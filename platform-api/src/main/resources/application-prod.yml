@@ -1,4 +1,15 @@
 # Public production defaults; inject deployment-specific values externally.
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DATABASE}
+      password: ${REDIS_PASSWORD}
 springdoc:
   api-docs:
     enabled: ${API_DOCS_ENABLED:false}

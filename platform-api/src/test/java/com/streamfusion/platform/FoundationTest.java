@@ -23,13 +23,19 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -39,8 +45,21 @@ import org.springframework.web.bind.annotation.RestController;
         classes = PlatformApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Import(FoundationTest.TestEndpoints.class)
+@Import({FoundationTest.TestEndpoints.class, FoundationTest.TestOnlySecurity.class})
 class FoundationTest {
+    // Exercise MVC error handling without opening these paths in production.
+    @TestConfiguration(proxyBeanMethods = false)
+    static class TestOnlySecurity {
+        @Bean
+        @Order(0)
+        SecurityFilterChain testEndpointChain(HttpSecurity http) throws Exception {
+            return http.securityMatcher("/test-only/**", "/missing")
+                    .authorizeHttpRequests(authorize -> authorize.anyRequest().permitAll())
+                    .csrf(AbstractHttpConfigurer::disable)
+                    .build();
+        }
+    }
+
     private final TestRestTemplate client;
 
     @Autowired

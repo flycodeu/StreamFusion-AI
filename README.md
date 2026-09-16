@@ -51,7 +51,8 @@ flowchart LR
 
 ## 快速开始
 
-以下步骤使用 **Windows PowerShell**。当前工程骨架不依赖 MySQL、Docker、相机或 GPU。
+以下步骤使用 **Windows PowerShell**。后端开发运行需要 MySQL 和 Redis；不依赖相机或 GPU。
+普通自动化测试使用测试专属 H2，不连接个人数据库或 Redis。
 
 ### 1. 准备环境
 
@@ -104,6 +105,11 @@ Pop-Location
 该脚本只诊断，不安装软件，也不停止占用端口的进程。
 
 ### 4. 启动服务
+
+先准备项目数据库和 Redis，并按 [数据库与安全配置说明](DEVELOPMENT.md#mysqlmybatis-plusredis)
+填写后端 local 配置；公共示例不会自动提供数据库凭证或创建数据库。
+个人开发推荐将下面 API 命令中的 `-Profile dev` 换为 `-Profile local`。
+使用 dev 时需提供 DB_USERNAME / DB_PASSWORD 等环境变量。
 
 在仓库根目录打开四个终端，每个终端执行一条命令：
 

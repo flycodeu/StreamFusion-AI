@@ -1,5 +1,17 @@
 # Copy to application-local.yml and select the local profile.
 # This example is public; the copied file is ignored by Git.
+spring:
+  datasource:
+    # Example for a local server only; production must configure verified TLS.
+    url: jdbc:mysql://127.0.0.1:3306/streamfusion?connectionTimeZone=UTC&connectTimeout=3000&socketTimeout=5000&sslMode=DISABLED&allowPublicKeyRetrieval=true
+    username: ${DB_USERNAME:}
+    password: ${DB_PASSWORD:}
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      database: 10
+      password: ""
 server:
   address: ${SERVER_ADDRESS:127.0.0.1}
   port: ${SERVER_PORT:8080}

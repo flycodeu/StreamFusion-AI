@@ -5,6 +5,28 @@ spring:
     default: dev
   lifecycle:
     timeout-per-shutdown-phase: ${streamfusion.shutdown-grace}
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 1
+      connection-timeout: 3000
+      validation-timeout: 2000
+  sql:
+    init:
+      mode: never
+  data:
+    redis:
+      connect-timeout: 3s
+      timeout: 3s
+      repositories:
+        enabled: false
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    default-statement-timeout: 5
+  global-config:
+    banner: false
 streamfusion:
   work-dir: ${SF_API_WORK_DIR:.run}
   shutdown-grace: ${SF_API_SHUTDOWN_GRACE:15s}

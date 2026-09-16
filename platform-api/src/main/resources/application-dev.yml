@@ -1,4 +1,15 @@
 # Shared development defaults. Keep credentials outside the repository.
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/streamfusion?connectionTimeZone=UTC&connectTimeout=3000&socketTimeout=5000}
+    username: ${DB_USERNAME:}
+    password: ${DB_PASSWORD:}
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DATABASE:10}
+      password: ${REDIS_PASSWORD:}
 server:
   address: ${SERVER_ADDRESS:127.0.0.1}
   port: ${SERVER_PORT:8080}

@@ -23,6 +23,62 @@ PyCharm 分别使用 `node-agent/.venv`、`runtime/.venv`，不要选择父目�
 
 ## 配置入口
 
+### MySQL、MyBatis-Plus、Redis
+
+后端开发运行现在需要 MySQL 和 Redis。MyBatis-Plus 使用 Boot 3 专用 starter；
+MySQL 驱动、Redis/Lettuce 和 Spring Security 版本由 Spring Boot 管理。
+不重复引入 MyBatis starter，不创建空 Mapper、通用 RedisUtils 或尚无业务消费者的分页插件。
+
+| 环境 | 连接来源 |
+|---|---|
+| dev | MySQL URL 默认本地 streamfusion，账号密码从 DB_USERNAME / DB_PASSWORD 注入；Redis 默认本机 6379、数据库 10 |
+| local | 被忽略的 platform-api/config/application-local.yml，适合个人连接配置 |
+| prod | 显式设置 DB_URL、DB_USERNAME、DB_PASSWORD、REDIS_HOST、REDIS_DATABASE、REDIS_PASSWORD；REDIS_PORT 默认 6379 |
+| test | 仅测试资源中的 H2 内存数据库；Redis 健康检查关闭，不连接个人 Redis |
+
+标准覆盖入口为 Spring 配置；不使用 REDIS_URL，避免 URL 中数据库号覆盖单独的 database 配置。
+普通开发变量为上述 DB_* / REDIS_*；local 文件中可直接修改连接参数。
+本轮不自动建库、建用户表或初始化数据；没有迁移脚本，因为没有业务结构变更。
+首次运行前由开发者确认项目数据库已存在。不要使用系统业务库代替缺失的项目库。
+
+从示例复制 local 文件并填写连接信息后，使用：
+
+```powershell
+.\scripts\start.ps1 api -Profile local
+```
+
+实际 local 文件不提交、不进入 JAR。公共示例不放真实 MySQL 账号密码。
+示例 JDBC 的关闭 TLS、公钥获取参数只供本机开发；生产使用最小权限数据库账号及经验证的 TLS。
+Redis 无密码仅适用于受控本机开发；不要将无认证 Redis 暴露到公网。
+
+数据库连接池上限 10，连接等待 3 秒；Redis 连接/命令超时均 3 秒，
+MyBatis 默认语句超时 5 秒。无 SQL 自动初始化、无 Redis 启动写入。
+数据源连接按需建立，因此“进程启动”不能代替连接成功；/actuator/health 会检查数据库与 Redis，
+失败返回 DOWN/503，且不公开连接细节。
+
+普通 `mvnw.cmd verify` 无需本机数据库，H2 只证明组件装配与基础查询，不证明 MySQL 完全兼容。
+真实本地连接检查需明确启用，只有 SELECT 1 与 Redis PING，不写数据：
+
+```powershell
+# 在 platform-api 目录执行，先确认 local 文件中的目标
+.\mvnw.cmd "-Dtest=LocalInfrastructureTest" "-Dsf.test.localInfrastructure=true" test
+```
+
+### Spring Security 基础
+
+当前仅引入安全边界，尚无登录接口、用户认证提供者或用户表：
+
+- GET /actuator/health 公开；接口文档开启时 GET /v3/api-docs 公开，prod 默认关闭文档。
+- 其余请求默认拒绝；匿名安全请求返回 JSON 401，不跳登录页面、不发 Basic 挑战。
+- 保留 CSRF；缺少 CSRF 的写请求返回 JSON 403。
+- 不生成默认 user 或随机密码，不启用 formLogin、HTTP Basic、默认 logout。
+- 复用现有错误体与 traceId，不建立第二套错误模型。
+- 未选定 JWT、Session JDBC 或 Redis 会话；引入 Redis 不等于已经决定使用它保存登录状态。
+
+后续登录功能要显式开放对应入口并实现认证，不可临时改为全局 permitAll。
+
+### 应用配置
+
 后端继续保留 dev / local / prod / test 隔离。公共配置对象在
 [PlatformProperties.java](platform-api/src/main/java/com/streamfusion/platform/common/config/PlatformProperties.java)，
 环境专属端口和日志级别仍在对应 profile 中；真实 local 文件不提交。
