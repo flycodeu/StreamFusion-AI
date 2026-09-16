@@ -55,7 +55,9 @@ class SecurityConfigurationTest {
     void rejectsUnsafeRequestsWithoutCsrf() throws Exception {
         mvc.perform(post("/api/v1/users"))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("FORBIDDEN"));
+                .andExpect(jsonPath("$.code").value("CSRF_INVALID"))
+                .andExpect(jsonPath("$.msg").exists())
+                .andExpect(jsonPath("$.message").doesNotExist());
         mvc.perform(post("/api/v1/users").with(csrf())).andExpect(status().isUnauthorized());
     }
 

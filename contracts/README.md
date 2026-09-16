@@ -28,7 +28,23 @@ uv run --project algorithm-node/node-agent --locked python -m pytest contracts/t
 
 ## HTTP 基础约定
 
-既有健康响应保持原样。当前统一的是错误外壳，不强行包装 Actuator 或健康成功响应。
+Platform管理端 `/api/v1` 的普通JSON成功与失败统一使用 `R<T>`：
+
+```json
+{
+  "code": "SUCCESS",
+  "msg": "操作成功",
+  "data": null,
+  "traceId": "0123456789abcdef0123456789abcdef",
+  "timestamp": "2026-09-16T00:00:00Z"
+}
+```
+
+成功业务数据放data；无数据也保留null。错误保留真实4xx/5xx，使用字符串错误码与安全msg，不能HTTP200包装失败。创建使用201并保留Location，其他普通业务成功使用200。当前只实现公共封装与拒绝出口，登录及CRUD尚未开放。
+
+业务异常通过 `throw BusinessException.error(ErrorCode.CONFLICT)` 交统一异常处理；Security/CSRF和Servlet错误分派采用相同外壳，CSRF拒绝为403/CSRF_INVALID。业务响应设置no-store，响应头X-Trace-Id与正文一致。
+
+Actuator健康与OpenAPI成功响应保持原样。非业务底座错误及Python接口仍使用以下既有结构；TaskSpec/Event/Agent Sync不改为R。
 
 ```json
 {
@@ -41,7 +57,7 @@ uv run --project algorithm-node/node-agent --locked python -m pytest contracts/t
 ```
 
 错误保持真实 HTTP 状态，不用 HTTP 200 表达失败。
-客户端依赖 code 和 status，不解析 message；message 不暴露原始输入、堆栈和内部异常。
+客户端依赖 code 和 HTTP status，不解析 message/msg 文本；两类消息字段均不暴露原始输入、堆栈和内部异常。
 响应头 X-Trace-Id 与错误体一致。UTC 时间使用带 Z 的 ISO 8601 / RFC 3339，保留可变小数精度。
 
 | HTTP | code | 说明 |

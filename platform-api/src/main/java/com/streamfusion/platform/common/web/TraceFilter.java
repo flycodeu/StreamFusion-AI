@@ -44,6 +44,8 @@ public class TraceFilter extends OncePerRequestFilter {
         }
         MDC.put("traceId", id);
         response.setHeader("X-Trace-Id", id);
+        if (ApiErrorWriter.isBusinessRequest(request))
+            response.setHeader("Cache-Control", "no-store");
         long start = System.nanoTime();
         try {
             chain.doFilter(request, response);

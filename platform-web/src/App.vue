@@ -2,7 +2,8 @@
 import { onMounted, ref } from 'vue'
 import { ElButton } from 'element-plus'
 import 'element-plus/es/components/button/style/css'
-import { ApiRequestError, getJson } from './lib/http'
+import { ApiRequestError } from './lib/http/error'
+import { getHealth } from './api/health/api'
 import AdminLayout from './layouts/AdminLayout.vue'
 
 const loading = ref(false)
@@ -16,10 +17,7 @@ async function checkHealth(): Promise<void> {
   status.value = '检查中'
   detail.value = ''
   try {
-    const data = await getJson('/actuator/health')
-    if (typeof data !== 'object' || data === null || !('status' in data) || data.status !== 'UP') {
-      throw new Error('健康接口未返回 UP')
-    }
+    await getHealth()
     status.value = '运行正常'
     detail.value = 'Platform API · UP'
   } catch (error: unknown) {
