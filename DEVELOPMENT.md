@@ -38,11 +38,9 @@ MySQL 驱动、Redis/Lettuce 和 Spring Security 版本由 Spring Boot 管理。
 
 标准覆盖入口为 Spring 配置；不使用 REDIS_URL，避免 URL 中数据库号覆盖单独的 database 配置。
 普通开发变量为上述 DB_* / REDIS_*；local 文件中可直接修改连接参数。
-启动时 Flyway 会校验并执行 [独立 SQL 迁移](platform-api/sql/README.md)，创建 RBAC 表结构和内置超级管理员角色，
-但不会创建数据库或默认账号。首次运行请先确认目标是专用项目库；不要使用其他业务库代替。
-迁移源在 platform-api/sql/migrations，构建时打包到 db/migration；已执行文件不得修改，后续变更新增版本。
-sql 根目录的逐表文件和汇总 SQL 自动生成，CREATE TABLE 字段直接带中文 COMMENT，不重复参与迁移。
-这些导出文件先 DROP 再 CREATE，会清空对应表，只用于明确可丢弃的独立测试库；不要导入当前应用数据库。
+表结构只维护 platform-api/sql/业务 中的八份逐表文件，sql/汇总/streamfusion-mysql.sql 由 scripts/export-sql.ps1 自动生成。
+首次运行前，按 [SQL 指南](platform-api/sql/README.md)手动初始化专用空库；应用不自动建库、建表或升级。
+脚本先 DROP 再 CREATE，会清空目标表；已有数据的库禁止用它升级。本地已经初始化的数据库无需重导。
 
 从示例复制 local 文件并填写连接信息后，使用：
 
@@ -55,16 +53,16 @@ sql 根目录的逐表文件和汇总 SQL 自动生成，CREATE TABLE 字段直�
 Redis 无密码仅适用于受控本机开发；不要将无认证 Redis 暴露到公网。
 
 数据库连接池上限 10，连接等待 3 秒；Redis 连接/命令超时均 3 秒，
-MyBatis 默认语句超时 5 秒。仅 Flyway 管理表结构，无 Redis 启动写入。
+MyBatis 默认语句超时 5 秒。spring.sql.init.mode=never，SQL 不打包到应用 JAR，无 Redis 启动写入。
 平台默认时区为 Asia/Shanghai（UTC+8）。Java 启动入口和 Jackson 默认时区使用 Asia/Shanghai，
 MySQL 连接池执行 SET time_zone='+08:00'，H2 测试使用等价命令。
 JDBC URL 的 connectionTimeZone 也应为 Asia/Shanghai（含生产 DB_URL），不能再覆盖为 UTC。
 这只影响本项目连接，不修改 MySQL 全局或操作系统时区。DATETIME 业务字段按北京时间存储；
 历史 UTC 数据不能只改配置，需要核查后停写转换；新库不得重复加8小时。详见 SQL 说明。
-Flyway 要求启动时数据库可连接，迁移或校验失败会阻止启动；/actuator/health 会检查数据库与 Redis，
-失败返回 DOWN/503，且不公开连接细节。
+/actuator/health 检查数据库与 Redis 连通性，失败返回 DOWN/503，且不公开连接细节。
+健康检查不校验业务表是否存在；初始化是否成功需单独核对。
 
-普通 `mvnw.cmd verify` 无需本机数据库，H2 检查组件装配、迁移与基础约束，不证明 MySQL 完全兼容。
+普通 `mvnw.cmd verify` 无需本机数据库，H2 检查组件装配、汇总 SQL 建表/重建与基础约束，不证明 MySQL 完全兼容。
 真实本地连接检查需明确启用，只有 SELECT 1 与 Redis PING，不写数据：
 
 ```powershell
@@ -72,8 +70,8 @@ Flyway 要求启动时数据库可连接，迁移或校验失败会阻止启动�
 .\mvnw.cmd "-Dtest=LocalInfrastructureTest" "-Dsf.test.localInfrastructure=true" test
 ```
 
-导出生成、重建限制和真实 MySQL 迁移验证见 [SQL 指南](platform-api/sql/README.md)。
-其中 LocalSchemaMigrationTest 是面向本机新安装库的写测试，默认跳过，与上述只读连接测试严格区分。
+汇总生成、重建限制和真实 MySQL 元数据检查见 [SQL 指南](platform-api/sql/README.md)。
+其中 LocalSchemaInspectionTest 只读检查本机现有表和字段备注，不执行初始化或任何写操作。
 
 ### Spring Security 基础
 

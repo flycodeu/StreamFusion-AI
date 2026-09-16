@@ -18,7 +18,7 @@ StreamFusion AI 的目标是让视频分析任务可以被统一配置、在算�
 
 | 模块 | 当前已实现 | 尚未实现 |
 |---|---|---|
-| Platform API | MySQL / Redis 接入、Flyway 迁移、RBAC 表结构、Security 基础、健康检查、分环境配置、统一错误、OpenAPI JSON | 登录、用户与权限管理、相机、任务及事件 API |
+| Platform API | MySQL / Redis 接入、RBAC 初始化 SQL、Security 基础、健康检查、分环境配置、统一错误、OpenAPI JSON | 登录、用户与权限管理、相机、任务及事件 API |
 | Platform Web | 顶部栏与可收起侧栏、未登录身份展示、后端连接检查、超时与错误提示、手动重试 | 登录页、业务管理页面、动态路由、视频预览 |
 | Node Agent | 独立环境与配置、健康接口、接口文档、请求日志 | 节点注册、心跳、任务同步、进程监督 |
 | Algorithm Runtime | 独立环境与配置、健康接口、接口文档、请求日志 | 拉流、解码、模型推理、事件与证据 |
@@ -64,7 +64,7 @@ flowchart LR
 | pnpm | 10.34.5 | [package.json](platform-web/package.json) |
 | Python | 3.12 | [pyproject.toml](algorithm-node/node-agent/pyproject.toml) |
 | uv | CI 固定使用 0.7.19 | Python 依赖安装与环境管理 |
-| MySQL | 8.0.16+ | Flyway 迁移依赖外键与 CHECK 约束 |
+| MySQL | 8.0.16+ | 表结构依赖外键与 CHECK 约束 |
 | Redis | 开发默认本机 6379、数据库 10 | [连接配置](DEVELOPMENT.md#mysqlmybatis-plusredis) |
 
 设置 `JAVA_HOME` 为 JDK 21 的安装目录，并确认 `java -version`、`node -v`、`pnpm -v`、`uv --version`。
@@ -110,8 +110,8 @@ Pop-Location
 
 先准备项目数据库和 Redis，并按 [数据库与安全配置说明](DEVELOPMENT.md#mysqlmybatis-plusredis)
 填写后端 local 配置；公共示例不会自动提供数据库凭证或创建数据库。
-启动会执行 [Flyway 迁移](platform-api/sql/README.md)，请使用专用项目库。
-当前迁移仅建立 RBAC 表结构与内置角色，不创建默认用户，登录及用户管理仍在开发中。
+首次使用请按 [SQL 指南](platform-api/sql/README.md)手动初始化专用空库；应用启动不建表、不迁移。
+初始化仅建立 RBAC 表结构与内置角色，不创建默认用户。脚本含 DROP，已有数据的库不要重复导入。
 个人开发推荐将下面 API 命令中的 `-Profile dev` 换为 `-Profile local`。
 使用 dev 时需提供 DB_USERNAME / DB_PASSWORD 等环境变量。
 
@@ -212,7 +212,7 @@ Agent 与 Runtime 在各自目录使用 `uv run --locked python -m app` 启动�
 | 本地环境检查 | 仓库根目录 | `.\scripts\doctor.ps1` |
 | 运行中的服务检查 | 仓库根目录 | `.\scripts\check-health.ps1` |
 
-测试覆盖配置与健康响应、安全基础、错误与日志、H2 迁移及基本约束、管理端布局和协议样例。
+测试覆盖配置与健康响应、安全基础、错误与日志、H2 建表与重建及基本约束、管理端布局和协议样例。
 真实 MySQL 检查需显式启用，说明见 [SQL 指南](platform-api/sql/README.md#验证)；普通测试不连接本机数据库。
 Python 的 Ruff、mypy 命令和格式化方法见 [开发指南](DEVELOPMENT.md#验证命令)。
 GitHub Actions 配置了 Windows / Linux 检查矩阵，不包含部署操作。
@@ -238,8 +238,9 @@ StreamFusion-AI/
 ├── .github/workflows/         # GitHub Actions 自动检查
 ├── platform-api/              # Java 平台后端
 │   ├── config/                # 外部配置，仅示例提交
-│   ├── sql/                   # 逐表/汇总重建脚本及使用说明
-│   │   └── migrations/        # Flyway 版本迁移，应用唯一执行入口
+│   ├── sql/
+│   │   ├── 业务/             # 逐表 SQL，唯一维护源
+│   │   └── 汇总/             # 自动生成的 streamfusion-mysql.sql
 │   └── src/
 │       ├── main/              # 应用代码与公共环境配置
 │       └── test/              # 测试与 test 环境配置
@@ -264,7 +265,7 @@ StreamFusion-AI/
 - [x] 健康检查、环境配置分离与依赖锁定
 - [x] 启动校验、环境诊断、日志与错误处理基础
 - [x] 代码质量检查、CI 工作流与公共协议样例
-- [x] MySQL / Redis 接入、Flyway 与 RBAC 初始表结构
+- [x] MySQL / Redis 接入与 RBAC 初始化 SQL
 - [x] 管理端布局与服务状态页
 - [ ] Redis Session 登录、用户与部门管理、角色权限及动态路由
 - [ ] 真实视频接入、解码与单路模型推理

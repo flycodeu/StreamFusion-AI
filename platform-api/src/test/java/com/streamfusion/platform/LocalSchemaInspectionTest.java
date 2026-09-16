@@ -3,27 +3,26 @@ package com.streamfusion.platform;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import javax.sql.DataSource;
-import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
-/** Explicitly writes migrations ONLY to the loopback streamfusion development database. */
-@SpringBootTest(properties = "spring.flyway.enabled=false")
+/** Opt-in, read-only metadata checks for an existing local schema. */
+@SpringBootTest
 @ActiveProfiles("local")
 @EnabledIfSystemProperty(named = "sf.test.localSchema", matches = "true")
-class LocalSchemaMigrationTest {
+class LocalSchemaInspectionTest {
     private final DataSource source;
 
     @Autowired
-    LocalSchemaMigrationTest(DataSource source) {
+    LocalSchemaInspectionTest(DataSource source) {
         this.source = source;
     }
 
     @Test
-    void migratesAndChecksLocalProjectSchema() throws Exception {
+    void checksLocalProjectSchemaWithoutWrites() throws Exception {
         try (var connection = source.getConnection()) {
             assertThat(connection.getMetaData().getDatabaseProductName()).isEqualTo("MySQL");
             assertThat(connection.getCatalog()).isEqualTo("streamfusion");
@@ -33,31 +32,7 @@ class LocalSchemaMigrationTest {
                     .isIn(
                             "jdbc:mysql://127.0.0.1:3306/streamfusion",
                             "jdbc:mysql://localhost:3306/streamfusion");
-            try (var tables =
-                    connection.getMetaData().getTables("streamfusion", null, "sys_user", null)) {
-                if (tables.next()) {
-                    try (var statement = connection.createStatement();
-                            var users = statement.executeQuery("SELECT COUNT(*) FROM sys_user")) {
-                        assertThat(users.next()).isTrue();
-                        assertThat(users.getLong(1))
-                                .as("Fresh-install test refuses a database with users")
-                                .isZero();
-                    }
-                }
-            }
         }
-        var flyway =
-                Flyway.configure()
-                        .dataSource(source)
-                        .locations("classpath:db/migration")
-                        .validateMigrationNaming(true)
-                        .baselineOnMigrate(false)
-                        .cleanDisabled(true)
-                        .load();
-        flyway.migrate();
-        flyway.validate();
-        SchemaAssertions.assertFreshInstallation(source, flyway);
-        SchemaAssertions.assertConstraints(source);
         try (var connection = source.getConnection();
                 var sql = connection.createStatement()) {
             try (var rows = sql.executeQuery("SELECT @@session.time_zone")) {
