@@ -3,7 +3,7 @@
 spring:
   datasource:
     # Example for a local server only; production must configure verified TLS.
-    url: jdbc:mysql://127.0.0.1:3306/streamfusion?connectionTimeZone=UTC&connectTimeout=3000&socketTimeout=5000&sslMode=DISABLED&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://127.0.0.1:3306/streamfusion?connectionTimeZone=Asia/Shanghai&connectTimeout=3000&socketTimeout=5000&sslMode=DISABLED&allowPublicKeyRetrieval=true
     username: ${DB_USERNAME:}
     password: ${DB_PASSWORD:}
   data:

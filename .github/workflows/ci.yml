@@ -33,6 +33,9 @@ jobs:
           java-version: '21'
           cache: maven
       - run: sh mvnw -B -ntp verify
+      - name: Check generated SQL aggregate
+        shell: pwsh
+        run: ../scripts/export-sql.ps1 -Check
 
   web:
     runs-on: ${{ matrix.os }}

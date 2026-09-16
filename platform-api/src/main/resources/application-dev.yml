@@ -1,7 +1,7 @@
 # Shared development defaults. Keep credentials outside the repository.
 spring:
   datasource:
-    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/streamfusion?connectionTimeZone=UTC&connectTimeout=3000&socketTimeout=5000}
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/streamfusion?connectionTimeZone=Asia/Shanghai&connectTimeout=3000&socketTimeout=5000}
     username: ${DB_USERNAME:}
     password: ${DB_PASSWORD:}
   data:

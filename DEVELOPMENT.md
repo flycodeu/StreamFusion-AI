@@ -25,7 +25,7 @@ PyCharm 分别使用 `node-agent/.venv`、`runtime/.venv`，不要选择父目�
 
 ### MySQL、MyBatis-Plus、Redis
 
-后端开发运行现在需要 MySQL 和 Redis。MyBatis-Plus 使用 Boot 3 专用 starter；
+后端开发运行需要 MySQL 和 Redis。MyBatis-Plus 使用 Boot 3 专用 starter；
 MySQL 驱动、Redis/Lettuce 和 Spring Security 版本由 Spring Boot 管理。
 不重复引入 MyBatis starter，不创建空 Mapper、通用 RedisUtils 或尚无业务消费者的分页插件。
 
@@ -38,8 +38,11 @@ MySQL 驱动、Redis/Lettuce 和 Spring Security 版本由 Spring Boot 管理。
 
 标准覆盖入口为 Spring 配置；不使用 REDIS_URL，避免 URL 中数据库号覆盖单独的 database 配置。
 普通开发变量为上述 DB_* / REDIS_*；local 文件中可直接修改连接参数。
-本轮不自动建库、建用户表或初始化数据；没有迁移脚本，因为没有业务结构变更。
-首次运行前由开发者确认项目数据库已存在。不要使用系统业务库代替缺失的项目库。
+启动时 Flyway 会校验并执行 [独立 SQL 迁移](platform-api/sql/README.md)，创建 RBAC 表结构和内置超级管理员角色，
+但不会创建数据库或默认账号。首次运行请先确认目标是专用项目库；不要使用其他业务库代替。
+迁移源在 platform-api/sql/migrations，构建时打包到 db/migration；已执行文件不得修改，后续变更新增版本。
+sql 根目录的逐表文件和汇总 SQL 自动生成，CREATE TABLE 字段直接带中文 COMMENT，不重复参与迁移。
+这些导出文件先 DROP 再 CREATE，会清空对应表，只用于明确可丢弃的独立测试库；不要导入当前应用数据库。
 
 从示例复制 local 文件并填写连接信息后，使用：
 
@@ -52,11 +55,16 @@ MySQL 驱动、Redis/Lettuce 和 Spring Security 版本由 Spring Boot 管理。
 Redis 无密码仅适用于受控本机开发；不要将无认证 Redis 暴露到公网。
 
 数据库连接池上限 10，连接等待 3 秒；Redis 连接/命令超时均 3 秒，
-MyBatis 默认语句超时 5 秒。无 SQL 自动初始化、无 Redis 启动写入。
-数据源连接按需建立，因此“进程启动”不能代替连接成功；/actuator/health 会检查数据库与 Redis，
+MyBatis 默认语句超时 5 秒。仅 Flyway 管理表结构，无 Redis 启动写入。
+平台默认时区为 Asia/Shanghai（UTC+8）。Java 启动入口和 Jackson 默认时区使用 Asia/Shanghai，
+MySQL 连接池执行 SET time_zone='+08:00'，H2 测试使用等价命令。
+JDBC URL 的 connectionTimeZone 也应为 Asia/Shanghai（含生产 DB_URL），不能再覆盖为 UTC。
+这只影响本项目连接，不修改 MySQL 全局或操作系统时区。DATETIME 业务字段按北京时间存储；
+历史 UTC 数据不能只改配置，需要核查后停写转换；新库不得重复加8小时。详见 SQL 说明。
+Flyway 要求启动时数据库可连接，迁移或校验失败会阻止启动；/actuator/health 会检查数据库与 Redis，
 失败返回 DOWN/503，且不公开连接细节。
 
-普通 `mvnw.cmd verify` 无需本机数据库，H2 只证明组件装配与基础查询，不证明 MySQL 完全兼容。
+普通 `mvnw.cmd verify` 无需本机数据库，H2 检查组件装配、迁移与基础约束，不证明 MySQL 完全兼容。
 真实本地连接检查需明确启用，只有 SELECT 1 与 Redis PING，不写数据：
 
 ```powershell
@@ -64,16 +72,19 @@ MyBatis 默认语句超时 5 秒。无 SQL 自动初始化、无 Redis 启动写
 .\mvnw.cmd "-Dtest=LocalInfrastructureTest" "-Dsf.test.localInfrastructure=true" test
 ```
 
+导出生成、重建限制和真实 MySQL 迁移验证见 [SQL 指南](platform-api/sql/README.md)。
+其中 LocalSchemaMigrationTest 是面向本机新安装库的写测试，默认跳过，与上述只读连接测试严格区分。
+
 ### Spring Security 基础
 
-当前仅引入安全边界，尚无登录接口、用户认证提供者或用户表：
+当前仅引入安全边界和用户等表结构，尚无登录接口或用户认证提供者：
 
 - GET /actuator/health 公开；接口文档开启时 GET /v3/api-docs 公开，prod 默认关闭文档。
 - 其余请求默认拒绝；匿名安全请求返回 JSON 401，不跳登录页面、不发 Basic 挑战。
 - 保留 CSRF；缺少 CSRF 的写请求返回 JSON 403。
 - 不生成默认 user 或随机密码，不启用 formLogin、HTTP Basic、默认 logout。
 - 复用现有错误体与 traceId，不建立第二套错误模型。
-- 未选定 JWT、Session JDBC 或 Redis 会话；引入 Redis 不等于已经决定使用它保存登录状态。
+- 登录设计采用 Redis Session + 安全 Cookie；当前尚未实现会话登录，不提供 JWT/JDBC 双路线。
 
 后续登录功能要显式开放对应入口并实现认证，不可临时改为全局 permitAll。
 
@@ -127,8 +138,10 @@ Agent 前缀为 `SF_AGENT_`，Runtime 为 `SF_RUNTIME_`。不互相加载配置�
 
 ## 日志与请求关联
 
-Java 输出 UTC 文本日志，Python 输出 UTC JSON 日志，共用字段语义：
+Java 输出带 +08:00 的北京时间文本日志；Python 的既有 UTC JSON 日志和跨服务协议暂不改动，共用字段语义：
 时间、level、service、traceId；请求结束记录 method、路由模板、status、durationMs。
+公共 ApiError/协议中的 Instant 仍按 UTC/Z 序列化以保持兼容；数据库本地日期时间转成 Instant 时必须显式指定 Asia/Shanghai。
+前端当前状态页的检查时间固定按 Asia/Shanghai 展示，不依赖浏览器所在时区。
 请求头 `X-Trace-Id` 只接收 32 位小写十六进制，不合法则重新生成并在响应头返回。
 前端自动生成请求标识，出错时显示错误码及标识，默认请求超时 5 秒，不自动重试。
 启动和停机等非请求日志的 traceId 为 `-`。
@@ -156,6 +169,7 @@ Java 输出 UTC 文本日志，Python 输出 UTC JSON 日志，共用字段语�
 | platform-web，主动格式化 | `pnpm format` |
 | 两个 Python 工程分别执行 | `uv run --locked ruff check app tests`、`uv run --locked ruff format --check app tests`、`uv run --locked mypy`、`uv run --locked python -m pytest -q` |
 | 仓库根目录 | `uv run --project algorithm-node/node-agent --locked python -m pytest contracts/tests -q` |
+| 仓库根目录 | `./scripts/export-sql.ps1 -Check` |
 
 GitHub Actions 在 push、PR 或手动触发时检查 Windows/Linux 构建、格式、类型和测试；
 只读权限、固定 action 提交、无部署步骤、不使用生产密钥。远端运行结果以实际 Actions 为准。

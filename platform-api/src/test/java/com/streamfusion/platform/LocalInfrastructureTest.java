@@ -12,7 +12,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 /** Explicit opt-in, read-only local connectivity test. Never writes keys, tables or schema. */
-@SpringBootTest
+@SpringBootTest(properties = "spring.flyway.enabled=false")
 @ActiveProfiles("local")
 @EnabledIfSystemProperty(named = "sf.test.localInfrastructure", matches = "true")
 class LocalInfrastructureTest {

@@ -6,7 +6,7 @@
 
 [快速开始](#快速开始) · [系统架构](#系统架构) · [开发指南](DEVELOPMENT.md) · [公共协议](contracts/README.md) · [路线图](#路线图) · [反馈问题](https://github.com/flycodeu/StreamFusion-AI/issues)
 
-> **项目状态：早期开发。** 当前提供工程骨架、健康检查、分环境配置、日志与自动化检查。视频拉流、模型推理、任务调度及事件管理尚未实现，暂不具备生产使用条件。
+> **项目状态：早期开发。** 当前具备工程基础、MySQL / Redis 接入、RBAC 表结构与管理端布局。登录、用户管理及视频推理业务尚未实现，暂不具备生产使用条件。
 
 ## 项目介绍
 
@@ -18,13 +18,13 @@ StreamFusion AI 的目标是让视频分析任务可以被统一配置、在算�
 
 | 模块 | 当前已实现 | 尚未实现 |
 |---|---|---|
-| Platform API | 健康检查、四环境配置、启动校验、统一错误、OpenAPI JSON | 用户、相机、任务及事件 API |
-| Platform Web | 后端连接检查、请求超时、错误码与请求标识、手动重试 | 管理页面、视频预览 |
+| Platform API | MySQL / Redis 接入、Flyway 迁移、RBAC 表结构、Security 基础、健康检查、分环境配置、统一错误、OpenAPI JSON | 登录、用户与权限管理、相机、任务及事件 API |
+| Platform Web | 顶部栏与可收起侧栏、未登录身份展示、后端连接检查、超时与错误提示、手动重试 | 登录页、业务管理页面、动态路由、视频预览 |
 | Node Agent | 独立环境与配置、健康接口、接口文档、请求日志 | 节点注册、心跳、任务同步、进程监督 |
 | Algorithm Runtime | 独立环境与配置、健康接口、接口文档、请求日志 | 拉流、解码、模型推理、事件与证据 |
 | 工程基础 | 依赖锁定、环境检查、日志轮转与脱敏、质量检查、CI 工作流、协议样例校验 | 自动部署、部署编排 |
 
-健康接口返回 `UP` 仅表示进程可用；Python 接口中的 `mode=skeleton` 表示当前为空壳实现。
+后端健康检查包含 MySQL 与 Redis 连通性；返回 `UP` 不代表业务链路已验收。Python 接口中的 `mode=skeleton` 表示当前为空壳实现。
 公共协议为设计基线，不代表节点同步链路已经运行；CI 结果以 [GitHub Actions](https://github.com/flycodeu/StreamFusion-AI/actions) 的实际记录为准。
 
 ## 系统架构
@@ -64,6 +64,8 @@ flowchart LR
 | pnpm | 10.34.5 | [package.json](platform-web/package.json) |
 | Python | 3.12 | [pyproject.toml](algorithm-node/node-agent/pyproject.toml) |
 | uv | CI 固定使用 0.7.19 | Python 依赖安装与环境管理 |
+| MySQL | 8.0.16+ | Flyway 迁移依赖外键与 CHECK 约束 |
+| Redis | 开发默认本机 6379、数据库 10 | [连接配置](DEVELOPMENT.md#mysqlmybatis-plusredis) |
 
 设置 `JAVA_HOME` 为 JDK 21 的安装目录，并确认 `java -version`、`node -v`、`pnpm -v`、`uv --version`。
 首次安装需能访问 Maven、npm 和 PyPI。无需安装全局 Maven。
@@ -108,6 +110,8 @@ Pop-Location
 
 先准备项目数据库和 Redis，并按 [数据库与安全配置说明](DEVELOPMENT.md#mysqlmybatis-plusredis)
 填写后端 local 配置；公共示例不会自动提供数据库凭证或创建数据库。
+启动会执行 [Flyway 迁移](platform-api/sql/README.md)，请使用专用项目库。
+当前迁移仅建立 RBAC 表结构与内置角色，不创建默认用户，登录及用户管理仍在开发中。
 个人开发推荐将下面 API 命令中的 `-Profile dev` 换为 `-Profile local`。
 使用 dev 时需提供 DB_USERNAME / DB_PASSWORD 等环境变量。
 
@@ -204,10 +208,12 @@ Agent 与 Runtime 在各自目录使用 `uv run --locked python -m app` 启动�
 | Agent 配置与接口测试 | `algorithm-node/node-agent` | `uv run --locked python -m pytest -q` |
 | Runtime 配置与接口测试 | `algorithm-node/runtime` | `uv run --locked python -m pytest -q` |
 | 公共协议校验 | 仓库根目录 | `uv run --project algorithm-node/node-agent --locked python -m pytest contracts/tests -q` |
+| 逐表与汇总 SQL 一致性 | 仓库根目录 | `.\scripts\export-sql.ps1 -Check` |
 | 本地环境检查 | 仓库根目录 | `.\scripts\doctor.ps1` |
 | 运行中的服务检查 | 仓库根目录 | `.\scripts\check-health.ps1` |
 
-测试覆盖健康响应、配置加载与隔离、非法配置、错误分类、请求标识、日志脱敏及协议样例。
+测试覆盖配置与健康响应、安全基础、错误与日志、H2 迁移及基本约束、管理端布局和协议样例。
+真实 MySQL 检查需显式启用，说明见 [SQL 指南](platform-api/sql/README.md#验证)；普通测试不连接本机数据库。
 Python 的 Ruff、mypy 命令和格式化方法见 [开发指南](DEVELOPMENT.md#验证命令)。
 GitHub Actions 配置了 Windows / Linux 检查矩阵，不包含部署操作。
 这些检查不能替代完整浏览器链路、真实视频、推理精度或 GPU 性能验收。
@@ -232,6 +238,8 @@ StreamFusion-AI/
 ├── .github/workflows/         # GitHub Actions 自动检查
 ├── platform-api/              # Java 平台后端
 │   ├── config/                # 外部配置，仅示例提交
+│   ├── sql/                   # 逐表/汇总重建脚本及使用说明
+│   │   └── migrations/        # Flyway 版本迁移，应用唯一执行入口
 │   └── src/
 │       ├── main/              # 应用代码与公共环境配置
 │       └── test/              # 测试与 test 环境配置
@@ -240,7 +248,7 @@ StreamFusion-AI/
 │   ├── node-agent/            # 节点协调进程与独立依赖
 │   └── runtime/               # 算法执行进程与独立依赖
 ├── contracts/                 # 公共协议、样例及校验
-├── scripts/                   # 启动、环境诊断与健康检查
+├── scripts/                   # 启动、环境诊断、健康检查与 SQL 导出
 └── DEVELOPMENT.md             # 配置、日志与开发约定
 ```
 
@@ -256,7 +264,9 @@ StreamFusion-AI/
 - [x] 健康检查、环境配置分离与依赖锁定
 - [x] 启动校验、环境诊断、日志与错误处理基础
 - [x] 代码质量检查、CI 工作流与公共协议样例
-- [ ] 数据库迁移与基础存储接入
+- [x] MySQL / Redis 接入、Flyway 与 RBAC 初始表结构
+- [x] 管理端布局与服务状态页
+- [ ] Redis Session 登录、用户与部门管理、角色权限及动态路由
 - [ ] 真实视频接入、解码与单路模型推理
 - [ ] 节点注册、任务同步与 Runtime 监督
 - [ ] 相机、场景、模型和任务管理
