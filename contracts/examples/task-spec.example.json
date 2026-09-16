@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "1.0",
+  "taskId": "task-1001",
+  "taskVersion": 13,
+  "assignmentId": "asg-9001",
+  "assignmentEpoch": 8,
+  "desiredState": "RUNNING",
+  "camera": {
+    "cameraId": "cam-2001",
+    "streamProfileId": "stream-sub",
+    "streamRef": "stream-lease-5001"
+  },
+  "runtime": {
+    "executor": "GENERIC_GSTREAMER",
+    "decodeMode": "AUTO",
+    "queuePolicy": "LATEST",
+    "preview": {
+      "rawEnabled": true,
+      "annotatedMode": "ON_DEMAND",
+      "outputFps": 10.0,
+      "width": 1280,
+      "height": 720
+    },
+    "evidence": {
+      "saveRawImage": true,
+      "saveAnnotatedImage": true,
+      "preRecordSeconds": 15,
+      "postRecordSeconds": 15
+    }
+  },
+  "scenarios": [
+    {
+      "taskScenarioId": "ts-01",
+      "scenarioCode": "helmet_missing",
+      "scenarioReleaseVersion": "2.0.0",
+      "inferFps": 2.0,
+      "trackFps": 10.0,
+      "model": {
+        "modelVersionId": "model-ppe-3.1",
+        "artifactSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "plugin": {
+        "pluginVersionId": "plugin-helmet-1.2.0",
+        "apiVersion": "1"
+      },
+      "params": {
+        "confidenceThreshold": 0.5,
+        "confirmObservations": 2,
+        "clearAfterSeconds": 5,
+        "evidenceIntervalSeconds": 30
+      }
+    }
+  ]
+}

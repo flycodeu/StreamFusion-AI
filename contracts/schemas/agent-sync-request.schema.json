@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/video-ai/schemas/agent-sync-request-1.0.json",
+  "title": "Agent Sync Request 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "nodeId", "agentVersion", "lastAssignmentRevision", "observedAt", "capabilities", "resources", "runs", "acknowledgedCommandIds"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "nodeId": { "$ref": "#/$defs/id" },
+    "agentVersion": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "lastAssignmentRevision": { "type": "integer", "minimum": 0 },
+    "observedAt": { "type": "string", "format": "date-time" },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["executors", "codecs"],
+      "properties": {
+        "executors": { "type": "array", "items": { "enum": ["GENERIC_GSTREAMER", "DEEPSTREAM"] }, "uniqueItems": true },
+        "codecs": { "type": "array", "items": { "enum": ["H264", "H265", "MJPEG"] }, "uniqueItems": true },
+        "gstreamerVersion": { "type": "string" },
+        "ffmpegVersion": { "type": "string" },
+        "cudaVersion": { "type": "string" }
+      }
+    },
+    "resources": { "$ref": "#/$defs/resources" },
+    "runs": { "type": "array", "items": { "$ref": "#/$defs/run" } },
+    "acknowledgedCommandIds": { "type": "array", "items": { "$ref": "#/$defs/id" }, "uniqueItems": true }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "percentage": { "type": "number", "minimum": 0, "maximum": 100 },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpuUsagePercent", "memoryUsedMb", "memoryTotalMb", "diskFreeGb", "gpus"],
+      "properties": {
+        "cpuUsagePercent": { "$ref": "#/$defs/percentage" },
+        "memoryUsedMb": { "type": "integer", "minimum": 0 },
+        "memoryTotalMb": { "type": "integer", "minimum": 1 },
+        "diskFreeGb": { "type": "number", "minimum": 0 },
+        "gpus": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["index", "name", "utilizationPercent", "memoryUsedMb", "memoryTotalMb", "temperatureC"],
+            "properties": {
+              "index": { "type": "integer", "minimum": 0 },
+              "name": { "type": "string", "minLength": 1 },
+              "utilizationPercent": { "$ref": "#/$defs/percentage" },
+              "memoryUsedMb": { "type": "integer", "minimum": 0 },
+              "memoryTotalMb": { "type": "integer", "minimum": 1 },
+              "temperatureC": { "type": "number", "minimum": -20, "maximum": 130 }
+            }
+          }
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["taskId", "runId", "assignmentEpoch", "appliedTaskVersion", "actualState"],
+      "properties": {
+        "taskId": { "$ref": "#/$defs/id" },
+        "runId": { "$ref": "#/$defs/id" },
+        "assignmentEpoch": { "type": "integer", "minimum": 1 },
+        "appliedTaskVersion": { "type": "integer", "minimum": 0 },
+        "actualState": { "enum": ["PENDING", "PREPARING", "STARTING", "RUNNING", "DEGRADED", "RECONNECTING", "STOPPING", "STOPPED", "FAILED", "LOST"] },
+        "lastPacketAt": { "type": ["string", "null"], "format": "date-time" },
+        "lastFrameAt": { "type": ["string", "null"], "format": "date-time" },
+        "lastInferenceAt": { "type": ["string", "null"], "format": "date-time" },
+        "lastResultAt": { "type": ["string", "null"], "format": "date-time" }
+      }
+    }
+  }
+}

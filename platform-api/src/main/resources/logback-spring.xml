@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <springProperty scope="context" name="WORK_DIR" source="streamfusion.work-dir" defaultValue=".run"/>
+    <conversionRule conversionWord="safeMessage" class="com.streamfusion.platform.common.logging.SafeMessageConverter"/>
+    <conversionRule conversionWord="safeException" class="com.streamfusion.platform.common.logging.SafeExceptionConverter"/>
+    <property name="PATTERN" value="%d{yyyy-MM-dd'T'HH:mm:ss.SSS'Z',UTC} level=%level service=platform-api traceId=%X{traceId:--} logger=%logger{40} %safeMessage%n%safeException"/>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder><pattern>${PATTERN}</pattern><charset>UTF-8</charset></encoder>
+    </appender>
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${WORK_DIR}/logs/platform-api.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${WORK_DIR}/logs/platform-api.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>10MB</maxFileSize>
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>100MB</totalSizeCap>
+        </rollingPolicy>
+        <encoder><pattern>${PATTERN}</pattern><charset>UTF-8</charset></encoder>
+    </appender>
+    <root level="INFO"><appender-ref ref="CONSOLE"/><appender-ref ref="FILE"/></root>
+</configuration>

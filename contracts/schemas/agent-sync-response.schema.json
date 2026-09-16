@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/video-ai/schemas/agent-sync-response-1.0.json",
+  "title": "Agent Sync Response 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "serverTime", "assignmentRevision", "assignments", "commands"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "serverTime": { "type": "string", "format": "date-time" },
+    "assignmentRevision": { "type": "integer", "minimum": 0 },
+    "assignments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["taskId", "desiredState", "taskVersion", "assignmentEpoch", "taskSpecUrl", "leaseExpiresAt"],
+        "properties": {
+          "taskId": { "type": "string", "minLength": 1 },
+          "desiredState": { "enum": ["RUNNING", "STOPPED"] },
+          "taskVersion": { "type": "integer", "minimum": 1 },
+          "assignmentEpoch": { "type": "integer", "minimum": 1 },
+          "taskSpecUrl": { "type": "string", "minLength": 1 },
+          "leaseExpiresAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["commandId", "type", "expiresAt"],
+        "properties": {
+          "commandId": { "type": "string", "minLength": 1 },
+          "type": { "enum": ["COLLECT_DIAGNOSTICS", "RESTART_AGENT", "RELOAD_CAPABILITIES", "CLEAR_ARTIFACT_CACHE"] },
+          "targetRunId": { "type": ["string", "null"] },
+          "expiresAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}

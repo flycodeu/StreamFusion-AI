@@ -4,9 +4,9 @@
 
 将平台管理、节点协调和算法执行分开，逐步构建从视频接入、任务运行到事件证据的完整链路。
 
-[快速开始](#快速开始) · [系统架构](#系统架构) · [环境配置](#环境配置) · [路线图](#路线图) · [反馈问题](https://github.com/flycodeu/StreamFusion-AI/issues)
+[快速开始](#快速开始) · [系统架构](#系统架构) · [开发指南](DEVELOPMENT.md) · [公共协议](contracts/README.md) · [路线图](#路线图) · [反馈问题](https://github.com/flycodeu/StreamFusion-AI/issues)
 
-> **项目状态：早期开发，工程底座已就绪。** 当前提供可启动的工程骨架、健康检查和分环境配置。视频拉流、模型推理、任务调度及事件管理尚未实现，暂不具备生产使用条件。
+> **项目状态：早期开发。** 当前提供工程骨架、健康检查、分环境配置、日志与自动化检查。视频拉流、模型推理、任务调度及事件管理尚未实现，暂不具备生产使用条件。
 
 ## 项目介绍
 
@@ -18,13 +18,14 @@ StreamFusion AI 的目标是让视频分析任务可以被统一配置、在算�
 
 | 模块 | 当前已实现 | 尚未实现 |
 |---|---|---|
-| Platform API | Spring Boot 启动、Actuator 健康检查、四环境配置 | 用户、相机、任务及事件 API |
-| Platform Web | Vue 空壳、后端连接检查、失败提示与手动重试 | 管理页面、视频预览 |
-| Node Agent | 独立 Python 环境、健康接口、接口文档 | 节点注册、心跳、任务同步、进程监督 |
-| Algorithm Runtime | 独立 Python 环境、健康接口、接口文档 | 拉流、解码、模型推理、事件与证据 |
-| 工程基础 | 依赖锁定、启动脚本、构建与健康测试 | CI/CD、部署编排 |
+| Platform API | 健康检查、四环境配置、启动校验、统一错误、OpenAPI JSON | 用户、相机、任务及事件 API |
+| Platform Web | 后端连接检查、请求超时、错误码与请求标识、手动重试 | 管理页面、视频预览 |
+| Node Agent | 独立环境与配置、健康接口、接口文档、请求日志 | 节点注册、心跳、任务同步、进程监督 |
+| Algorithm Runtime | 独立环境与配置、健康接口、接口文档、请求日志 | 拉流、解码、模型推理、事件与证据 |
+| 工程基础 | 依赖锁定、环境检查、日志轮转与脱敏、质量检查、CI 工作流、协议样例校验 | 自动部署、部署编排 |
 
 健康接口返回 `UP` 仅表示进程可用；Python 接口中的 `mode=skeleton` 表示当前为空壳实现。
+公共协议为设计基线，不代表节点同步链路已经运行；CI 结果以 [GitHub Actions](https://github.com/flycodeu/StreamFusion-AI/actions) 的实际记录为准。
 
 ## 系统架构
 
@@ -61,7 +62,7 @@ flowchart LR
 | Node.js | 24.21.0 | [.nvmrc](platform-web/.nvmrc) |
 | pnpm | 10.34.5 | [package.json](platform-web/package.json) |
 | Python | 3.12 | [pyproject.toml](algorithm-node/node-agent/pyproject.toml) |
-| uv | 支持仓库中的 `uv.lock` | Python 依赖安装与环境管理 |
+| uv | CI 固定使用 0.7.19 | Python 依赖安装与环境管理 |
 
 设置 `JAVA_HOME` 为 JDK 21 的安装目录，并确认 `java -version`、`node -v`、`pnpm -v`、`uv --version`。
 首次安装需能访问 Maven、npm 和 PyPI。无需安装全局 Maven。
@@ -99,6 +100,9 @@ uv sync --locked
 Pop-Location
 ```
 
+安装后可从根目录执行 `.\scripts\doctor.ps1`，检查工具链、Python 解释器、依赖与默认端口。
+该脚本只诊断，不安装软件，也不停止占用端口的进程。
+
 ### 4. 启动服务
 
 在仓库根目录打开四个终端，每个终端执行一条命令：
@@ -114,6 +118,7 @@ Pop-Location
 |---|---|
 | Web | http://127.0.0.1:5173 |
 | API 健康检查 | http://127.0.0.1:8080/actuator/health |
+| API 接口描述（开发环境） | http://127.0.0.1:8080/v3/api-docs |
 | Agent 健康检查 / 接口文档 | http://127.0.0.1:8100/health · http://127.0.0.1:8100/docs |
 | Runtime 健康检查 / 接口文档 | http://127.0.0.1:8101/health · http://127.0.0.1:8101/docs |
 
@@ -179,20 +184,27 @@ java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=prod
 前端需要改变后端地址时，复制 [环境变量示例](platform-web/.env.example) 为 `platform-web/.env.local`，
 修改 `API_TARGET` 后重启 Vite。默认请求链为浏览器 → Vite 代理 → Platform API。
 
-Agent 与 Runtime 使用 Uvicorn 的 `--host`、`--port` 参数配置监听地址，详见 [算法节点说明](algorithm-node/README.md)。
+Agent 与 Runtime 在各自目录使用 `uv run --locked python -m app` 启动。
+需要自定义时，将各自的 `.env.example` 复制为 `.env.local`，分别使用 `SF_AGENT_*` 和 `SF_RUNTIME_*` 配置；
+环境变量优先于文件，配置错误会阻止正常启动。已有文件不要覆盖。
+完整配置项、日志位置和超时边界见 [开发指南](DEVELOPMENT.md#配置入口)。
 
 ## 开发与验证
 
 | 检查 | 工作目录 | 命令 |
 |---|---|---|
-| 后端构建与测试 | `platform-api` | `mvnw.cmd clean verify` |
-| 前端类型与构建 | `platform-web` | `pnpm build` |
-| Agent 健康接口测试 | `algorithm-node/node-agent` | `uv run --locked python -m pytest -q` |
-| Runtime 健康接口测试 | `algorithm-node/runtime` | `uv run --locked python -m pytest -q` |
+| 后端格式、构建与测试 | `platform-api` | `mvnw.cmd clean verify` |
+| 前端检查与测试 | `platform-web` | `pnpm lint`、`pnpm format:check`、`pnpm test`、`pnpm build` |
+| Agent 配置与接口测试 | `algorithm-node/node-agent` | `uv run --locked python -m pytest -q` |
+| Runtime 配置与接口测试 | `algorithm-node/runtime` | `uv run --locked python -m pytest -q` |
+| 公共协议校验 | 仓库根目录 | `uv run --project algorithm-node/node-agent --locked python -m pytest contracts/tests -q` |
+| 本地环境检查 | 仓库根目录 | `.\scripts\doctor.ps1` |
 | 运行中的服务检查 | 仓库根目录 | `.\scripts\check-health.ps1` |
 
-后端测试覆盖健康响应、四环境配置加载、本地配置隔离、默认环境及配置缺失行为。
-以上验证仅覆盖当前工程骨架，不包含真实视频、推理精度或 GPU 性能验证。
+测试覆盖健康响应、配置加载与隔离、非法配置、错误分类、请求标识、日志脱敏及协议样例。
+Python 的 Ruff、mypy 命令和格式化方法见 [开发指南](DEVELOPMENT.md#验证命令)。
+GitHub Actions 配置了 Windows / Linux 检查矩阵，不包含部署操作。
+这些检查不能替代完整浏览器链路、真实视频、推理精度或 GPU 性能验收。
 
 <details>
 <summary>常见启动问题</summary>
@@ -202,7 +214,7 @@ Agent 与 Runtime 使用 Uvicorn 的 `--host`、`--port` 参数配置监听地�
 - **端口占用**：检查 8080、5173、8100、8101 的监听进程。修改端口后同时调整代理和检查地址。
 - **依赖下载失败**：检查网络、代理和包管理器镜像配置。
 - **local 文件找不到**：检查启动工作目录及 `LOCAL_CONFIG_PATH`。
-- **运行日志**：查看对应启动终端；当前没有任务或事件日志。
+- **运行日志**：查看启动终端及各服务默认 `.run/logs/`，用响应中的 `X-Trace-Id` 定位请求；当前没有任务或事件日志。
 - **发布前端**：`dist/` 需要静态服务器及 API 反向代理，不能把 Vite 开发服务器作为生产部署方案。
 
 </details>
@@ -211,6 +223,7 @@ Agent 与 Runtime 使用 Uvicorn 的 `--host`、`--port` 参数配置监听地�
 
 ```text
 StreamFusion-AI/
+├── .github/workflows/         # GitHub Actions 自动检查
 ├── platform-api/              # Java 平台后端
 │   ├── config/                # 外部配置，仅示例提交
 │   └── src/
@@ -220,11 +233,14 @@ StreamFusion-AI/
 ├── algorithm-node/
 │   ├── node-agent/            # 节点协调进程与独立依赖
 │   └── runtime/               # 算法执行进程与独立依赖
-└── scripts/                   # 启动与健康检查
+├── contracts/                 # 公共协议、样例及校验
+├── scripts/                   # 启动、环境诊断与健康检查
+└── DEVELOPMENT.md             # 配置、日志与开发约定
 ```
 
 版本文件、依赖锁文件、Maven Wrapper 和无敏感信息的配置示例纳入版本管理。
 依赖目录、构建产物、IDE 配置、真实 `.env`、本地配置和算法运行数据不提交。
+`.github/` 是共享自动检查配置，应提交；本地工具目录 `.tools/` 和运行目录 `.run/` 不提交。
 
 ## 路线图
 
@@ -232,6 +248,8 @@ StreamFusion-AI/
 
 - [x] 三工程骨架，Agent / Runtime 独立运行
 - [x] 健康检查、环境配置分离与依赖锁定
+- [x] 启动校验、环境诊断、日志与错误处理基础
+- [x] 代码质量检查、CI 工作流与公共协议样例
 - [ ] 数据库迁移与基础存储接入
 - [ ] 真实视频接入、解码与单路模型推理
 - [ ] 节点注册、任务同步与 Runtime 监督

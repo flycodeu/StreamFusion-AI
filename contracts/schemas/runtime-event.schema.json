@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/video-ai/schemas/runtime-event-1.0.json",
+  "title": "Runtime Event 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "eventId", "eventRevision", "runId", "taskId", "taskScenarioId", "assignmentEpoch", "type", "scenarioCode", "occurredAt", "severity", "summary", "localEvidence"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "eventId": { "type": "string", "minLength": 1 },
+    "eventRevision": { "type": "integer", "minimum": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "taskId": { "type": "string", "minLength": 1 },
+    "taskScenarioId": { "type": "string", "minLength": 1 },
+    "assignmentEpoch": { "type": "integer", "minimum": 1 },
+    "type": { "enum": ["OPEN", "UPDATE", "CLOSE", "VIDEO_READY", "VIDEO_FAILED"] },
+    "scenarioCode": { "type": "string", "minLength": 1 },
+    "subjectKey": { "type": ["string", "null"] },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "severity": { "type": "integer", "minimum": 1, "maximum": 4 },
+    "summary": { "type": "object" },
+    "localEvidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidenceId", "kind", "path", "capturedAt", "sha256"],
+        "properties": {
+          "evidenceId": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["RAW_IMAGE", "ANNOTATED_IMAGE", "EVENT_VIDEO", "DIAGNOSTIC"] },
+          "path": { "type": "string", "minLength": 1 },
+          "capturedAt": { "type": "string", "format": "date-time" },
+          "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }
+        }
+      }
+    }
+  }
+}

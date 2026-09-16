@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1.0",
+  "nodeId": "node-a",
+  "agentVersion": "0.1.0",
+  "lastAssignmentRevision": 1032,
+  "observedAt": "2026-09-15T05:00:00Z",
+  "capabilities": {
+    "executors": ["GENERIC_GSTREAMER"],
+    "codecs": ["H264", "H265"],
+    "gstreamerVersion": "1.24.x",
+    "ffmpegVersion": "distribution-package",
+    "cudaVersion": "environment-specific"
+  },
+  "resources": {
+    "cpuUsagePercent": 31.2,
+    "memoryUsedMb": 11820,
+    "memoryTotalMb": 32768,
+    "diskFreeGb": 420.5,
+    "gpus": [
+      {
+        "index": 0,
+        "name": "NVIDIA RTX 4090",
+        "utilizationPercent": 63.0,
+        "memoryUsedMb": 12800,
+        "memoryTotalMb": 24564,
+        "temperatureC": 65
+      }
+    ]
+  },
+  "runs": [
+    {
+      "taskId": "task-1001",
+      "runId": "run-3007",
+      "assignmentEpoch": 8,
+      "appliedTaskVersion": 12,
+      "actualState": "RUNNING",
+      "lastPacketAt": "2026-09-15T04:59:59.900Z",
+      "lastFrameAt": "2026-09-15T04:59:59.800Z",
+      "lastInferenceAt": "2026-09-15T04:59:59.500Z",
+      "lastResultAt": "2026-09-15T04:59:59.510Z"
+    }
+  ],
+  "acknowledgedCommandIds": ["cmd-7700"]
+}

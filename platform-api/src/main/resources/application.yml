@@ -3,6 +3,15 @@ spring:
     name: streamfusion-platform-api
   profiles:
     default: dev
+  lifecycle:
+    timeout-per-shutdown-phase: ${streamfusion.shutdown-grace}
+streamfusion:
+  work-dir: ${SF_API_WORK_DIR:.run}
+  shutdown-grace: ${SF_API_SHUTDOWN_GRACE:15s}
+springdoc:
+  api-docs:
+    enabled: ${API_DOCS_ENABLED:true}
+    path: /v3/api-docs
 server:
   shutdown: graceful
 management:

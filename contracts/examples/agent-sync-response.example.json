@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1.0",
+  "serverTime": "2026-09-15T05:00:00.120Z",
+  "assignmentRevision": 1034,
+  "assignments": [
+    {
+      "taskId": "task-1001",
+      "desiredState": "RUNNING",
+      "taskVersion": 13,
+      "assignmentEpoch": 8,
+      "taskSpecUrl": "/internal/v1/assignments/asg-9001/spec",
+      "leaseExpiresAt": "2026-09-15T05:00:20Z"
+    }
+  ],
+  "commands": [
+    {
+      "commandId": "cmd-7788",
+      "type": "COLLECT_DIAGNOSTICS",
+      "targetRunId": "run-3007",
+      "expiresAt": "2026-09-15T05:05:00Z"
+    }
+  ]
+}

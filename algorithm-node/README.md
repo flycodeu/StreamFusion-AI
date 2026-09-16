@@ -13,9 +13,13 @@
 
 ```powershell
 # node-agent 目录
-uv run --locked python -m uvicorn app.main:app --host 127.0.0.1 --port 8100
+uv run --locked python -m app
 # runtime 目录（另一个终端）
-uv run --locked python -m uvicorn app.main:app --host 127.0.0.1 --port 8101
+uv run --locked python -m app
 ```
 
-各目录执行 `uv run --locked python -m pytest` 可测试健康接口。Ctrl+C 停止。
+各目录执行 `uv run --locked python -m pytest` 可测试健康接口、配置校验、错误响应与日志脱敏。Ctrl+C 停止服务。
+
+复制各目录的 `.env.example` 为 `.env.local` 后修改本地配置（不要覆盖已有文件）。
+Agent 使用 SF_AGENT_*，Runtime 使用 SF_RUNTIME_*；启动时校验配置。
+完整配置、日志、质量检查说明见 [开发指南](../DEVELOPMENT.md)。

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "1.0",
+  "eventId": "evt-7001",
+  "eventRevision": 1,
+  "runId": "run-3007",
+  "taskId": "task-1001",
+  "taskScenarioId": "ts-01",
+  "assignmentEpoch": 8,
+  "type": "OPEN",
+  "scenarioCode": "helmet_missing",
+  "subjectKey": "session-44:track-12",
+  "occurredAt": "2026-09-15T05:01:12.532Z",
+  "severity": 3,
+  "summary": {
+    "confidence": 0.91,
+    "regionId": "roi-gate"
+  },
+  "localEvidence": [
+    {
+      "evidenceId": "evd-1",
+      "kind": "RAW_IMAGE",
+      "path": "/var/lib/video-ai/evidence-staging/evt-7001/raw.jpg",
+      "capturedAt": "2026-09-15T05:01:12.500Z",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "evidenceId": "evd-2",
+      "kind": "ANNOTATED_IMAGE",
+      "path": "/var/lib/video-ai/evidence-staging/evt-7001/annotated.jpg",
+      "capturedAt": "2026-09-15T05:01:12.500Z",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+}

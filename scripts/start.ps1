@@ -42,11 +42,11 @@ try {
         }
         'agent' {
             Set-Location algorithm-node/node-agent
-            & uv run --locked python -m uvicorn app.main:app --host 127.0.0.1 --port 8100
+            & uv run --locked python -m app
         }
         'runtime' {
             Set-Location algorithm-node/runtime
-            & uv run --locked python -m uvicorn app.main:app --host 127.0.0.1 --port 8101
+            & uv run --locked python -m app
         }
     }
     if ($LASTEXITCODE -ne 0) { throw "$Project exited with code $LASTEXITCODE" }
