@@ -1,0 +1,9 @@
+# Copy to application-local.yml and select the local profile.
+# This example is public; the copied file is ignored by Git.
+server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
+  port: ${SERVER_PORT:8080}
+logging:
+  level:
+    root: INFO
+    com.streamfusion: DEBUG

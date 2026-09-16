@@ -1,0 +1,5 @@
+# Load personal configuration only when the local profile is selected.
+# Required on purpose: a missing local file must not silently use other defaults.
+spring:
+  config:
+    import: "file:${LOCAL_CONFIG_PATH:./config/application-local.yml}"

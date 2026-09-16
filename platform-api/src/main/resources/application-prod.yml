@@ -1,0 +1,11 @@
+# Public production defaults; inject deployment-specific values externally.
+server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
+  port: ${SERVER_PORT:8080}
+  error:
+    include-message: never
+    include-stacktrace: never
+logging:
+  level:
+    root: INFO
+    com.streamfusion: INFO

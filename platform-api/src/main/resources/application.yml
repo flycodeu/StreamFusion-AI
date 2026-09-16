@@ -1,0 +1,15 @@
+spring:
+  application:
+    name: streamfusion-platform-api
+  profiles:
+    default: dev
+server:
+  shutdown: graceful
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never

@@ -1,0 +1,8 @@
+# Test-only resource: never packaged into the application JAR.
+server:
+  address: 127.0.0.1
+  port: 0
+logging:
+  level:
+    root: WARN
+    com.streamfusion: WARN
