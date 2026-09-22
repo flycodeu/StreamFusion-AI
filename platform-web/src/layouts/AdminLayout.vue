@@ -3,6 +3,7 @@ import { ref } from 'vue'
 
 defineProps<{ displayName?: string }>()
 const collapsed = ref(false)
+const brandIcon = `${import.meta.env.BASE_URL}streamfusion.svg`
 </script>
 
 <template>
@@ -10,8 +11,8 @@ const collapsed = ref(false)
     <a class="skip-link" href="#main-content">跳转到内容</a>
     <aside id="primary-sidebar" class="sidebar" aria-label="主导航">
       <a class="brand" href="#main-content" aria-label="StreamFusion AI 首页">
-        <span class="brand-mark" aria-hidden="true">SF</span>
-        <span class="brand-name">StreamFusion <small>AI PLATFORM</small></span>
+        <img class="brand-mark" :src="brandIcon" alt="" width="34" height="34" />
+        <span class="brand-name">StreamFusion <span class="brand-ai">AI</span></span>
       </a>
       <nav class="navigation" aria-label="功能菜单">
         <a class="nav-item is-active" href="#main-content" aria-current="page" title="系统概览">
@@ -30,7 +31,6 @@ const collapsed = ref(false)
           <span class="nav-label">系统概览</span>
         </a>
       </nav>
-      <span class="sidebar-caption">STREAMFUSION AI</span>
     </aside>
     <div class="workspace">
       <header class="topbar">
@@ -104,43 +104,34 @@ svg {
   height: 100dvh;
   display: flex;
   flex-direction: column;
-  background: #162432;
-  color: #a8b6c5;
+  background: #edf3f2;
+  color: #526b69;
+  border-right: 1px solid #dce6e3;
 }
 .brand {
   height: 76px;
-  padding: 0 22px;
+  padding: 0 18px;
   display: flex;
   align-items: center;
-  gap: 11px;
-  color: #f5f8fb;
+  gap: 10px;
+  color: #254a47;
   white-space: nowrap;
 }
 .brand-mark {
-  display: grid;
-  place-items: center;
+  display: block;
   width: 34px;
   height: 34px;
   flex-shrink: 0;
-  border: 1px solid #466c72;
-  border-radius: 9px;
-  background: #24474f;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: -1px;
 }
 .brand-name {
   font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.3px;
 }
-.brand-name small {
-  display: block;
-  margin-top: 4px;
-  color: #78939f;
-  font-size: 8px;
-  letter-spacing: 2.4px;
-  font-weight: 500;
+.brand-ai {
+  color: #177a78;
+  font-size: 12px;
+  font-weight: 600;
 }
 .navigation {
   padding: 22px 12px;
@@ -156,19 +147,12 @@ svg {
   white-space: nowrap;
 }
 .nav-item.is-active {
-  background: #23434c;
-  color: #d8f4ed;
-  box-shadow: inset 3px 0 #68b8a9;
+  background: #d8e9e4;
+  color: #1f6259;
+  box-shadow: inset 3px 0 #398a78;
 }
 .nav-item:hover {
-  background: #2b4a55;
-}
-.sidebar-caption {
-  margin: auto 0 24px;
-  text-align: center;
-  font-size: 9px;
-  letter-spacing: 1.8px;
-  color: #688090;
+  background: #cfe3dc;
 }
 .workspace {
   flex: 1;
@@ -241,8 +225,7 @@ svg {
   padding: 0 21px;
 }
 .is-collapsed .brand-name,
-.is-collapsed .nav-label,
-.is-collapsed .sidebar-caption {
+.is-collapsed .nav-label {
   display: none;
 }
 .is-collapsed .nav-item {
@@ -257,8 +240,7 @@ svg {
     padding: 0 15px;
   }
   .brand-name,
-  .nav-label,
-  .sidebar-caption {
+  .nav-label {
     display: none;
   }
   .navigation {

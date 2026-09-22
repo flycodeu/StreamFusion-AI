@@ -12,7 +12,8 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "dev": "vite",
+    "test:dev-start": "node --test ../scripts/tests/web-start.test.mjs",
+    "dev": "node scripts/dev.mjs",
     "typecheck": "vue-tsc --noEmit",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort"

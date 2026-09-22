@@ -26,10 +26,10 @@ async function checkHealth(): Promise<void> {
   try {
     await getHealth()
     status.value = 'up'
-    detail.value = 'Platform API · UP'
+    detail.value = '后端服务连接正常'
   } catch (error: unknown) {
     status.value = 'failed'
-    detail.value = `${error instanceof Error ? error.message : '未知错误'}。请检查 Platform API 是否启动及 API_TARGET 配置。`
+    detail.value = `${error instanceof Error ? error.message : '未知错误'}。请确认后端服务已启动，或联系管理员检查连接配置。`
     if (error instanceof ApiRequestError) {
       detail.value += ` 错误码：${error.code}，请求标识：${error.traceId}`
     }
@@ -47,17 +47,11 @@ onMounted(checkHealth)
 <template>
   <AdminLayout>
     <div class="page-heading">
-      <div>
-        <p class="eyebrow">WORKSPACE</p>
-        <h1>系统概览</h1>
-      </div>
+      <h1>系统概览</h1>
     </div>
     <section class="health" aria-labelledby="health-title">
       <div class="section-heading">
-        <div>
-          <h2 id="health-title">服务状态</h2>
-          <p class="section-subtitle">Platform API</p>
-        </div>
+        <h2 id="health-title">服务状态</h2>
         <ElButton :loading="loading" @click="checkHealth">刷新状态</ElButton>
       </div>
       <div role="status" aria-live="polite">
@@ -79,12 +73,6 @@ onMounted(checkHealth)
   justify-content: space-between;
   gap: 20px;
   margin-bottom: 26px;
-}
-.eyebrow {
-  font-size: 10px;
-  letter-spacing: 2px;
-  color: #81919d;
-  margin: 0 0 10px;
 }
 h1 {
   margin: 0;
@@ -110,11 +98,6 @@ h2 {
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-}
-.section-subtitle {
-  margin: 6px 0 0;
-  font-size: 11px;
-  color: #8a96a1;
 }
 .status {
   display: flex;
