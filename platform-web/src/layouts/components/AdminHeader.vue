@@ -24,9 +24,6 @@ const emit = defineEmits<{ 'toggle-sidebar': [] }>()
         <path d="M9 4v16M13 9h4M13 13h4" />
       </svg>
     </button>
-    <span class="breadcrumb"
-      >工作台 <span aria-hidden="true">/</span> <strong>系统概览</strong></span
-    >
     <div class="account" aria-label="当前用户">
       <span class="avatar" aria-hidden="true">
         <template v-if="displayName">{{ Array.from(displayName)[0] }}</template>
@@ -35,7 +32,9 @@ const emit = defineEmits<{ 'toggle-sidebar': [] }>()
           <path d="M5 20v-2a7 7 0 0 1 14 0v2" />
         </svg>
       </span>
-      <span>{{ displayName || '未登录' }}</span>
+      <span class="account-name" :title="displayName || '未登录'">{{
+        displayName || '未登录'
+      }}</span>
     </div>
   </header>
 </template>
@@ -47,10 +46,10 @@ svg {
   flex-shrink: 0;
 }
 .topbar {
-  height: 64px;
-  padding: 0 30px;
-  border-bottom: 1px solid #e4e9ed;
+  height: var(--header-height);
+  padding: 6px 20px;
   background: #fff;
+  border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   gap: 22px;
@@ -58,28 +57,19 @@ svg {
 .icon-button {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
-  padding: 4px;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  padding: 8px;
   border: 0;
   background: transparent;
-  border-radius: 5px;
-  color: #697888;
+  border-radius: 50%;
+  color: var(--text-secondary);
   cursor: pointer;
 }
 .icon-button:hover {
-  background: #edf3f5;
-  color: #177a78;
-}
-.breadcrumb {
-  font-size: 12px;
-  color: #8b96a1;
-  display: flex;
-  gap: 16px;
-}
-.breadcrumb strong {
-  color: #4b5967;
-  font-weight: 500;
+  background: var(--surface-muted);
+  color: var(--text-primary);
 }
 .account {
   margin-left: auto;
@@ -87,16 +77,24 @@ svg {
   align-items: center;
   gap: 10px;
   font-size: 13px;
-  color: #526170;
+  color: var(--text-secondary);
+  min-width: 0;
+  max-width: min(50%, 240px);
+}
+.account-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .avatar {
   width: 32px;
   height: 32px;
+  flex-shrink: 0;
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: #eaf1f2;
-  color: #567980;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
   font-size: 13px;
 }
 .avatar svg {
@@ -105,11 +103,8 @@ svg {
 }
 @media (max-width: 680px) {
   .topbar {
-    padding: 0 16px;
+    padding: 0 12px;
     gap: 10px;
-  }
-  .breadcrumb {
-    gap: 8px;
   }
   .account {
     gap: 6px;

@@ -38,11 +38,13 @@ const collapsed = ref(false)
   top: 8px;
 }
 .admin-layout {
+  --header-height: 56px;
   display: flex;
   min-height: 100dvh;
 }
 .workspace {
   flex: 1;
   min-width: 0;
+  background: #fafbf9;
 }
 </style>

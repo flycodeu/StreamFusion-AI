@@ -1,8 +1,12 @@
 :root {
-  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
-  color: #263343;
-  background: #f4f6f8;
+  font-family: 'SF Pro Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: var(--text-primary);
+  background: #fff;
   font-synthesis: none;
+  --text-primary: #252724;
+  --text-secondary: #6b706a;
+  --surface-muted: #f5f6f3;
+  --border-subtle: #e7e9e4;
   --el-color-primary: #177a78;
 }
 * {
@@ -24,6 +28,6 @@ a {
   text-decoration: none;
 }
 :focus-visible {
-  outline: 2px solid #238eaa;
+  outline: 2px solid #177a78;
   outline-offset: 4px;
 }
