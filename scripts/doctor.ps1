@@ -81,7 +81,7 @@ foreach ($project in @('node-agent', 'runtime')) {
 if (Test-Path (Join-Path $projectRoot 'algorithm-node/.venv')) {
     Write-Output 'WARN [PyCharm] Parent algorithm-node/.venv exists. Select each subproject .venv, not this parent environment.'
 }
-foreach ($port in @(8080, 5173, 8100, 8101)) {
+foreach ($port in @(8080, 8090, 8100, 8101)) {
     $listeners = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
     if ($listeners.Count -eq 0) { Write-Output "PASS [Port $port] available" }
     else {

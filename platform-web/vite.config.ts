@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => {
     plugins: [vue()],
     server: {
       host: '127.0.0.1',
-      port: 5173,
+      port: 8090,
       strictPort: true,
       proxy: {
         '/actuator': { target: env.API_TARGET || 'http://127.0.0.1:8080' },
