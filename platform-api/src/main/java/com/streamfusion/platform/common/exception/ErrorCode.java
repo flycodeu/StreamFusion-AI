@@ -51,10 +51,22 @@ public enum ErrorCode {
     }
 
     public static ErrorCode fromStatus(int status) {
-        if (status == 422) return VALIDATION_ERROR;
-        for (ErrorCode code : values()) {
-            if (code.httpStatus == status) return code;
-        }
-        return status >= 500 ? INTERNAL_ERROR : HTTP_ERROR;
+        // Several business errors share a status; the default must not depend on enum order.
+        return switch (status) {
+            case 400, 422 -> VALIDATION_ERROR;
+            case 401 -> UNAUTHORIZED;
+            case 403 -> FORBIDDEN;
+            case 404 -> NOT_FOUND;
+            case 405 -> METHOD_NOT_ALLOWED;
+            case 406 -> NOT_ACCEPTABLE;
+            case 409 -> CONFLICT;
+            case 412 -> PRECONDITION_FAILED;
+            case 413 -> PAYLOAD_TOO_LARGE;
+            case 415 -> UNSUPPORTED_MEDIA_TYPE;
+            case 428 -> PRECONDITION_REQUIRED;
+            case 429 -> RATE_LIMITED;
+            case 503 -> DEPENDENCY_UNAVAILABLE;
+            default -> status >= 500 ? INTERNAL_ERROR : HTTP_ERROR;
+        };
     }
 }

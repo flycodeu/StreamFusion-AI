@@ -45,9 +45,9 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
             List<ValidationDetails.FieldError> fields =
                     binding.getFieldErrors().stream()
                             .map(error -> error.getField())
-                            .filter(field -> field.matches("[A-Za-z][A-Za-z0-9_]{0,63}"))
+                            .filter(ValidationDetails.FieldError::isValidFieldName)
                             .distinct()
-                            .limit(20)
+                            .limit(ValidationDetails.MAX_FIELD_ERRORS)
                             .map(ValidationDetails.FieldError::invalid)
                             .toList();
             if (!fields.isEmpty()) details = new ValidationDetails(fields);

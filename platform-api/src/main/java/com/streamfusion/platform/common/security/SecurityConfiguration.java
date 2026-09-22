@@ -10,6 +10,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.security.web.csrf.CsrfException;
 
 /** Fail-closed foundation. Login and user authorization are intentionally not implemented yet. */
@@ -37,25 +38,24 @@ public class SecurityConfiguration {
                 .logout(AbstractHttpConfigurer::disable)
                 .requestCache(AbstractHttpConfigurer::disable)
                 .exceptionHandling(
-                        errors ->
-                                errors.authenticationEntryPoint(
-                                                (request, response, exception) ->
-                                                        writer.write(
-                                                                request,
-                                                                response,
-                                                                ErrorCode.UNAUTHORIZED))
-                                        .accessDeniedHandler(
-                                                (request, response, exception) ->
-                                                        writer.write(
-                                                                request,
-                                                                response,
-                                                                exception instanceof CsrfException
-                                                                                && ApiErrorWriter
-                                                                                        .isBusinessRequest(
-                                                                                                request)
-                                                                        ? ErrorCode.CSRF_INVALID
-                                                                        : ErrorCode.FORBIDDEN)));
+                        errors -> {
+                            errors.authenticationEntryPoint(
+                                    (request, response, exception) ->
+                                            writer.write(
+                                                    request, response, ErrorCode.UNAUTHORIZED));
+                            errors.accessDeniedHandler(accessDeniedHandler(writer));
+                        });
         // Keep CSRF protection; cookie/JWT/session choices belong to the login design.
         return http.build();
+    }
+
+    private static AccessDeniedHandler accessDeniedHandler(ApiErrorWriter writer) {
+        return (request, response, exception) -> {
+            ErrorCode code =
+                    exception instanceof CsrfException && ApiErrorWriter.isBusinessRequest(request)
+                            ? ErrorCode.CSRF_INVALID
+                            : ErrorCode.FORBIDDEN;
+            writer.write(request, response, code);
+        };
     }
 }

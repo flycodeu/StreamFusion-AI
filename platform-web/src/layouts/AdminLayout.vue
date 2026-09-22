@@ -73,3 +73,216 @@ const collapsed = ref(false)
     </div>
   </div>
 </template>
+
+<style scoped>
+svg {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+.skip-link {
+  position: fixed;
+  top: -64px;
+  left: 16px;
+  z-index: 10;
+  padding: 12px;
+  background: white;
+}
+.skip-link:focus {
+  top: 8px;
+}
+.admin-layout {
+  --sidebar-width: 224px;
+  display: flex;
+  min-height: 100dvh;
+}
+.sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: #162432;
+  color: #a8b6c5;
+}
+.brand {
+  height: 76px;
+  padding: 0 22px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: #f5f8fb;
+  white-space: nowrap;
+}
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: 1px solid #466c72;
+  border-radius: 9px;
+  background: #24474f;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -1px;
+}
+.brand-name {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+}
+.brand-name small {
+  display: block;
+  margin-top: 4px;
+  color: #78939f;
+  font-size: 8px;
+  letter-spacing: 2.4px;
+  font-weight: 500;
+}
+.navigation {
+  padding: 22px 12px;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 0 15px;
+  border-radius: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.nav-item.is-active {
+  background: #23434c;
+  color: #d8f4ed;
+  box-shadow: inset 3px 0 #68b8a9;
+}
+.nav-item:hover {
+  background: #2b4a55;
+}
+.sidebar-caption {
+  margin: auto 0 24px;
+  text-align: center;
+  font-size: 9px;
+  letter-spacing: 1.8px;
+  color: #688090;
+}
+.workspace {
+  flex: 1;
+  min-width: 0;
+}
+.topbar {
+  height: 64px;
+  padding: 0 30px;
+  border-bottom: 1px solid #e4e9ed;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  border-radius: 5px;
+  color: #697888;
+  cursor: pointer;
+}
+.icon-button:hover {
+  background: #edf3f5;
+  color: #177a78;
+}
+.breadcrumb {
+  font-size: 12px;
+  color: #8b96a1;
+  display: flex;
+  gap: 16px;
+}
+.breadcrumb strong {
+  color: #4b5967;
+  font-weight: 500;
+}
+.account {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #526170;
+}
+.avatar {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #eaf1f2;
+  color: #567980;
+  font-size: 13px;
+}
+.avatar svg {
+  width: 20px;
+  height: 20px;
+}
+.main-content {
+  padding: 36px;
+}
+.is-collapsed {
+  --sidebar-width: 76px;
+}
+.is-collapsed .brand {
+  padding: 0 21px;
+}
+.is-collapsed .brand-name,
+.is-collapsed .nav-label,
+.is-collapsed .sidebar-caption {
+  display: none;
+}
+.is-collapsed .nav-item {
+  padding: 0 15px;
+}
+@media (max-width: 680px) {
+  .admin-layout {
+    --sidebar-width: 64px;
+  }
+  .brand,
+  .is-collapsed .brand {
+    padding: 0 15px;
+  }
+  .brand-name,
+  .nav-label,
+  .sidebar-caption {
+    display: none;
+  }
+  .navigation {
+    padding: 22px 8px;
+  }
+  .nav-item {
+    padding: 0 13px;
+  }
+  .is-collapsed .sidebar {
+    display: none;
+  }
+  .topbar {
+    padding: 0 16px;
+    gap: 10px;
+  }
+  .breadcrumb {
+    gap: 8px;
+  }
+  .account {
+    gap: 6px;
+    font-size: 12px;
+  }
+  .main-content {
+    padding: 26px 18px;
+  }
+}
+</style>

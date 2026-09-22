@@ -12,6 +12,7 @@ import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.exception.details.ValidationDetails;
 import com.streamfusion.platform.common.response.R;
 import com.streamfusion.platform.common.web.ApiErrorWriter;
+import com.streamfusion.platform.common.web.ApiExceptionHandler;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.RequestDispatcher;
 import java.net.URI;
@@ -29,6 +30,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.MethodParameter;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.*;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -41,7 +43,11 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.validation.BeanPropertyBindingResult;
+import org.springframework.validation.FieldError;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.context.request.ServletWebRequest;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
@@ -257,6 +263,76 @@ class ApiIntegrationTest {
                                 .path("field")
                                 .asText())
                 .isEqualTo("count");
+    }
+
+    @Test
+    void bindingDetailsFilterUnsafeNamesAndDeduplicateBeforeApplyingLimit() throws Exception {
+        var binding = new BeanPropertyBindingResult(new Object(), "input");
+        for (String field : new String[] {"nested.password", "items[0]", "x".repeat(65)}) {
+            binding.addError(new FieldError("input", field, "private"));
+        }
+        for (int index = 0; index < 25; index++) {
+            var field = new FieldError("input", "field" + index, "private");
+            binding.addError(field);
+            binding.addError(field);
+        }
+        var request = new MockHttpServletRequest("GET", "/api/v1/test-only/fields");
+        try (var ignored = MDC.putCloseable("traceId", TRACE)) {
+            var response =
+                    new ApiExceptionHandler(writer)
+                            .handleException(
+                                    new MethodArgumentNotValidException(
+                                            new MethodParameter(
+                                                    TestEndpoints.class.getDeclaredMethod(
+                                                            "fields", Input.class),
+                                                    0),
+                                            binding),
+                                    new ServletWebRequest(request, new MockHttpServletResponse()));
+            assertThat(response).isNotNull();
+            assertThat(response.getStatusCode().value()).isEqualTo(400);
+            JsonNode body = mapper.valueToTree(response.getBody());
+            JsonNode fields = body.path("data").path("fieldErrors");
+            assertThat(fields.size()).isEqualTo(20);
+            assertThat(fields.get(0).path("field").asText()).isEqualTo("field0");
+            assertThat(fields.get(19).path("field").asText()).isEqualTo("field19");
+            assertThat(body.toString()).doesNotContain("private", "nested.password", "items[0]");
+        }
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "400,VALIDATION_ERROR",
+        "401,UNAUTHORIZED",
+        "403,FORBIDDEN",
+        "404,NOT_FOUND",
+        "405,METHOD_NOT_ALLOWED",
+        "406,NOT_ACCEPTABLE",
+        "409,CONFLICT",
+        "412,PRECONDITION_FAILED",
+        "413,PAYLOAD_TOO_LARGE",
+        "415,UNSUPPORTED_MEDIA_TYPE",
+        "418,HTTP_ERROR",
+        "422,VALIDATION_ERROR",
+        "428,PRECONDITION_REQUIRED",
+        "429,RATE_LIMITED",
+        "500,INTERNAL_ERROR",
+        "502,INTERNAL_ERROR"
+    })
+    void servletErrorsPreserveDefaultCodesAndHttpStatus(int httpStatus, String code)
+            throws Exception {
+        mvc.perform(
+                        get("/error")
+                                .with(
+                                        request -> {
+                                            request.setDispatcherType(DispatcherType.ERROR);
+                                            return request;
+                                        })
+                                .requestAttr(
+                                        RequestDispatcher.ERROR_REQUEST_URI,
+                                        "/api/v1/test-only/object")
+                                .requestAttr(RequestDispatcher.ERROR_STATUS_CODE, httpStatus))
+                .andExpect(status().is(httpStatus))
+                .andExpect(jsonPath("$.code").value(code));
     }
 
     @Test

@@ -59,6 +59,11 @@ class SecurityConfigurationTest {
                 .andExpect(jsonPath("$.msg").exists())
                 .andExpect(jsonPath("$.message").doesNotExist());
         mvc.perform(post("/api/v1/users").with(csrf())).andExpect(status().isUnauthorized());
+        mvc.perform(post("/private"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.message").exists())
+                .andExpect(jsonPath("$.msg").doesNotExist());
     }
 
     @Test
