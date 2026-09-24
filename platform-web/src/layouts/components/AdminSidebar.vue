@@ -15,6 +15,7 @@ const brandIcon = `${import.meta.env.BASE_URL}streamfusion.svg`
       <span class="brand-name">StreamFusion <span class="brand-ai">AI</span></span>
     </a>
     <nav class="navigation" aria-label="功能菜单">
+      <p class="nav-heading">工作台</p>
       <a class="nav-item is-active" href="#main-content" aria-current="page" title="首页">
         <svg
           viewBox="0 0 24 24"
@@ -38,7 +39,7 @@ svg {
   flex-shrink: 0;
 }
 .sidebar {
-  --sidebar-width: 232px;
+  --sidebar-width: 216px;
   width: var(--sidebar-width);
   flex-shrink: 0;
   position: sticky;
@@ -46,19 +47,19 @@ svg {
   height: 100dvh;
   display: flex;
   flex-direction: column;
-  background: #eef1ed;
-  border-right: 1px solid #dce1d9;
-  color: var(--text-secondary);
+  background: #f3f6f3;
+  border-right: 1px solid #dfe6df;
+  color: #57665f;
 }
 .brand {
   height: var(--header-height);
   flex-shrink: 0;
-  border-bottom: 1px solid #dce1d9;
+  border-bottom: 1px solid #dfe6df;
   padding: 0 22px;
   display: flex;
   align-items: center;
   gap: 10px;
-  color: var(--text-primary);
+  color: #23362f;
   white-space: nowrap;
 }
 .brand-mark {
@@ -69,34 +70,41 @@ svg {
 }
 .brand-name {
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 650;
   letter-spacing: -0.3px;
 }
 .brand-ai {
-  color: var(--text-secondary);
+  color: #72827a;
   font-size: 12px;
   font-weight: 600;
 }
 .navigation {
-  padding: 20px 14px;
+  padding: 20px 12px;
+}
+.nav-heading {
+  margin: 0 12px 11px;
+  color: #87958c;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
 }
 .nav-item {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 44px;
+  min-height: 42px;
   padding: 0 15px;
-  border-radius: 24px;
+  border-radius: 5px;
   font-size: 13px;
   white-space: nowrap;
 }
 .nav-item.is-active {
-  background: #e5e9e1;
-  color: #344a39;
-  font-weight: 500;
+  background: #e3eee6;
+  color: #246448;
+  font-weight: 600;
 }
 .nav-item:hover {
-  background: #dce3d7;
+  background: #e8eee8;
 }
 .is-collapsed {
   --sidebar-width: 76px;
@@ -105,7 +113,8 @@ svg {
   padding: 0 21px;
 }
 .is-collapsed .brand-name,
-.is-collapsed .nav-label {
+.is-collapsed .nav-label,
+.is-collapsed .nav-heading {
   display: none;
 }
 .is-collapsed .nav-item {
@@ -121,7 +130,8 @@ svg {
     padding: 0 15px;
   }
   .brand-name,
-  .nav-label {
+  .nav-label,
+  .nav-heading {
     display: none;
   }
   .navigation {

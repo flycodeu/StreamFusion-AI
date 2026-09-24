@@ -24,6 +24,7 @@ const emit = defineEmits<{ 'toggle-sidebar': [] }>()
         <path d="M9 4v16M13 9h4M13 13h4" />
       </svg>
     </button>
+    <span class="topbar-title">平台管理</span>
     <div class="account" aria-label="当前用户">
       <span class="avatar" aria-hidden="true">
         <template v-if="displayName">{{ Array.from(displayName)[0] }}</template>
@@ -52,7 +53,12 @@ svg {
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
-  gap: 22px;
+  gap: 16px;
+}
+.topbar-title {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
 }
 .icon-button {
   display: grid;
@@ -63,7 +69,7 @@ svg {
   padding: 8px;
   border: 0;
   background: transparent;
-  border-radius: 50%;
+  border-radius: 6px;
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -92,9 +98,9 @@ svg {
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  border-radius: 50%;
-  background: var(--surface-muted);
-  color: var(--text-secondary);
+  border-radius: 6px;
+  background: #e9efec;
+  color: #48665e;
   font-size: 13px;
 }
 .avatar svg {

@@ -6,12 +6,12 @@
 
 <style scoped>
 .main-content {
-  --content-spacing: clamp(24px, 2vw, 30px);
+  --content-spacing: clamp(18px, 1.7vw, 26px);
   width: 100%;
 }
 @media (max-width: 680px) {
   .main-content {
-    --content-spacing: clamp(16px, 3vw, 20px);
+    --content-spacing: 14px;
   }
 }
 </style>

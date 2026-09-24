@@ -31,10 +31,10 @@ const activePage = ref('home')
 }
 .page-tabs :deep(.el-tabs__item) {
   min-width: 64px;
-  height: 44px;
-  font-size: 14px;
+  height: 42px;
+  font-size: 13px;
 }
 .page-tabs :deep(.el-tabs__content) {
-  padding: var(--content-spacing);
+  min-height: calc(100dvh - var(--header-height) - 43px);
 }
 </style>

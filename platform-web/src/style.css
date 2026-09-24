@@ -1,13 +1,14 @@
 :root {
-  font-family: 'SF Pro Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   color: var(--text-primary);
-  background: #fff;
+  background: #f8faf8;
   font-synthesis: none;
-  --text-primary: #252724;
-  --text-secondary: #6b706a;
-  --surface-muted: #f5f6f3;
-  --border-subtle: #e7e9e4;
-  --el-color-primary: #177a78;
+  --text-primary: #1c2928;
+  --text-secondary: #596865;
+  --text-tertiary: #778581;
+  --surface-muted: #f2f5f2;
+  --border-subtle: #e4e9e4;
+  --el-color-primary: #1b7069;
 }
 * {
   box-sizing: border-box;
@@ -28,6 +29,6 @@ a {
   text-decoration: none;
 }
 :focus-visible {
-  outline: 2px solid #177a78;
-  outline-offset: 4px;
+  outline: 2px solid #1b7069;
+  outline-offset: 2px;
 }

@@ -45,6 +45,6 @@ const collapsed = ref(false)
 .workspace {
   flex: 1;
   min-width: 0;
-  background: #fafbf9;
+  background: #f8faf8;
 }
 </style>
