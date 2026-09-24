@@ -10,7 +10,7 @@ describe('AdminLayout', () => {
         render: () => h(AdminLayout, null, { default: () => h('h1', '服务状态') }),
       }),
     )
-    expect(html).toContain('系统概览')
+    expect(html).toContain('首页')
     expect(html).toContain('未登录')
     expect(html).toContain('服务状态')
     expect(html).toContain('aria-controls="primary-sidebar"')
