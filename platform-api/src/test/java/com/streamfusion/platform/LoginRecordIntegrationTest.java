@@ -34,6 +34,7 @@ import org.springframework.test.web.servlet.MockMvc;
 @SpringBootTest(
         properties = {
             "spring.datasource.url=jdbc:h2:mem:login_records;MODE=MySQL;DB_CLOSE_DELAY=-1",
+            "platform.ip-guard.trusted-proxies=127.0.0.1",
             "platform.auth.initial-password=Initial1!"
         })
 @AutoConfigureMockMvc
@@ -90,6 +91,31 @@ class LoginRecordIntegrationTest {
         mvc.perform(get("/auth/login-records/page")).andExpect(status().isUnauthorized());
         mvc.perform(get("/auth/login-records/page?size=101").session(session))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void disabledIpEnforcementStillResolvesAuditSourceWithoutRejectingMalformedProxyMetadata()
+            throws Exception {
+        var session = login("HistoryAdmin");
+        for (int version = 0; version < 2; version++) {
+            String forwarded = version == 0 ? "192.0.2.21" : "invalid-proxy-value";
+            mvc.perform(
+                            put("/auth/me")
+                                    .session(session)
+                                    .with(csrf())
+                                    .header("X-Forwarded-For", forwarded)
+                                    .contentType("application/json")
+                                    .content(
+                                            "{\"nickname\":\"资料更新\",\"version\":\""
+                                                    + version
+                                                    + "\"}"))
+                    .andExpect(status().isOk());
+            assertThat(
+                            jdbc.queryForObject(
+                                    "SELECT source_ip FROM sys_operation_log WHERE action='PROFILE_UPDATE' ORDER BY id DESC LIMIT 1",
+                                    String.class))
+                    .isEqualTo(version == 0 ? "192.0.2.21" : "127.0.0.1");
+        }
     }
 
     @Test

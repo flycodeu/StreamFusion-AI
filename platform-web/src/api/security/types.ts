@@ -1,5 +1,7 @@
 import { id, integer, object, optionalString, string } from '../parse'
 import { isUtcTimestamp } from '../../lib/http/error'
+import { parseAuditReference } from '../audit/types'
+import type { AuditReference } from '../audit/types'
 
 export type IpBlockStatus = 'BLOCKED' | 'RELEASED'
 
@@ -13,6 +15,7 @@ export interface IpBlock {
   blockedAt: string
   unblockedAt: string | null
   unblockedBy: string | null
+  unblockedByReference: AuditReference | null
   version: string
 }
 
@@ -32,6 +35,14 @@ export function parseIpBlock(value: unknown): IpBlock {
   const sourceIp = string(row.sourceIp)
   if (!sourceIp || sourceIp.length > 64) throw new Error('sourceIp')
   const unblockedAt = optionalString(row.unblockedAt)
+  const unblockedBy = row.unblockedBy == null ? null : id(row.unblockedBy)
+  const unblockedByReference =
+    row.unblockedByReference == null ? null : parseAuditReference(row.unblockedByReference)
+  if (
+    unblockedByReference &&
+    (unblockedByReference.type !== 'USER' || unblockedByReference.id !== unblockedBy)
+  )
+    throw new Error('unblockedByReference')
   return {
     id: id(row.id),
     sourceIp,
@@ -41,7 +52,8 @@ export function parseIpBlock(value: unknown): IpBlock {
     windowSeconds,
     blockedAt: timestamp(row.blockedAt),
     unblockedAt: unblockedAt === null ? null : timestamp(unblockedAt),
-    unblockedBy: row.unblockedBy == null ? null : id(row.unblockedBy),
+    unblockedBy,
+    unblockedByReference,
     version: id(row.version),
   }
 }

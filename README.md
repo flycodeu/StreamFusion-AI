@@ -113,7 +113,9 @@ Pop-Location
 先准备项目数据库和 Redis，并按 [数据库与安全配置说明](DEVELOPMENT.md#mysqlmybatis-plusredis)
 填写后端 local 配置；公共示例不会自动提供数据库凭证或创建数据库。
 首次使用请按 [SQL 指南](platform-api/sql/README.md)手动初始化专用空库；应用启动不建表、不迁移。
-初始化建立九张业务表、SUPER_ADMIN、管理 PAGE 和示例组织“飞云科技公司 / 研发部门 / 运维部门”，不创建账号或写入固定密码哈希。示例组织可通过管理 API 修改，解除成员和子部门引用后可删除；普通新建用户不会自动加入示例部门。脚本含 DROP，已有数据的库不要重复导入。旧版八表数据库须先按 [SQL 指南](platform-api/sql/README.md#已有库增加-ip-封禁表)增加 IP 封禁表，再启动新版后端。
+初始化建立十张业务表（包括 IP 封禁与登录记录）、SUPER_ADMIN、两个菜单目录、七个 PAGE，以及示例组织“飞云科技公司 / 研发部门 / 运维部门”，不创建账号或写入固定密码哈希。页面种子包含“系统管理”下的管理页面及“监控面板 → 接口文档”。示例组织可通过部门管理调整；普通新建用户不会自动加入示例部门。脚本含 DROP，已有数据的库不要重复导入。旧版库需按 [SQL 指南](platform-api/sql/README.md#已有库升级)核对并补齐缺少的表和菜单。
+
+SQL 指南提供空库创建、汇总文件导入与种子核对命令。普通启动及管理员引导都会检查业务表和必要列；缺少结构时直接报告缺项并停止，不自动建表。此检查不替代列类型、索引、外键及业务数据的验证。
 
 构建完成并配置好 local 数据源后，在仓库根目录执行一次非 Web 引导：
 
@@ -136,7 +138,7 @@ try {
 
 个人开发推荐使用 `local`；使用 `dev` 时需提供 `DB_USERNAME` / `DB_PASSWORD` 等环境变量。
 
-在仓库根目录打开四个终端，每个终端执行一条命令：
+只使用管理界面时启动 API 与 Web 即可。需要同时运行算法节点骨架时再启动 Agent 和 Runtime。在仓库根目录分别打开终端执行：
 
 ```powershell
 .\scripts\start.ps1 api -Profile local
@@ -156,10 +158,11 @@ try {
 
 Windows 下通过 `pnpm dev` 或 `scripts/start.ps1 web` 重复启动时，会先关闭同一项目、同一端口的旧 Vite 实例。若占用者是其他程序或无法确认归属，则保留该进程并显示 PID；可手动处理，或用 `pnpm dev --port 8091` 临时指定空闲端口。启动器支持 `--port`、`--host`、`--mode` 参数；其他系统保留 Vite 的端口冲突检查。可在 `platform-web` 目录执行 `pnpm test:dev-start` 验证重复启动及无关进程保护。
 
-打开 Web，使用初始化账号登录；首页可以检查后端连接。运行以下命令检查默认端口：
+打开 Web，使用初始化账号登录；首页可以检查后端连接。只启动管理端时运行以下检查：
 
 ```powershell
-.\scripts\check-health.ps1
+.\scripts\check-health.ps1 -Services api,web
+# 四个服务全部启动后，可省略 -Services 检查全部默认端口。
 ```
 
 各终端使用 `Ctrl+C` 停止服务。
@@ -167,6 +170,8 @@ Windows 下通过 `pnpm dev` 或 `scripts/start.ps1 web` 重复启动时，会�
 前端登录使用挑战公钥与密文登录接口，默认关闭旧明文登录入口。登录后重新获取 CSRF 令牌供写请求使用，详情见[登录与模块授权](DEVELOPMENT.md#登录与模块授权)。新建和重置普通用户使用 `SF_AUTH_INITIAL_PASSWORD`；dev/local 提供上述开发临时密码，prod 须显式配置。页面路径、接口分层和新增菜单方法见[前端开发约定](platform-web/DEVELOPMENT.md)。
 
 登录来源防护默认在同一 IP 十分钟内累计二十次失败后封禁，**不会自动解除**。超级管理员从其他未封禁地址进入“系统管理 → 操作记录 → IP 封禁”手动解除。阈值、可信代理、限频及应急恢复见[IP 登录防护](DEVELOPMENT.md#ip-登录防护)。本轮账号体验和 IP 防护的完整验收仍待完成。
+
+登录记录的公网地域使用可选离线数据。需要地域名称时，在仓库根目录执行 `.\scripts\install-ip-region.ps1`，安装后重启 API；文件来源、许可及校验见[离线 IP 地域数据](scripts/IP-REGION.md)。未安装时仍可登录并保存记录，无法识别的公网地域显示未知。
 
 <details>
 <summary>不使用启动脚本</summary>
@@ -220,7 +225,7 @@ java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=prod
 ### 前端与算法节点
 
 前端需要改变后端地址时，复制 [环境变量示例](platform-web/.env.example) 为 `platform-web/.env.local`，
-修改 `API_TARGET` 后重启 Vite。默认请求链为浏览器 → Vite 代理 → Platform API。
+修改 `API_TARGET` 后重启 Vite。默认开发请求链为浏览器 → Vite `/api` 代理 → Platform API。构建后的前端使用同源根路径 API；`pnpm preview` 只预览构建产物，完整运行需由静态服务器配置 API 反向代理，具体路径见[开发指南](DEVELOPMENT.md#前端生产访问路径)。
 
 Agent 与 Runtime 在各自目录使用 `uv run --locked python -m app` 启动。
 需要自定义时，将各自的 `.env.example` 复制为 `.env.local`，分别使用 `SF_AGENT_*` 和 `SF_RUNTIME_*` 配置；
@@ -254,6 +259,7 @@ GitHub Actions 配置了 Windows / Linux 检查矩阵，不包含部署操作。
 - **端口占用**：检查 8080、8090、8100、8101 的监听进程。修改端口后同时调整代理和检查地址。
 - **依赖下载失败**：检查网络、代理和包管理器镜像配置。
 - **local 文件找不到**：检查启动工作目录及 `LOCAL_CONFIG_PATH`。
+- **提示缺少业务表或字段**：全新专用空库按 SQL 指南导入完整十表；已有库先备份再定向增量，不能重放初始化文件。
 - **运行日志**：查看启动终端及各服务默认 `.run/logs/`，用响应中的 `X-Trace-Id` 定位请求；当前没有任务或事件日志。
 - **发布前端**：`dist/` 需要静态服务器及 API 反向代理，不能把 Vite 开发服务器作为生产部署方案。
 

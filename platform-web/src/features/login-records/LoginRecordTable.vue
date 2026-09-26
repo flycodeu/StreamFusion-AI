@@ -25,6 +25,7 @@ const options = [
 const columns = useColumns(
   'login-records',
   options.slice(0, 9).map((item) => item.key),
+  options.map((item) => item.key),
 )
 const rows = ref<LoginRecord[]>([])
 const page = ref(1)

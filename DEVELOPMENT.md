@@ -38,7 +38,7 @@ MySQL 驱动、Redis/Lettuce 和 Spring Security 版本由 Spring Boot 管理。
 
 标准覆盖入口为 Spring 配置；不使用 REDIS_URL，避免 URL 中数据库号覆盖单独的 database 配置。
 普通开发变量为上述 DB_* / REDIS_*；local 文件中可直接修改连接参数。
-表结构只维护 platform-api/sql/业务 中的九份逐表文件，sql/汇总/streamfusion-mysql.sql 由 scripts/export-sql.ps1 自动生成。旧版八表库须先增加 sys_ip_block，再启动启用 IP 防护的新版后端，步骤见 [SQL 指南](platform-api/sql/README.md#已有库增加-ip-封禁表)。
+表结构只维护 platform-api/sql/业务 中的十份逐表文件，sql/汇总/streamfusion-mysql.sql 由 scripts/export-sql.ps1 自动生成。当前必需结构包括 sys_ip_block 和 sys_login_record，旧版库须按实际缺项升级，步骤见 [SQL 指南](platform-api/sql/README.md#已有库升级)。
 首次运行前，按 [SQL 指南](platform-api/sql/README.md)手动初始化专用空库；应用不自动建库、建表或升级。
 脚本先 DROP 再 CREATE，会清空目标表；已有数据的库禁止用它升级。本地已经初始化的数据库无需重导。
 SQL 仅初始化内置角色、管理 PAGE 及可调整的示例组织，不包含默认用户或固定密码哈希。首次账号由下面的非 Web 引导创建。
@@ -61,7 +61,7 @@ JDBC URL 的 connectionTimeZone 也应为 Asia/Shanghai（含生产 DB_URL），
 这只影响本项目连接，不修改 MySQL 全局或操作系统时区。DATETIME 业务字段按北京时间存储；
 历史 UTC 数据不能只改配置，需要核查后停写转换；新库不得重复加8小时。详见 SQL 说明。
 /actuator/health 检查数据库与 Redis 连通性，失败返回 DOWN/503，且不公开连接细节。
-健康检查不校验业务表是否存在；初始化是否成功需单独核对。
+普通启动和管理员引导会只读检查业务表及必要列，缺项时报告名称和 SQL 指南后停止；不会执行建表、迁移或种子修复。检查不要求已运行数据库保留固定菜单或部门，也不验证列类型、索引及外键。健康检查仅报告依赖连通性，初始化种子和登录业务仍须分别核对。
 
 普通 `mvnw.cmd verify` 无需本机数据库，H2 检查管理业务、组件装配、汇总 SQL 建表/重建与约束，不证明 MySQL 排序规则、JSON 类型或并发行为完全兼容。
 真实本地连接检查需明确启用，只有 SELECT 1 与 Redis PING，不写数据：
@@ -117,6 +117,21 @@ API 客户端需按以下顺序对接：
 
 管理 API 编辑使用单个 `version` 检查旧表单冲突，删除需要 `If-Match: "版本值"`。这是并发保护，不是业务版本历史。返回和错误沿用统一 `R` 与 `traceId`；管理审计保存对象及关系摘要，不记录密码或完整请求。管理前端与动态路由已接入，新增领域页面参见 [前端开发约定](platform-web/DEVELOPMENT.md)。
 
+### 登录记录与地域
+
+成功登录写入 `sys_login_record`，记录账号/昵称、来源地址、浏览器/系统类别，以及登录、活动和结束时间；不保存 Session ID 或会话凭据。本人可在个人中心查看，用户管理按相应用户权限查询目标账号。浏览器和系统类别来自客户端声明，不能作为设备身份的证明。
+
+公网地域使用本地 ip2region 数据。首次克隆不带二进制数据库；可从仓库根目录运行 `.\scripts\install-ip-region.ps1`，核验下载后重启 API。固定来源、许可、文件校验和离线更新方法见 [安装说明](scripts/IP-REGION.md)。不安装或文件不可读时，登录与记录继续工作，无法识别的地址显示未知地域；运行期不调用外部地域服务。
+
+| 配置 / 环境变量 | 默认值 | 用途 |
+|---|---|---|
+| platform.login-record.activity-interval / SF_LOGIN_ACTIVITY_INTERVAL | 60s | 活动时间写入节流，允许 10s～5m |
+| platform.login-record.ipv4-database / SF_IP_REGION_V4_DB | .run/ip-region/ip2region_v4.xdb | IPv4 离线数据文件，相对 API 工作目录 |
+| platform.login-record.ipv6-database / SF_IP_REGION_V6_DB | .run/ip-region/ip2region_v6.xdb | IPv6 离线数据文件，相对 API 工作目录 |
+| platform.login-record.local-networks | 空列表 | 可选内网 CIDR 和展示名称；最多 64 项，不改变来源 IP 的信任规则 |
+
+例如在私有 local 配置中可增加 `platform.login-record.local-networks: [{cidr: "10.20.0.0/16", name: "研发网络"}]`。这仅为地域展示标签，不授予权限，也不表示该网段可信代理。
+
 ### IP 登录防护
 
 同一规范化 IP 在十分钟窗口累计二十次登录失败后写入 `sys_ip_block`。封禁无到期时间，应用或 Redis 重启不会解除。成功登录不清除同一 IP 的失败累计；原账号五次连续失败锁十五分钟的保护继续生效。封禁后拒绝登录与业务接口，已有会话同样受限；健康检查、退出及用于退出的 CSRF 获取保留。
@@ -130,13 +145,29 @@ API 客户端需按以下顺序对接：
 | SF_IP_FAILURE_WINDOW | 10m | 失败计数窗口，修改不解除已封禁地址 |
 | SF_IP_RESOURCE_LIMIT | 120 | 同一 IP 的 CSRF、登录挑战及提交共享请求上限 |
 | SF_IP_RESOURCE_WINDOW | 1m | 请求计数窗口；超过返回 429 与 Retry-After，不单独生成永久封禁 |
-| SF_TRUSTED_PROXIES | prod 为空；dev/local 为 127.0.0.1,::1 | 逗号分隔的可信代理精确 IP，最多 32 个，不使用任意来源通配 |
+| SF_TRUSTED_PROXIES | local 为 127.0.0.1,::1；dev/prod 为空 | 逗号分隔的可信代理精确 IP，最多 32 个，不使用任意来源通配 |
 
 失败计数、资源限频及挑战一次性消费由 Redis 原子操作完成；故障返回依赖不可用，不静默放行。失败窗口为首次失败起计的固定窗口。每个挑战只允许成功领取一次，凭据从日志与审计中排除。前端已登录的密码表单从 `GET /auth/password-policy` 获取实际规则，按 Unicode 码点计数，服务器仍作最终校验。
 
 **代理配置：** 默认使用 TCP 对端 IP，只在对端命中可信代理列表时解释 `X-Forwarded-For`，从右向左寻找首个不可信来源。Vite 开发代理将客户端传入的来源链覆盖为实际 socket 地址，并删除 `Forwarded` 和 `X-Real-IP`。生产边缘代理也必须清理外部来源头，后端仅信任真实代理地址；不要将客户端网段加入代理白名单。否则会将多人错误合并到代理 IP，或允许伪造来源。IP 封禁与账号锁定只是登录防护，不表示已实现恶意软件检测或流量攻击防御。参见 [Spring Boot 代理说明](https://docs.spring.io/spring-boot/3.5/how-to/webserver.html)及 [OWASP 认证防护](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html)。
 
 **应急恢复：** 优先由另一未封禁地址的超级管理员在页面解除。所有管理员共用被封禁出口时，由有数据库权限的运维备份目标记录，核实 `source_ip`、`id` 与 `version` 后，在维护事务内定向更新该行 `status='RELEASED'`、`unblocked_at=当前北京时间`、`unblocked_by=NULL`、`version=version+1`，更新条件必须同时匹配原 id、version、BLOCKED，并确认仅一行。保留工单及前后记录；直接数据库恢复不会自动写应用审计。不删除整表、不重置其他 IP、不将关闭防护作为常规解封操作。Redis 旧计数无需清除，新版本已隔离旧世代。
+
+### 服务信息与接口文档
+
+服务信息使用异步采集和有界缓存，包含 JVM、主机可见资源及明确配置的服务端口。端口可连接不等于业务健康；Agent/Runtime 的 TCP 可达也不表示视频链路已实现。GPU 数据依赖本机可执行的 `nvidia-smi`，没有 NVIDIA 环境时显示不可用。
+
+| Spring 配置 | 默认值 | 用途 |
+|---|---|---|
+| platform.server-monitor.cache-ttl | 30s | 成功采集缓存，允许 5s～5m |
+| platform.server-monitor.probe-timeout | 500ms | 单项网络端口探测等待，允许 100ms～2s |
+| platform.server-monitor.collection-timeout | 6s | 本轮采集返回期限，允许 2s～10s |
+| platform.server-monitor.web-host / web-port | 127.0.0.1 / 8090；prod 端口 0 | 可通过 SF_MONITOR_WEB_HOST / SF_MONITOR_WEB_PORT 覆盖 |
+| platform.server-monitor.agent-host / agent-port | 127.0.0.1 / 8100 | Agent 探测目标，未部署时端口可设为 0 |
+| platform.server-monitor.runtime-host / runtime-port | 127.0.0.1 / 8101 | Runtime 探测目标，未部署时端口可设为 0 |
+| platform.server-monitor.gpu-enabled | true | 是否执行本机 NVIDIA GPU 查询 |
+
+监控面板内的接口文档页面要求 `api-docs` PAGE 权限，先读取 `GET /api-docs/status`，文档与 Swagger UI 均启用时嵌入当前后端文档。页面仅用于浏览，未开放接口调试；原始 `/v3/api-docs` 和 `/swagger-ui` 资源仍沿现有环境开关策略，prod 默认关闭。菜单权限并不把开发环境原本公开的 Springdoc 资源改成受保护接口。
 
 ### 应用配置
 
@@ -154,7 +185,7 @@ API 客户端需按以下顺序对接：
 | SF_AUTH_IDLE_TIMEOUT / SF_AUTH_ABSOLUTE_TIMEOUT | 30m / 8h | 会话空闲与绝对超时；绝对时长不得小于空闲超时且不超过 1 天 |
 | SF_AUTH_SECURE_COOKIE | dev/local 为 false，prod 为 true | 是否仅通过 HTTPS 发送会话 Cookie |
 
-目前没有异步控制器或出站 HTTP 调用，不预留通用请求超时配置；新增真实调用时在调用边界定义超时。
+服务信息控制器异步返回，并在其采集边界设置期限；目前没有业务出站 HTTP 调用，不预留通用出站请求超时配置。新增真实调用时在调用边界定义超时。
 Java 日志系统在配置对象绑定前初始化，启动失败也可能生成日志目录。
 
 Python 各自在 `app/settings.py` 定义配置，在 `app/__main__.py` 启动进程。
@@ -188,6 +219,14 @@ Agent 前缀为 `SF_AGENT_`，Runtime 为 `SF_RUNTIME_`。不互相加载配置�
 前端仍使用被忽略的 `platform-web/.env.local` 中的 `API_TARGET`。
 不要把私密信息放进 `VITE_*` 变量，这类变量会进入浏览器包。
 
+### 前端生产访问路径
+
+开发模式下浏览器请求 `/api/...`，Vite 去掉 `/api` 后转发给 `API_TARGET`。生产构建保持同源根路径 API 契约，例如 `/auth/me`、`/menus` 和 `/api-docs/status`，不使用 `/api` 前缀。仅设置 `API_TARGET` 不会改变已构建页面的请求地址；`pnpm preview` 用于静态预览，不能替代完整 API 反向代理。
+
+静态服务器需将实际后端入口（`/auth/`、`/user/`、`/roles`、`/menus`、`/departments`、`/audit/`、`/server/`、`/security/`、`/api-docs/status`、`/actuator/health`）转发到 API，并保持 Cookie、CSRF 请求头、`X-Trace-Id`、`If-Match` 与响应状态。开启接口文档时，还需转发 `/v3/api-docs` 及其子路径、`/swagger-ui.html`、`/swagger-ui/`。
+
+API 转发应先于 Vue 路由的 `index.html` 回退；失败的 API 请求不能回退成前端 HTML。`/api-docs.html` 和 `/api-docs.js` 是前端嵌入文档页的静态文件，仍由静态服务器提供。部署前验证登录、改密、刷新业务路由、错误响应以及 Cookie 的 HTTPS 属性；仓库未提供生产部署编排。
+
 ## 日志与请求关联
 
 Java 输出带 +08:00 的北京时间文本日志；Python 的既有 UTC JSON 日志和跨服务协议暂不改动，共用字段语义：
@@ -197,7 +236,7 @@ Java 输出带 +08:00 的北京时间文本日志；Python 的既有 UTC JSON �
 请求头 `X-Trace-Id` 只接收 32 位小写十六进制，不合法则重新生成并在响应头返回。
 前端自动生成请求标识，出错时显示错误码及标识，默认请求超时 5 秒，不自动重试。
 启动和停机等非请求日志的 traceId 为 `-`。
-这只是请求关联基础；还未实现跨服务调用、异步线程 MDC 传播或分布式追踪。
+服务信息异步响应显式保留原请求 traceId；其余线程不自动继承 MDC。当前尚未实现跨服务调用、通用线程上下文传播或分布式追踪。
 
 日志位置：各服务工作目录的 `logs/`。
 
@@ -222,6 +261,9 @@ Java 输出带 +08:00 的北京时间文本日志；Python 的既有 UTC JSON �
 | 两个 Python 工程分别执行 | `uv run --locked ruff check app tests`、`uv run --locked ruff format --check app tests`、`uv run --locked mypy`、`uv run --locked python -m pytest -q` |
 | 仓库根目录 | `uv run --project algorithm-node/node-agent --locked python -m pytest contracts/tests -q` |
 | 仓库根目录 | `./scripts/export-sql.ps1 -Check` |
+| 仓库根目录，运行中的管理端 | `./scripts/check-health.ps1 -Services api,web` |
+| platform-web，Windows 启动器回归 | `pnpm test:dev-start` |
+| 仓库根目录，Windows API 启动器回归 | `./scripts/tests/api-start.test.ps1 -JavaHome <JDK21目录>` |
 
 默认后端测试使用 H2 与模拟会话，真实基础设施用例默认跳过。以下命令在 `platform-api` 目录执行，并先确认目标和配置：
 

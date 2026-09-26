@@ -14,6 +14,7 @@ import { getServerStatus } from '../../api/server/api'
 import type { ServerSnapshot } from '../../api/server/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import TablePanel from '../../components/table/TablePanel.vue'
+import { formatDateTime } from '../../utils/dateTime'
 
 defineOptions({ name: 'SystemServer' })
 const snapshot = ref<ServerSnapshot | null>(null)
@@ -44,16 +45,6 @@ function percent(value?: number | null): string {
 function bytes(value?: number | null): string {
   return value == null || value < 0 ? '不可用' : `${(value / 1024 ** 3).toFixed(2)} GB`
 }
-function time(value?: string | null): string {
-  return value
-    ? new Intl.DateTimeFormat('zh-CN', {
-        timeZone: 'Asia/Shanghai',
-        dateStyle: 'short',
-        timeStyle: 'medium',
-        hour12: false,
-      }).format(new Date(value))
-    : '—'
-}
 function uptime(value?: number): string {
   if (value == null) return '不可用'
   const minutes = Math.floor(value / 60000)
@@ -65,7 +56,7 @@ onMounted(load)
 <template>
   <div class="content-page server-page">
     <div class="server-toolbar">
-      <span>采集时间：{{ time(snapshot?.sampledAt) }}</span
+      <span>采集时间：{{ formatDateTime(snapshot?.sampledAt) }}</span
       ><ElButton type="primary" :loading="loading" @click="load">刷新</ElButton>
     </div>
     <RequestError :error="error" />
@@ -118,7 +109,7 @@ onMounted(load)
             {{ bytes(snapshot?.jvm?.heapMaxBytes) }}</ElDescriptionsItem
           >
           <ElDescriptionsItem label="启动时间" :span="2">{{
-            time(snapshot?.jvm?.startedAt)
+            formatDateTime(snapshot?.jvm?.startedAt)
           }}</ElDescriptionsItem>
           <ElDescriptionsItem label="运行时长" :span="2">{{
             uptime(snapshot?.jvm?.uptimeMillis)

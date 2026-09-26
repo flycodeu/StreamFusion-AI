@@ -17,8 +17,15 @@ try {
         'api' {
             if ($JavaHome) { $env:JAVA_HOME = $JavaHome }
             if ($env:JAVA_HOME) { $env:Path = "$env:JAVA_HOME\bin;$env:Path" }
-            $javaInfo = (& java -version 2>&1 | Out-String)
-            if ($javaInfo -notmatch 'version "21\.') { throw 'JDK 21 is required. Set JAVA_HOME or pass -JavaHome.' }
+            # A successful java -version writes to stderr; PowerShell 5.1 must not treat it as a startup failure.
+            try {
+                $ErrorActionPreference = 'Continue'
+                $javaInfo = (& java -version 2>&1 | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+                $javaExit = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = 'Stop'
+            }
+            if ($javaExit -ne 0 -or $javaInfo -notmatch 'version "21(?:\.|\")') { throw 'JDK 21 is required. Set JAVA_HOME or pass -JavaHome.' }
             Set-Location platform-api
             if ($Profile) {
                 & .\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=$Profile"

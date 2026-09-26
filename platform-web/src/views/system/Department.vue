@@ -23,6 +23,7 @@ import { flattenTree, treeIds } from '../../utils/tree'
 import TablePanel from '../../components/table/TablePanel.vue'
 import TableActions from '../../components/table/TableActions.vue'
 import { useTableSelection } from '../../composables/table/useTableSelection'
+import { usePageScope } from '../../composables/usePageScope'
 
 defineOptions({ name: 'SystemDepartment' })
 
@@ -32,6 +33,8 @@ const allRows = ref<Department[]>([])
 const name = ref('')
 const loading = ref(false)
 const saving = ref(false)
+const deleting = ref(false)
+const captureScope = usePageScope()
 const error = ref<unknown>(null)
 const dialog = ref(false)
 const editing = ref<Department | null>(null)
@@ -46,6 +49,7 @@ let sequence = 0
 
 async function load(): Promise<void> {
   const current = ++sequence
+  const inScope = captureScope()
   loading.value = true
   error.value = null
   try {
@@ -53,14 +57,14 @@ async function load(): Promise<void> {
     const [filtered, all] = keyword
       ? await Promise.all([api.getDepartments(keyword), api.getDepartments()])
       : await api.getDepartments().then((result) => [result, result])
-    if (current !== sequence) return
+    if (current !== sequence || !inScope()) return
     rows.value = filtered
     allRows.value = all
     clearSelection()
   } catch (cause) {
-    if (current === sequence) error.value = cause
+    if (current === sequence && inScope()) error.value = cause
   } finally {
-    if (current === sequence) loading.value = false
+    if (current === sequence && inScope()) loading.value = false
   }
 }
 function resetSearch(): void {
@@ -88,6 +92,7 @@ async function save(): Promise<void> {
   submitted.value = true
   if (!form.name.trim() || saving.value) return
   saving.value = true
+  const inScope = captureScope()
   error.value = null
   try {
     if (editing.value)
@@ -103,21 +108,29 @@ async function save(): Promise<void> {
         name: form.name.trim(),
         sortOrder: form.sortOrder,
       })
+    if (!inScope()) return
     dialog.value = false
     await load()
   } catch (cause) {
-    error.value = cause
+    if (inScope()) error.value = cause
   } finally {
     saving.value = false
   }
 }
 async function remove(node: Department): Promise<void> {
+  if (deleting.value) return
+  const inScope = captureScope()
+  deleting.value = true
   try {
     await ElMessageBox.confirm(`删除部门“${node.name}”？`, '确认删除', { type: 'warning' })
+    if (!inScope()) return
     await api.deleteDepartment(node)
+    if (!inScope()) return
     await load()
   } catch (cause) {
-    if (cause !== 'cancel' && cause !== 'close') error.value = cause
+    if (inScope() && cause !== 'cancel' && cause !== 'close') error.value = cause
+  } finally {
+    deleting.value = false
   }
 }
 onMounted(load)
@@ -197,6 +210,7 @@ onMounted(load)
                 class="table-action-end"
                 type="danger"
                 :disabled="
+                  deleting ||
                   (completeNodes.get(row.id)?.children.length ?? row.children.length) > 0 ||
                   row.memberCount > 0
                 "
@@ -213,9 +227,12 @@ onMounted(load)
       :title="editing ? '编辑部门' : '新建部门'"
       width="520px"
       destroy-on-close
+      :close-on-click-modal="!saving"
+      :close-on-press-escape="!saving"
+      :show-close="!saving"
     >
       <RequestError :error="error" />
-      <ElForm label-width="90px" @submit.prevent="save">
+      <ElForm label-width="90px" :disabled="saving" @submit.prevent="save">
         <ElFormItem
           label="部门名称"
           required
@@ -242,7 +259,7 @@ onMounted(load)
         /></ElFormItem>
       </ElForm>
       <template #footer
-        ><ElButton @click="dialog = false">取消</ElButton
+        ><ElButton :disabled="saving" @click="dialog = false">取消</ElButton
         ><ElButton type="primary" :loading="saving" @click="save">保存</ElButton></template
       >
     </ElDialog>

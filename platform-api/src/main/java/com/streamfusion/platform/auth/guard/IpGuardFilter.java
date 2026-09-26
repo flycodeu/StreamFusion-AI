@@ -40,11 +40,22 @@ public class IpGuardFilter extends OncePerRequestFilter {
     protected void doFilterInternal(
             HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
-        if (!properties.enabled()) {
+        String path = request.getRequestURI().substring(request.getContextPath().length());
+        String method = request.getMethod().equals("HEAD") ? "GET" : request.getMethod();
+        String route = method + " " + path;
+        if (!properties.enabled() || route.equals("POST /auth/logout")) {
+            if (ApiErrorWriter.isBusinessRequest(request)) {
+                try {
+                    addresses.resolve(request);
+                } catch (BusinessException invalid) {
+                    // Bypassing enforcement must remain possible with malformed proxy metadata.
+                    // Without a trusted result, audit records fall back to the connection address.
+                    if (invalid.code() != ErrorCode.VALIDATION_ERROR) throw invalid;
+                }
+            }
             chain.doFilter(request, response);
             return;
         }
-        String path = request.getRequestURI().substring(request.getContextPath().length());
         if (path.contains("%")) {
             try {
                 String decoded =
@@ -60,12 +71,6 @@ public class IpGuardFilter extends OncePerRequestFilter {
             }
         }
         if (!ApiErrorWriter.isBusinessRequest(request)) {
-            chain.doFilter(request, response);
-            return;
-        }
-        String method = request.getMethod().equals("HEAD") ? "GET" : request.getMethod();
-        String route = method + " " + path;
-        if (route.equals("POST /auth/logout")) {
             chain.doFilter(request, response);
             return;
         }

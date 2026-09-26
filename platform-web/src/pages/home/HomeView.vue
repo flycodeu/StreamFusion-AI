@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { ElAlert, ElButton, ElCard, ElDescriptions, ElDescriptionsItem, ElTag } from 'element-plus'
 import { ApiRequestError } from '../../lib/http/error'
 import { getHealth } from '../../api/health/api'
+import { formatDateTime } from '../../utils/dateTime'
 
 type HealthStatus = 'idle' | 'checking' | 'up' | 'failed'
 
@@ -36,16 +37,7 @@ async function checkHealth(): Promise<void> {
       traceId.value = error.traceId
     }
   } finally {
-    checkedAt.value = new Intl.DateTimeFormat('zh-CN', {
-      timeZone: 'Asia/Shanghai',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    }).format(new Date())
+    checkedAt.value = formatDateTime(new Date())
   }
 }
 

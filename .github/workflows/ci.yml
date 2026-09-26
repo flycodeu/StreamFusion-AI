@@ -36,6 +36,14 @@ jobs:
       - name: Check generated SQL aggregate
         shell: pwsh
         run: ../scripts/export-sql.ps1 -Check
+      - name: Check SQL export in Windows PowerShell
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: powershell.exe -NoProfile -NonInteractive -File ../scripts/export-sql.ps1 -Check
+      - name: Check Windows API startup script
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ../scripts/tests/api-start.test.ps1
 
   web:
     runs-on: ${{ matrix.os }}
@@ -60,6 +68,9 @@ jobs:
       - run: pnpm lint
       - run: pnpm format:check
       - run: pnpm test
+      - name: Check Windows development startup
+        if: runner.os == 'Windows'
+        run: pnpm test:dev-start
       - run: pnpm build
 
   python:

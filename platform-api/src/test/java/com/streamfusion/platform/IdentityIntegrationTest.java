@@ -169,6 +169,12 @@ class IdentityIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.user.status").value(0))
                 .andExpect(jsonPath("$.data.isSuperAdmin").value(false));
+        for (String path : List.of("/auth/csrf", "/auth/me", "/auth/password-policy")) {
+            mvc.perform(head(path).session(first)).andExpect(status().isOk());
+        }
+        mvc.perform(head("/user/page").session(first))
+                .andExpect(status().isForbidden())
+                .andExpect(content().string(""));
         Csrf csrf = csrf(first);
         mvc.perform(
                         put("/auth/me")

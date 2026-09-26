@@ -28,11 +28,14 @@ import TablePanel from '../../components/table/TablePanel.vue'
 import TableActions from '../../components/table/TableActions.vue'
 import ColumnPicker from '../../components/table/ColumnPicker.vue'
 import { useColumns } from '../../composables/table/useColumns'
+import { usePageScope } from '../../composables/usePageScope'
+import { formatDateTime } from '../../utils/dateTime'
 import IpBlockPanel from '../../features/security/IpBlockPanel.vue'
 import { sessionState } from '../../session/state'
 import AuditReferenceList from '../../features/audit/AuditReferenceList.vue'
 import {
   auditChanges,
+  auditReason,
   normalizedTraceId,
   referenceName,
   traceDiagnostic,
@@ -59,7 +62,8 @@ const detailError = ref<unknown>(null)
 const detailLoading = ref(false)
 const drawer = ref(false)
 const detail = ref<AuditDetail | null>(null)
-const columns = useColumns('audit', ['user', 'module', 'action', 'target', 'result', 'time'])
+const detailId = ref('')
+const captureScope = usePageScope()
 const columnOptions = [
   { key: 'user', label: '操作人' },
   { key: 'module', label: '模块' },
@@ -69,6 +73,11 @@ const columnOptions = [
   { key: 'time', label: '操作时间' },
   { key: 'trace', label: '请求标识' },
 ]
+const columns = useColumns(
+  'audit',
+  ['user', 'module', 'action', 'target', 'result', 'time'],
+  columnOptions.map((item) => item.key),
+)
 const moduleNames: Record<string, string> = {
   USER: '用户',
   ROLE: '角色',
@@ -110,14 +119,6 @@ const changes = computed(() => auditChanges(detail.value))
 let sequence = 0
 let detailSequence = 0
 
-function formatTime(value: string): string {
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    dateStyle: 'short',
-    timeStyle: 'medium',
-    hour12: false,
-  }).format(new Date(value))
-}
 function actor(row: AuditEntry): string {
   return referenceName(
     row.actor,
@@ -137,6 +138,7 @@ async function load(): Promise<void> {
     query.traceId && !normalizedTraceId(query.traceId) ? '请输入完整的32位请求标识' : ''
   if (traceError.value) return
   const current = ++sequence
+  const inScope = captureScope()
   loading.value = true
   error.value = null
   try {
@@ -151,13 +153,13 @@ async function load(): Promise<void> {
       startTime: utc(timeRange.value?.[0]),
       endTime: utc(timeRange.value?.[1]),
     })
-    if (current !== sequence) return
+    if (current !== sequence || !inScope()) return
     rows.value = result.items
     total.value = result.total
   } catch (cause) {
-    if (current === sequence) error.value = cause
+    if (current === sequence && inScope()) error.value = cause
   } finally {
-    if (current === sequence) loading.value = false
+    if (current === sequence && inScope()) loading.value = false
   }
 }
 function search(): void {
@@ -188,39 +190,49 @@ function relatedOperations(traceId: string): void {
 async function copyDiagnostics(): Promise<void> {
   const value = detail.value
   if (!value) return
+  const inScope = captureScope()
   const marker = value.record.traceId ? traceDiagnostic(value.record.traceId) : null
   const text = [
-    `时间：${formatTime(value.record.createdAt)}`,
+    `时间：${formatDateTime(value.record.createdAt)}`,
     `操作人：${actor(value.record)}`,
     `操作：${actionNames[value.record.action] || value.record.action}`,
     `对象：${target(value.record)}`,
     `结果：${resultNames[value.record.result] || value.record.result}`,
+    `原因：${auditReason(value.record.reasonCode)}`,
     `记录ID：${value.record.id}`,
     marker ? `后端日志检索：${marker}` : '该记录无请求标识',
   ].join('\n')
   try {
     await globalThis.navigator.clipboard.writeText(text)
-    ElMessage.success('排查信息已复制')
+    if (inScope()) ElMessage.success('排查信息已复制')
   } catch {
-    ElMessage.warning('浏览器未允许复制，可手动选择请求标识')
+    if (inScope()) ElMessage.warning('浏览器未允许复制，可手动选择请求标识')
   }
 }
 async function showDetail(id: string): Promise<void> {
   const current = ++detailSequence
+  const inScope = captureScope()
+  detailId.value = id
   drawer.value = true
   detail.value = null
   detailError.value = null
   detailLoading.value = true
   try {
     const value = await getAuditDetail(id)
-    if (current === detailSequence) detail.value = value
+    if (current === detailSequence && inScope()) detail.value = value
   } catch (cause) {
-    if (current === detailSequence) detailError.value = cause
+    if (current === detailSequence && inScope()) detailError.value = cause
   } finally {
-    if (current === detailSequence) detailLoading.value = false
+    if (current === detailSequence && inScope()) detailLoading.value = false
   }
 }
 onMounted(load)
+watch(drawer, (open) => {
+  if (open) return
+  detailSequence++
+  detailLoading.value = false
+  detailId.value = ''
+})
 watch(activeTab, (value) => {
   drawer.value = false
   detailSequence++
@@ -247,7 +259,7 @@ watch(
           ><ElInput
             v-model="query.user"
             class="search-field"
-            placeholder="账号、昵称或ID"
+            placeholder="当前账号/昵称或ID"
             clearable
         /></ElFormItem>
         <ElFormItem label="动作"
@@ -309,7 +321,6 @@ watch(
           ><ColumnPicker v-model="columns" :options="columnOptions"
         /></template>
         <ElTable v-loading="loading" :data="rows" row-key="id" border empty-text="暂无操作记录">
-          <ElTableColumn type="selection" width="48" align="center" />
           <ElTableColumn
             v-if="columns.includes('user')"
             label="操作人"
@@ -354,7 +365,9 @@ watch(
             ></ElTableColumn
           >
           <ElTableColumn v-if="columns.includes('time')" label="操作时间" min-width="175"
-            ><template #default="{ row }">{{ formatTime(row.createdAt) }}</template></ElTableColumn
+            ><template #default="{ row }">{{
+              formatDateTime(row.createdAt)
+            }}</template></ElTableColumn
           >
           <ElTableColumn
             v-if="columns.includes('trace')"
@@ -391,6 +404,12 @@ watch(
       <ElDrawer v-model="drawer" title="操作详情" size="760px" destroy-on-close>
         <div v-loading="detailLoading">
           <RequestError :error="detailError" />
+          <ElButton
+            v-if="detailError && detailId"
+            :loading="detailLoading"
+            @click="showDetail(detailId)"
+            >重新加载详情</ElButton
+          >
           <template v-if="detail">
             <ElDescriptions :column="1" border>
               <ElDescriptionsItem label="记录ID">{{ detail.record.id }}</ElDescriptionsItem>
@@ -413,12 +432,12 @@ watch(
               <ElDescriptionsItem label="结果">{{
                 resultNames[detail.record.result] || detail.record.result
               }}</ElDescriptionsItem>
-              <ElDescriptionsItem label="原因编码">{{
-                detail.record.reasonCode || '—'
+              <ElDescriptionsItem label="原因">{{
+                auditReason(detail.record.reasonCode)
               }}</ElDescriptionsItem>
               <ElDescriptionsItem label="来源IP">{{ detail.sourceIp || '—' }}</ElDescriptionsItem>
               <ElDescriptionsItem label="操作时间">{{
-                formatTime(detail.record.createdAt)
+                formatDateTime(detail.record.createdAt)
               }}</ElDescriptionsItem>
               <ElDescriptionsItem label="请求定位"
                 ><div class="trace-tools">

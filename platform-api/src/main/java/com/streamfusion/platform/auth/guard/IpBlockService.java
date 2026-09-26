@@ -5,7 +5,11 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.incrementer.IdentifierGenerator;
 import com.streamfusion.platform.access.mapper.AccessMapper;
 import com.streamfusion.platform.access.service.AccessService;
+import com.streamfusion.platform.audit.mapper.AuditReadMapper;
 import com.streamfusion.platform.audit.pojo.dto.AuditContextDto;
+import com.streamfusion.platform.audit.pojo.vo.AuditReferenceVo;
+import com.streamfusion.platform.audit.service.AuditChanges;
+import com.streamfusion.platform.audit.service.AuditReferences;
 import com.streamfusion.platform.audit.service.AuditService;
 import com.streamfusion.platform.auth.guard.mapper.IpBlockMapper;
 import com.streamfusion.platform.auth.guard.pojo.dto.IpBlockQueryDto;
@@ -20,6 +24,9 @@ import com.streamfusion.platform.common.validation.DecimalInput;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -34,6 +41,9 @@ public class IpBlockService {
     private final IdentifierGenerator ids;
     private final IpGuardProperties properties;
     private final AuditService audit;
+    private final AuditReadMapper auditReader;
+    private final AuditChanges auditChanges;
+    private final AuditReferences references;
     private final Clock clock;
     private final CurrentUserService current;
     private final AccessService access;
@@ -109,8 +119,7 @@ public class IpBlockService {
                                 .eq(ip != null, IpBlockEntity::getSourceIp, ip)
                                 .eq(status != null, IpBlockEntity::getStatus, status)
                                 .orderByDesc(IpBlockEntity::getBlockedAt, IpBlockEntity::getId));
-        return PageResultVo.from(
-                rows, rows.getRecords().stream().map(IpBlockService::view).toList());
+        return PageResultVo.from(rows, views(rows.getRecords()));
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -141,7 +150,7 @@ public class IpBlockService {
                                                 .next(expected)))
                 != 1) throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
         audit.record(actor, "IP_BLOCK", key, "IP_BLOCK_RELEASE", "SUCCESS", null, context);
-        return view(mapper.selectById(key));
+        return views(List.of(mapper.selectById(key))).getFirst();
     }
 
     private long requireSuper() {
@@ -151,7 +160,43 @@ public class IpBlockService {
         return actor;
     }
 
-    private static IpBlockVo view(IpBlockEntity row) {
+    private List<IpBlockVo> views(List<IpBlockEntity> rows) {
+        Map<Long, Long> releasedBy = new LinkedHashMap<>();
+        rows.stream()
+                .filter(row -> row.getUnblockedBy() != null)
+                .forEach(row -> releasedBy.put(row.getId(), row.getUnblockedBy()));
+        Map<Long, AuditReferenceVo> snapshots = new LinkedHashMap<>();
+        if (!releasedBy.isEmpty()) {
+            for (var release : auditReader.latestIpReleases(List.copyOf(releasedBy.keySet()))) {
+                Long expectedActor = releasedBy.get(release.getTargetId());
+                // Never attach another actor's or an earlier release's name to the current row.
+                if (expectedActor != null && expectedActor.equals(release.getActorId())) {
+                    snapshots.put(
+                            release.getTargetId(), auditChanges.read(release.getChanges()).actor());
+                }
+            }
+        }
+        var currentNames =
+                references.current(
+                        releasedBy.values().stream()
+                                .map(id -> new AuditReferences.Request("USER", id.toString()))
+                                .toList());
+        return rows.stream()
+                .map(
+                        row ->
+                                view(
+                                        row,
+                                        references.resolve(
+                                                "USER",
+                                                row.getUnblockedBy() == null
+                                                        ? null
+                                                        : row.getUnblockedBy().toString(),
+                                                snapshots.get(row.getId()),
+                                                currentNames)))
+                .toList();
+    }
+
+    private static IpBlockVo view(IpBlockEntity row, AuditReferenceVo unblockedByReference) {
         return new IpBlockVo(
                 row.getId().toString(),
                 row.getSourceIp(),
@@ -162,6 +207,7 @@ public class IpBlockService {
                 row.getBlockedAt().atZone(ZONE).toInstant(),
                 row.getUnblockedAt() == null ? null : row.getUnblockedAt().atZone(ZONE).toInstant(),
                 row.getUnblockedBy() == null ? null : row.getUnblockedBy().toString(),
+                unblockedByReference,
                 row.getVersion().toString());
     }
 }

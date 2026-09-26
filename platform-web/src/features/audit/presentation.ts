@@ -17,6 +17,18 @@ export const changeNames: Record<string, string> = {
   afterDepartmentIds: '变更后部门',
 }
 
+const reasonNames: Record<string, string> = {
+  INVALID_CREDENTIALS: '账号或密码不正确',
+  ACCOUNT_UNAVAILABLE: '账号已不可用或登录状态已变化',
+  ACCOUNT_COOLING_DOWN: '连续登录失败，账号暂时锁定',
+  RETRY_REQUIRED: '账号限制已变化，请重新登录',
+  LOGIN_FAILURE_THRESHOLD: '登录失败次数超限',
+}
+
+export function auditReason(code: string | null): string {
+  return code ? reasonNames[code] || code : '—'
+}
+
 export function referenceName(reference: AuditReference | null, fallback = '—'): string {
   if (!reference) return fallback
   if (reference.source === 'MISSING') return `已删除或未知对象（ID ${reference.id}）`

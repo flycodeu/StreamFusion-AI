@@ -11,6 +11,7 @@ const blocked = {
   blockedAt: '2026-09-26T00:00:00Z',
   unblockedAt: null,
   unblockedBy: null,
+  unblockedByReference: null,
   version: '9007199254740994',
 }
 
@@ -28,6 +29,37 @@ describe('IP block response contract', () => {
       unblockedBy: '9007199254740995',
     }
     expect(parseIpBlock(released)).toEqual(released)
+  })
+
+  it('accepts older responses without the optional user summary', () => {
+    const legacy = { ...blocked, unblockedBy: '123', unblockedByReference: undefined }
+    expect(parseIpBlock(legacy)).toMatchObject({
+      unblockedBy: '123',
+      unblockedByReference: null,
+    })
+  })
+
+  it.each(['SNAPSHOT', 'CURRENT', 'MISSING'])(
+    'preserves a readable release user with source %s',
+    (source) => {
+      const reference = { id: '123', type: 'USER', name: '运维', code: 'operator', source }
+      expect(
+        parseIpBlock({ ...blocked, unblockedBy: '123', unblockedByReference: reference }),
+      ).toMatchObject({ unblockedBy: '123', unblockedByReference: reference })
+    },
+  )
+
+  it.each([
+    { id: '124', type: 'USER' },
+    { id: '123', type: 'ROLE' },
+  ])('rejects a mismatched release user summary: %j', (invalid) => {
+    expect(() =>
+      parseIpBlock({
+        ...blocked,
+        unblockedBy: '123',
+        unblockedByReference: { ...invalid, name: '运维', code: null, source: 'CURRENT' },
+      }),
+    ).toThrow()
   })
 
   it.each([

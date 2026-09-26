@@ -1,4 +1,10 @@
 const status = globalThis.document.getElementById('document-status')
+// Accept only the existing development prefix; production APIs retain their root paths.
+const apiPrefix =
+  new globalThis.URLSearchParams(globalThis.location.search).get('apiPrefix') === '/api'
+    ? '/api'
+    : ''
+globalThis.document.getElementById('swagger-style').href = `${apiPrefix}/swagger-ui/swagger-ui.css`
 
 async function loadScript() {
   await new Promise((resolve, reject) => {
@@ -7,7 +13,7 @@ async function loadScript() {
       script.remove()
       reject(new Error('接口文档资源加载超时，请刷新重试。'))
     }, 15000)
-    script.src = '/api/swagger-ui/swagger-ui-bundle.js'
+    script.src = `${apiPrefix}/swagger-ui/swagger-ui-bundle.js`
     script.onload = () => {
       globalThis.clearTimeout(timeout)
       resolve()
@@ -21,7 +27,7 @@ async function loadScript() {
 }
 
 async function loadDocument() {
-  const response = await fetch('/api/v3/api-docs', {
+  const response = await fetch(`${apiPrefix}/v3/api-docs`, {
     credentials: 'same-origin',
     signal: AbortSignal.timeout(15000),
     headers: { Accept: 'application/json' },
@@ -41,7 +47,7 @@ async function start() {
   try {
     const [, spec] = await Promise.all([loadScript(), loadDocument()])
     globalThis.SwaggerUIBundle({
-      spec: { ...spec, servers: [{ url: '/api', description: '当前平台 API' }] },
+      spec: { ...spec, servers: [{ url: apiPrefix || '/', description: '当前平台 API' }] },
       dom_id: '#swagger-ui',
       deepLinking: true,
       filter: true,

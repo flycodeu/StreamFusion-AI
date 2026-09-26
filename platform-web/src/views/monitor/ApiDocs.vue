@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { ElButton, ElEmpty, vLoading } from 'element-plus'
-import { getApiDocsStatus } from '../../api/api-docs/api'
+import { apiDocsFrameUrl, getApiDocsStatus } from '../../api/api-docs/api'
 import RequestError from '../../components/feedback/RequestError.vue'
 
 defineOptions({ name: 'MonitorApiDocs' })
@@ -9,6 +9,7 @@ const enabled = ref(false)
 const loading = ref(false)
 const error = ref<unknown>(null)
 const revision = ref(0)
+const frameUrl = apiDocsFrameUrl()
 
 async function load(): Promise<void> {
   if (loading.value) return
@@ -39,7 +40,7 @@ onMounted(load)
       v-if="enabled"
       :key="revision"
       class="api-docs-frame"
-      src="/api-docs.html"
+      :src="frameUrl"
       title="Springdoc 接口文档"
       referrerpolicy="same-origin"
     />

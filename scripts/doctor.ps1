@@ -13,13 +13,21 @@ function Report([string]$Name, [bool]$Ok, [string]$Detail) {
     Write-Output "$status [$Name] $Detail"
 }
 
+function Read-CommandOutput([string]$Command, [string[]]$Arguments) {
+    # PowerShell 5.1 wraps native stderr as errors, even when java -version succeeds.
+    $ErrorActionPreference = 'Continue'
+    $output = (& $Command @Arguments 2>&1 | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine
+    [pscustomobject]@{ Output = $output.Trim(); ExitCode = $LASTEXITCODE }
+}
+
 # Only inspect the selected tools. Never install, change global settings or kill processes.
 $javaCommand = Get-Command java -ErrorAction SilentlyContinue
 $selectedJavaHome = if ($JavaHome) { $JavaHome } else { $env:JAVA_HOME }
 $java = if ($selectedJavaHome) { Join-Path $selectedJavaHome 'bin/java.exe' } elseif ($javaCommand) { $javaCommand.Source } else { '' }
 if ($java -and (Test-Path $java)) {
-    $version = (& $java -version 2>&1 | Out-String).Trim()
-    Report 'JDK' ($version -match 'version "21\.') "$java; $($version.Split([Environment]::NewLine)[0])"
+    $javaResult = Read-CommandOutput $java @('-version')
+    $version = $javaResult.Output
+    Report 'JDK' ($javaResult.ExitCode -eq 0 -and $version -match 'version "21(?:\.|\")') "$java; $($version.Split([Environment]::NewLine)[0])"
 } else { Report 'JDK' $false 'JDK 21 not found; set JAVA_HOME or pass -JavaHome.' }
 
 $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
@@ -40,11 +48,13 @@ try {
             $corepack = Get-Command corepack -ErrorAction SilentlyContinue
             $entry = if ($corepack) { Join-Path (Split-Path $corepack.Source) 'node_modules/corepack/dist/pnpm.js' } else { '' }
             if (($NodePath -or (Test-Path $localNode)) -and $entry -and (Test-Path $entry) -and (Test-Path $node)) {
-                $pnpmVersion = (& $node $entry --version 2>&1 | Out-String).Trim()
-                Report 'pnpm' ($LASTEXITCODE -eq 0 -and $pnpmVersion -eq '10.34.5') "node=$node; entry=$entry; version=$pnpmVersion (network disabled)"
+                $pnpmResult = Read-CommandOutput $node @($entry, '--version')
+                $pnpmVersion = $pnpmResult.Output
+                Report 'pnpm' ($pnpmResult.ExitCode -eq 0 -and $pnpmVersion -eq '10.34.5') "node=$node; entry=$entry; version=$pnpmVersion (network disabled)"
             } else {
-                $pnpmVersion = (& $pnpmCommand.Source --version 2>&1 | Out-String).Trim()
-                Report 'pnpm' ($LASTEXITCODE -eq 0 -and $pnpmVersion -eq '10.34.5') "launcher=$($pnpmCommand.Source); version=$pnpmVersion (network disabled)"
+                $pnpmResult = Read-CommandOutput $pnpmCommand.Source @('--version')
+                $pnpmVersion = $pnpmResult.Output
+                Report 'pnpm' ($pnpmResult.ExitCode -eq 0 -and $pnpmVersion -eq '10.34.5') "launcher=$($pnpmCommand.Source); version=$pnpmVersion (network disabled)"
                 $launcherNode = Join-Path (Split-Path $pnpmCommand.Source) 'node.exe'
                 if (Test-Path $launcherNode) {
                     $launcherVersion = & $launcherNode --version
@@ -69,11 +79,11 @@ foreach ($project in @('node-agent', 'runtime')) {
     if (!(Test-Path $python)) { Report $project $false 'Missing .venv; run uv sync --locked in this subproject.'; continue }
     Push-Location $directory
     try {
-        $result = & $python -B -m app.diagnostics 2>&1
-        if ($LASTEXITCODE -ne 0) {
+        $result = Read-CommandOutput $python @('-B', '-m', 'app.diagnostics')
+        if ($result.ExitCode -ne 0) {
             Report $project $false 'Dependency import or settings validation failed; inspect using python -m app.diagnostics.'
         } else {
-            $report = ($result | Out-String) | ConvertFrom-Json
+            $report = $result.Output | ConvertFrom-Json
             Report $project ($report.python -like '3.12.*') "python=$($report.python); executable=$($report.executable); fastapi=$($report.fastapi); settings=$($report.settings); port=$($report.port)"
         }
     } finally { Pop-Location }

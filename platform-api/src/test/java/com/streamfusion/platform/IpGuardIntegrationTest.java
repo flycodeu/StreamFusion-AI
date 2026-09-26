@@ -36,6 +36,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
         properties = {
             "spring.datasource.url=jdbc:h2:mem:ip_guard;MODE=MySQL;DB_CLOSE_DELAY=-1",
             "platform.ip-guard.enabled=true",
+            "platform.ip-guard.trusted-proxies=127.0.0.1",
             "platform.ip-guard.failure-threshold=5"
         })
 @AutoConfigureMockMvc
@@ -133,6 +134,25 @@ class IpGuardIntegrationTest {
     }
 
     @Test
+    void blockedClientCanLogoutBehindTrustedProxyAndKeepsItsAuditSource() throws Exception {
+        String clientIp = "192.0.2.66";
+        blocks.block(clientIp, 0, 5, new AuditContextDto(clientIp, "Test"));
+        mvc.perform(
+                        post("/auth/logout")
+                                .session(admin)
+                                .with(csrf())
+                                .with(ip("127.0.0.1"))
+                                .header("X-Forwarded-For", clientIp))
+                .andExpect(status().isOk());
+        assertThat(admin.isInvalid()).isTrue();
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT source_ip FROM sys_operation_log WHERE action='LOGOUT'",
+                                String.class))
+                .isEqualTo(clientIp);
+    }
+
+    @Test
     void unblocksWithVersionAndPreventsOldInflightFailureFromReblockingReleasedAddress()
             throws Exception {
         String attacker = "2001:db8:0:0:0:0:0:10";
@@ -160,7 +180,11 @@ class IpGuardIntegrationTest {
         mvc.perform(put(path).session(admin).with(csrf()).header("If-Match", "\"1\""))
                 .andExpect(status().isOk())
                 .andExpect(header().string("ETag", "\"2\""))
-                .andExpect(jsonPath("$.data.status").value("RELEASED"));
+                .andExpect(jsonPath("$.data.status").value("RELEASED"))
+                .andExpect(jsonPath("$.data.unblockedBy").value(Long.toString(adminId)))
+                .andExpect(jsonPath("$.data.unblockedByReference.id").value(Long.toString(adminId)))
+                .andExpect(jsonPath("$.data.unblockedByReference.name").value("安全管理员"))
+                .andExpect(jsonPath("$.data.unblockedByReference.source").value("SNAPSHOT"));
         assertThat(blocks.requireAllowed(attacker)).isEqualTo(2);
         blocks.block(attacker, 0, 99, new AuditContextDto(attacker, "late request"));
         assertThat(blocks.requireAllowed(attacker)).isEqualTo(2);
@@ -173,6 +197,7 @@ class IpGuardIntegrationTest {
             throws Exception {
         blocks.block("192.0.2.20", 0, 5, new AuditContextDto("192.0.2.20", null));
         long id = jdbc.queryForObject("SELECT id FROM sys_ip_block", Long.class);
+        mvc.perform(get("/audit/ip-blocks/page")).andExpect(status().isUnauthorized());
         jdbc.update(
                 "INSERT INTO sys_role(id,code,name,status,version) VALUES(9001,'AUDITOR','审计员','ENABLED',0)");
         jdbc.update("INSERT INTO sys_role_menu(role_id,menu_id) VALUES(9001,1006)");
@@ -189,6 +214,122 @@ class IpGuardIntegrationTest {
         jdbc.update("INSERT INTO sys_user_role(user_id,role_id) VALUES(?,1)", adminId);
         jdbc.update("UPDATE sys_menu SET enabled=FALSE WHERE id=1006");
         mvc.perform(get("/audit/ip-blocks/page").session(admin)).andExpect(status().isForbidden());
+    }
+
+    @Test
+    void keepsTheLatestReleaseActorNameAfterRenameAndHardDelete() throws Exception {
+        jdbc.update(
+                "INSERT INTO sys_user(id,username,nickname,password,status,must_change_password)"
+                        + " SELECT 101,'FormerAdmin','首次解封人',password,1,FALSE FROM sys_user WHERE id=?",
+                adminId);
+        jdbc.update("INSERT INTO sys_user_role(user_id,role_id) VALUES(101,1)");
+        var login =
+                mvc.perform(
+                                post("/auth/login")
+                                        .with(csrf())
+                                        .contentType("application/json")
+                                        .content(
+                                                "{\"username\":\"FormerAdmin\",\"password\":\"GuardAdmin1!\"}"))
+                        .andExpect(status().isOk())
+                        .andReturn();
+        var former = (MockHttpSession) login.getRequest().getSession(false);
+        String ip = "192.0.2.71";
+        blocks.block(ip, 0, 5, new AuditContextDto(ip, null));
+        long id =
+                jdbc.queryForObject(
+                        "SELECT id FROM sys_ip_block WHERE source_ip=?", Long.class, ip);
+        String release = "/audit/ip-blocks/" + id + "/unblock";
+        mvc.perform(put(release).session(former).with(csrf()).header("If-Match", "\"1\""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.unblockedByReference.name").value("首次解封人"));
+        jdbc.update("UPDATE sys_user SET nickname='最近解封人' WHERE id=101");
+        blocks.block(ip, 2, 5, new AuditContextDto(ip, null));
+        mvc.perform(get("/audit/ip-blocks/page").session(admin).param("sourceIp", ip))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].unblockedByReference").isEmpty());
+        mvc.perform(put(release).session(former).with(csrf()).header("If-Match", "\"3\""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.unblockedByReference.name").value("最近解封人"));
+        jdbc.update("UPDATE sys_user SET nickname='后来改名' WHERE id=101");
+        for (boolean delete : java.util.List.of(false, true)) {
+            if (delete) {
+                jdbc.update("DELETE FROM sys_user_role WHERE user_id=101");
+                jdbc.update("DELETE FROM sys_user WHERE id=101");
+            }
+            String body =
+                    mvc.perform(get("/audit/ip-blocks/page").session(admin).param("sourceIp", ip))
+                            .andExpect(status().isOk())
+                            .andExpect(jsonPath("$.data.items[0].unblockedBy").value("101"))
+                            .andExpect(
+                                    jsonPath("$.data.items[0].unblockedByReference.id")
+                                            .value("101"))
+                            .andExpect(
+                                    jsonPath("$.data.items[0].unblockedByReference.name")
+                                            .value("最近解封人"))
+                            .andExpect(
+                                    jsonPath("$.data.items[0].unblockedByReference.code")
+                                            .value("FormerAdmin"))
+                            .andExpect(
+                                    jsonPath("$.data.items[0].unblockedByReference.source")
+                                            .value("SNAPSHOT"))
+                            .andReturn()
+                            .getResponse()
+                            .getContentAsString();
+            assertThat(body).doesNotContain("首次解封人", "后来改名", "changes", "password");
+        }
+    }
+
+    @Test
+    void oldReleaseRowsUseCurrentOrMissingNamesWithoutBorrowingAnEarlierSnapshot()
+            throws Exception {
+        jdbc.update(
+                "INSERT INTO sys_user(id,username,nickname,password) VALUES(101,'ExistingUser','当前解封人','synthetic-only')");
+        jdbc.update(
+                "INSERT INTO sys_ip_block(id,source_ip,status,reason_code,failed_attempts,window_seconds,blocked_at,unblocked_at,unblocked_by,version)"
+                        + " VALUES(301,'192.0.2.72','RELEASED','LOGIN_FAILURE_THRESHOLD',5,600,'2026-01-01 00:00:00','2026-01-01 00:01:00',101,2),"
+                        + "(302,'192.0.2.73','RELEASED','LOGIN_FAILURE_THRESHOLD',5,600,'2026-01-01 00:00:00','2026-01-01 00:01:00',102,2),"
+                        + "(303,'192.0.2.74','RELEASED','LOGIN_FAILURE_THRESHOLD',5,600,'2026-01-01 00:00:00','2026-01-01 00:01:00',101,2)");
+        String oldSnapshot =
+                "{\"_actor\":{\"id\":\"101\",\"type\":\"USER\",\"name\":\"更早的解封人\",\"code\":\"ExistingUser\"}}";
+        String wrongSnapshot =
+                "{\"_actor\":{\"id\":\"999\",\"type\":\"USER\",\"name\":\"错误身份\",\"code\":null},\"password\":\"must-not-expose\"}";
+        jdbc.update(
+                "INSERT INTO sys_operation_log(id,actor_id,target_type,target_id,action,result,changes,created_at)"
+                        + " VALUES(11,101,'IP_BLOCK',303,'IP_BLOCK_RELEASE','SUCCESS',?,'2026-01-01 00:01:00'),"
+                        + "(12,101,'IP_BLOCK',303,'IP_BLOCK_RELEASE','SUCCESS',?,'2026-01-01 00:01:00'),"
+                        + "(13,101,'IP_BLOCK',303,'IP_BLOCK_RELEASE','FAILURE',?,'2026-01-01 00:02:00'),"
+                        + "(14,101,'USER',303,'IP_BLOCK_RELEASE','SUCCESS',?,'2026-01-01 00:03:00')",
+                oldSnapshot,
+                wrongSnapshot,
+                oldSnapshot,
+                oldSnapshot);
+        String body =
+                mvc.perform(get("/audit/ip-blocks/page").session(admin).param("status", "RELEASED"))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.total").value(3))
+                        .andExpect(jsonPath("$.data.items[0].id").value("303"))
+                        .andExpect(
+                                jsonPath("$.data.items[0].unblockedByReference.name")
+                                        .value("当前解封人"))
+                        .andExpect(
+                                jsonPath("$.data.items[0].unblockedByReference.source")
+                                        .value("CURRENT"))
+                        .andExpect(jsonPath("$.data.items[1].id").value("302"))
+                        .andExpect(jsonPath("$.data.items[1].unblockedByReference.id").value("102"))
+                        .andExpect(
+                                jsonPath("$.data.items[1].unblockedByReference.source")
+                                        .value("MISSING"))
+                        .andExpect(jsonPath("$.data.items[2].id").value("301"))
+                        .andExpect(
+                                jsonPath("$.data.items[2].unblockedByReference.name")
+                                        .value("当前解封人"))
+                        .andExpect(
+                                jsonPath("$.data.items[2].unblockedByReference.source")
+                                        .value("CURRENT"))
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString();
+        assertThat(body).doesNotContain("更早的解封人", "错误身份", "must-not-expose", "changes");
     }
 
     @Test

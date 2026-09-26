@@ -24,6 +24,7 @@ import { useColumns } from '../../composables/table/useColumns'
 import TablePanel from '../../components/table/TablePanel.vue'
 import TableActions from '../../components/table/TableActions.vue'
 import { useTableSelection } from '../../composables/table/useTableSelection'
+import { usePageScope } from '../../composables/usePageScope'
 
 defineOptions({ name: 'SystemRole' })
 
@@ -49,6 +50,9 @@ const codeError = computed(() => {
   return code === 'SUPER_ADMIN' ? '该编码为系统保留编码' : ''
 })
 const saving = ref(false)
+const deleting = ref(false)
+const statusChanging = ref<string[]>([])
+const captureScope = usePageScope()
 const menuDialog = ref(false)
 const roleMenus = ref<RoleMenus | null>(null)
 const menuRole = ref<Role | null>(null)
@@ -60,6 +64,7 @@ let menuSequence = 0
 
 async function load(): Promise<void> {
   const current = ++sequence
+  const inScope = captureScope()
   loading.value = true
   error.value = null
   try {
@@ -69,14 +74,14 @@ async function load(): Promise<void> {
       keyword: keyword.value.trim() || undefined,
       status: status.value || undefined,
     })
-    if (current !== sequence) return
+    if (current !== sequence || !inScope()) return
     rows.value = result.items
     clearSelection()
     total.value = result.total
   } catch (cause) {
-    if (current === sequence) error.value = cause
+    if (current === sequence && inScope()) error.value = cause
   } finally {
-    if (current === sequence) loading.value = false
+    if (current === sequence && inScope()) loading.value = false
   }
 }
 
@@ -114,6 +119,7 @@ async function save(): Promise<void> {
   submitted.value = true
   if (!form.name.trim() || codeError.value || saving.value) return
   saving.value = true
+  const inScope = captureScope()
   error.value = null
   try {
     if (editing.value)
@@ -128,31 +134,55 @@ async function save(): Promise<void> {
         name: form.name.trim(),
         description: form.description.trim() || null,
       })
+    if (!inScope()) return
     dialog.value = false
     await load()
   } catch (cause) {
-    error.value = cause
+    if (inScope()) error.value = cause
   } finally {
     saving.value = false
   }
 }
 async function changeStatus(role: Role): Promise<void> {
+  if (role.code === 'SUPER_ADMIN' || statusChanging.value.includes(role.id)) return
+  const inScope = captureScope()
+  const current = sequence
+  statusChanging.value.push(role.id)
   error.value = null
   try {
-    await api.changeRoleStatus(role, role.status !== 'ENABLED')
+    const updated = await api.changeRoleStatus(role, role.status !== 'ENABLED')
+    if (!inScope()) return
+    if (
+      current === sequence &&
+      status.value &&
+      status.value !== updated.status &&
+      rows.value.length === 1 &&
+      rows.value[0]?.id === role.id &&
+      page.value > 1
+    )
+      page.value--
     await load()
   } catch (cause) {
-    error.value = cause
+    if (inScope()) error.value = cause
+  } finally {
+    statusChanging.value = statusChanging.value.filter((id) => id !== role.id)
   }
 }
 async function remove(role: Role): Promise<void> {
+  if (deleting.value) return
+  const inScope = captureScope()
+  deleting.value = true
   try {
     await ElMessageBox.confirm(`删除角色“${role.name}”？`, '确认删除', { type: 'warning' })
+    if (!inScope()) return
     await api.deleteRole(role)
+    if (!inScope()) return
     if (rows.value.length === 1 && page.value > 1) page.value--
     await load()
   } catch (cause) {
-    if (cause !== 'cancel' && cause !== 'close') error.value = cause
+    if (inScope() && cause !== 'cancel' && cause !== 'close') error.value = cause
+  } finally {
+    deleting.value = false
   }
 }
 function pageIds(nodes: RoleMenuNode[]): string[] {
@@ -163,22 +193,24 @@ function pageIds(nodes: RoleMenuNode[]): string[] {
 }
 async function openMenus(role: Role): Promise<void> {
   const current = ++menuSequence
+  const inScope = captureScope()
   error.value = null
   try {
     const menus = await api.getRoleMenus(role.id)
-    if (current !== menuSequence) return
+    if (current !== menuSequence || !inScope()) return
     menuRole.value = role
     roleMenus.value = menus
     menuDialog.value = true
     await nextTick()
-    if (current === menuSequence) treeRef.value?.setCheckedKeys(menus.selectedPageIds)
+    if (current === menuSequence && inScope()) treeRef.value?.setCheckedKeys(menus.selectedPageIds)
   } catch (cause) {
-    if (current === menuSequence) error.value = cause
+    if (current === menuSequence && inScope()) error.value = cause
   }
 }
 async function saveMenus(): Promise<void> {
   if (!roleMenus.value || !menuRole.value || saving.value) return
   saving.value = true
+  const inScope = captureScope()
   error.value = null
   try {
     const allowed = new Set(pageIds(roleMenus.value.tree))
@@ -186,10 +218,11 @@ async function saveMenus(): Promise<void> {
       .map(String)
       .filter((id) => allowed.has(id))
     await api.setRoleMenus(menuRole.value.id, roleMenus.value.version, selected)
+    if (!inScope()) return
     menuDialog.value = false
     await load()
   } catch (cause) {
-    error.value = cause
+    if (inScope()) error.value = cause
   } finally {
     saving.value = false
   }
@@ -306,13 +339,14 @@ onMounted(load)
               <ElButton
                 plain
                 :disabled="row.code === 'SUPER_ADMIN'"
+                :loading="statusChanging.includes(row.id)"
                 @click="changeStatus(asRole(row))"
                 >{{ row.status === 'ENABLED' ? '停用' : '启用' }}</ElButton
               >
               <ElButton
                 plain
                 type="danger"
-                :disabled="row.code === 'SUPER_ADMIN'"
+                :disabled="row.code === 'SUPER_ADMIN' || deleting"
                 @click="remove(asRole(row))"
                 >删除</ElButton
               >
@@ -336,9 +370,12 @@ onMounted(load)
       :title="editing ? '编辑角色' : '新建角色'"
       width="520px"
       destroy-on-close
+      :close-on-click-modal="!saving"
+      :close-on-press-escape="!saving"
+      :show-close="!saving"
     >
       <RequestError :error="error" />
-      <ElForm label-width="90px" @submit.prevent="save">
+      <ElForm label-width="90px" :disabled="saving" @submit.prevent="save">
         <ElFormItem label="角色编码" required :error="submitted ? codeError : ''"
           ><ElInput v-model="form.code" :disabled="!!editing" maxlength="64"
         /></ElFormItem>
@@ -353,7 +390,7 @@ onMounted(load)
         /></ElFormItem>
       </ElForm>
       <template #footer
-        ><ElButton @click="dialog = false">取消</ElButton
+        ><ElButton :disabled="saving" @click="dialog = false">取消</ElButton
         ><ElButton type="primary" :loading="saving" @click="save">保存</ElButton></template
       >
     </ElDialog>
@@ -362,6 +399,9 @@ onMounted(load)
       :title="`配置页面 · ${menuRole?.name || ''}`"
       width="600px"
       destroy-on-close
+      :close-on-click-modal="!saving"
+      :close-on-press-escape="!saving"
+      :show-close="!saving"
     >
       <RequestError :error="error" />
       <ElTree
@@ -374,7 +414,7 @@ onMounted(load)
         default-expand-all
       />
       <template #footer
-        ><ElButton @click="menuDialog = false">取消</ElButton
+        ><ElButton :disabled="saving" @click="menuDialog = false">取消</ElButton
         ><ElButton type="primary" :loading="saving" @click="saveMenus">保存</ElButton></template
       >
     </ElDialog>

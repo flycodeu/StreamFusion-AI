@@ -54,10 +54,14 @@ router.beforeEach(async (to) => {
       return sessionState.me ? '/unavailable' : { path: '/login', query: { next: to.fullPath } }
     }
   }
-  if (sessionState.me.user.mustChangePassword && to.path !== '/change-password')
-    return '/change-password'
+  const me = sessionState.me
+  if (!me) {
+    syncRoutes([], [])
+    return { path: '/login', query: { next: to.fullPath } }
+  }
+  if (me.user.mustChangePassword && to.path !== '/change-password') return '/change-password'
   if (to.path === '/change-password') return true
-  syncRoutes(sessionState.me.routes, sessionState.me.modules)
+  syncRoutes(me.routes, me.modules)
   const resolved = router.resolve(to.fullPath)
   if (!resolved.matched.length) return '/forbidden'
   if (to.matched.at(-1) !== resolved.matched.at(-1)) return to.fullPath

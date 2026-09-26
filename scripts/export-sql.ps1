@@ -1,4 +1,4 @@
-param([switch]$Check)
+﻿param([switch]$Check)
 
 $ErrorActionPreference = 'Stop'
 $sqlDirectory = Join-Path $PSScriptRoot '../platform-api/sql'

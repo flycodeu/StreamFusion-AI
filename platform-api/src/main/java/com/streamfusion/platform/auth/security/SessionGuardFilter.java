@@ -44,8 +44,9 @@ public class SessionGuardFilter extends OncePerRequestFilter {
                 var user = current.requireUser();
                 loginRecords.observe(request);
                 String route = request.getRequestURI().substring(request.getContextPath().length());
+                String method = "HEAD".equals(request.getMethod()) ? "GET" : request.getMethod();
                 if (CurrentUserService.requiresPasswordChange(user)
-                        && !LIMITED.contains(request.getMethod() + " " + route)) {
+                        && !LIMITED.contains(method + " " + route)) {
                     throw BusinessException.error(ErrorCode.PASSWORD_CHANGE_REQUIRED);
                 }
             } catch (BusinessException ex) {

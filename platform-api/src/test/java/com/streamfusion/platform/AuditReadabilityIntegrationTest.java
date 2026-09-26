@@ -3,9 +3,6 @@ package com.streamfusion.platform;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.streamfusion.platform.audit.mapper.AuditReadMapper;
-import com.streamfusion.platform.audit.pojo.dto.AuditCriteria;
 import com.streamfusion.platform.audit.pojo.dto.AuditQueryDto;
 import com.streamfusion.platform.audit.service.AuditQueryService;
 import com.streamfusion.platform.audit.service.AuditService;
@@ -31,7 +28,6 @@ class AuditReadabilityIntegrationTest {
     @Autowired DataSource source;
     @Autowired AuditService audit;
     @Autowired AuditQueryService queries;
-    @Autowired AuditReadMapper readMapper;
     private JdbcTemplate jdbc;
 
     @BeforeEach
@@ -84,13 +80,15 @@ class AuditReadabilityIntegrationTest {
         assertThat(detail.relations().get("afterMenuIds")).isEmpty();
         assertThat(detail.changes()).doesNotContainKeys("_actor", "_target", "_relations");
         assertThat(queries.page(new AuditQueryDto()).getItems().getFirst().actor().name())
-                .isEqualTo("目前用户");
+                .isEqualTo("操作时用户");
         assertThat(queries.page(new AuditQueryDto()).getItems().getFirst().actor().source())
-                .isEqualTo("CURRENT");
+                .isEqualTo("SNAPSHOT");
         jdbc.update("DELETE FROM sys_user WHERE id=101");
         assertThat(queries.detail(id).record().actor().name()).isEqualTo("操作时用户");
         assertThat(queries.page(new AuditQueryDto()).getItems().getFirst().actor().source())
-                .isEqualTo("MISSING");
+                .isEqualTo("SNAPSHOT");
+        assertThat(queries.page(new AuditQueryDto()).getItems().getFirst().target().name())
+                .isEqualTo("操作时用户");
     }
 
     @Test
@@ -112,11 +110,16 @@ class AuditReadabilityIntegrationTest {
         assertThat(absent.name()).isNull();
         assertThat(detail.relations().get("parentId").getFirst().type()).isEqualTo("DEPT");
         assertThat(detail.record().actor().source()).isEqualTo("CURRENT");
+        assertThat(queries.page(new AuditQueryDto()).getItems().getFirst().actor().source())
+                .isEqualTo("CURRENT");
         assertThat(detail.changes()).doesNotContainKey("password");
         assertThat(
                         jdbc.queryForObject(
                                 "SELECT changes FROM sys_operation_log WHERE id=110", String.class))
                 .isEqualTo(original);
+        jdbc.update("DELETE FROM sys_user WHERE id=101");
+        assertThat(queries.page(new AuditQueryDto()).getItems().getFirst().actor().source())
+                .isEqualTo("MISSING");
     }
 
     @Test
@@ -143,7 +146,7 @@ class AuditReadabilityIntegrationTest {
     }
 
     @Test
-    void exactTraceQueryCorrelatesEventsAndPageDoesNotLoadChanges() {
+    void exactTraceQueryCorrelatesEventsAndKeepsSubjectSnapshots() {
         String trace = "abcdef0123456789abcdef0123456789";
         try (var ignored = MDC.putCloseable("traceId", trace)) {
             record("USER", 101L, "TRACE_ONE", Map.of());
@@ -155,17 +158,30 @@ class AuditReadabilityIntegrationTest {
         AuditQueryDto query = new AuditQueryDto();
         query.setTraceId("  " + trace.toUpperCase(java.util.Locale.ROOT) + "  ");
         assertThat(queries.page(query).getTotal()).isEqualTo(2);
+        assertThat(queries.page(query).getItems())
+                .allSatisfy(row -> assertThat(row.actor().source()).isEqualTo("SNAPSHOT"));
         query.setAction("TRACE_TWO");
         assertThat(queries.page(query).getTotal()).isEqualTo(1);
         query.setTraceId(trace.substring(1));
         assertThatThrownBy(() -> queries.page(query)).isInstanceOf(BusinessException.class);
-        var rows =
-                readMapper.page(
-                        new Page<>(1, 20),
-                        new AuditCriteria(null, null, null, null, null, trace, null, null));
-        assertThat(rows.getRecords())
-                .hasSize(2)
-                .allSatisfy(row -> assertThat(row.getChanges()).isNull());
+    }
+
+    @Test
+    void listRejectsSnapshotsForAnotherIdentityOrObjectType() {
+        String summary =
+                """
+                {"_actor":{"id":"999","type":"USER","name":"不属于操作者","code":null},
+                 "_target":{"id":"103","type":"USER","name":"不属于部门","code":null},
+                 "password":"must-not-expose"}
+                """;
+        jdbc.update(
+                "INSERT INTO sys_operation_log(id,actor_id,target_type,target_id,action,result,changes) VALUES(110,101,'DEPT',103,'OLD','SUCCESS',?)",
+                summary);
+        var row = queries.page(new AuditQueryDto()).getItems().getFirst();
+        assertThat(row.actor().name()).isEqualTo("操作时用户");
+        assertThat(row.actor().source()).isEqualTo("CURRENT");
+        assertThat(row.target().name()).isEqualTo("操作时部门");
+        assertThat(row.target().source()).isEqualTo("CURRENT");
     }
 
     private String record(String type, long targetId, String action, Map<String, ?> changes) {

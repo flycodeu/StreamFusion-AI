@@ -3,6 +3,7 @@ import type { AuthUser, MenuRoute } from '../api/auth/types'
 import { buildMenuRoutes } from '../router/dynamic/routes'
 import { clearIdentity, sessionState, setIdentity } from './state'
 import { synchronizeAuthorization } from './authorizationSync'
+import { refreshIdentity } from './session'
 
 const auth = vi.hoisted(() => ({ getMe: vi.fn<() => Promise<AuthUser>>() }))
 const routing = vi.hoisted(() => ({
@@ -54,6 +55,41 @@ beforeEach(() => {
 })
 
 describe('authorization synchronization after a business refusal', () => {
+  it.each([
+    ['navigation', 'older-first'],
+    ['navigation', 'newer-first'],
+    ['authorization', 'older-first'],
+    ['authorization', 'newer-first'],
+  ])(
+    'shares refresh ordering when %s starts first and responses finish %s',
+    async (first, order) => {
+      let resolveOlder!: (value: AuthUser) => void
+      let resolveNewer!: (value: AuthUser) => void
+      auth.getMe
+        .mockImplementationOnce(() => new Promise((resolve) => (resolveOlder = resolve)))
+        .mockImplementationOnce(() => new Promise((resolve) => (resolveNewer = resolve)))
+      const older =
+        first === 'navigation' ? refreshIdentity() : synchronizeAuthorization(sessionState.epoch)
+      const newer =
+        first === 'navigation' ? synchronizeAuthorization(sessionState.epoch) : refreshIdentity()
+      const revoked = { ...identity(), modules: [], routes: [] }
+      if (order === 'older-first') {
+        resolveOlder(identity())
+        await older
+        resolveNewer(revoked)
+        await newer
+      } else {
+        resolveNewer(revoked)
+        await newer
+        resolveOlder(identity())
+        await older
+      }
+      expect(sessionState.me?.modules).toEqual([])
+      expect(sessionState.me?.routes).toEqual([])
+      expect(routing.replace).toHaveBeenCalledTimes(first === 'navigation' ? 1 : 0)
+    },
+  )
+
   it('removes revoked navigation and reruns the current guard with its query and hash', async () => {
     auth.getMe.mockResolvedValue({ ...identity(), modules: [], routes: [] })
     await synchronizeAuthorization(sessionState.epoch)

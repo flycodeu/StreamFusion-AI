@@ -32,6 +32,7 @@ import { availablePagePaths, normalizeViewPath, resolvePage } from '../../router
 import { validMenuPath } from '../../router/dynamic/routes'
 import { refreshIdentity } from '../../session/session'
 import { flattenTree } from '../../utils/tree'
+import { usePageScope } from '../../composables/usePageScope'
 
 defineOptions({ name: 'SystemMenu' })
 
@@ -57,6 +58,8 @@ const type = ref('')
 const enabled = ref<boolean | null>(null)
 const loading = ref(false)
 const saving = ref(false)
+const deleting = ref(false)
+const captureScope = usePageScope()
 const error = ref<unknown>(null)
 const dialog = ref(false)
 const editing = ref<MenuNode | null>(null)
@@ -83,6 +86,7 @@ let sequence = 0
 
 async function load(): Promise<void> {
   const current = ++sequence
+  const inScope = captureScope()
   loading.value = true
   error.value = null
   clearSelection()
@@ -97,13 +101,13 @@ async function load(): Promise<void> {
       api.getMenus({}),
       filtered ? api.getMenus(query) : Promise.resolve(null),
     ])
-    if (current !== sequence) return
+    if (current !== sequence || !inScope()) return
     rows.value = result || all
     allRows.value = all
   } catch (cause) {
-    if (current === sequence) error.value = cause
+    if (current === sequence && inScope()) error.value = cause
   } finally {
-    if (current === sequence) loading.value = false
+    if (current === sequence && inScope()) loading.value = false
   }
 }
 function reset(): void {
@@ -136,28 +140,37 @@ async function save(): Promise<void> {
   submitted.value = true
   if (!form.name.trim() || pathError.value || keyError.value || saving.value) return
   saving.value = true
+  const inScope = captureScope()
   error.value = null
   try {
     const payload = menuWrite(form, editing.value)
     if (editing.value) await api.updateMenu(editing.value.id, editing.value.version, payload)
     else await api.createMenu(payload)
+    if (!inScope()) return
     dialog.value = false
     await load()
-    await refreshNavigation()
+    if (inScope()) await refreshNavigation()
   } catch (cause) {
-    error.value = cause
+    if (inScope()) error.value = cause
   } finally {
     saving.value = false
   }
 }
 async function remove(node: MenuNode): Promise<void> {
+  if (deleting.value) return
+  const inScope = captureScope()
+  deleting.value = true
   try {
     await ElMessageBox.confirm(`删除菜单“${node.name}”？`, '确认删除', { type: 'warning' })
+    if (!inScope()) return
     await api.deleteMenu(node)
+    if (!inScope()) return
     await load()
-    await refreshNavigation()
+    if (inScope()) await refreshNavigation()
   } catch (cause) {
-    if (cause !== 'cancel' && cause !== 'close') error.value = cause
+    if (inScope() && cause !== 'cancel' && cause !== 'close') error.value = cause
+  } finally {
+    deleting.value = false
   }
 }
 onMounted(load)
@@ -281,7 +294,10 @@ onMounted(load)
                 plain
                 class="table-action-end"
                 type="danger"
-                :disabled="(completeNodes.get(row.id)?.children.length ?? row.children.length) > 0"
+                :disabled="
+                  deleting ||
+                  (completeNodes.get(row.id)?.children.length ?? row.children.length) > 0
+                "
                 @click="remove(asMenu(row))"
                 >删除</ElButton
               >
@@ -295,9 +311,12 @@ onMounted(load)
       :title="editing ? '编辑菜单' : '新建菜单'"
       width="600px"
       destroy-on-close
+      :close-on-click-modal="!saving"
+      :close-on-press-escape="!saving"
+      :show-close="!saving"
     >
       <RequestError :error="error" />
-      <ElForm label-width="100px" @submit.prevent="save">
+      <ElForm label-width="100px" :disabled="saving" @submit.prevent="save">
         <ElFormItem
           label="菜单名称"
           required
@@ -343,13 +362,13 @@ onMounted(load)
         </template>
         <ElFormItem label="图标"><IconPicker v-model="form.icon" /></ElFormItem>
         <ElFormItem label="排序"
-          ><ElInputNumber v-model="form.sortOrder" :min="0" :max="10000"
+          ><ElInputNumber v-model="form.sortOrder" :min="0" :max="10000" :precision="0"
         /></ElFormItem>
         <ElFormItem label="导航显示"><ElSwitch v-model="form.visible" /></ElFormItem>
         <ElFormItem label="启用"><ElSwitch v-model="form.enabled" /></ElFormItem>
       </ElForm>
       <template #footer
-        ><ElButton @click="dialog = false">取消</ElButton
+        ><ElButton :disabled="saving" @click="dialog = false">取消</ElButton
         ><ElButton type="primary" :loading="saving" @click="save">保存</ElButton></template
       >
     </ElDialog>

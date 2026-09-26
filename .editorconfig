@@ -16,3 +16,7 @@ end_of_line = crlf
 
 [*.md]
 trim_trailing_whitespace = false
+
+[scripts/export-sql.ps1]
+# Windows PowerShell 5.1 needs a BOM for the Chinese SQL filenames.
+charset = utf-8-bom

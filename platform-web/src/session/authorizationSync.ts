@@ -1,17 +1,19 @@
-import { getMe } from '../api/auth/api'
+import type { AuthUser } from '../api/auth/types'
 import { buildMenuRoutes, fixedPaths } from '../router/dynamic/routes'
-import { sessionState, setIdentity } from './state'
+import { refreshIdentity } from './session'
+import { sessionState } from './state'
 
 /** A forbidden object action can retain its PAGE grant; only fresh server identity decides. */
 export async function synchronizeAuthorization(epoch: number): Promise<void> {
-  const initialIdentity = sessionState.me
-  const current = () => sessionState.epoch === epoch && sessionState.me === initialIdentity
-  if (!initialIdentity || !current()) return
-
-  const me = await getMe()
-  if (!current()) return
-  setIdentity(me)
-  const synchronizedIdentity = sessionState.me
+  if (!sessionState.me || sessionState.epoch !== epoch) return
+  let synchronizedIdentity: AuthUser | undefined
+  try {
+    synchronizedIdentity = await refreshIdentity()
+  } catch (error) {
+    if (sessionState.epoch !== epoch) return
+    throw error
+  }
+  if (!synchronizedIdentity) return
 
   const { router } = await import('../router')
   const identity = sessionState.me

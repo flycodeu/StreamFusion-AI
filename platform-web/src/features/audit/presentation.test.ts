@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { parseAuditDetail, parseAuditReference } from '../../api/audit/types'
 import {
   auditChanges,
+  auditReason,
   normalizedTraceId,
   referenceName,
   referenceSource,
@@ -9,6 +10,12 @@ import {
 } from './presentation'
 
 describe('readable historical audit evidence', () => {
+  it('describes known reasons and preserves unknown reason codes for troubleshooting', () => {
+    expect(auditReason('INVALID_CREDENTIALS')).toBe('账号或密码不正确')
+    expect(auditReason('LOGIN_FAILURE_THRESHOLD')).toBe('登录失败次数超限')
+    expect(auditReason('FUTURE_REASON')).toBe('FUTURE_REASON')
+    expect(auditReason(null)).toBe('—')
+  })
   it('retains the supplied historical name independently of a current name for the same ID', () => {
     const snapshot = parseAuditReference({
       id: '9007199254740993',

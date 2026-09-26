@@ -22,7 +22,11 @@ import ColumnPicker from '../../components/table/ColumnPicker.vue'
 import TableActions from '../../components/table/TableActions.vue'
 import TablePanel from '../../components/table/TablePanel.vue'
 import { useColumns } from '../../composables/table/useColumns'
+import { usePageScope } from '../../composables/usePageScope'
 import { sessionState } from '../../session/state'
+import AuditReferenceList from '../audit/AuditReferenceList.vue'
+import { auditReason } from '../audit/presentation'
+import { formatDateTime } from '../../utils/dateTime'
 
 const query = reactive({ page: 1, size: 20, sourceIp: '', status: 'BLOCKED' as IpBlockStatus | '' })
 const rows = ref<IpBlock[]>([])
@@ -30,6 +34,7 @@ const total = ref(0)
 const loading = ref(false)
 const unblocking = ref<string | null>(null)
 const error = ref<unknown>(null)
+const captureScope = usePageScope()
 const columns = useColumns('ip-blocks', [
   'ip',
   'status',
@@ -46,27 +51,15 @@ const columnOptions = [
   { key: 'attempts', label: '登录失败次数' },
   { key: 'blockedAt', label: '封禁时间' },
   { key: 'unblockedAt', label: '解封时间' },
-  { key: 'unblockedBy', label: '解封人ID' },
+  { key: 'unblockedBy', label: '解封人' },
 ]
-const reasonNames: Record<string, string> = { LOGIN_FAILURE_THRESHOLD: '登录失败次数超限' }
 const asBlock = (value: unknown): IpBlock => value as IpBlock
 let sequence = 0
-let active = true
 let pendingRead: InstanceType<typeof globalThis.AbortController> | undefined
 
-function formatTime(value: string | null): string {
-  return value
-    ? new Intl.DateTimeFormat('zh-CN', {
-        timeZone: 'Asia/Shanghai',
-        dateStyle: 'short',
-        timeStyle: 'medium',
-        hour12: false,
-      }).format(new Date(value))
-    : '—'
-}
-
 async function load(): Promise<void> {
-  if (!active || !sessionState.me?.isSuperAdmin) return
+  const inScope = captureScope()
+  if (!inScope() || !sessionState.me?.isSuperAdmin) return
   const current = ++sequence
   pendingRead?.abort()
   pendingRead = new globalThis.AbortController()
@@ -82,13 +75,13 @@ async function load(): Promise<void> {
       },
       pendingRead.signal,
     )
-    if (!active || current !== sequence) return
+    if (!inScope() || !sessionState.me?.isSuperAdmin || current !== sequence) return
     rows.value = result.items
     total.value = result.total
   } catch (cause) {
-    if (active && current === sequence) error.value = cause
+    if (inScope() && current === sequence) error.value = cause
   } finally {
-    if (active && current === sequence) loading.value = false
+    if (inScope() && current === sequence) loading.value = false
   }
 }
 
@@ -104,10 +97,10 @@ function reset(): void {
 }
 
 async function release(row: IpBlock): Promise<void> {
-  if (!active || unblocking.value || row.status !== 'BLOCKED' || !sessionState.me?.isSuperAdmin)
+  const inScope = captureScope()
+  if (!inScope() || unblocking.value || row.status !== 'BLOCKED' || !sessionState.me?.isSuperAdmin)
     return
-  const epoch = sessionState.epoch
-  const userId = sessionState.me.user.id
+  const current = sequence
   unblocking.value = row.id
   try {
     await ElMessageBox.confirm(`确认解除 IP ${row.sourceIp} 的封禁？`, '解除IP封禁', {
@@ -115,29 +108,29 @@ async function release(row: IpBlock): Promise<void> {
       cancelButtonText: '取消',
       type: 'warning',
     })
-    if (
-      !active ||
-      sessionState.epoch !== epoch ||
-      sessionState.me?.user.id !== userId ||
-      !sessionState.me.isSuperAdmin
-    )
-      return
+    if (!inScope() || !sessionState.me?.isSuperAdmin) return
     error.value = null
     await unblockIp(row)
-    if (!active) return
+    if (!inScope() || !sessionState.me?.isSuperAdmin) return
     ElMessage.success('已解除封禁')
-    if (rows.value.length === 1 && query.page > 1 && query.status === 'BLOCKED') query.page--
+    if (
+      current === sequence &&
+      rows.value.length === 1 &&
+      rows.value[0]?.id === row.id &&
+      query.page > 1 &&
+      query.status === 'BLOCKED'
+    )
+      query.page--
     await load()
   } catch (cause) {
-    if (active && cause !== 'cancel' && cause !== 'close') error.value = cause
+    if (inScope() && cause !== 'cancel' && cause !== 'close') error.value = cause
   } finally {
-    if (active) unblocking.value = null
+    if (inScope()) unblocking.value = null
   }
 }
 
 onMounted(load)
 onBeforeUnmount(() => {
-  active = false
   sequence++
   pendingRead?.abort()
 })
@@ -192,9 +185,7 @@ onBeforeUnmount(() => {
           min-width="175"
           show-overflow-tooltip
         >
-          <template #default="{ row }">{{
-            reasonNames[row.reasonCode] || row.reasonCode
-          }}</template>
+          <template #default="{ row }">{{ auditReason(row.reasonCode) }}</template>
         </ElTableColumn>
         <ElTableColumn v-if="columns.includes('attempts')" label="登录失败次数" min-width="180">
           <template #default="{ row }"
@@ -202,18 +193,21 @@ onBeforeUnmount(() => {
           >
         </ElTableColumn>
         <ElTableColumn v-if="columns.includes('blockedAt')" label="封禁时间" min-width="175">
-          <template #default="{ row }">{{ formatTime(row.blockedAt) }}</template>
+          <template #default="{ row }">{{ formatDateTime(row.blockedAt) }}</template>
         </ElTableColumn>
         <ElTableColumn v-if="columns.includes('unblockedAt')" label="解封时间" min-width="175">
-          <template #default="{ row }">{{ formatTime(row.unblockedAt) }}</template>
+          <template #default="{ row }">{{ formatDateTime(row.unblockedAt) }}</template>
         </ElTableColumn>
-        <ElTableColumn
-          v-if="columns.includes('unblockedBy')"
-          label="解封人ID"
-          min-width="180"
-          show-overflow-tooltip
-        >
-          <template #default="{ row }">{{ row.unblockedBy || '—' }}</template>
+        <ElTableColumn v-if="columns.includes('unblockedBy')" label="解封人" min-width="220">
+          <template #default="{ row }">
+            <AuditReferenceList
+              v-if="row.unblockedByReference"
+              :references="[row.unblockedByReference]"
+            />
+            <span v-else>{{
+              row.unblockedBy ? `账号 ID ${row.unblockedBy}（无名称记录）` : '—'
+            }}</span>
+          </template>
         </ElTableColumn>
         <ElTableColumn
           label="操作"

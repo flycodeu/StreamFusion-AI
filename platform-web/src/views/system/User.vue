@@ -33,6 +33,7 @@ import { accountHint } from '../../utils/loginValidation'
 import RoleAssignmentDialog from '../../features/user/RoleAssignmentDialog.vue'
 import LoginRecordTable from '../../features/login-records/LoginRecordTable.vue'
 import { loginTime } from '../../features/login-records/presentation'
+import { usePageScope } from '../../composables/usePageScope'
 
 defineOptions({ name: 'SystemUser' })
 
@@ -52,6 +53,8 @@ const keyword = ref('')
 const status = ref<number | null>(null)
 const loading = ref(false)
 const saving = ref(false)
+const deleting = ref(false)
+const captureScope = usePageScope()
 const error = ref<unknown>(null)
 const dialog = ref(false)
 const loginRecordsUser = ref<UserSummary | null>(null)
@@ -121,6 +124,7 @@ const emailError = computed(() => {
     : ''
 })
 let sequence = 0
+let detailSequence = 0
 
 function isProtectedAccount(row: UserSummary): boolean {
   return (
@@ -138,6 +142,7 @@ function canEdit(row: UserSummary): boolean {
 
 async function load(): Promise<void> {
   const current = ++sequence
+  const inScope = captureScope()
   loading.value = true
   error.value = null
   try {
@@ -147,14 +152,14 @@ async function load(): Promise<void> {
       keyword: keyword.value.trim() || undefined,
       status: typeof status.value === 'number' ? status.value : undefined,
     })
-    if (current !== sequence) return
+    if (current !== sequence || !inScope()) return
     rows.value = result.items
     clearSelection()
     total.value = result.total
   } catch (cause) {
-    if (current === sequence) error.value = cause
+    if (current === sequence && inScope()) error.value = cause
   } finally {
-    if (current === sequence) loading.value = false
+    if (current === sequence && inScope()) loading.value = false
   }
 }
 
@@ -174,11 +179,15 @@ function editSelected(): void {
 }
 
 async function openCreate(): Promise<void> {
+  const current = ++detailSequence
+  const inScope = captureScope()
   error.value = null
   try {
-    departmentOptions.value = await api.getDepartmentOptions()
+    const options = await api.getDepartmentOptions()
+    if (current !== detailSequence || !inScope()) return
+    departmentOptions.value = options
   } catch (cause) {
-    error.value = cause
+    if (current === detailSequence && inScope()) error.value = cause
     return
   }
   editing.value = null
@@ -195,9 +204,12 @@ async function openCreate(): Promise<void> {
   dialog.value = true
 }
 async function openEdit(row: UserSummary): Promise<void> {
+  const current = ++detailSequence
+  const inScope = captureScope()
   error.value = null
   try {
     const [user, options] = await Promise.all([api.getUser(row.id), api.getDepartmentOptions()])
+    if (current !== detailSequence || !inScope()) return
     departmentOptions.value = options
     editing.value = user
     submitted.value = false
@@ -212,7 +224,7 @@ async function openEdit(row: UserSummary): Promise<void> {
     })
     dialog.value = true
   } catch (cause) {
-    error.value = cause
+    if (current === detailSequence && inScope()) error.value = cause
   }
 }
 async function save(): Promise<void> {
@@ -223,6 +235,7 @@ async function save(): Promise<void> {
   )
     return
   saving.value = true
+  const inScope = captureScope()
   error.value = null
   try {
     const fields = {
@@ -238,22 +251,27 @@ async function save(): Promise<void> {
     else if (editing.value) await api.updateUser({ ...editing.value, ...fields })
     else {
       const created = await api.createUser({ username: form.username.trim(), ...fields })
+      if (!inScope()) return
       resultTitle.value = '用户创建成功'
       passwordResults.value = [successfulPasswordResult(created)]
       resultDialog.value = true
     }
+    if (!inScope()) return
     dialog.value = false
     await load()
   } catch (cause) {
-    error.value = cause
+    if (inScope()) error.value = cause
   } finally {
     saving.value = false
   }
 }
 async function openRelation(row: UserSummary): Promise<void> {
+  const currentRequest = ++detailSequence
+  const inScope = captureScope()
   error.value = null
   try {
     const [current, options] = await Promise.all([api.getUserRoles(row.id), api.getRoleOptions()])
+    if (currentRequest !== detailSequence || !inScope()) return
     relationVersion.value = current.version
     selectedIds.value = current.roles.map((role) => role.id)
     assignedRoles.value = current.roles
@@ -261,6 +279,7 @@ async function openRelation(row: UserSummary): Promise<void> {
     relationUser.value = row
     relationDialog.value = true
   } catch (cause) {
+    if (currentRequest !== detailSequence || !inScope()) return
     relationDialog.value = false
     error.value = cause
   }
@@ -268,27 +287,40 @@ async function openRelation(row: UserSummary): Promise<void> {
 async function saveRelation(roleIds: string[]): Promise<void> {
   if (!relationUser.value || !relationDialog.value || saving.value) return
   saving.value = true
+  const inScope = captureScope()
   error.value = null
   try {
     await api.setUserRoles(relationUser.value.id, relationVersion.value, roleIds)
+    if (!inScope()) return
     relationDialog.value = false
     await load()
   } catch (cause) {
-    error.value = cause
+    if (inScope()) error.value = cause
   } finally {
     saving.value = false
   }
 }
 async function changeStatus(row: UserSummary, enabled: boolean): Promise<void> {
   if (isProtectedAccount(row) || statusChanging.value.includes(row.id) || resetting.value) return
+  const inScope = captureScope()
+  const current = sequence
   statusChanging.value.push(row.id)
   error.value = null
   try {
     const updated = await api.changeUserStatus(row, enabled)
-    rows.value = rows.value.map((item) => (item.id === updated.id ? updated : item))
-    clearSelection()
+    if (!inScope()) return
+    if (
+      current === sequence &&
+      typeof status.value === 'number' &&
+      status.value !== updated.status &&
+      rows.value.length === 1 &&
+      rows.value[0]?.id === row.id &&
+      page.value > 1
+    )
+      page.value--
+    await load()
   } catch (cause) {
-    error.value = cause
+    if (inScope()) error.value = cause
   } finally {
     statusChanging.value = statusChanging.value.filter((id) => id !== row.id)
   }
@@ -307,22 +339,22 @@ function successfulPasswordResult(user: UserCredentialResult): PasswordResult {
 async function resetPasswords(users: UserSummary[]): Promise<void> {
   const targets = users.filter((user) => !isProtectedAccount(user))
   if (!targets.length || resetting.value) return
+  const inScope = captureScope()
+  resetting.value = true
   try {
     await ElMessageBox.confirm(`确认重置 ${targets.length} 个用户的密码？`, '重置密码', {
       type: 'warning',
     })
-  } catch (cause) {
-    if (cause !== 'cancel' && cause !== 'close') error.value = cause
-    return
-  }
-  resetting.value = true
-  passwordResults.value = []
-  try {
+    if (!inScope()) return
+    passwordResults.value = []
     for (const user of targets) {
+      if (!inScope()) return
       try {
         const result = await api.resetUserPassword(user)
+        if (!inScope()) return
         passwordResults.value.push(successfulPasswordResult(result))
       } catch (cause) {
+        if (!inScope()) return
         passwordResults.value.push({
           id: user.id,
           username: user.username,
@@ -336,18 +368,27 @@ async function resetPasswords(users: UserSummary[]): Promise<void> {
     resultTitle.value = '密码重置结果'
     resultDialog.value = true
     await load()
+  } catch (cause) {
+    if (inScope() && cause !== 'cancel' && cause !== 'close') error.value = cause
   } finally {
     resetting.value = false
   }
 }
 async function remove(row: UserSummary): Promise<void> {
+  if (deleting.value) return
+  const inScope = captureScope()
+  deleting.value = true
   try {
     await ElMessageBox.confirm(`删除用户“${row.username}”？`, '确认删除', { type: 'warning' })
+    if (!inScope()) return
     await api.deleteUser(row)
+    if (!inScope()) return
     if (rows.value.length === 1 && page.value > 1) page.value--
     await load()
   } catch (cause) {
-    if (cause !== 'cancel' && cause !== 'close') error.value = cause
+    if (inScope() && cause !== 'cancel' && cause !== 'close') error.value = cause
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -513,7 +554,7 @@ onMounted(load)
                 plain
                 type="danger"
                 class="table-action-end"
-                :disabled="isProtectedAccount(asUser(row)) || resetting"
+                :disabled="isProtectedAccount(asUser(row)) || resetting || deleting"
                 @click="remove(asUser(row))"
                 >删除</ElButton
               >
@@ -548,9 +589,12 @@ onMounted(load)
       :title="editing ? '编辑用户' : '新建用户'"
       width="800px"
       destroy-on-close
+      :close-on-click-modal="!saving"
+      :close-on-press-escape="!saving"
+      :show-close="!saving"
     >
       <RequestError :error="error" />
-      <ElForm class="user-form-grid" label-width="80px" @submit.prevent="save">
+      <ElForm class="user-form-grid" label-width="80px" :disabled="saving" @submit.prevent="save">
         <ElFormItem label="账号" :required="!editing" :error="submitted ? accountError : ''"
           ><ElInput v-model="form.username" :disabled="!!editing" maxlength="32"
         /></ElFormItem>
@@ -597,7 +641,7 @@ onMounted(load)
         </ElFormItem>
       </ElForm>
       <template #footer
-        ><ElButton @click="dialog = false">取消</ElButton
+        ><ElButton :disabled="saving" @click="dialog = false">取消</ElButton
         ><ElButton type="primary" :loading="saving" @click="save">保存</ElButton></template
       >
     </ElDialog>

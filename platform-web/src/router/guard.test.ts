@@ -116,6 +116,17 @@ describe('session-aware route guard', () => {
     expect(session.refresh).toHaveBeenCalledTimes(2)
   })
 
+  it('redirects to login when another request clears identity during its refresh', async () => {
+    session.refresh.mockImplementation(async () => {
+      session.state.me = null
+    })
+    const { router } = await import('./index')
+    await router.push('/profile')
+    expect(router.currentRoute.value.path).toBe('/login')
+    expect(router.currentRoute.value.query.next).toBe('/profile')
+    expect(session.refresh).toHaveBeenCalledTimes(1)
+  })
+
   it('shows the unavailable page after an identity dependency failure without repeating it', async () => {
     session.refresh.mockRejectedValue(new Error('backend unavailable'))
     const { router } = await import('./index')

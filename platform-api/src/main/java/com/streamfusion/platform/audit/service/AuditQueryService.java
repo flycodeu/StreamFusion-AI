@@ -76,7 +76,9 @@ public class AuditQueryService {
         var current = references.current(wanted);
         return PageResultVo.from(
                 resultPage,
-                resultPage.getRecords().stream().map(row -> entry(row, null, current)).toList());
+                resultPage.getRecords().stream()
+                        .map(row -> entry(row, changes.read(row.getChanges()), current))
+                        .toList());
     }
 
     public AuditDetailVo detail(String id) {

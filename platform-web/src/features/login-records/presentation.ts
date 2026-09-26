@@ -1,12 +1,4 @@
-export function loginTime(value: string | null): string {
-  if (!value) return '—'
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    dateStyle: 'short',
-    timeStyle: 'medium',
-    hour12: false,
-  }).format(new Date(value))
-}
+export { formatDateTime as loginTime } from '../../utils/dateTime'
 
 export function sessionDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600)
