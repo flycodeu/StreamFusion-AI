@@ -12,6 +12,12 @@ public interface UserService extends IService<UserEntity> {
     /** 在调用方事务中锁定用户，锁持续到事务结束。 */
     UserEntity lockById(long id);
 
+    /** Advances only the session version while the caller holds the user lock. */
+    int replaceSession(long id, long expectedSessionVersion);
+
+    /** Explicit administration action advances both session and edit versions. */
+    int forceLogout(long id, long version, long actorId, LocalDateTime now);
+
     /** 核对密码及会话版本后更新失败次数和冷却时间。 */
     int updateLoginState(
             long id,

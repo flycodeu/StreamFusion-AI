@@ -4,6 +4,7 @@ import { refreshIdentity, restoreSession } from '../session/session'
 import { sessionState } from '../session/state'
 import { buildMenuRoutes, fixedPaths } from './dynamic/routes'
 import { fixedRoutes } from './fixed'
+import { navigationFailure } from './navigationFailure'
 
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -31,7 +32,8 @@ router.beforeEach(async (to) => {
     try {
       await restoreSession()
       identityRefreshed = true
-    } catch {
+    } catch (error) {
+      navigationFailure.value = { error, path: to.fullPath }
       if (to.path !== '/unavailable' && to.path !== '/login') return '/unavailable'
     }
   }
@@ -50,7 +52,8 @@ router.beforeEach(async (to) => {
   if (!identityRefreshed) {
     try {
       await refreshIdentity()
-    } catch {
+    } catch (error) {
+      navigationFailure.value = { error, path: to.fullPath }
       return sessionState.me ? '/unavailable' : { path: '/login', query: { next: to.fullPath } }
     }
   }
@@ -66,5 +69,6 @@ router.beforeEach(async (to) => {
   if (!resolved.matched.length) return '/forbidden'
   if (to.matched.at(-1) !== resolved.matched.at(-1)) return to.fullPath
   if (!fixedPaths.has(to.path) && !dynamicNames.has(String(resolved.name))) return '/forbidden'
+  navigationFailure.value = null
   return true
 })

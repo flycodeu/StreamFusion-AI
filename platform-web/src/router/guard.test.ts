@@ -128,11 +128,19 @@ describe('session-aware route guard', () => {
   })
 
   it('shows the unavailable page after an identity dependency failure without repeating it', async () => {
-    session.refresh.mockRejectedValue(new Error('backend unavailable'))
+    const error = new Error('backend unavailable')
+    session.refresh.mockRejectedValue(error)
     const { router } = await import('./index')
+    const { navigationFailure } = await import('./navigationFailure')
     await router.push('/profile')
     expect(router.currentRoute.value.path).toBe('/unavailable')
     expect(session.refresh).toHaveBeenCalledTimes(1)
+    expect(navigationFailure.value).toEqual({ error, path: '/profile' })
+
+    session.refresh.mockResolvedValue()
+    await router.replace(navigationFailure.value!.path)
+    expect(router.currentRoute.value.path).toBe('/profile')
+    expect(navigationFailure.value).toBeNull()
   })
 
   it.each(['/login', '/unavailable'])(

@@ -261,6 +261,30 @@ public class UserManagementServiceImpl implements UserManagementService {
 
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED)
+    public UserVo forceLogout(String id, String requestedVersion, AuditContextDto context) {
+        long userId = rules.id(id);
+        long version = rules.version(requestedVersion);
+        UserEntity actor = lockAndRequireActor();
+        UserEntity target = lockOrdinaryTarget(userId, actor);
+        requireVersion(target, version, ErrorCode.VERSION_CONFLICT);
+        if (users.forceLogout(userId, version, actor.getId(), now()) != 1) {
+            throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
+        }
+        loginRecords.endAll(userId, "FORCED_LOGOUT");
+        audit.record(
+                actor.getId(),
+                "USER",
+                userId,
+                "USER_FORCE_LOGOUT",
+                "SUCCESS",
+                null,
+                context,
+                userSummary(target));
+        return view(find(userId));
+    }
+
+    @Override
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void delete(String id, String requestedVersion, AuditContextDto context) {
         long userId = rules.id(id);
         long version = rules.version(requestedVersion);

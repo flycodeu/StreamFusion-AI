@@ -1,5 +1,3 @@
-export { formatDateTime as loginTime } from '../../utils/dateTime'
-
 export function sessionDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
@@ -21,6 +19,7 @@ const reasons: Record<string, string> = {
   ACCOUNT_DELETED: '账号已删除',
   LOGIN_ABORTED: '登录未完成',
   REPLACED: '重新登录',
+  FORCED_LOGOUT: '管理员强制登出',
 }
 
 export function loginEndReason(reason: string | null): string {

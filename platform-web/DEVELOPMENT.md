@@ -41,18 +41,11 @@
 
 新建页面的路径同时用于定位组件，最长 64 字符。表格中的 `componentKey`、`moduleKey` 是后端协议字段，由前端自动提交或由后端补齐，管理界面无需重复填写。
 
-为兼容已有菜单，旧的路由/组件映射（如 `/system/departments` → `/system/Department`）在只修改名称、图标、排序时保持原值；主动修改页面路径时，组件随新路径更新。已有页面的后端模块归属保持不变，更改唯一标识不会迁移接口权限。公共转换逻辑在 `src/features/menu/form.ts`。
+浏览器路由地址与组件文件路径可以不同，例如 `/system/departments` 使用 `/system/Department` 组件。只修改名称、图标、排序时保留组件路径；主动修改页面路径时，组件随新路径更新。页面的后端模块归属保持不变，更改唯一标识不会迁移接口权限。表单转换逻辑在 `src/features/menu/form.ts`。
 
-页面键负责区分路由，模块键负责接口授权；已有多个 PAGE 共享同一模块的协议继续兼容。持有该模块任一有效 PAGE 可访问该模块接口，需要不同接口授权边界时由后端声明不同模块。
+页面键负责区分路由，模块键负责接口授权。多个 PAGE 可以共享同一模块；持有该模块任一有效 PAGE 可访问该模块接口，需要不同接口授权边界时由后端声明不同模块。
 
-以下旧组件键仅用于兼容已有菜单数据，新菜单填写实际页面路径：
-
-| 旧键                 | 当前组件路径         |
-| -------------------- | -------------------- |
-| `SYSTEM_USERS`       | `/system/User`       |
-| `SYSTEM_ROLES`       | `/system/Role`       |
-| `SYSTEM_MENUS`       | `/system/Menu`       |
-| `SYSTEM_DEPARTMENTS` | `/system/Department` |
+组件键统一使用以 `/` 开头的实际文件路径，解析器不维护别名。系统管理页面位于 `/system/User`、`/system/Role`、`/system/Menu`、`/system/Department`；监控页面位于 `/monitor/Audit`、`/monitor/Server`、`/monitor/ApiDocs`。
 
 目录节点只组织菜单，不配置页面字段；目录可继续包含目录，PAGE 是末级节点，当前最多五层。角色授权树勾选目录会选中可分配的后代页面，取消目录会取消后代，部分选择显示半选；保存到后端的是 PAGE ID。隐藏页面或隐藏父目录只影响导航展示；有效 PAGE 的路由仍可直接访问。禁用状态和角色授权由后端决定。组件不存在时，已授权路由显示配置错误页面，入口见 `src/pages/error/RouteUnavailableView.vue`。
 
@@ -68,7 +61,9 @@
 
 登录、首页、个人信息、改密和错误页使用固定路由，不需要后台 PAGE 配置。首页、个人信息和改密等受保护固定页面仍检查登录状态；会话过期后清理身份数据并进入登录页。登录页与服务不可用页作为公共或恢复入口，避免鉴权失败时循环跳转。
 
-当前会话采用空闲 30 分钟、最长 8 小时的后端规则。浏览器缓存的菜单不是授权依据，身份和路由在加载或导航时通过后端刷新。强制改密状态在身份刷新后判断。
+当前会话采用空闲 30 分钟、最长 8 小时的后端规则；同一账号的新登录会结束旧会话。前端每 15 秒检查会话状态，页面恢复可见时立即检查；状态检查不续期。旧登录收到失效原因后进入登录页并提示新登录的时间、IP、地区和浏览器环境。用户管理的强制登出同样触发会话失效提示。同源标签共享 Cookie，登录、退出或改密会通知其他标签重新恢复身份。相关实现位于 `src/session/` 和 `components/feedback/SessionEndedDialog.vue`。
+
+浏览器缓存的菜单不是授权依据，身份和路由在加载或导航时通过后端刷新。强制改密状态在身份刷新后判断。
 
 ### 登录与记住密码
 
@@ -86,11 +81,13 @@
 
 ## 图标、表格与系统信息
 
-侧栏与菜单选择器使用 `@element-plus/icons-vue`，图标键和中文名称统一维护在 `src/components/icons/catalog.ts`，后端保存稳定的图标键。未知旧键使用兜底图标。品牌与 favicon 共用 `public/streamfusion.svg`。
+侧栏与菜单选择器使用 `@element-plus/icons-vue`，图标键和中文名称统一维护在 `src/components/icons/catalog.ts`，后端保存稳定的图标键。未知图标键使用兜底图标。品牌与 favicon 共用 `public/streamfusion.svg`。
 
 管理表格使用 Element Plus 的带边框表格，拖动表头边缘可调整列宽，列显隐由公共 ColumnPicker 管理；列宽在当前页面生效。业务界面的正文不再重复显示侧栏和顶部已有的标题。
 
-操作记录页面为 `system/Audit.vue`，接口集中在 `src/api/audit/`，使用 `/audit/page` 和 `/audit/{id}`。服务信息页面为 `system/Server.vue`，接口集中在 `src/api/server/`，使用 `/server/status`；分别需要 `audit` 和 `server` 模块授权。菜单初始化 SQL 提供这两个 PAGE；已有数据库须定向增加菜单及超级管理员角色关系，不能重跑初始化建表脚本。
+操作记录和服务信息位于监控面板，页面分别为 `src/views/monitor/Audit.vue`、`src/views/monitor/Server.vue`，浏览器地址与组件路径统一为 `/monitor/Audit`、`/monitor/Server`。接口集中在 `src/api/audit/`、`src/api/server/`，使用 `/audit/page`、`/audit/{id}` 和 `/server/status`，分别需要 `audit`、`server` 模块授权。菜单初始化 SQL 包含监控目录及 PAGE；现有数据库的菜单更新使用 `platform-api/sql/升级/` 定向脚本，不能重跑初始化建表脚本。
+
+接口文档页面为 `src/views/monitor/ApiDocs.vue`，嵌入同源固定的 `public/api-docs.html`，可刷新和导出 OpenAPI JSON。文档入口检查 `api-docs` 模块授权；嵌入页只从当前站点读取 `/v3/api-docs`，不接受外部 URL。导出接口位于 `src/api/api-docs/`。页面错误统一使用 `PageState` 与 `RequestError`，先展示原因和恢复操作，再按需展开错误码、时间及请求标识。
 
 服务信息只读取当前后端运行环境、JVM、NVIDIA GPU 和项目配置的服务端口，不扫描全机所有服务。使用有界单采集线程、请求合并、默认 30 秒缓存和采集超时；页面只在进入和手动刷新时请求，不轮询。端口可达只表示 TCP 连接成功，页面不会将其显示为服务业务健康；未能读取的指标显示不可用。
 
@@ -114,13 +111,13 @@
 | `src/components/feedback/` | 公共请求错误反馈                                                                                     |
 | `src/components/icons/`    | 公共图标                                                                                             |
 | `src/composables/table/`   | 列显隐、行选择等可复用状态逻辑                                                                       |
-| `src/features/<功能>/`     | 从页面提取的业务逻辑；例如菜单表单及兼容映射 `menu/form.ts`                                          |
+| `src/features/<功能>/`     | 从页面提取的业务逻辑；例如菜单表单转换 `menu/form.ts`                                                |
 | `src/layouts/`             | 管理端布局和导航组件                                                                                 |
 | `src/router/dynamic/`      | 页面发现、菜单转换和路径规则                                                                         |
 | `src/session/`             | 身份恢复、登录、退出和会话状态                                                                       |
 | `src/utils/`               | 通用工具，例如树处理                                                                                 |
 
-固定页面通过 `src/router/fixed.ts` 显式注册；菜单组件缺失页由动态路由生成器引用。`pages` 和 `views` 都保存完整页面，公共组件放在 `components`，复用状态放在 `composables`，业务转换放在 `features`。不要在 `views` 中放固定页、错误页或公共组件，以免被当作业务页面发现。
+固定页面通过 `src/router/fixed.ts` 显式注册；菜单组件缺失页由动态路由生成器引用。`pages` 和 `views` 都保存完整页面，公共组件放在 `components`，复用状态放在 `composables`，业务转换放在 `features`。不要在 `views` 中放固定页、错误页、公共组件或测试文件，以免被当作业务页面发现。跨页面交互测试位于 `tests/views/`；其他单元测试与对应模块同目录。
 
 表格行操作统一使用 `components/table/TableActions.vue`，按钮采用 `plain`，由组件维护字号、点击尺寸和间距。操作列设置足够的 `min-width`、`class-name="table-actions-column"` 和 `:resizable="false"`，避免拖窄后按钮遮挡；数据列仍可调整宽度。目录/页面等不同行类型应保持主要操作的位置稳定，尾部危险操作可使用 `table-action-end`。宽度不超过1024px时解除右固定列，使用表格内部横向滚动；触摸设备增大按钮高度。图标选择器在格子内显示名称，不叠加悬停提示。
 

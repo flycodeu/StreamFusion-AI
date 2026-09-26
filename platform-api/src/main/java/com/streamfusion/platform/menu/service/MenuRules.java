@@ -19,7 +19,6 @@ import org.springframework.stereotype.Component;
 public class MenuRules {
     private static final Pattern ROUTE = Pattern.compile("[A-Za-z][A-Za-z0-9_:-]{0,63}");
     private static final Pattern PATH = Pattern.compile("/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*");
-    private static final Pattern LEGACY_COMPONENT = Pattern.compile("[A-Z][A-Z0-9_]{0,63}");
     private static final Pattern ICON = Pattern.compile("[a-z][a-z0-9-]{0,63}");
     private static final Set<String> RESERVED_PATHS =
             Set.of(
@@ -108,11 +107,7 @@ public class MenuRules {
         }
         String componentKey = blankToNull(input.getComponentKey());
         if (componentKey == null) componentKey = path;
-        else if (!LEGACY_COMPONENT.matcher(componentKey).matches() && !componentKey.startsWith("/"))
-            componentKey = "/" + componentKey;
-        if (componentKey.length() > 64
-                || !(LEGACY_COMPONENT.matcher(componentKey).matches()
-                        || PATH.matcher(componentKey).matches())) {
+        if (componentKey.length() > 64 || !PATH.matcher(componentKey).matches()) {
             throw invalid("componentKey");
         }
         String moduleKey = blankToNull(input.getModuleKey());

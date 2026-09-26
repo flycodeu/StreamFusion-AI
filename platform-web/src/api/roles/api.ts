@@ -1,8 +1,8 @@
 import { request } from '../client'
-import { empty, list, page } from '../parse'
+import { empty, page } from '../parse'
 import type { Page } from '../parse'
-import { parseRole, parseRoleMenus, parseRoleOption } from './types'
-import type { Role, RoleMenus, RoleOption } from './types'
+import { parseRole, parseRoleMenus } from './types'
+import type { Role, RoleMenus } from './types'
 
 export async function getRoles(query: {
   page: number
@@ -17,17 +17,6 @@ export async function getRoles(query: {
       params: query,
       successStatus: 200,
       decode: (v) => page(v, parseRole),
-    })
-  ).data
-}
-
-export async function getRoleOptions(): Promise<RoleOption[]> {
-  return (
-    await request({
-      path: '/roles/options',
-      method: 'GET',
-      successStatus: 200,
-      decode: (v) => list(v, parseRoleOption),
     })
   ).data
 }

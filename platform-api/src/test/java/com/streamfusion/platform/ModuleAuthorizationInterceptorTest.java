@@ -133,7 +133,7 @@ class ModuleAuthorizationInterceptorTest {
     @CsvSource({
         "csrf,GET,/auth/csrf",
         "csrf,HEAD,/auth/csrf",
-        "login,POST,/auth/login",
+        "secureLogin,POST,/auth/login/secure",
         "me,GET,/auth/me",
         "update,PUT,/auth/me",
         "password,PUT,/auth/password",
@@ -151,7 +151,11 @@ class ModuleAuthorizationInterceptorTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"csrf,GET,/auth/new-business", "csrf,POST,/auth/csrf", "login,POST,/auth/logout"})
+    @CsvSource({
+        "csrf,GET,/auth/new-business",
+        "csrf,POST,/auth/csrf",
+        "secureLogin,POST,/auth/logout"
+    })
     void authenticationExemptionRequiresExactHandlerPathAndMethod(
             String handler, String method, String path) throws Exception {
         var request = new MockHttpServletRequest(method, path);

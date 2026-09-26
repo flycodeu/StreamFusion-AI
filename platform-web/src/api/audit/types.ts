@@ -73,7 +73,7 @@ export function parseAuditDetail(value: unknown): AuditDetail {
     else changes[key] = string(item)
   }
   const relations: AuditDetail['relations'] = {}
-  for (const [key, item] of Object.entries(object(row.relations ?? {}))) {
+  for (const [key, item] of Object.entries(object(row.relations))) {
     if (!Array.isArray(item) || item.length > 1000) throw new Error('Invalid audit relations')
     relations[key] = list(item, parseAuditReference)
   }

@@ -42,7 +42,7 @@ export function parseUserSummary(value: unknown): UserSummary {
     avatarKey: optionalString(row.avatarKey),
     status: integer(row.status),
     lockedUntil: optionalString(row.lockedUntil),
-    loginRestricted: row.loginRestricted == null ? false : boolean(row.loginRestricted),
+    loginRestricted: boolean(row.loginRestricted),
     departments: departments(row.departments),
     roles: list(row.roles, parseRoleOption),
     version: id(row.version),

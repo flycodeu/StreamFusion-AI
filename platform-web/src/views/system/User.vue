@@ -7,6 +7,10 @@ import {
   ElFormItem,
   ElInput,
   ElMessageBox,
+  ElMessage,
+  ElDropdown,
+  ElDropdownMenu,
+  ElDropdownItem,
   ElOption,
   ElPagination,
   ElSelect,
@@ -32,7 +36,7 @@ import { ApiRequestError } from '../../lib/http/error'
 import { accountHint } from '../../utils/loginValidation'
 import RoleAssignmentDialog from '../../features/user/RoleAssignmentDialog.vue'
 import LoginRecordTable from '../../features/login-records/LoginRecordTable.vue'
-import { loginTime } from '../../features/login-records/presentation'
+import { formatDateTime } from '../../utils/dateTime'
 import { usePageScope } from '../../composables/usePageScope'
 
 defineOptions({ name: 'SystemUser' })
@@ -54,6 +58,7 @@ const status = ref<number | null>(null)
 const loading = ref(false)
 const saving = ref(false)
 const deleting = ref(false)
+const forcingLogout = ref<string[]>([])
 const captureScope = usePageScope()
 const error = ref<unknown>(null)
 const dialog = ref(false)
@@ -326,6 +331,29 @@ async function changeStatus(row: UserSummary, enabled: boolean): Promise<void> {
   }
 }
 
+async function forceLogout(row: UserSummary): Promise<void> {
+  if (isProtectedAccount(row) || forcingLogout.value.includes(row.id)) return
+  const inScope = captureScope()
+  forcingLogout.value.push(row.id)
+  try {
+    await ElMessageBox.confirm(
+      `将结束账号「${row.username}」的当前登录，对方会收到登出提示。账号仍可重新登录。`,
+      '强制登出',
+      { type: 'warning', confirmButtonText: '确认登出', cancelButtonText: '取消' },
+    )
+    if (!inScope()) return
+    error.value = null
+    await api.forceLogoutUser(row)
+    if (!inScope()) return
+    ElMessage.success('已强制登出')
+    await load()
+  } catch (cause) {
+    if (cause !== 'cancel' && cause !== 'close' && inScope()) error.value = cause
+  } finally {
+    forcingLogout.value = forcingLogout.value.filter((id) => id !== row.id)
+  }
+}
+
 function successfulPasswordResult(user: UserCredentialResult): PasswordResult {
   return {
     id: user.id,
@@ -488,7 +516,7 @@ onMounted(load)
           <template #default="{ row }">
             <div v-if="row.loginRestricted" class="restriction-cell">
               <ElTag type="warning" effect="plain">登录受限</ElTag>
-              <span>至 {{ loginTime(row.lockedUntil) }}</span>
+              <span>至 {{ formatDateTime(row.lockedUntil) }}</span>
             </div>
             <span v-else>—</span>
           </template>
@@ -550,14 +578,26 @@ onMounted(load)
                 inactive-text="关"
                 @change="changeStatus(asUser(row), Boolean($event))"
               />
-              <ElButton
-                plain
-                type="danger"
-                class="table-action-end"
-                :disabled="isProtectedAccount(asUser(row)) || resetting || deleting"
-                @click="remove(asUser(row))"
-                >删除</ElButton
-              >
+              <ElDropdown trigger="click" class="table-action-end">
+                <ElButton plain :disabled="resetting || deleting || forcingLogout.includes(row.id)"
+                  >更多</ElButton
+                >
+                <template #dropdown>
+                  <ElDropdownMenu>
+                    <ElDropdownItem
+                      :disabled="isProtectedAccount(asUser(row)) || forcingLogout.includes(row.id)"
+                      @click="forceLogout(asUser(row))"
+                      >强制登出</ElDropdownItem
+                    >
+                    <ElDropdownItem
+                      divided
+                      :disabled="isProtectedAccount(asUser(row)) || deleting"
+                      @click="remove(asUser(row))"
+                      >删除用户</ElDropdownItem
+                    >
+                  </ElDropdownMenu>
+                </template>
+              </ElDropdown>
             </TableActions></template
           ></ElTableColumn
         >

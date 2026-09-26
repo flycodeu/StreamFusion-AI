@@ -1,12 +1,15 @@
 package com.streamfusion.platform;
 
+import static com.streamfusion.platform.support.SecureLoginSupport.loginRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.streamfusion.platform.auth.service.BootstrapService;
 import com.streamfusion.platform.support.IdentitySchema;
+import com.streamfusion.platform.support.SecureLoginSupport;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,7 +28,8 @@ import org.springframework.test.web.servlet.MockMvc;
         })
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-class VersionBoundaryIntegrationTest {
+class VersionBoundaryIntegrationTest extends SecureLoginSupport {
+    @Autowired ObjectMapper json;
     @Autowired MockMvc mvc;
     @Autowired DataSource source;
     @Autowired BootstrapService bootstrap;
@@ -40,11 +44,13 @@ class VersionBoundaryIntegrationTest {
         admin =
                 (MockHttpSession)
                         mvc.perform(
-                                        post("/auth/login")
-                                                .with(csrf())
-                                                .contentType("application/json")
-                                                .content(
-                                                        "{\"username\":\"VersionAdmin\",\"password\":\"VersionAdmin1!\"}"))
+                                        loginRequest(
+                                                        mvc,
+                                                        json,
+                                                        null,
+                                                        "VersionAdmin",
+                                                        "VersionAdmin1!")
+                                                .with(csrf()))
                                 .andExpect(status().isOk())
                                 .andReturn()
                                 .getRequest()

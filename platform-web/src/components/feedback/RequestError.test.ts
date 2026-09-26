@@ -40,4 +40,27 @@ describe('request error feedback', () => {
       expect(html).toContain(code === 'USERNAME_TAKEN' ? '请更换账号' : '请联系管理员维护')
     }
   })
+
+  it.each([
+    ['NETWORK_ERROR', '请检查网络连接'],
+    ['REQUEST_TIMEOUT', '服务响应时间较长'],
+  ])(
+    'offers a recovery action for %s while preserving diagnostic metadata',
+    async (code, advice) => {
+      const html = await renderToString(
+        createSSRApp(RequestError, {
+          error: new ApiRequestError(code, '请求未完成', {
+            traceId: 'a'.repeat(32),
+            timestamp: '2026-09-26T02:30:00Z',
+          }),
+        }),
+      )
+      expect(html).toContain(advice)
+      expect(html).toContain('排查信息')
+      expect(html).toContain(code)
+      expect(html).toContain('2026/9/26 10:30:00')
+      expect(html).toContain('a'.repeat(32))
+      expect(html).not.toContain('请检查输入')
+    },
+  )
 })

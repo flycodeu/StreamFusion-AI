@@ -107,9 +107,13 @@ java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=local 
 API 客户端需按以下顺序对接：
 
 1. `GET /auth/csrf`，保存 Cookie 及响应 `data.headerName`、`data.token`。
-2. `GET /auth/login/challenge` 获取一次性挑战，按前端 `src/api/auth/cipher.ts` 使用 ECDH P-256、HKDF-SHA256、AES-GCM 加密账号和密码，再 `POST /auth/login/secure` 提交密文、携带 CSRF 与 Cookie。`/auth/login` 旧入口默认关闭。
+2. `GET /auth/login/challenge` 获取一次性挑战，按前端 `src/api/auth/cipher.ts` 使用 ECDH P-256、HKDF-SHA256、AES-GCM 加密账号和密码，再 `POST /auth/login/secure` 提交密文、携带 CSRF 与 Cookie。
 3. 登录会轮换会话和 CSRF；重新请求 `/auth/csrf`，再读取 `GET /auth/me`。待改密账号只允许本人信息、改密和退出等入口。
 4. 写请求继续携带最新 CSRF 令牌和 Cookie。`PUT /auth/password` 改密成功后重新登录；`POST /auth/logout` 撤销当前会话。
+
+同一账号只允许一个有效登录。新登录在账号行锁中递增 `session_version`，将旧登录记录标记为 `REPLACED`；Spring Session 最终保存成功后才提交登录 SQL，保存失败不撤销旧登录。`GET /auth/session` 只读检查有效性，不刷新空闲时限；前台每次检查完成后间隔 15 秒再请求，隐藏标签暂停。
+
+旧登录返回 `SESSION_REPLACED`，管理员强退返回 `SESSION_FORCED_LOGOUT`。统一响应中的安全详情用于登录页弹窗，包含结束时间、新登录时间及来源摘要。`GET /auth/csrf` 会将撤销身份清理为匿名状态，支持首次正确重新登录。用户强退接口为 `POST /user/{id}/force-logout`，要求 user 模块权限、CSRF 和 `If-Match`，仍校验本人/超级账号保护。强退写入 `USER_FORCE_LOGOUT` 审计，不禁用账号。
 
 `GET /actuator/health`、CSRF 和登录入口公开；开启文档时 `/v3/api-docs`、`/swagger-ui.html` 可访问，prod 默认关闭。Swagger UI 不代替会话登录或 CSRF 获取。未知业务入口默认拒绝；未登录返回统一 JSON 401，缺少 CSRF 的写请求返回 403，不启用表单登录、HTTP Basic 或默认随机密码用户。
 
@@ -136,7 +140,7 @@ API 客户端需按以下顺序对接：
 
 同一规范化 IP 在十分钟窗口累计二十次登录失败后写入 `sys_ip_block`。封禁无到期时间，应用或 Redis 重启不会解除。成功登录不清除同一 IP 的失败累计；原账号五次连续失败锁十五分钟的保护继续生效。封禁后拒绝登录与业务接口，已有会话同样受限；健康检查、退出及用于退出的 CSRF 获取保留。
 
-超级管理员须从未封禁的地址进入“系统管理 → 操作记录 → IP 封禁”，查询并确认解除。查询和解除接口同时检查 `audit` PAGE 与 SUPER_ADMIN 身份，普通操作日志查看者没有解封权限。解除使用 `If-Match` 防止旧记录覆盖，新世代使解除前的未完成登录尝试不能再次封禁。封禁与解除写入操作记录。
+超级管理员须从未封禁的地址进入“监控面板 → 操作记录 → IP 封禁”，查询并确认解除。查询和解除接口同时检查 `audit` PAGE 与 SUPER_ADMIN 身份，普通操作日志查看者没有解封权限。解除使用 `If-Match` 防止旧记录覆盖，新世代使解除前的未完成登录尝试不能再次封禁。封禁与解除写入操作记录。
 
 | 环境变量 | 默认值 | 用途 |
 |---|---|---|

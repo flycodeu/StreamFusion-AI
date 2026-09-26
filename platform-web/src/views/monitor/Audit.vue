@@ -98,6 +98,7 @@ const actionNames: Record<string, string> = {
   USER_DISABLE: '停用用户',
   USER_RESET_PASSWORD: '重置用户密码',
   USER_DELETE: '删除用户',
+  USER_FORCE_LOGOUT: '强制登出用户',
   USER_ROLE_UPDATE: '调整用户角色',
   USER_DEPARTMENTS_UPDATE: '调整用户部门',
   ROLE_CREATE: '新建角色',

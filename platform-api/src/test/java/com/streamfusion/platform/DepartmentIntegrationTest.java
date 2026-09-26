@@ -1,5 +1,6 @@
 package com.streamfusion.platform;
 
+import static com.streamfusion.platform.support.SecureLoginSupport.loginRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -12,7 +13,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.streamfusion.platform.auth.service.BootstrapService;
 import com.streamfusion.platform.support.IdentitySchema;
-import java.util.Map;
+import com.streamfusion.platform.support.SecureLoginSupport;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,7 +33,7 @@ import org.springframework.test.web.servlet.MvcResult;
         })
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-class DepartmentIntegrationTest {
+class DepartmentIntegrationTest extends SecureLoginSupport {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
     @Autowired DataSource source;
@@ -416,17 +417,13 @@ class DepartmentIntegrationTest {
         MockHttpSession session =
                 (MockHttpSession)
                         mvc.perform(
-                                        post("/auth/login")
-                                                .session(initial.session())
-                                                .header(initial.header(), initial.token())
-                                                .contentType("application/json")
-                                                .content(
-                                                        json.writeValueAsString(
-                                                                Map.of(
-                                                                        "username",
-                                                                        username,
-                                                                        "password",
-                                                                        password))))
+                                        loginRequest(
+                                                        mvc,
+                                                        json,
+                                                        initial.session(),
+                                                        username,
+                                                        password)
+                                                .header(initial.header(), initial.token()))
                                 .andExpect(status().isOk())
                                 .andReturn()
                                 .getRequest()

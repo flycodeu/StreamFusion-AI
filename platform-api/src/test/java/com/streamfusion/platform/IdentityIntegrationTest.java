@@ -1,5 +1,6 @@
 package com.streamfusion.platform;
 
+import static com.streamfusion.platform.support.SecureLoginSupport.loginRequest;
 import static org.assertj.core.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -13,6 +14,7 @@ import com.streamfusion.platform.auth.service.PasswordService;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.support.IdentitySchema;
+import com.streamfusion.platform.support.SecureLoginSupport;
 import com.streamfusion.platform.user.service.UserService;
 import java.time.Instant;
 import java.util.HashSet;
@@ -43,7 +45,7 @@ import org.springframework.test.web.servlet.MvcResult;
         })
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-class IdentityIntegrationTest {
+class IdentityIntegrationTest extends SecureLoginSupport {
     @Autowired MockMvc mvc;
     @Autowired DataSource source;
     @Autowired ObjectMapper json;
@@ -123,17 +125,8 @@ class IdentityIntegrationTest {
         String oldId = csrf.session().getId();
         MvcResult result =
                 mvc.perform(
-                                post("/auth/login")
-                                        .session(csrf.session())
-                                        .header(csrf.header(), csrf.token())
-                                        .contentType("application/json")
-                                        .content(
-                                                json.writeValueAsString(
-                                                        Map.of(
-                                                                "username",
-                                                                "Admin01",
-                                                                "password",
-                                                                "AdminPass1!"))))
+                                loginRequest(mvc, json, csrf.session(), "Admin01", "AdminPass1!")
+                                        .header(csrf.header(), csrf.token()))
                         .andExpect(status().isOk())
                         .andExpect(jsonPath("$.data").isEmpty())
                         .andReturn();
@@ -165,20 +158,23 @@ class IdentityIntegrationTest {
         String id = create(admin, "Worker01");
         var first = login("Worker01", "Initial1!");
         var second = login("Worker01", "Initial1!");
-        mvc.perform(get("/auth/me").session(first))
+        mvc.perform(get("/auth/session").session(first))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("SESSION_REPLACED"));
+        mvc.perform(get("/auth/me").session(second))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.user.status").value(0))
                 .andExpect(jsonPath("$.data.isSuperAdmin").value(false));
         for (String path : List.of("/auth/csrf", "/auth/me", "/auth/password-policy")) {
-            mvc.perform(head(path).session(first)).andExpect(status().isOk());
+            mvc.perform(head(path).session(second)).andExpect(status().isOk());
         }
-        mvc.perform(head("/user/page").session(first))
+        mvc.perform(head("/user/page").session(second))
                 .andExpect(status().isForbidden())
                 .andExpect(content().string(""));
-        Csrf csrf = csrf(first);
+        Csrf csrf = csrf(second);
         mvc.perform(
                         put("/auth/me")
-                                .session(first)
+                                .session(second)
                                 .header(csrf.header(), csrf.token())
                                 .contentType("application/json")
                                 .content("{\"nickname\":\"张三\",\"version\":\"0\"}"))
@@ -186,12 +182,13 @@ class IdentityIntegrationTest {
                 .andExpect(jsonPath("$.code").value("PASSWORD_CHANGE_REQUIRED"));
         mvc.perform(
                         put("/auth/password")
-                                .session(first)
+                                .session(second)
                                 .header(csrf.header(), csrf.token())
                                 .contentType("application/json")
                                 .content(
                                         "{\"currentPassword\":\"Initial1!\",\"newPassword\":\"Personal2@\"}"))
                 .andExpect(status().isOk());
+        mvc.perform(get("/auth/me").session(first)).andExpect(status().isUnauthorized());
         mvc.perform(get("/auth/me").session(second)).andExpect(status().isUnauthorized());
         assertThat(users.getById(Long.parseLong(id)).getStatus()).isEqualTo(1);
         var normal = login("Worker01", "Personal2@");
@@ -646,13 +643,19 @@ class IdentityIntegrationTest {
         var result = mvc.perform(get("/v3/api-docs")).andExpect(status().isOk()).andReturn();
         JsonNode document = json.readTree(result.getResponse().getContentAsString());
         JsonNode schemas = document.path("components").path("schemas");
+        assertThat(schemas.has("LoginDto")).isFalse();
+        assertThat(document.path("paths").has("/auth/login")).isFalse();
         assertThat(
-                        schemas.path("LoginDto")
-                                .path("properties")
-                                .path("password")
-                                .path("writeOnly")
-                                .asBoolean())
-                .isTrue();
+                        document.path("paths")
+                                .path("/auth/login/secure")
+                                .path("post")
+                                .path("requestBody")
+                                .path("content")
+                                .path("application/json")
+                                .path("schema")
+                                .path("$ref")
+                                .asText())
+                .isEqualTo("#/components/schemas/EncryptedLoginDto");
         assertThat(
                         schemas.path("PasswordChangeDto")
                                 .path("properties")
@@ -874,17 +877,8 @@ class IdentityIntegrationTest {
         Csrf csrf = csrf(null);
         var result =
                 mvc.perform(
-                                post("/auth/login")
-                                        .session(csrf.session())
-                                        .header(csrf.header(), csrf.token())
-                                        .contentType("application/json")
-                                        .content(
-                                                json.writeValueAsString(
-                                                        Map.of(
-                                                                "username",
-                                                                username,
-                                                                "password",
-                                                                password))))
+                                loginRequest(mvc, json, csrf.session(), username, password)
+                                        .header(csrf.header(), csrf.token()))
                         .andExpect(status().isOk())
                         .andReturn();
         return (MockHttpSession) result.getRequest().getSession(false);

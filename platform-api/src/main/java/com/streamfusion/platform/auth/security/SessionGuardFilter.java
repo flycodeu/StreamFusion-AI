@@ -1,5 +1,6 @@
 package com.streamfusion.platform.auth.security;
 
+import com.streamfusion.platform.auth.pojo.dto.SessionPrincipalDto;
 import com.streamfusion.platform.auth.service.CurrentUserService;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
@@ -36,6 +37,9 @@ public class SessionGuardFilter extends OncePerRequestFilter {
     protected void doFilterInternal(
             HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
+        String route = request.getRequestURI().substring(request.getContextPath().length());
+        String method = "HEAD".equals(request.getMethod()) ? "GET" : request.getMethod();
+        boolean preparingCsrf = "GET".equals(method) && "/auth/csrf".equals(route);
         var authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication != null
                 && authentication.isAuthenticated()
@@ -43,15 +47,22 @@ public class SessionGuardFilter extends OncePerRequestFilter {
             try {
                 var user = current.requireUser();
                 loginRecords.observe(request);
-                String route = request.getRequestURI().substring(request.getContextPath().length());
-                String method = "HEAD".equals(request.getMethod()) ? "GET" : request.getMethod();
                 if (CurrentUserService.requiresPasswordChange(user)
                         && !LIMITED.contains(method + " " + route)) {
                     throw BusinessException.error(ErrorCode.PASSWORD_CHANGE_REQUIRED);
                 }
             } catch (BusinessException ex) {
+                BusinessException reported = ex;
                 if (ex.code() == ErrorCode.UNAUTHORIZED) {
                     var activity = loginRecords.activity(request);
+                    if (!preparingCsrf
+                            && authentication.getPrincipal()
+                                    instanceof SessionPrincipalDto principal) {
+                        reported = loginRecords.endedSession(principal, activity);
+                    }
+                    // Preparing a fresh login is an explicit anonymous-session transition.
+                    // Its successful response must be allowed to carry the new CSRF cookie.
+                    if (!preparingCsrf) SessionCookieProtectionFilter.revoked(request);
                     SecurityContextHolder.clearContext();
                     var session = request.getSession(false);
                     if (session != null) session.invalidate();
@@ -61,8 +72,12 @@ public class SessionGuardFilter extends OncePerRequestFilter {
                         if (!SessionDependencyFilter.dependencyFailure(failure)) throw failure;
                         LOG.warn("Invalidated session history update unavailable");
                     }
+                    if (preparingCsrf) {
+                        chain.doFilter(request, response);
+                        return;
+                    }
                 }
-                writer.write(request, response, ex.code());
+                writer.write(request, response, reported.code(), reported.safeDetails());
                 return;
             }
         }

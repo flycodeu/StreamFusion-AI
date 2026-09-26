@@ -28,21 +28,21 @@ class MenuRulesTest {
     }
 
     @Test
-    void normalizesFilePathAndPreservesExplicitModuleAndLegacyComponent() {
+    void acceptsCanonicalFilePathAndExplicitModule() {
         var input = page();
         input.setRouteName("camera:Manage_1-edit");
         input.setPath("/camera/Manage_1-edit");
-        input.setComponentKey("system/Department");
+        input.setComponentKey("/system/Department");
         input.setModuleKey("department");
         when(modules.contains("department")).thenReturn(true);
         assertThat(rules.write(input).componentKey()).isEqualTo("/system/Department");
-        input.setComponentKey("SYSTEM_DEPARTMENTS");
-        assertThat(rules.write(input).componentKey()).isEqualTo("SYSTEM_DEPARTMENTS");
     }
 
     @ParameterizedTest
     @ValueSource(
             strings = {
+                "SYSTEM_DEPARTMENTS",
+                "system/Department",
                 "https://host/page",
                 "//host/page",
                 "/camera/../manage",

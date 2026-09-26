@@ -23,5 +23,7 @@ public interface UserManagementService {
 
     UserVo resetPassword(String id, String requestedVersion, AuditContextDto context);
 
+    UserVo forceLogout(String id, String requestedVersion, AuditContextDto context);
+
     void delete(String id, String requestedVersion, AuditContextDto context);
 }

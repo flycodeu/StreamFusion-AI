@@ -7,7 +7,8 @@ import TablePanel from '../../components/table/TablePanel.vue'
 import ColumnPicker from '../../components/table/ColumnPicker.vue'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { useColumns } from '../../composables/table/useColumns'
-import { loginEndReason, loginTime, sessionDuration } from './presentation'
+import { loginEndReason, sessionDuration } from './presentation'
+import { formatDateTime } from '../../utils/dateTime'
 
 const props = defineProps<{ userId?: string }>()
 const options = [
@@ -82,7 +83,7 @@ onUnmounted(() => {
       </template>
       <ElTable v-loading="loading" :data="rows" row-key="id" border empty-text="暂无登录记录">
         <ElTableColumn v-if="columns.includes('loginAt')" label="登录时间" min-width="175"
-          ><template #default="{ row }">{{ loginTime(row.loginAt) }}</template></ElTableColumn
+          ><template #default="{ row }">{{ formatDateTime(row.loginAt) }}</template></ElTableColumn
         >
         <ElTableColumn
           v-if="columns.includes('sourceIp')"
@@ -105,7 +106,7 @@ onUnmounted(() => {
         <ElTableColumn v-if="columns.includes('os')" prop="os" label="操作系统" min-width="125" />
         <ElTableColumn v-if="columns.includes('lastActivityAt')" label="最后活动" min-width="175"
           ><template #default="{ row }">{{
-            loginTime(row.lastActivityAt)
+            formatDateTime(row.lastActivityAt)
           }}</template></ElTableColumn
         >
         <ElTableColumn v-if="columns.includes('duration')" label="会话时长" min-width="115"
@@ -126,7 +127,7 @@ onUnmounted(() => {
           }}</template></ElTableColumn
         >
         <ElTableColumn v-if="columns.includes('endedAt')" label="结束时间" min-width="175"
-          ><template #default="{ row }">{{ loginTime(row.endedAt) }}</template></ElTableColumn
+          ><template #default="{ row }">{{ formatDateTime(row.endedAt) }}</template></ElTableColumn
         >
       </ElTable>
       <template #footer

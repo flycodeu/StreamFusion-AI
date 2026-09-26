@@ -29,6 +29,8 @@ async function loadScript() {
 async function loadDocument() {
   const response = await fetch(`${apiPrefix}/v3/api-docs`, {
     credentials: 'same-origin',
+    redirect: 'error',
+    cache: 'no-store',
     signal: AbortSignal.timeout(15000),
     headers: { Accept: 'application/json' },
   })
@@ -48,6 +50,22 @@ async function start() {
     const [, spec] = await Promise.all([loadScript(), loadDocument()])
     globalThis.SwaggerUIBundle({
       spec: { ...spec, servers: [{ url: apiPrefix || '/', description: '当前平台 API' }] },
+      queryConfigEnabled: false,
+      configUrl: null,
+      url: '',
+      requestInterceptor(request) {
+        const target = new globalThis.URL(request.url, globalThis.location.href)
+        if (
+          target.origin !== globalThis.location.origin ||
+          target.pathname !== `${apiPrefix}/v3/api-docs` ||
+          target.search
+        ) {
+          throw new Error('接口文档仅允许加载当前平台的固定文档地址。')
+        }
+        request.credentials = 'same-origin'
+        request.redirect = 'error'
+        return request
+      },
       dom_id: '#swagger-ui',
       deepLinking: true,
       filter: true,

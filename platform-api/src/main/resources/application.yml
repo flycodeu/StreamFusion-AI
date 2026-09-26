@@ -70,7 +70,6 @@ platform:
     idle-timeout: ${SF_AUTH_IDLE_TIMEOUT:30m}
     absolute-timeout: ${SF_AUTH_ABSOLUTE_TIMEOUT:8h}
     secure-cookie: ${SF_AUTH_SECURE_COOKIE:true}
-    allow-legacy-login: ${SF_AUTH_ALLOW_LEGACY_LOGIN:false}
     initial-password: ${SF_AUTH_INITIAL_PASSWORD:}
     worker-id: ${SF_AUTH_WORKER_ID:0}
     datacenter-id: ${SF_AUTH_DATACENTER_ID:0}

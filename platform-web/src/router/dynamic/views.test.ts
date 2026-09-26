@@ -7,7 +7,15 @@ const departmentPage: PageLoader = async () => ({ default: { name: 'Department' 
 
 describe('file-based business page resolution', () => {
   it('discovers business pages while fixed application pages remain outside the manifest', () => {
-    expect(availablePagePaths).toContain('/system/Department')
+    expect(availablePagePaths).toEqual([
+      '/monitor/ApiDocs',
+      '/monitor/Audit',
+      '/monitor/Server',
+      '/system/Department',
+      '/system/Menu',
+      '/system/Role',
+      '/system/User',
+    ])
     for (const path of [
       '/auth/LoginView',
       '/auth/ChangePasswordView',
@@ -28,7 +36,6 @@ describe('file-based business page resolution', () => {
     })
 
     expect(resolve('/camera/manage')).toBe(cameraPage)
-    expect(resolve('camera/manage')).toBe(cameraPage)
     expect(resolve('/camera/group/index')).toBe(departmentPage)
     expect(await resolve('/camera/manage')?.()).toMatchObject({
       default: { name: 'CameraManage' },
@@ -36,19 +43,9 @@ describe('file-based business page resolution', () => {
   })
 
   it.each([
-    ['SYSTEM_USERS', '/system/User'],
-    ['SYSTEM_ROLES', '/system/Role'],
-    ['SYSTEM_MENUS', '/system/Menu'],
-    ['SYSTEM_DEPARTMENTS', '/system/Department'],
-  ])('keeps existing database component %s compatible', (legacy, path) => {
-    const resolve = createPageResolver({ [`../../views${path}.vue`]: departmentPage })
-    expect(normalizeViewPath(legacy)).toBe(path)
-    expect(resolve(legacy)).toBe(departmentPage)
-  })
-
-  it.each([
     null,
     '',
+    'camera/manage',
     '//camera/manage',
     'https://example.invalid/camera/manage',
     '/camera/../manage',

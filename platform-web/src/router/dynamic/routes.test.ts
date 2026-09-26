@@ -71,19 +71,21 @@ describe('backend menu route assembly', () => {
     ])
   })
 
-  it('supports a legacy component key without requiring the URL to match the filename', () => {
-    const legacyResolve = createPageResolver({ '../../views/system/Department.vue': cameraPage })
+  it('resolves the component without requiring the URL to match the filename', () => {
+    const departmentResolve = createPageResolver({
+      '../../views/system/Department.vue': cameraPage,
+    })
     const result = buildMenuRoutes(
       [
         page({
           path: '/system/departments',
           routeName: 'departments',
-          componentKey: 'SYSTEM_DEPARTMENTS',
+          componentKey: '/system/Department',
           moduleKey: 'departments',
         }),
       ],
       ['departments'],
-      legacyResolve,
+      departmentResolve,
     )
     expect(result.records[0]).toMatchObject({
       path: '/system/departments',

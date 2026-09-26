@@ -13,6 +13,7 @@ import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.Objects;
+import java.util.function.Consumer;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -44,6 +45,15 @@ public class AuthenticationService {
 
     public SessionPrincipalDto authenticate(
             String username, String password, AuditContextDto context) {
+        return authenticate(username, password, context, principal -> {});
+    }
+
+    /** Completes successful session establishment under the same account lock as credentials. */
+    public SessionPrincipalDto authenticate(
+            String username,
+            String password,
+            AuditContextDto context,
+            Consumer<SessionPrincipalDto> establishSession) {
         rules.username(username);
         if (password == null || password.isEmpty() || password.length() > 4096) {
             throw BusinessException.error(ErrorCode.VALIDATION_ERROR);
@@ -77,10 +87,7 @@ public class AuthenticationService {
                             if (current == null
                                     || current.getStatus() == UserStatus.BANNED.getCode()
                                     || !Objects.equals(
-                                            current.getPassword(), observed.getPassword())
-                                    || !Objects.equals(
-                                            current.getSessionVersion(),
-                                            observed.getSessionVersion())) {
+                                            current.getPassword(), observed.getPassword())) {
                                 audit.record(
                                         null,
                                         "USER",
@@ -146,8 +153,13 @@ public class AuthenticationService {
                                     0,
                                     null,
                                     checkedAt);
-                            return new SessionPrincipalDto(
-                                    current.getId(), current.getSessionVersion(), clock.instant());
+                            var principal =
+                                    new SessionPrincipalDto(
+                                            current.getId(),
+                                            current.getSessionVersion(),
+                                            clock.instant());
+                            establishSession.accept(principal);
+                            return principal;
                         });
         // Throw after commit so failure counters and audit survive a rejected login.
         if (result == null) throw BusinessException.error(ErrorCode.LOGIN_FAILED);

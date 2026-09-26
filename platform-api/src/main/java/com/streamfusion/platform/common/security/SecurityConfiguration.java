@@ -39,10 +39,7 @@ public class SecurityConfiguration {
                     authorize.requestMatchers("/actuator/health").permitAll();
                     authorize
                             .requestMatchers(
-                                    "/auth/csrf",
-                                    "/auth/login",
-                                    "/auth/login/challenge",
-                                    "/auth/login/secure")
+                                    "/auth/csrf", "/auth/login/challenge", "/auth/login/secure")
                             .permitAll();
                     if (docsEnabled) {
                         authorize

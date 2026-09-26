@@ -26,11 +26,13 @@ export const fixedRoutes: readonly RouteRecordRaw[] = [
     path: '/forbidden',
     name: 'forbidden',
     component: () => import('../pages/error/ForbiddenView.vue'),
+    meta: { title: '访问受限' },
   },
   {
     path: '/unavailable',
     name: 'unavailable',
     component: () => import('../pages/error/UnavailableView.vue'),
+    meta: { title: '服务暂不可用' },
   },
 ]
 

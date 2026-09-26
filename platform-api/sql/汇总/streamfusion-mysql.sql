@@ -106,7 +106,7 @@ CREATE TABLE sys_menu (
     type VARCHAR(16) NOT NULL COMMENT '类型：DIRECTORY、PAGE',
     route_name VARCHAR(64) NULL COMMENT '路由名称',
     path VARCHAR(200) NULL COMMENT '路由路径',
-    component_key VARCHAR(64) NULL COMMENT '页面文件路径，兼容旧组件键',
+    component_key VARCHAR(64) NULL COMMENT '页面文件路径',
     module_key VARCHAR(64) NULL COMMENT '模块键',
     icon VARCHAR(64) NULL COMMENT '图标键',
     sort_order INT NOT NULL DEFAULT 0 COMMENT '排序值',
@@ -134,27 +134,21 @@ CREATE INDEX ix_menu_parent ON sys_menu(parent_id, sort_order, id);
 -- 系统管理初始菜单
 INSERT INTO sys_menu (id, parent_id, name, type, icon, sort_order, visible, enabled)
 VALUES (1001, NULL, '系统管理', 'DIRECTORY', 'settings', 0, TRUE, TRUE);
-INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, sort_order, visible, enabled)
-VALUES
-    (1002, 1001, '用户管理', 'PAGE', 'SystemUsers', '/system/users', '/system/User', 'user', 0, TRUE, TRUE),
-    (1003, 1001, '角色管理', 'PAGE', 'SystemRoles', '/system/roles', '/system/Role', 'role', 1, TRUE, TRUE),
-    (1004, 1001, '菜单管理', 'PAGE', 'SystemMenus', '/system/menus', '/system/Menu', 'menu', 2, TRUE, TRUE),
-    (1005, 1001, '部门管理', 'PAGE', 'SystemDepartments', '/system/departments', '/system/Department', 'department', 3, TRUE, TRUE),
-    (1006, 1001, '操作记录', 'PAGE', 'audit', '/system/Audit', '/system/Audit', 'audit', 4, TRUE, TRUE),
-    (1007, 1001, '服务信息', 'PAGE', 'server', '/system/Server', '/system/Server', 'server', 5, TRUE, TRUE);
-
-UPDATE sys_menu SET icon = 'audit' WHERE id = 1006;
-UPDATE sys_menu SET icon = 'server' WHERE id = 1007;
-UPDATE sys_menu SET icon = 'user' WHERE id = 1002;
-UPDATE sys_menu SET icon = 'role' WHERE id = 1003;
-UPDATE sys_menu SET icon = 'menu' WHERE id = 1004;
-UPDATE sys_menu SET icon = 'department' WHERE id = 1005;
-
--- 监控面板初始菜单
+-- 先创建目录，再插入带外键的子页面。
 INSERT INTO sys_menu (id, parent_id, name, type, icon, sort_order, visible, enabled)
 VALUES (1008, NULL, '监控面板', 'DIRECTORY', 'monitor', 1, TRUE, TRUE);
 INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, icon, sort_order, visible, enabled)
-VALUES (1009, 1008, '接口文档', 'PAGE', 'MonitorApiDocs', '/monitor/ApiDocs', '/monitor/ApiDocs', 'api-docs', 'menu', 0, TRUE, TRUE);
+VALUES
+    (1002, 1001, '用户管理', 'PAGE', 'SystemUsers', '/system/users', '/system/User', 'user', 'user', 0, TRUE, TRUE),
+    (1003, 1001, '角色管理', 'PAGE', 'SystemRoles', '/system/roles', '/system/Role', 'role', 'role', 1, TRUE, TRUE),
+    (1004, 1001, '菜单管理', 'PAGE', 'SystemMenus', '/system/menus', '/system/Menu', 'menu', 'menu', 2, TRUE, TRUE),
+    (1005, 1001, '部门管理', 'PAGE', 'SystemDepartments', '/system/departments', '/system/Department', 'department', 'department', 3, TRUE, TRUE),
+    (1006, 1008, '操作记录', 'PAGE', 'audit', '/monitor/Audit', '/monitor/Audit', 'audit', 'audit', 0, TRUE, TRUE),
+    (1007, 1008, '服务信息', 'PAGE', 'server', '/monitor/Server', '/monitor/Server', 'server', 'server', 1, TRUE, TRUE);
+
+-- 监控面板初始菜单
+INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, icon, sort_order, visible, enabled)
+VALUES (1009, 1008, '接口文档', 'PAGE', 'MonitorApiDocs', '/monitor/ApiDocs', '/monitor/ApiDocs', 'api-docs', 'menu', 2, TRUE, TRUE);
 
 -- 用户角色关联表.sql
 CREATE TABLE sys_user_role (

@@ -1,5 +1,7 @@
 package com.streamfusion.platform;
 
+import static com.streamfusion.platform.support.SecureLoginSupport.claimEachChallengeOnce;
+import static com.streamfusion.platform.support.SecureLoginSupport.loginRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -57,6 +59,7 @@ class IpGuardIntegrationTest {
     void setup() throws Exception {
         IdentitySchema.initialize(source);
         jdbc = new JdbcTemplate(source);
+        claimEachChallengeOnce(store);
         var counters = new ConcurrentHashMap<String, AtomicLong>();
         when(store.failure(anyString(), anyLong()))
                 .thenAnswer(
@@ -73,12 +76,9 @@ class IpGuardIntegrationTest {
         adminId = bootstrap.initialize("GuardAdmin", "安全管理员", "GuardAdmin1!", null);
         var result =
                 mvc.perform(
-                                post("/auth/login")
+                                loginRequest(mvc, json, null, "GuardAdmin", "GuardAdmin1!")
                                         .with(csrf())
-                                        .with(ip("192.0.2.1"))
-                                        .contentType("application/json")
-                                        .content(
-                                                "{\"username\":\"GuardAdmin\",\"password\":\"GuardAdmin1!\"}"))
+                                        .with(ip("192.0.2.1")))
                         .andExpect(status().isOk())
                         .andReturn();
         admin = (MockHttpSession) result.getRequest().getSession(false);
@@ -89,22 +89,20 @@ class IpGuardIntegrationTest {
             throws Exception {
         String attacker = "192.0.2.10";
         for (int i = 0; i < 4; i++) {
-            if (i == 2)
-                mvc.perform(
-                                post("/auth/login")
-                                        .with(csrf())
-                                        .with(ip(attacker))
-                                        .contentType("application/json")
-                                        .content(
-                                                "{\"username\":\"GuardAdmin\",\"password\":\"GuardAdmin1!\"}"))
-                        .andExpect(status().isOk());
+            if (i == 2) {
+                var freshLogin =
+                        mvc.perform(
+                                        loginRequest(mvc, json, null, "GuardAdmin", "GuardAdmin1!")
+                                                .with(csrf())
+                                                .with(ip(attacker)))
+                                .andExpect(status().isOk())
+                                .andReturn();
+                admin = (MockHttpSession) freshLogin.getRequest().getSession(false);
+            }
             mvc.perform(
-                            post("/auth/login")
+                            loginRequest(mvc, json, null, "MissingUser", "Wrong1!")
                                     .with(csrf())
-                                    .with(ip(attacker))
-                                    .contentType("application/json")
-                                    .content(
-                                            "{\"username\":\"MissingUser\",\"password\":\"Wrong1!\"}"))
+                                    .with(ip(attacker)))
                     .andExpect(status().isUnauthorized());
         }
         mvc.perform(
@@ -225,11 +223,8 @@ class IpGuardIntegrationTest {
         jdbc.update("INSERT INTO sys_user_role(user_id,role_id) VALUES(101,1)");
         var login =
                 mvc.perform(
-                                post("/auth/login")
-                                        .with(csrf())
-                                        .contentType("application/json")
-                                        .content(
-                                                "{\"username\":\"FormerAdmin\",\"password\":\"GuardAdmin1!\"}"))
+                                loginRequest(mvc, json, null, "FormerAdmin", "GuardAdmin1!")
+                                        .with(csrf()))
                         .andExpect(status().isOk())
                         .andReturn();
         var former = (MockHttpSession) login.getRequest().getSession(false);

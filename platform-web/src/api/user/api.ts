@@ -2,7 +2,7 @@ import { request } from '../client'
 import { empty, list, page } from '../parse'
 import type { Page } from '../parse'
 import { parseDepartmentOption, parseUserDepartments } from '../departments/types'
-import type { DepartmentOption, UserDepartments } from '../departments/types'
+import type { DepartmentOption } from '../departments/types'
 import { parseRoleOption } from '../roles/types'
 import type { RoleOption } from '../roles/types'
 import {
@@ -12,8 +12,6 @@ import {
   parseUserSummary,
 } from './types'
 import type { UserCredentialResult, UserDetail, UserSummary } from './types'
-import { parseMenuRoutes } from '../auth/types'
-import type { MenuRoute } from '../auth/types'
 
 export async function getUsers(query: {
   page: number
@@ -119,6 +117,18 @@ export async function deleteUser(input: UserSummary): Promise<void> {
   })
 }
 
+export async function forceLogoutUser(input: UserSummary): Promise<UserDetail> {
+  return (
+    await request({
+      path: `/user/${input.id}/force-logout`,
+      method: 'POST',
+      ifMatch: `"${input.version}"`,
+      successStatus: 200,
+      decode: parseUserDetail,
+    })
+  ).data
+}
+
 export async function getUserRoles(
   id: string,
 ): Promise<{ userId: string; version: string; roles: RoleOption[] }> {
@@ -140,17 +150,6 @@ export async function setUserRoles(id: string, version: string, roleIds: string[
     successStatus: 200,
     decode: parseUserRoles,
   })
-}
-
-export async function getUserDepartments(id: string): Promise<UserDepartments> {
-  return (
-    await request({
-      path: `/user/${id}/departments`,
-      method: 'GET',
-      successStatus: 200,
-      decode: parseUserDepartments,
-    })
-  ).data
 }
 
 export async function setUserDepartments(
@@ -185,17 +184,6 @@ export async function getDepartmentOptions(): Promise<DepartmentOption[]> {
       method: 'GET',
       successStatus: 200,
       decode: (v) => list(v, parseDepartmentOption),
-    })
-  ).data
-}
-
-export async function getUserMenus(id: string): Promise<MenuRoute[]> {
-  return (
-    await request({
-      path: `/user/${id}/menus`,
-      method: 'GET',
-      successStatus: 200,
-      decode: parseMenuRoutes,
     })
   ).data
 }

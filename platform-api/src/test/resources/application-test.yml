@@ -34,4 +34,3 @@ platform:
     enabled: false
   auth:
     secure-cookie: false
-    allow-legacy-login: true

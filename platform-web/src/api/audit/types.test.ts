@@ -24,12 +24,16 @@ describe('operation record response parsing', () => {
       record: entry,
       sourceIp: '127.0.0.1',
       changes: { name: null, beforeDepartmentIds: ['2001'], afterDepartmentIds: ['2002'] },
+      relations: {},
     }
     expect(parseAuditDetail(detail)).toEqual({
       ...detail,
       record: { ...entry, actor: null, target: null },
       relations: {},
     })
+  })
+  it('rejects a response missing the relation summaries', () => {
+    expect(() => parseAuditDetail({ record: entry, changes: {} })).toThrow('object')
   })
   it('rejects numeric IDs and unexpected nested summary objects', () => {
     expect(() => parseAuditEntry({ ...entry, id: 9007199254740992 })).toThrow()

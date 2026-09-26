@@ -24,6 +24,36 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserEntity> impleme
     }
 
     @Override
+    public int replaceSession(long id, long expectedSessionVersion) {
+        return baseMapper.update(
+                null,
+                new LambdaUpdateWrapper<UserEntity>()
+                        .eq(UserEntity::getId, id)
+                        .eq(UserEntity::getSessionVersion, expectedSessionVersion)
+                        .set(
+                                UserEntity::getSessionVersion,
+                                VersionCounter.next(expectedSessionVersion)));
+    }
+
+    @Override
+    public int forceLogout(long id, long version, long actorId, LocalDateTime now) {
+        UserEntity observed = getById(id);
+        if (observed == null || observed.getVersion() != version) return 0;
+        return baseMapper.update(
+                null,
+                new LambdaUpdateWrapper<UserEntity>()
+                        .eq(UserEntity::getId, id)
+                        .eq(UserEntity::getVersion, version)
+                        .eq(UserEntity::getSessionVersion, observed.getSessionVersion())
+                        .set(
+                                UserEntity::getSessionVersion,
+                                VersionCounter.next(observed.getSessionVersion()))
+                        .set(UserEntity::getVersion, VersionCounter.next(version))
+                        .set(UserEntity::getUpdatedBy, actorId)
+                        .set(UserEntity::getUpdatedAt, now));
+    }
+
+    @Override
     public int updateLoginState(
             long id,
             String expectedHash,

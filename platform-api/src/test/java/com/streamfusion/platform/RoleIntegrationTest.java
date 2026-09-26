@@ -1,5 +1,6 @@
 package com.streamfusion.platform;
 
+import static com.streamfusion.platform.support.SecureLoginSupport.loginRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -13,6 +14,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.streamfusion.platform.auth.service.BootstrapService;
 import com.streamfusion.platform.support.IdentitySchema;
+import com.streamfusion.platform.support.SecureLoginSupport;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,7 +39,7 @@ import org.springframework.test.web.servlet.MvcResult;
         })
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-class RoleIntegrationTest {
+class RoleIntegrationTest extends SecureLoginSupport {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
     @Autowired DataSource source;
@@ -65,7 +67,8 @@ class RoleIntegrationTest {
         mvc.perform(get("/roles/" + roleId + "/menus").session(admin.session()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.selectedPageIds.length()").value(0))
-                .andExpect(jsonPath("$.data.tree[0].children.length()").value(6));
+                .andExpect(jsonPath("$.data.tree[0].children.length()").value(4))
+                .andExpect(jsonPath("$.data.tree[1].children.length()").value(3));
         write(
                 put("/roles/" + roleId + "/menus"),
                 admin,
@@ -76,7 +79,7 @@ class RoleIntegrationTest {
                                 "SELECT COUNT(*) FROM sys_role_menu WHERE role_id=?",
                                 Integer.class,
                                 Long.parseLong(roleId)))
-                .isEqualTo(6);
+                .isEqualTo(4);
         write(
                 put("/roles/" + roleId + "/menus"),
                 admin,
@@ -306,7 +309,7 @@ class RoleIntegrationTest {
                         "path",
                         "/test/dormant",
                         "componentKey",
-                        "SYSTEM_DEPARTMENTS",
+                        "/system/Department",
                         "moduleKey",
                         "department",
                         "sortOrder",
@@ -371,7 +374,7 @@ class RoleIntegrationTest {
                                 "SELECT menu_id FROM sys_role_menu WHERE role_id=?",
                                 Long.class,
                                 Long.parseLong(newRole)))
-                .containsExactlyInAnyOrder(1002L, 1003L, 1004L, 1005L, 1006L, 1007L);
+                .containsExactlyInAnyOrder(1002L, 1003L, 1004L, 1005L);
 
         write(
                 put("/roles/" + existingRole + "/menus"),
@@ -563,17 +566,13 @@ class RoleIntegrationTest {
         MockHttpSession session =
                 (MockHttpSession)
                         mvc.perform(
-                                        post("/auth/login")
-                                                .session(initial.session())
-                                                .header(initial.header(), initial.token())
-                                                .contentType("application/json")
-                                                .content(
-                                                        json.writeValueAsString(
-                                                                Map.of(
-                                                                        "username",
-                                                                        username,
-                                                                        "password",
-                                                                        password))))
+                                        loginRequest(
+                                                        mvc,
+                                                        json,
+                                                        initial.session(),
+                                                        username,
+                                                        password)
+                                                .header(initial.header(), initial.token()))
                                 .andExpect(status().isOk())
                                 .andReturn()
                                 .getRequest()

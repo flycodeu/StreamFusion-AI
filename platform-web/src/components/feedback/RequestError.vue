@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { WarningFilled } from '@element-plus/icons-vue'
 import { ApiRequestError } from '../../lib/http/error'
 import { formatDateTime } from '../../utils/dateTime'
 
@@ -75,6 +76,8 @@ const advice = computed(() => {
     return '请通过个人中心修改本人资料；受保护账号由超级管理员处理。'
   if (error.code === 'VERSION_EXHAUSTED') return '请联系管理员维护，不能通过刷新或重置版本解决。'
   if (error.code === 'IP_BLOCKED') return '请由超级管理员在操作记录的 IP 封禁列表中解除限制。'
+  if (error.code === 'NETWORK_ERROR') return '请检查网络连接，并确认平台服务已启动后重试。'
+  if (error.code === 'REQUEST_TIMEOUT') return '服务响应时间较长，请稍后重试。'
   if (error.status === 429)
     return error.retryAfter
       ? `请求过于频繁，请在 ${error.retryAfter} 秒后重试。`
@@ -96,33 +99,104 @@ const time = computed(() => {
 
 <template>
   <div v-if="error" class="request-error" role="alert">
-    <strong>{{ detail?.message || '操作失败，请重试' }}</strong>
-    <span>{{ advice }}</span>
-    <span v-for="field in fieldErrors" :key="field">{{ field }}</span>
-    <details v-if="detail">
-      <summary>{{ detail.code }} · {{ time }}</summary>
-      <div v-if="detail.traceId" class="trace-id">请求标识 {{ detail.traceId }}</div>
-    </details>
+    <WarningFilled class="error-icon" aria-hidden="true" />
+    <div class="error-content">
+      <strong class="error-title">{{ detail?.message || '操作未完成' }}</strong>
+      <p class="error-advice">{{ advice }}</p>
+      <ul v-if="fieldErrors.length" class="field-errors">
+        <li v-for="field in fieldErrors" :key="field">{{ field }}</li>
+      </ul>
+      <details v-if="detail" class="error-diagnostics">
+        <summary>排查信息</summary>
+        <dl>
+          <div>
+            <dt>错误码</dt>
+            <dd>{{ detail.code }}</dd>
+          </div>
+          <div>
+            <dt>发生时间</dt>
+            <dd>{{ time }}</dd>
+          </div>
+          <div v-if="detail.traceId">
+            <dt>请求标识</dt>
+            <dd class="trace-id">{{ detail.traceId }}</dd>
+          </div>
+        </dl>
+      </details>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .request-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 15px 16px;
+  margin: 12px 0;
+  background: #fff8f6;
+  border: 1px solid #f0dcd5;
+  border-radius: 8px;
+  color: #944b3e;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.error-icon {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  color: #c57961;
+}
+.error-content {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.error-title {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+.error-advice {
+  margin: 4px 0 0;
+  color: #866057;
+}
+.field-errors {
+  margin: 9px 0 0;
+  padding-left: 18px;
+}
+.error-diagnostics {
+  margin-top: 10px;
+  color: #80665e;
+  font-size: 12px;
+}
+.error-diagnostics summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.error-diagnostics dl {
   display: grid;
   gap: 5px;
-  padding: 12px 14px;
-  margin: 10px 0;
-  background: #fff4f2;
-  border: 1px solid #eac9c2;
-  border-radius: 6px;
-  color: #8f2d28;
-  font-size: 13px;
+  margin: 8px 0 0;
+  padding-top: 9px;
+  border-top: 1px solid #f0dcd5;
 }
-.request-error summary {
-  cursor: pointer;
+.error-diagnostics dl > div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+}
+.error-diagnostics dt,
+.error-diagnostics dd {
+  margin: 0;
+}
+.error-diagnostics dd {
+  color: #674c44;
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 .trace-id {
-  margin-top: 6px;
-  overflow-wrap: anywhere;
+  font-family: Consolas, monospace;
 }
 </style>

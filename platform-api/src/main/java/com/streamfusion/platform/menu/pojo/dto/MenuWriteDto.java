@@ -27,7 +27,7 @@ public class MenuWriteDto {
     @Schema(description = "页面路由路径，以/开头，默认同时定位views中的同名.vue页面", maxLength = 200)
     private String path;
 
-    @Schema(description = "可选页面文件路径，相对views且不带.vue；缺省使用path，兼容旧组件键", maxLength = 64)
+    @Schema(description = "可选页面文件路径，相对views且不带.vue；以/开头，缺省使用path", maxLength = 64)
     private String componentKey;
 
     @Schema(description = "可选后端模块键，对应已注册接口的@ModuleAccess值；缺省使用routeName，创建后不可更改", maxLength = 64)

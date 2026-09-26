@@ -31,14 +31,6 @@ describe('IP block response contract', () => {
     expect(parseIpBlock(released)).toEqual(released)
   })
 
-  it('accepts older responses without the optional user summary', () => {
-    const legacy = { ...blocked, unblockedBy: '123', unblockedByReference: undefined }
-    expect(parseIpBlock(legacy)).toMatchObject({
-      unblockedBy: '123',
-      unblockedByReference: null,
-    })
-  })
-
   it.each(['SNAPSHOT', 'CURRENT', 'MISSING'])(
     'preserves a readable release user with source %s',
     (source) => {

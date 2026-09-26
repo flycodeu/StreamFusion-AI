@@ -2,20 +2,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRenderer, nextTick } from 'vue'
 import type { App, Component } from 'vue'
-import type { Department } from '../../api/departments/types'
-import type { MenuNode } from '../../api/menus/types'
-import type { Role, RoleMenus } from '../../api/roles/types'
-import type { UserCredentialResult, UserDetail } from '../../api/user/types'
-import type { AuditDetail, AuditEntry } from '../../api/audit/types'
-import type { IpBlock } from '../../api/security/types'
-import { clearIdentity, setIdentity } from '../../session/state'
-import DepartmentView from './Department.vue'
-import MenuView from './Menu.vue'
-import RoleView from './Role.vue'
-import UserView from './User.vue'
-import AuditView from './Audit.vue'
-import LoginRecordTable from '../../features/login-records/LoginRecordTable.vue'
-import IpBlockPanel from '../../features/security/IpBlockPanel.vue'
+import type { Department } from '../../src/api/departments/types'
+import type { MenuNode } from '../../src/api/menus/types'
+import type { Role, RoleMenus } from '../../src/api/roles/types'
+import type { UserCredentialResult, UserDetail } from '../../src/api/user/types'
+import type { AuditDetail, AuditEntry } from '../../src/api/audit/types'
+import type { IpBlock } from '../../src/api/security/types'
+import { clearIdentity, setIdentity } from '../../src/session/state'
+import DepartmentView from '../../src/views/system/Department.vue'
+import MenuView from '../../src/views/system/Menu.vue'
+import RoleView from '../../src/views/system/Role.vue'
+import UserView from '../../src/views/system/User.vue'
+import AuditView from '../../src/views/monitor/Audit.vue'
+import LoginRecordTable from '../../src/features/login-records/LoginRecordTable.vue'
+import IpBlockPanel from '../../src/features/security/IpBlockPanel.vue'
 
 const api = vi.hoisted(() => ({
   getDepartments: vi.fn(),
@@ -35,6 +35,7 @@ const api = vi.hoisted(() => ({
   changeUserStatus: vi.fn(),
   getDepartmentOptions: vi.fn(),
   deleteUser: vi.fn(),
+  forceLogoutUser: vi.fn(),
   resetUserPassword: vi.fn(),
   getAuditPage: vi.fn(),
   getAuditDetail: vi.fn(),
@@ -44,19 +45,19 @@ const api = vi.hoisted(() => ({
   success: vi.fn(),
   confirm: vi.fn(),
 }))
-vi.mock('../../api/departments/api', () => api)
-vi.mock('../../api/menus/api', () => api)
-vi.mock('../../api/roles/api', () => api)
-vi.mock('../../api/user/api', () => api)
-vi.mock('../../api/audit/api', () => api)
-vi.mock('../../api/login-records/api', () => api)
-vi.mock('../../api/security/api', () => api)
-vi.mock('../../session/session', () => ({ refreshIdentity: vi.fn() }))
+vi.mock('../../src/api/departments/api', () => api)
+vi.mock('../../src/api/menus/api', () => api)
+vi.mock('../../src/api/roles/api', () => api)
+vi.mock('../../src/api/user/api', () => api)
+vi.mock('../../src/api/audit/api', () => api)
+vi.mock('../../src/api/login-records/api', () => api)
+vi.mock('../../src/api/security/api', () => api)
+vi.mock('../../src/session/session', () => ({ refreshIdentity: vi.fn() }))
 vi.mock('vue-router', () => ({
   useRoute: () => ({ path: '/system/Menu', query: {}, hash: '' }),
   useRouter: () => ({ replace: vi.fn() }),
 }))
-vi.mock('../../components/table/ColumnPicker.vue', async () => {
+vi.mock('../../src/components/table/ColumnPicker.vue', async () => {
   const { defineComponent, h } = await import('vue')
   return {
     default: defineComponent({
@@ -67,7 +68,7 @@ vi.mock('../../components/table/ColumnPicker.vue', async () => {
     }),
   }
 })
-vi.mock('../../components/icons/IconPicker.vue', () => ({ default: { render: () => null } }))
+vi.mock('../../src/components/icons/IconPicker.vue', () => ({ default: { render: () => null } }))
 vi.mock('element-plus', async () => {
   const { defineComponent, h, inject, provide } = await import('vue')
   const controls = [
@@ -89,6 +90,8 @@ vi.mock('element-plus', async () => {
     'ElEmpty',
     'ElTabPane',
     'ElTabs',
+    'ElDropdownMenu',
+    'ElDropdownItem',
   ]
   const stubs = Object.fromEntries(
     controls.map((name) => [
@@ -103,6 +106,11 @@ vi.mock('element-plus', async () => {
   )
   return {
     ...stubs,
+    ElDropdown: defineComponent({
+      setup(_, { slots }) {
+        return () => h('ElDropdown', [slots.default?.(), slots.dropdown?.()])
+      },
+    }),
     vLoading: {},
     ElMessageBox: { confirm: api.confirm },
     ElMessage: { success: api.success, warning: vi.fn() },
@@ -352,6 +360,39 @@ afterEach(() => {
 })
 
 describe('management page interactions', () => {
+  it('confirms forced logout once and refreshes the list', async () => {
+    const target = user('2')
+    api.getUsers.mockResolvedValue({ items: [target], total: 1, page: 1, size: 20 })
+    api.forceLogoutUser.mockResolvedValue({ ...target, version: '1' })
+    const root = await mount(UserView)
+    const confirmation = deferred<unknown>()
+    api.confirm.mockReturnValue(confirmation.promise)
+    const control = findAll(root, 'ElDropdownItem').find((item) => content(item) === '强制登出')!
+    const handle = control.props.onClick as () => Promise<void>
+    const pending = handle()
+    await handle()
+    expect(api.confirm).toHaveBeenCalledTimes(1)
+    expect(api.forceLogoutUser).not.toHaveBeenCalled()
+    confirmation.resolve(undefined)
+    await pending
+    expect(api.forceLogoutUser).toHaveBeenCalledExactlyOnceWith(target)
+    expect(api.success).toHaveBeenCalledWith('已强制登出')
+    expect(api.getUsers).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not force logout after the acting identity changes during confirmation', async () => {
+    api.getUsers.mockResolvedValue({ items: [user('2')], total: 1, page: 1, size: 20 })
+    const root = await mount(UserView)
+    const confirmation = deferred<unknown>()
+    api.confirm.mockReturnValue(confirmation.promise)
+    const control = findAll(root, 'ElDropdownItem').find((item) => content(item) === '强制登出')!
+    const pending = (control.props.onClick as () => Promise<void>)()
+    clearIdentity()
+    confirmation.resolve(undefined)
+    await pending
+    expect(api.forceLogoutUser).not.toHaveBeenCalled()
+  })
+
   it('shows required role fields and rejects invalid codes before sending a create request', async () => {
     const root = await mount(RoleView)
     await click(button(root, '新建角色'))
@@ -613,7 +654,11 @@ describe('management page interactions', () => {
         const confirmation = deferred<unknown>()
         api.confirm.mockReturnValue(confirmation.promise)
         const root = await mount(component)
-        const removing = (button(root, '删除').props.onClick as () => Promise<void>)()
+        const control =
+          component === UserView
+            ? findAll(root, 'ElDropdownItem').find((item) => content(item) === '删除用户')!
+            : button(root, '删除')
+        const removing = (control.props.onClick as () => Promise<void>)()
         if (reason === 'unmounted') apps.pop()!.unmount()
         else clearIdentity()
         confirmation.resolve(undefined)
@@ -762,7 +807,7 @@ describe('audit and IP block recovery', () => {
     expect(findAll(root, 'ElDescriptions')).toHaveLength(0)
   })
 
-  it('shows release user names with snapshot sources and explicit legacy fallbacks', async () => {
+  it('shows release user names with their sources and marks missing names explicitly', async () => {
     signInAsSuperAdmin()
     const released = { ...ipBlock(), status: 'RELEASED' as const, unblockedBy: '1001' }
     const snapshot = {

@@ -58,8 +58,17 @@ public final class ApiErrorWriter {
 
     public void write(HttpServletRequest request, HttpServletResponse response, ErrorCode code)
             throws IOException {
+        write(request, response, code, null);
+    }
+
+    public void write(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            ErrorCode code,
+            Object details)
+            throws IOException {
         if (response.isCommitted()) return;
-        var result = entity(request, code.httpStatus(), code, null, new HttpHeaders());
+        var result = entity(request, code.httpStatus(), code, details, new HttpHeaders());
         response.setStatus(result.getStatusCode().value());
         if (isBusinessRequest(request)) response.setHeader("Cache-Control", "no-store");
         result.getHeaders()

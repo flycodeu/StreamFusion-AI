@@ -23,13 +23,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @RequiredArgsConstructor
 public class IpGuardFilter extends OncePerRequestFilter {
     private static final Set<String> RESOURCES =
-            Set.of(
-                    "GET /auth/csrf",
-                    "GET /auth/login/challenge",
-                    "POST /auth/login",
-                    "POST /auth/login/secure");
+            Set.of("GET /auth/csrf", "GET /auth/login/challenge", "POST /auth/login/secure");
     private static final Set<String> RESOURCE_PATHS =
-            Set.of("/auth/csrf", "/auth/login/challenge", "/auth/login", "/auth/login/secure");
+            Set.of("/auth/csrf", "/auth/login/challenge", "/auth/login/secure");
     private final IpGuardProperties properties;
     private final ClientIpResolver addresses;
     private final IpBlockService blocks;

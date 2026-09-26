@@ -1,5 +1,6 @@
 package com.streamfusion.platform;
 
+import static com.streamfusion.platform.support.SecureLoginSupport.loginRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -14,6 +15,7 @@ import com.streamfusion.platform.auth.service.PasswordService;
 import com.streamfusion.platform.loginrecord.mapper.LoginRecordMapper;
 import com.streamfusion.platform.loginrecord.service.LoginRecordService;
 import com.streamfusion.platform.support.IdentitySchema;
+import com.streamfusion.platform.support.SecureLoginSupport;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -39,7 +41,7 @@ import org.springframework.test.web.servlet.MockMvc;
         })
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-class LoginRecordIntegrationTest {
+class LoginRecordIntegrationTest extends SecureLoginSupport {
     @Autowired MockMvc mvc;
     @Autowired DataSource source;
     @Autowired ObjectMapper json;
@@ -197,12 +199,7 @@ class LoginRecordIntegrationTest {
         insertOrdinary(511, "HistoryUser");
         var ordinary = login("HistoryUser");
         for (int i = 0; i < 5; i++) {
-            mvc.perform(
-                            post("/auth/login")
-                                    .with(csrf())
-                                    .contentType("application/json")
-                                    .content(
-                                            "{\"username\":\"HistoryUser\",\"password\":\"WrongPass1!\"}"))
+            mvc.perform(loginRequest(mvc, json, null, "HistoryUser", "WrongPass1!").with(csrf()))
                     .andExpect(status().isUnauthorized());
         }
         mvc.perform(get("/user/511").session(admin))
@@ -230,12 +227,7 @@ class LoginRecordIntegrationTest {
 
     @Test
     void failedLoginsStayInAuditAndOldSessionsRemainCompatible() throws Exception {
-        mvc.perform(
-                        post("/auth/login")
-                                .with(csrf())
-                                .contentType("application/json")
-                                .content(
-                                        "{\"username\":\"HistoryAdmin\",\"password\":\"WrongPass1!\"}"))
+        mvc.perform(loginRequest(mvc, json, null, "HistoryAdmin", "WrongPass1!").with(csrf()))
                 .andExpect(status().isUnauthorized());
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_login_record", Integer.class))
                 .isZero();
@@ -288,7 +280,7 @@ class LoginRecordIntegrationTest {
     private MockHttpSession login(String username) throws Exception {
         return (MockHttpSession)
                 mvc.perform(
-                                post("/auth/login")
+                                loginRequest(mvc, json, null, username, "HistoryPass1!")
                                         .with(csrf())
                                         .with(
                                                 request -> {
@@ -298,15 +290,7 @@ class LoginRecordIntegrationTest {
                                         .header("X-Forwarded-For", "8.8.8.8")
                                         .header(
                                                 "User-Agent",
-                                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128.0 Safari/537.36 Edg/128.0")
-                                        .contentType("application/json")
-                                        .content(
-                                                json.writeValueAsString(
-                                                        java.util.Map.of(
-                                                                "username",
-                                                                username,
-                                                                "password",
-                                                                "HistoryPass1!"))))
+                                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128.0 Safari/537.36 Edg/128.0"))
                         .andExpect(status().isOk())
                         .andReturn()
                         .getRequest()

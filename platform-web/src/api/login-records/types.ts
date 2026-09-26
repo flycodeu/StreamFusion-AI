@@ -20,8 +20,7 @@ export interface LoginRecord {
 export function parseLoginRecord(value: unknown): LoginRecord {
   const row = object(value)
   const durationSeconds = integer(row.durationSeconds)
-  if (durationSeconds < 0 || !Number.isSafeInteger(durationSeconds))
-    throw new Error('Invalid login duration')
+  if (durationSeconds < 0) throw new Error('Invalid login duration')
   return {
     id: id(row.id),
     userId: id(row.userId),

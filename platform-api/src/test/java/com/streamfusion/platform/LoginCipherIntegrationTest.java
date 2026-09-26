@@ -1,8 +1,6 @@
 package com.streamfusion.platform;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -10,26 +8,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.streamfusion.platform.auth.guard.LoginGuardStore;
 import com.streamfusion.platform.auth.pojo.dto.EncryptedLoginDto;
 import com.streamfusion.platform.auth.service.BootstrapService;
 import com.streamfusion.platform.auth.service.LoginCipherService;
 import com.streamfusion.platform.auth.service.PasswordService;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.support.IdentitySchema;
-import java.nio.charset.StandardCharsets;
-import java.security.KeyPairGenerator;
-import java.security.SecureRandom;
-import java.security.spec.ECGenParameterSpec;
-import java.security.spec.X509EncodedKeySpec;
-import java.util.Base64;
-import java.util.HexFormat;
-import java.util.Map;
-import javax.crypto.Cipher;
-import javax.crypto.KeyAgreement;
-import javax.crypto.Mac;
-import javax.crypto.spec.GCMParameterSpec;
-import javax.crypto.spec.SecretKeySpec;
+import com.streamfusion.platform.support.SecureLoginSupport;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,33 +23,27 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest(
         properties = {
             "spring.datasource.url=jdbc:h2:mem:encrypted_login;MODE=MySQL;DB_CLOSE_DELAY=-1",
-            "platform.auth.allow-legacy-login=false",
             "platform.auth.max-password-length=128"
         })
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-class LoginCipherIntegrationTest {
+class LoginCipherIntegrationTest extends SecureLoginSupport {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
     @Autowired DataSource source;
     @Autowired BootstrapService bootstrap;
     @Autowired LoginCipherService cipherService;
     @Autowired PasswordService passwords;
-    @MockitoBean LoginGuardStore loginGuard;
 
     @BeforeEach
     void reset() throws Exception {
         IdentitySchema.initialize(source);
         bootstrap.initialize("Admin01", null, "AdminPass1!", null);
-        var consumed = java.util.concurrent.ConcurrentHashMap.<String>newKeySet();
-        when(loginGuard.claimChallenge(anyString()))
-                .thenAnswer(call -> consumed.add(call.getArgument(0)));
     }
 
     @Test
@@ -80,7 +59,7 @@ class LoginCipherIntegrationTest {
                                         csrf.path("token").asText())
                                 .contentType("application/json")
                                 .content("{\"username\":\"Admin01\",\"password\":\"AdminPass1!\"}"))
-                .andExpect(status().isMethodNotAllowed());
+                .andExpect(status().isUnauthorized());
 
         JsonNode challenge =
                 json.readTree(
@@ -199,41 +178,7 @@ class LoginCipherIntegrationTest {
     }
 
     private String encrypt(JsonNode challenge, String password) throws Exception {
-        String id = challenge.path("challengeId").asText();
-        byte[] server = Base64.getUrlDecoder().decode(challenge.path("serverPublicKey").asText());
-        var generator = KeyPairGenerator.getInstance("EC");
-        generator.initialize(new ECGenParameterSpec("secp256r1"));
-        var pair = generator.generateKeyPair();
-        var agreement = KeyAgreement.getInstance("ECDH");
-        agreement.init(pair.getPrivate());
-        agreement.doPhase(
-                java.security.KeyFactory.getInstance("EC")
-                        .generatePublic(new X509EncodedKeySpec(server)),
-                true);
-        var mac = Mac.getInstance("HmacSHA256");
-        mac.init(new SecretKeySpec(HexFormat.of().parseHex(id), "HmacSHA256"));
-        byte[] prk = mac.doFinal(agreement.generateSecret());
-        mac.init(new SecretKeySpec(prk, "HmacSHA256"));
-        mac.update("streamfusion-login-v1".getBytes(StandardCharsets.US_ASCII));
-        mac.update((byte) 1);
-        byte[] iv = new byte[12];
-        new SecureRandom().nextBytes(iv);
-        var cipher = Cipher.getInstance("AES/GCM/NoPadding");
-        cipher.init(
-                Cipher.ENCRYPT_MODE,
-                new SecretKeySpec(mac.doFinal(), "AES"),
-                new GCMParameterSpec(128, iv));
-        cipher.updateAAD(id.getBytes(StandardCharsets.US_ASCII));
-        byte[] ciphertext =
-                cipher.doFinal(
-                        json.writeValueAsBytes(
-                                Map.of("username", "Admin01", "password", password)));
-        var encoder = Base64.getUrlEncoder().withoutPadding();
         return json.writeValueAsString(
-                Map.of(
-                        "challengeId", id,
-                        "clientPublicKey", encoder.encodeToString(pair.getPublic().getEncoded()),
-                        "iv", encoder.encodeToString(iv),
-                        "ciphertext", encoder.encodeToString(ciphertext)));
+                SecureLoginSupport.encrypt(json, challenge, "Admin01", password));
     }
 }

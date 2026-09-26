@@ -180,6 +180,19 @@ public class UserController {
                 response);
     }
 
+    @Operation(summary = "强制用户登出")
+    @PostMapping("/{id}/force-logout")
+    public R<UserVo> forceLogout(
+            @PathVariable String id,
+            @RequestHeader(name = "If-Match", required = false) String ifMatch,
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        return userResponse(
+                service.forceLogout(
+                        id, VersionHeader.require(ifMatch), AuditContextDto.from(request)),
+                response);
+    }
+
     @Operation(summary = "删除用户")
     @DeleteMapping("/{id}")
     public R<Void> delete(

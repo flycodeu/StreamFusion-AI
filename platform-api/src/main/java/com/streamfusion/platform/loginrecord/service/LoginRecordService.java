@@ -8,8 +8,10 @@ import com.streamfusion.platform.auth.pojo.dto.SessionPrincipalDto;
 import com.streamfusion.platform.auth.service.CurrentUserService;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
+import com.streamfusion.platform.common.exception.details.SessionEndedDetails;
 import com.streamfusion.platform.common.pojo.dto.PageQueryDto;
 import com.streamfusion.platform.common.pojo.vo.PageResultVo;
+import com.streamfusion.platform.common.validation.VersionCounter;
 import com.streamfusion.platform.loginrecord.config.LoginRecordProperties;
 import com.streamfusion.platform.loginrecord.mapper.LoginRecordMapper;
 import com.streamfusion.platform.loginrecord.pojo.entity.LoginRecordEntity;
@@ -26,6 +28,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.Objects;
+import java.util.function.Consumer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -47,9 +50,18 @@ public class LoginRecordService {
     private final Clock clock;
 
     @Transactional
-    public void start(SessionPrincipalDto principal, HttpServletRequest request) {
+    public void start(
+            SessionPrincipalDto principal,
+            HttpServletRequest request,
+            Consumer<SessionPrincipalDto> persistSession) {
         UserEntity user = users.lockById(principal.getUserId());
         current.validate(principal, user);
+        long nextVersion = VersionCounter.next(user.getSessionVersion());
+        if (users.replaceSession(user.getId(), user.getSessionVersion()) != 1) {
+            throw BusinessException.error(ErrorCode.UNAUTHORIZED);
+        }
+        var established = new SessionPrincipalDto(user.getId(), nextVersion, clock.instant());
+        endAll(user.getId(), "REPLACED");
         String ip = clientIp.resolve(request);
         var region = classifier.region(ip);
         var client = classifier.client(request.getHeader("User-Agent"));
@@ -57,16 +69,16 @@ public class LoginRecordService {
         record.setUserId(user.getId());
         record.setUsername(user.getUsername());
         record.setNickname(user.getNickname());
-        record.setSessionVersion(principal.getSessionVersion());
+        record.setSessionVersion(established.getSessionVersion());
         record.setSourceIp(ip);
         record.setRegionType(region.type());
         record.setRegion(region.name());
         record.setBrowser(client.browser());
         record.setOs(client.os());
-        record.setLoginAt(local(principal.getAuthenticatedAt()));
+        record.setLoginAt(local(established.getAuthenticatedAt()));
         record.setLastActivityAt(record.getLoginAt());
         record.setAbsoluteExpiresAt(
-                local(principal.getAuthenticatedAt().plus(auth.absoluteTimeout())));
+                local(established.getAuthenticatedAt().plus(auth.absoluteTimeout())));
         record.setIdleTimeoutSeconds(Math.toIntExact(auth.idleTimeout().toSeconds()));
         record.setActivityIntervalSeconds(
                 Math.toIntExact(properties.activityInterval().toSeconds()));
@@ -75,7 +87,56 @@ public class LoginRecordService {
         request.getSession()
                 .setAttribute(
                         SESSION_ATTRIBUTE,
-                        new Activity(record.getId(), principal.getAuthenticatedAt()));
+                        new Activity(record.getId(), established.getAuthenticatedAt()));
+        // Keep the user lock until both SQL and the new Redis context are ready. A failed
+        // session save or success audit rolls back replacement of the previous login.
+        persistSession.accept(established);
+    }
+
+    /** Resolves a revoked session's own history, never a caller-provided account identifier. */
+    public BusinessException endedSession(SessionPrincipalDto principal, Activity activity) {
+        LoginRecordEntity previous = activity == null ? null : mapper.selectById(activity.id());
+        if (previous == null
+                || previous.getUserId() != principal.getUserId()
+                || previous.getSessionVersion() != principal.getSessionVersion()) {
+            return BusinessException.error(ErrorCode.UNAUTHORIZED);
+        }
+        if ("FORCED_LOGOUT".equals(previous.getEndReason())) {
+            return BusinessException.error(
+                    ErrorCode.SESSION_FORCED_LOGOUT,
+                    new SessionEndedDetails(
+                            "FORCED_LOGOUT",
+                            instant(previous.getEndedAt()),
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            null));
+        }
+        if (!"REPLACED".equals(previous.getEndReason())) {
+            return BusinessException.error(ErrorCode.UNAUTHORIZED);
+        }
+        LoginRecordEntity replacement =
+                mapper.selectOne(
+                        new LambdaQueryWrapper<LoginRecordEntity>()
+                                .eq(LoginRecordEntity::getUserId, principal.getUserId())
+                                .gt(
+                                        LoginRecordEntity::getSessionVersion,
+                                        principal.getSessionVersion())
+                                .orderByAsc(LoginRecordEntity::getSessionVersion)
+                                .last("LIMIT 1"));
+        return BusinessException.error(
+                ErrorCode.SESSION_REPLACED,
+                new SessionEndedDetails(
+                        "REPLACED",
+                        instant(previous.getEndedAt()),
+                        replacement == null ? null : instant(replacement.getLoginAt()),
+                        replacement == null ? null : replacement.getSourceIp(),
+                        replacement == null ? null : replacement.getRegionType(),
+                        replacement == null ? null : replacement.getRegion(),
+                        replacement == null ? null : replacement.getBrowser(),
+                        replacement == null ? null : replacement.getOs()));
     }
 
     public Activity activity(HttpServletRequest request) {

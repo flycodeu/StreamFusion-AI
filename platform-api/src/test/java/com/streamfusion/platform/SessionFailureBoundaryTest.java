@@ -42,7 +42,7 @@ class SessionFailureBoundaryTest {
                 .when(repository)
                 .save(session);
         var sessions = new SessionRepositoryFilter<>(repository);
-        var request = new MockHttpServletRequest("POST", "/auth/login");
+        var request = new MockHttpServletRequest("POST", "/auth/login/secure");
         var response = new MockHttpServletResponse();
 
         try (var ignored = MDC.putCloseable("traceId", TRACE)) {

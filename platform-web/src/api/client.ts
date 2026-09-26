@@ -1,5 +1,6 @@
 import { createApiClient } from '../lib/http/client'
 import { clearIdentity, sessionState } from '../session/state'
+import { rememberSessionEnded } from '../session/endedNotice'
 
 export const request = createApiClient({
   getCsrf: () => sessionState.csrf,
@@ -14,9 +15,20 @@ export const request = createApiClient({
       if (globalThis.location && globalThis.location.pathname !== '/login')
         globalThis.location.assign('/login?reason=ip-blocked')
     } else if (error.status === 401 && error.code !== 'LOGIN_FAILED') {
+      rememberSessionEnded(error.code, error.data)
       clearIdentity()
-      if (globalThis.location && globalThis.location.pathname !== '/login')
-        globalThis.location.assign('/login')
+      if (globalThis.location && globalThis.location.pathname !== '/login') {
+        if (error.code === 'SESSION_REPLACED' || error.code === 'SESSION_FORCED_LOGOUT') {
+          const clearedEpoch = sessionState.epoch
+          void import('../router')
+            .then(({ router }) => {
+              if (sessionState.epoch === clearedEpoch) return router.replace('/login')
+            })
+            .catch(() => {
+              if (sessionState.epoch === clearedEpoch) globalThis.location.assign('/login')
+            })
+        } else globalThis.location.assign('/login')
+      }
     } else if (error.code === 'PASSWORD_CHANGE_REQUIRED') {
       if (globalThis.location) globalThis.location.assign('/change-password')
     } else if (error.code === 'CSRF_INVALID') {

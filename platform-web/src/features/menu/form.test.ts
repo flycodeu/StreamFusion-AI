@@ -28,7 +28,7 @@ function directory(id: string, children: MenuNode[] = []): MenuNode {
   return { ...page(), id, name: `目录${id}`, type: 'DIRECTORY', page: null, children }
 }
 
-describe('simplified menu form compatibility', () => {
+describe('menu form conversion', () => {
   it('creates a page using server defaults for the selected file path and unique key', () => {
     const form = {
       ...newMenuForm('1'),
@@ -48,13 +48,13 @@ describe('simplified menu form compatibility', () => {
   })
 
   it('preserves a distinct component and immutable API module when editing display fields', () => {
-    const original = page({ path: '/accounts/manage', componentKey: 'SYSTEM_USERS' })
+    const original = page({ path: '/accounts/manage', componentKey: '/system/User' })
     const form = { ...editMenuForm(original), name: '人员', icon: 'avatar' }
     expect(menuWrite(form, original)).toMatchObject({
       name: '人员',
       icon: 'avatar',
       path: '/accounts/manage',
-      componentKey: 'SYSTEM_USERS',
+      componentKey: '/system/User',
       moduleKey: 'user',
     })
   })
@@ -69,8 +69,8 @@ describe('simplified menu form compatibility', () => {
     })
   })
 
-  it.each(['/system/User', 'SYSTEM_USERS', '/another/User'])(
-    'updates the component to a deliberately changed path even for old mapping %s',
+  it.each(['/system/User', '/another/User'])(
+    'updates component %s to a deliberately changed path',
     (componentKey) => {
       const original = page({ path: '/accounts/manage', componentKey })
       const form = { ...editMenuForm(original), path: '/camera/manage' }
@@ -81,11 +81,6 @@ describe('simplified menu form compatibility', () => {
       })
     },
   )
-
-  it('does not rewrite old component aliases when the path is unchanged', () => {
-    const original = page({ componentKey: 'SYSTEM_USERS' })
-    expect(menuWrite(editMenuForm(original), original).componentKey).toBe('SYSTEM_USERS')
-  })
 
   it('removes page fields for directories', () => {
     const form = { ...editMenuForm(page()), type: 'DIRECTORY' as const }

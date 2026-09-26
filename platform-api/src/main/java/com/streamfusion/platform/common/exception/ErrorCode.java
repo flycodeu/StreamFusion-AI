@@ -1,11 +1,14 @@
 package com.streamfusion.platform.common.exception;
 
+import com.streamfusion.platform.common.exception.details.SessionEndedDetails;
 import com.streamfusion.platform.common.exception.details.ValidationDetails;
 
 /** Stable, safe errors shared by the HTTP and security boundaries. */
 public enum ErrorCode {
     VALIDATION_ERROR(400, "请检查请求参数", ValidationDetails.class),
     UNAUTHORIZED(401, "请先登录"),
+    SESSION_REPLACED(401, "您的账号已在其他位置登录", SessionEndedDetails.class),
+    SESSION_FORCED_LOGOUT(401, "管理员已将您的账号强制登出", SessionEndedDetails.class),
     LOGIN_FAILED(401, "账号或密码错误，或暂时无法登录"),
     IP_BLOCKED(403, "当前IP已被限制访问，请联系管理员解除"),
     PASSWORD_CHANGE_REQUIRED(403, "请先修改密码"),

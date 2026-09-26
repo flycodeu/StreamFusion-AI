@@ -6,19 +6,9 @@ export type PageLoader = () => Promise<{ default: Component }>
 // Fixed application pages belong in pages/; shared widgets belong in components/.
 const files = import.meta.glob<{ default: Component }>('../../views/*/**/*.vue')
 
-// Compatibility for existing databases; new menus store a file path directly.
-const legacyPaths: Record<string, string> = {
-  SYSTEM_USERS: '/system/User',
-  SYSTEM_ROLES: '/system/Role',
-  SYSTEM_MENUS: '/system/Menu',
-  SYSTEM_DEPARTMENTS: '/system/Department',
-}
-
 export function normalizeViewPath(value: string | null): string | null {
-  if (!value) return null
-  const candidate = legacyPaths[value] ?? (value.startsWith('/') ? value : `/${value}`)
-  if (!/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(candidate)) return null
-  return candidate
+  if (!value || !/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(value)) return null
+  return value
 }
 
 export function createPageResolver(manifest: Record<string, PageLoader>) {

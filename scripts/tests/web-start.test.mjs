@@ -5,7 +5,7 @@ import { realpath } from "node:fs/promises";
 import { createServer } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
+import { promisify, stripVTControlCharacters } from "node:util";
 import test from "node:test";
 
 const project = fileURLToPath(new URL("../../platform-web/", import.meta.url));
@@ -27,8 +27,12 @@ async function listen(server) {
 }
 
 function start(port) {
+  // Exercise the colored output emitted by CI even when the test has no TTY.
+  const env = { ...process.env, FORCE_COLOR: "1" };
+  delete env.NO_COLOR;
   const child = spawn(process.execPath, [launcher, "--port", String(port)], {
     cwd: project,
+    env,
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -46,7 +50,7 @@ function start(port) {
 async function ready(instance) {
   const deadline = Date.now() + 20000;
   while (Date.now() < deadline) {
-    if (instance.output().includes("Local:")) return;
+    if (stripVTControlCharacters(instance.output()).includes("Local:")) return;
     assert.equal(instance.child.exitCode, null, instance.output());
     await delay(100);
   }

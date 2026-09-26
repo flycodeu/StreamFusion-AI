@@ -7,7 +7,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
 
-/** 账号密码登录参数。 */
+/** 解密后的账号密码，仅供内部登录调用，不直接作为 HTTP 请求对象。 */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

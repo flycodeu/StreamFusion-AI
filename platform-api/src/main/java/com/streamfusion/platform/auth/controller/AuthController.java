@@ -6,10 +6,12 @@ import com.streamfusion.platform.auth.guard.LoginProtection;
 import com.streamfusion.platform.auth.pojo.dto.EncryptedLoginDto;
 import com.streamfusion.platform.auth.pojo.dto.LoginDto;
 import com.streamfusion.platform.auth.pojo.dto.PasswordChangeDto;
+import com.streamfusion.platform.auth.pojo.dto.SessionPrincipalDto;
 import com.streamfusion.platform.auth.pojo.vo.AuthUserVo;
 import com.streamfusion.platform.auth.pojo.vo.CsrfVo;
 import com.streamfusion.platform.auth.pojo.vo.LoginChallengeVo;
 import com.streamfusion.platform.auth.pojo.vo.PasswordPolicyVo;
+import com.streamfusion.platform.auth.security.SessionCookieProtectionFilter;
 import com.streamfusion.platform.auth.security.SessionDependencyFilter;
 import com.streamfusion.platform.auth.service.AuthenticationService;
 import com.streamfusion.platform.auth.service.CurrentUserService;
@@ -53,6 +55,8 @@ import org.springframework.web.bind.annotation.*;
 @RequiredArgsConstructor
 public class AuthController {
     private static final Logger LOG = LoggerFactory.getLogger(AuthController.class);
+    public static final String LOGIN_ESTABLISHING =
+            AuthController.class.getName() + ".establishing";
     private final AuthenticationService authentication;
     private final ProfileService profiles;
     private final CurrentUserService current;
@@ -88,16 +92,6 @@ public class AuthController {
                 () -> completeLogin(loginCipher.decrypt(input, request), request, response));
     }
 
-    @Operation(summary = "登录")
-    @PostMapping("/login")
-    public R<Void> login(
-            @RequestBody LoginDto input, HttpServletRequest request, HttpServletResponse response) {
-        if (!properties.allowLegacyLogin()) {
-            throw BusinessException.error(ErrorCode.METHOD_NOT_ALLOWED);
-        }
-        return protection.attempt(request, () -> completeLogin(input, request, response));
-    }
-
     private R<Void> completeLogin(
             LoginDto input, HttpServletRequest request, HttpServletResponse response) {
         var existing = SecurityContextHolder.getContext().getAuthentication();
@@ -106,22 +100,17 @@ public class AuthController {
                 && !(existing instanceof AnonymousAuthenticationToken)) {
             throw BusinessException.error(ErrorCode.CONFLICT);
         }
-        var principal =
-                authentication.authenticate(
-                        input.getUsername(), input.getPassword(), AuditContextDto.from(request));
-        var auth = UsernamePasswordAuthenticationToken.authenticated(principal, null, List.of());
         try {
-            strategy.onAuthentication(auth, request, response);
-            request.getSession()
-                    .setMaxInactiveInterval(Math.toIntExact(properties.idleTimeout().toSeconds()));
-            var context = SecurityContextHolder.createEmptyContext();
-            context.setAuthentication(auth);
-            SecurityContextHolder.setContext(context);
-            // Redis flush-mode=immediate persists this attribute before the successful response.
-            contexts.saveContext(context, request, response);
-            loginRecords.start(principal, request);
-            authentication.recordLogin(principal, AuditContextDto.from(request));
+            authentication.authenticate(
+                    input.getUsername(),
+                    input.getPassword(),
+                    AuditContextDto.from(request),
+                    principal -> establishSession(principal, request, response));
         } catch (RuntimeException ex) {
+            // Rejected credentials have not created authenticated state. Keep their anonymous
+            // CSRF session so correcting the password works without an unrelated CSRF retry.
+            if (!Boolean.TRUE.equals(request.getAttribute(LOGIN_ESTABLISHING))) throw ex;
+            SessionCookieProtectionFilter.revoked(request);
             SecurityContextHolder.clearContext();
             try {
                 loginRecords.end(loginRecords.activity(request), "LOGIN_ABORTED", false);
@@ -137,6 +126,32 @@ public class AuthController {
             throw ex;
         }
         return R.success();
+    }
+
+    private void establishSession(
+            SessionPrincipalDto principal,
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        request.setAttribute(LOGIN_ESTABLISHING, Boolean.TRUE);
+        var auth = UsernamePasswordAuthenticationToken.authenticated(principal, null, List.of());
+        strategy.onAuthentication(auth, request, response);
+        request.getSession()
+                .setMaxInactiveInterval(Math.toIntExact(properties.idleTimeout().toSeconds()));
+        loginRecords.start(
+                principal, request, established -> persistSession(established, request, response));
+    }
+
+    private void persistSession(
+            SessionPrincipalDto principal,
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        var context = SecurityContextHolder.createEmptyContext();
+        context.setAuthentication(
+                UsernamePasswordAuthenticationToken.authenticated(principal, null, List.of()));
+        SecurityContextHolder.setContext(context);
+        // Immediate Redis writes must succeed before the SQL transaction commits.
+        contexts.saveContext(context, request, response);
+        authentication.recordLogin(principal, AuditContextDto.from(request));
     }
 
     @Operation(summary = "获取当前用户")

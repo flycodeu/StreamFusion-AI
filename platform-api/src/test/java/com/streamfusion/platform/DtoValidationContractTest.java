@@ -209,7 +209,6 @@ class DtoValidationContractTest {
                         Duration.ofMinutes(30),
                         Duration.ofHours(8),
                         true,
-                        false,
                         initialPassword,
                         0,
                         0));

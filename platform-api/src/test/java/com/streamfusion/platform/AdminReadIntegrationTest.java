@@ -1,5 +1,6 @@
 package com.streamfusion.platform;
 
+import static com.streamfusion.platform.support.SecureLoginSupport.loginRequest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -11,6 +12,7 @@ import com.streamfusion.platform.auth.service.BootstrapService;
 import com.streamfusion.platform.server.pojo.vo.ServerSnapshotVo;
 import com.streamfusion.platform.server.service.ServerCollector;
 import com.streamfusion.platform.support.IdentitySchema;
+import com.streamfusion.platform.support.SecureLoginSupport;
 import java.time.Instant;
 import java.util.List;
 import javax.sql.DataSource;
@@ -30,7 +32,7 @@ import org.springframework.test.web.servlet.MvcResult;
         properties = "spring.datasource.url=jdbc:h2:mem:admin_read;MODE=MySQL;DB_CLOSE_DELAY=-1")
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-class AdminReadIntegrationTest {
+class AdminReadIntegrationTest extends SecureLoginSupport {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
     @Autowired DataSource source;
@@ -49,14 +51,10 @@ class AdminReadIntegrationTest {
         JsonNode csrf = json.readTree(csrfResult.getResponse().getContentAsString()).path("data");
         session = (MockHttpSession) csrfResult.getRequest().getSession(false);
         mvc.perform(
-                        post("/auth/login")
-                                .session(session)
+                        loginRequest(mvc, json, session, "ReadAdmin", "ReadAdmin1!")
                                 .header(
                                         csrf.path("headerName").asText(),
-                                        csrf.path("token").asText())
-                                .contentType("application/json")
-                                .content(
-                                        "{\"username\":\"ReadAdmin\",\"password\":\"ReadAdmin1!\"}"))
+                                        csrf.path("token").asText()))
                 .andExpect(status().isOk());
         when(collector.collect())
                 .thenReturn(
@@ -107,8 +105,10 @@ class AdminReadIntegrationTest {
         mvc.perform(get("/auth/me").session(session))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.routes[1].name").value("监控面板"))
-                .andExpect(jsonPath("$.data.routes[1].children[0].moduleKey").value("api-docs"))
-                .andExpect(jsonPath("$.data.routes[1].children[0].path").value("/monitor/ApiDocs"));
+                .andExpect(jsonPath("$.data.routes[1].children[0].moduleKey").value("audit"))
+                .andExpect(jsonPath("$.data.routes[1].children[1].moduleKey").value("server"))
+                .andExpect(jsonPath("$.data.routes[1].children[2].moduleKey").value("api-docs"))
+                .andExpect(jsonPath("$.data.routes[1].children[2].path").value("/monitor/ApiDocs"));
         jdbc.update("UPDATE sys_menu SET enabled=FALSE WHERE id=1008");
         mvc.perform(get("/api-docs/status").session(session))
                 .andExpect(status().isForbidden())
@@ -171,6 +171,8 @@ class AdminReadIntegrationTest {
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
         mvc.perform(get("/audit/999999").session(session)).andExpect(status().isNotFound());
         jdbc.update("UPDATE sys_menu SET enabled=FALSE WHERE id=1001");
+        mvc.perform(get("/audit/page").session(session)).andExpect(status().isOk());
+        jdbc.update("UPDATE sys_menu SET enabled=FALSE WHERE id=1008");
         mvc.perform(get("/audit/page").session(session)).andExpect(status().isForbidden());
     }
 
