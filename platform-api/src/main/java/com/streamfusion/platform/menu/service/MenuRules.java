@@ -3,22 +3,40 @@ package com.streamfusion.platform.menu.service;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.exception.details.ValidationDetails;
+import com.streamfusion.platform.common.security.ModuleRegistry;
 import com.streamfusion.platform.common.validation.DecimalInput;
 import com.streamfusion.platform.menu.pojo.dto.MenuTreeQueryDto;
 import com.streamfusion.platform.menu.pojo.dto.MenuWriteDto;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
-/** Request validation and the currently implemented backend module registry. */
+/** Validates local page paths and module declarations registered by the backend. */
 @Component
+@RequiredArgsConstructor
 public class MenuRules {
-    private static final Pattern ROUTE = Pattern.compile("[A-Z][A-Za-z0-9]{0,63}");
-    private static final Pattern PATH = Pattern.compile("/[a-z0-9-]+(?:/[a-z0-9-]+)*");
-    private static final Pattern COMPONENT = Pattern.compile("[A-Z][A-Z0-9_]{0,63}");
+    private static final Pattern ROUTE = Pattern.compile("[A-Za-z][A-Za-z0-9_:-]{0,63}");
+    private static final Pattern PATH = Pattern.compile("/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*");
+    private static final Pattern LEGACY_COMPONENT = Pattern.compile("[A-Z][A-Z0-9_]{0,63}");
     private static final Pattern ICON = Pattern.compile("[a-z][a-z0-9-]{0,63}");
-    private static final Set<String> MODULES = Set.of("user", "role", "menu", "department");
+    private static final Set<String> RESERVED_PATHS =
+            Set.of(
+                    "/login",
+                    "/home",
+                    "/profile",
+                    "/change-password",
+                    "/forbidden",
+                    "/unavailable",
+                    "/api",
+                    "/auth",
+                    "/actuator",
+                    "/assets",
+                    "/src",
+                    "/public",
+                    "/node_modules");
+    private final ModuleRegistry modules;
 
     public record Values(
             Long parentId,
@@ -72,16 +90,35 @@ public class MenuRules {
         }
         String routeName = input.getRouteName();
         String path = input.getPath();
-        String componentKey = input.getComponentKey();
-        String moduleKey = input.getModuleKey();
         if (routeName == null || !ROUTE.matcher(routeName).matches()) throw invalid("routeName");
-        if (path == null || path.length() > 200 || !PATH.matcher(path).matches()) {
+        if (path == null
+                || path.length() > 200
+                || !PATH.matcher(path).matches()
+                || RESERVED_PATHS.stream()
+                        .anyMatch(
+                                root ->
+                                        path.equalsIgnoreCase(root)
+                                                || path.regionMatches(
+                                                        true,
+                                                        0,
+                                                        root + "/",
+                                                        0,
+                                                        root.length() + 1))) {
             throw invalid("path");
         }
-        if (componentKey == null || !COMPONENT.matcher(componentKey).matches()) {
+        String componentKey = blankToNull(input.getComponentKey());
+        if (componentKey == null) componentKey = path;
+        else if (!LEGACY_COMPONENT.matcher(componentKey).matches() && !componentKey.startsWith("/"))
+            componentKey = "/" + componentKey;
+        if (componentKey.length() > 64
+                || !(LEGACY_COMPONENT.matcher(componentKey).matches()
+                        || PATH.matcher(componentKey).matches())) {
             throw invalid("componentKey");
         }
-        if (moduleKey == null || !MODULES.contains(moduleKey)) throw invalid("moduleKey");
+        String moduleKey = blankToNull(input.getModuleKey());
+        if (moduleKey == null) moduleKey = routeName;
+        if (!ROUTE.matcher(moduleKey).matches() || !modules.contains(moduleKey))
+            throw invalid("moduleKey");
         return new Values(
                 parentId,
                 name,

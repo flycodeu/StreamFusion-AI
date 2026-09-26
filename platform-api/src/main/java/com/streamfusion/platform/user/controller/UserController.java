@@ -1,6 +1,7 @@
 package com.streamfusion.platform.user.controller;
 
 import com.streamfusion.platform.audit.pojo.dto.AuditContextDto;
+import com.streamfusion.platform.common.pojo.dto.PageQueryDto;
 import com.streamfusion.platform.common.pojo.vo.PageResultVo;
 import com.streamfusion.platform.common.response.R;
 import com.streamfusion.platform.common.security.ModuleAccess;
@@ -9,13 +10,15 @@ import com.streamfusion.platform.department.pojo.dto.UserDepartmentsUpdateDto;
 import com.streamfusion.platform.department.pojo.vo.DepartmentOptionVo;
 import com.streamfusion.platform.department.pojo.vo.UserDepartmentsVo;
 import com.streamfusion.platform.department.service.DepartmentService;
+import com.streamfusion.platform.loginrecord.pojo.vo.LoginRecordVo;
+import com.streamfusion.platform.loginrecord.service.LoginRecordService;
 import com.streamfusion.platform.menu.pojo.vo.MenuRouteVo;
 import com.streamfusion.platform.role.pojo.dto.UserRolesUpdateDto;
 import com.streamfusion.platform.role.pojo.vo.RoleOptionVo;
 import com.streamfusion.platform.role.pojo.vo.UserRolesVo;
 import com.streamfusion.platform.role.service.UserRoleService;
 import com.streamfusion.platform.user.pojo.dto.UserCreateDto;
-import com.streamfusion.platform.user.pojo.dto.UserProfileUpdateDto;
+import com.streamfusion.platform.user.pojo.dto.UserManagementUpdateDto;
 import com.streamfusion.platform.user.pojo.dto.UserQueryDto;
 import com.streamfusion.platform.user.pojo.dto.UserVersionDto;
 import com.streamfusion.platform.user.pojo.vo.UserSummaryVo;
@@ -41,6 +44,14 @@ public class UserController {
     private final UserManagementService service;
     private final UserRoleService roleService;
     private final DepartmentService departmentService;
+    private final LoginRecordService loginRecords;
+
+    @Operation(summary = "分页查询指定用户的成功登录历史")
+    @GetMapping("/{id}/login-records/page")
+    public R<PageResultVo<LoginRecordVo>> loginRecords(
+            @PathVariable String id, @ParameterObject @ModelAttribute PageQueryDto query) {
+        return R.success(loginRecords.forUser(id, query));
+    }
 
     @Operation(summary = "查询部门选择项")
     @GetMapping("/department-options")
@@ -127,7 +138,7 @@ public class UserController {
     @PutMapping("/{id}")
     public R<UserVo> update(
             @PathVariable String id,
-            @RequestBody UserProfileUpdateDto input,
+            @RequestBody UserManagementUpdateDto input,
             HttpServletRequest request,
             HttpServletResponse response) {
         return userResponse(service.update(id, input, AuditContextDto.from(request)), response);
@@ -159,12 +170,14 @@ public class UserController {
 
     @Operation(summary = "重置用户密码")
     @PostMapping("/{id}/reset-password")
-    public R<Void> resetPassword(
+    public R<UserVo> resetPassword(
             @PathVariable String id,
             @RequestBody UserVersionDto input,
-            HttpServletRequest request) {
-        service.resetPassword(id, input.getVersion(), AuditContextDto.from(request));
-        return R.success();
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        return userResponse(
+                service.resetPassword(id, input.getVersion(), AuditContextDto.from(request)),
+                response);
     }
 
     @Operation(summary = "删除用户")
@@ -179,6 +192,7 @@ public class UserController {
 
     private static R<UserVo> userResponse(UserVo user, HttpServletResponse response) {
         response.setHeader(HttpHeaders.ETAG, VersionHeader.quote(user.getVersion()));
+        response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
         return R.success(user);
     }
 }

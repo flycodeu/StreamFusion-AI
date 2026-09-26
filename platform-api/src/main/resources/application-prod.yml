@@ -1,4 +1,8 @@
 # Public production defaults; inject deployment-specific values externally.
+platform:
+  server-monitor:
+    web-host: ${SF_MONITOR_WEB_HOST:127.0.0.1}
+    web-port: ${SF_MONITOR_WEB_PORT:0}
 spring:
   datasource:
     url: ${DB_URL}

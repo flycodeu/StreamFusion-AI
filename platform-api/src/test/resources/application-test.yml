@@ -27,5 +27,11 @@ logging:
     root: WARN
     com.streamfusion: WARN
 platform:
+  login-record:
+    ipv4-database: ""
+    ipv6-database: ""
+  ip-guard:
+    enabled: false
   auth:
     secure-cookie: false
+    allow-legacy-login: true

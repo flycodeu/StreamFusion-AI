@@ -1,14 +1,13 @@
 :root {
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   color: var(--text-primary);
-  background: #f8faf8;
+  background: #f4f6f8;
   font-synthesis: none;
-  --text-primary: #1c2928;
-  --text-secondary: #596865;
-  --text-tertiary: #778581;
-  --surface-muted: #f2f5f2;
-  --border-subtle: #e4e9e4;
-  --el-color-primary: #1b7069;
+  --text-primary: #303133;
+  --text-secondary: #606266;
+  --text-tertiary: #909399;
+  --surface-muted: #f5f7fa;
+  --border-subtle: #e4e7ed;
 }
 * {
   box-sizing: border-box;
@@ -28,7 +27,99 @@ a {
   color: inherit;
   text-decoration: none;
 }
+.content-page {
+  padding: 20px var(--content-spacing);
+  width: 100%;
+}
+.page-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.page-title h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+.search-form {
+  background: #fff;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 18px 18px 0;
+  margin-bottom: 16px;
+}
+.search-form .el-form-item {
+  margin-bottom: 18px;
+  margin-right: 24px;
+}
+.search-form .search-field {
+  width: 220px;
+}
+.search-form .status-field {
+  width: 140px;
+}
+.data-panel,
+.form-panel {
+  background: #fff;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+.data-panel {
+  padding: 16px;
+}
+.form-panel {
+  padding: 24px;
+  max-width: 650px;
+}
+.el-table {
+  --el-table-header-bg-color: #f5f7fa;
+  --el-table-header-text-color: #606266;
+}
+.el-table th.el-table__cell {
+  font-weight: 600;
+}
+.el-table .table-actions-column > .cell {
+  overflow: visible;
+}
+.table-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 18px;
+}
+.form-error {
+  color: var(--el-color-danger);
+}
+.el-dialog {
+  max-width: calc(100vw - 32px);
+}
 :focus-visible {
-  outline: 2px solid #1b7069;
+  outline: 2px solid var(--el-color-primary);
   outline-offset: 2px;
+}
+@media (max-width: 1024px) {
+  .el-table .el-table__header-wrapper tr th.el-table-fixed-column--right,
+  .el-table .el-table__body-wrapper tr td.el-table-fixed-column--right {
+    position: static !important;
+  }
+  .el-table .el-table-fixed-column--right::before {
+    display: none;
+  }
+}
+@media (max-width: 680px) {
+  .search-form .el-form-item {
+    margin-right: 0;
+    display: flex;
+  }
+  .search-form .el-form-item__content {
+    min-width: 0;
+  }
+  .search-form .search-field,
+  .search-form .status-field {
+    width: 100%;
+  }
+  .content-page {
+    padding-top: 16px;
+  }
 }

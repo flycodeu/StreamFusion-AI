@@ -13,9 +13,10 @@ import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.pojo.vo.PageResultVo;
 import com.streamfusion.platform.common.security.ModuleAuthorizationService;
 import com.streamfusion.platform.department.service.DepartmentService;
+import com.streamfusion.platform.loginrecord.service.LoginRecordService;
 import com.streamfusion.platform.user.converter.UserVoConverter;
 import com.streamfusion.platform.user.pojo.dto.UserCreateDto;
-import com.streamfusion.platform.user.pojo.dto.UserProfileUpdateDto;
+import com.streamfusion.platform.user.pojo.dto.UserManagementUpdateDto;
 import com.streamfusion.platform.user.pojo.dto.UserQueryDto;
 import com.streamfusion.platform.user.pojo.entity.UserEntity;
 import com.streamfusion.platform.user.pojo.enums.UserStatus;
@@ -56,6 +57,7 @@ public class UserManagementServiceImpl implements UserManagementService {
     private final Clock clock;
     private final UserVoConverter converter;
     private final DepartmentService departments;
+    private final LoginRecordService loginRecords;
 
     @Override
     @Transactional(readOnly = true)
@@ -74,6 +76,7 @@ public class UserManagementServiceImpl implements UserManagementService {
                                 UserEntity::getNickname,
                                 UserEntity::getAvatarKey,
                                 UserEntity::getStatus,
+                                UserEntity::getLockedUntil,
                                 UserEntity::getVersion);
         if (search != null) {
             search = search.replace("!", "!!").replace("%", "!%").replace("_", "!_");
@@ -106,7 +109,8 @@ public class UserManagementServiceImpl implements UserManagementService {
         String phone = rules.phone(input.getPhone());
         String email = rules.email(input.getEmail());
         int gender = rules.gender(input.getGender());
-        String hash = passwords.initialPasswordHash();
+        String temporaryPassword = passwords.initialPassword();
+        String hash = passwords.encode(temporaryPassword);
         UserEntity actor = lockAndRequireActor();
         LocalDateTime now = now();
         UserEntity user = new UserEntity();
@@ -132,6 +136,9 @@ public class UserManagementServiceImpl implements UserManagementService {
         } catch (DuplicateKeyException exception) {
             throw BusinessException.error(ErrorCode.USERNAME_TAKEN);
         }
+        if (input.getDepartmentIds() != null) {
+            departments.assignForUserWrite(user.getId(), input.getDepartmentIds(), context);
+        }
         audit.record(
                 actor.getId(),
                 "USER",
@@ -141,12 +148,14 @@ public class UserManagementServiceImpl implements UserManagementService {
                 null,
                 context,
                 userSummary(user));
-        return view(user);
+        UserVo result = view(user);
+        result.setTemporaryPassword(temporaryPassword);
+        return result;
     }
 
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public UserVo update(String id, UserProfileUpdateDto input, AuditContextDto context) {
+    public UserVo update(String id, UserManagementUpdateDto input, AuditContextDto context) {
         long userId = rules.id(id);
         long version = rules.version(input.getVersion());
         String nickname = rules.nickname(input.getNickname());
@@ -169,6 +178,9 @@ public class UserManagementServiceImpl implements UserManagementService {
                         now())
                 != 1) {
             throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
+        }
+        if (input.getDepartmentIds() != null) {
+            departments.assignForUserWrite(userId, input.getDepartmentIds(), context);
         }
         UserEntity updated = find(userId);
         audit.record(
@@ -206,6 +218,7 @@ public class UserManagementServiceImpl implements UserManagementService {
         if (users.changeStatus(userId, version, status, actor.getId(), now()) != 1) {
             throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
         }
+        if (!enabled) loginRecords.endAll(userId, "ACCOUNT_DISABLED");
         audit.record(
                 actor.getId(),
                 "USER",
@@ -220,16 +233,18 @@ public class UserManagementServiceImpl implements UserManagementService {
 
     @Override
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public void resetPassword(String id, String requestedVersion, AuditContextDto context) {
+    public UserVo resetPassword(String id, String requestedVersion, AuditContextDto context) {
         long userId = rules.id(id);
         long version = rules.version(requestedVersion);
-        String hash = passwords.initialPasswordHash();
+        String temporaryPassword = passwords.initialPassword();
+        String hash = passwords.encode(temporaryPassword);
         UserEntity actor = lockAndRequireActor();
         UserEntity target = lockOrdinaryTarget(userId, actor);
         requireVersion(target, version, ErrorCode.VERSION_CONFLICT);
         if (users.resetPassword(userId, version, hash, actor.getId(), now()) != 1) {
             throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
         }
+        loginRecords.endAll(userId, "PASSWORD_RESET");
         audit.record(
                 actor.getId(),
                 "USER",
@@ -239,6 +254,9 @@ public class UserManagementServiceImpl implements UserManagementService {
                 null,
                 context,
                 userSummary(target));
+        UserVo result = view(find(userId));
+        result.setTemporaryPassword(temporaryPassword);
+        return result;
     }
 
     @Override
@@ -255,6 +273,7 @@ public class UserManagementServiceImpl implements UserManagementService {
         if (users.hardDelete(userId, version) != 1) {
             throw BusinessException.error(ErrorCode.PRECONDITION_FAILED);
         }
+        loginRecords.endAll(userId, "ACCOUNT_DELETED");
         audit.record(
                 actor.getId(), "USER", userId, "USER_DELETE", "SUCCESS", null, context, summary);
     }

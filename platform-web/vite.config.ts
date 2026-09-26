@@ -10,10 +10,19 @@ export default defineConfig(({ mode }) => {
       port: 8090,
       strictPort: true,
       proxy: {
-        '^/(user|auth|roles|menus|departments)(?:[/?]|$)': {
+        '^/api(?:/|$)': {
           target: env.API_TARGET || 'http://127.0.0.1:8080',
+          xfwd: true,
+          configure(proxy) {
+            proxy.on('proxyReq', (outgoing, incoming) => {
+              // This is the edge proxy: discard client-supplied forwarding chains.
+              outgoing.setHeader('X-Forwarded-For', incoming.socket.remoteAddress || '127.0.0.1')
+              outgoing.removeHeader('Forwarded')
+              outgoing.removeHeader('X-Real-IP')
+            })
+          },
+          rewrite: (path) => path.replace(/^\/api(?=\/|$)/, '') || '/',
         },
-        '/actuator': { target: env.API_TARGET || 'http://127.0.0.1:8080' },
       },
     },
   }

@@ -46,6 +46,22 @@ streamfusion:
   work-dir: ${SF_API_WORK_DIR:.run}
   shutdown-grace: ${SF_API_SHUTDOWN_GRACE:15s}
 platform:
+  login-record:
+    activity-interval: ${SF_LOGIN_ACTIVITY_INTERVAL:60s}
+    ipv4-database: ${SF_IP_REGION_V4_DB:.run/ip-region/ip2region_v4.xdb}
+    ipv6-database: ${SF_IP_REGION_V6_DB:.run/ip-region/ip2region_v6.xdb}
+    local-networks: []
+  server-monitor:
+    web-host: ${SF_MONITOR_WEB_HOST:127.0.0.1}
+    web-port: ${SF_MONITOR_WEB_PORT:8090}
+  ip-guard:
+    enabled: ${SF_IP_GUARD_ENABLED:true}
+    failure-threshold: ${SF_IP_FAILURE_THRESHOLD:20}
+    failure-window: ${SF_IP_FAILURE_WINDOW:10m}
+    resource-limit: ${SF_IP_RESOURCE_LIMIT:120}
+    resource-window: ${SF_IP_RESOURCE_WINDOW:1m}
+    redis-namespace: streamfusion:${spring.profiles.active:${spring.profiles.default}}:guard
+    trusted-proxies: ${SF_TRUSTED_PROXIES:}
   bootstrap:
     username: ${SF_BOOTSTRAP_USERNAME:admin}
     nickname: ${SF_BOOTSTRAP_NICKNAME:超级管理员}
@@ -54,6 +70,7 @@ platform:
     idle-timeout: ${SF_AUTH_IDLE_TIMEOUT:30m}
     absolute-timeout: ${SF_AUTH_ABSOLUTE_TIMEOUT:8h}
     secure-cookie: ${SF_AUTH_SECURE_COOKIE:true}
+    allow-legacy-login: ${SF_AUTH_ALLOW_LEGACY_LOGIN:false}
     initial-password: ${SF_AUTH_INITIAL_PASSWORD:}
     worker-id: ${SF_AUTH_WORKER_ID:0}
     datacenter-id: ${SF_AUTH_DATACENTER_ID:0}
@@ -65,6 +82,7 @@ springdoc:
     enabled: ${API_DOCS_ENABLED:true}
     path: /swagger-ui.html
 server:
+  forward-headers-strategy: none
   shutdown: graceful
 management:
   endpoints:

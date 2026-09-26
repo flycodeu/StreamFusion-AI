@@ -1,5 +1,6 @@
 package com.streamfusion.platform.common.web;
 
+import com.streamfusion.platform.common.security.ModuleRegistry;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -22,9 +23,19 @@ import org.springframework.web.servlet.HandlerMapping;
 public class TraceFilter extends OncePerRequestFilter {
     private static final Logger LOG = LoggerFactory.getLogger(TraceFilter.class);
     private static final Pattern VALID = Pattern.compile("^[a-f0-9]{32}$");
+    private final ModuleRegistry modules;
+
+    public TraceFilter(ModuleRegistry modules) {
+        this.modules = modules;
+    }
 
     @Override
     protected boolean shouldNotFilterErrorDispatch() {
+        return false;
+    }
+
+    @Override
+    protected boolean shouldNotFilterAsyncDispatch() {
         return false;
     }
 
@@ -44,6 +55,8 @@ public class TraceFilter extends OncePerRequestFilter {
         }
         MDC.put("traceId", id);
         response.setHeader("X-Trace-Id", id);
+        if (modules.matchesRequest(request))
+            request.setAttribute(ApiErrorWriter.MODULE_REQUEST_ATTRIBUTE, Boolean.TRUE);
         if (ApiErrorWriter.isBusinessRequest(request))
             response.setHeader("Cache-Control", "no-store");
         long start = System.nanoTime();

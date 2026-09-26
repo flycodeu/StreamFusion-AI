@@ -4,7 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.List;
 
-/** Current user's published route tree, without management versions or module grants. */
+/** Current user's published route tree, including each page's backend module binding. */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @Schema(description = "当前用户页面路由")
 public record MenuRouteVo(
@@ -15,5 +15,6 @@ public record MenuRouteVo(
         @Schema(description = "导航显示状态") boolean visible,
         @Schema(description = "路由名称") String routeName,
         @Schema(description = "路由路径") String path,
-        @Schema(description = "前端组件键") String componentKey,
+        @Schema(description = "页面文件路径，相对views且不带.vue，兼容旧组件键") String componentKey,
+        @Schema(description = "后端模块键，仅页面存在") String moduleKey,
         @Schema(description = "下级路由") List<MenuRouteVo> children) {}

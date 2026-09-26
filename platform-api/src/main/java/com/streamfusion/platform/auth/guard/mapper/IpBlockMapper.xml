@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.streamfusion.platform.auth.guard.mapper.IpBlockMapper">
+    <select id="find" resultType="com.streamfusion.platform.auth.guard.pojo.entity.IpBlockEntity">
+        SELECT * FROM sys_ip_block WHERE source_ip=#{ip}
+    </select>
+    <select id="lock" resultType="com.streamfusion.platform.auth.guard.pojo.entity.IpBlockEntity">
+        SELECT * FROM sys_ip_block WHERE source_ip=#{ip} FOR UPDATE
+    </select>
+    <insert id="ensure">
+        INSERT INTO sys_ip_block(id, source_ip, status, reason_code, failed_attempts, window_seconds, blocked_at, version)
+        VALUES (#{row.id}, #{row.sourceIp}, 'RELEASED', 'LOGIN_FAILURE_THRESHOLD', 0, #{row.windowSeconds}, #{row.blockedAt}, 0)
+        ON DUPLICATE KEY UPDATE source_ip=VALUES(source_ip)
+    </insert>
+</mapper>

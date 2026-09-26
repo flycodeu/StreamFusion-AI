@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.streamfusion.platform.loginrecord.mapper.LoginRecordMapper">
+    <update id="touch">
+        UPDATE sys_login_record SET last_activity_at=#{now}
+        WHERE id=#{id} AND end_reason IS NULL AND last_activity_at &lt;= #{before}
+    </update>
+    <update id="end">
+        UPDATE sys_login_record SET ended_at=#{now}, end_reason=#{reason}
+        <if test="active">, last_activity_at=#{now}</if>
+        WHERE id=#{id} AND end_reason IS NULL
+    </update>
+    <update id="endAll">
+        UPDATE sys_login_record SET ended_at=#{now}, end_reason=#{reason}
+        WHERE user_id=#{userId} AND end_reason IS NULL
+          AND absolute_expires_at &gt; #{now}
+          AND TIMESTAMPADD(SECOND, idle_timeout_seconds + activity_interval_seconds, last_activity_at) &gt; #{now}
+    </update>
+</mapper>

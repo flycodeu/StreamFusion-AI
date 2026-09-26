@@ -42,6 +42,7 @@
             updated_at = #{now}, updated_by = #{id}
         WHERE id = #{id} AND password = #{expectedHash}
           AND session_version = #{expectedSessionVersion}
+          AND version &lt; 9223372036854775807 AND session_version &lt; 9223372036854775807
           AND status IN (0, 1)
     </update>
 
@@ -57,5 +58,6 @@
             session_version = session_version + 1, version = version + 1,
             updated_by = #{actorId}, updated_at = #{now}
         WHERE id = #{id} AND version = #{version}
+          AND version &lt; 9223372036854775807 AND session_version &lt; 9223372036854775807
     </update>
 </mapper>

@@ -1,6 +1,6 @@
 # 数据库 SQL
 
-八份 `业务/` 逐表 SQL 是唯一维护源；`汇总/streamfusion-mysql.sql` 由 `scripts/export-sql.ps1` 生成，不手工修改。应用不自动执行 SQL，无 Flyway；SQL 仅作为测试资源读取，不打包进应用 JAR。
+九份 `业务/` 逐表 SQL 是唯一维护源；`汇总/streamfusion-mysql.sql` 由 `scripts/export-sql.ps1` 生成，不手工修改。应用不自动执行 SQL，无 Flyway；SQL 仅作为测试资源读取，不打包进应用 JAR。
 
 ## 当前结构
 
@@ -11,10 +11,11 @@
 | 菜单 | sys_menu | 目录与页面树、路由和模块键，模块鉴权与导航共用有效页面授权 |
 | 部门 | sys_dept、sys_user_dept | 多根组织树、多部门且无主部门；组织归属不产生权限 |
 | 审计 | sys_operation_log | 操作者、目标、动作、结果、来源及受控变更快照 |
+| IP 防护 | sys_ip_block | 规范化来源地址、封禁与人工解除状态、失败次数、时间及并发版本；无自动解封 |
 
 用户、角色、菜单、部门均硬删除，数据库没有软删除字段；用户与角色删除后允许使用新 ID 重新创建同名对象。账号列明确使用 `utf8mb4_0900_as_ci`，以 `UNIQUE(username)` 保持大小写无关唯一。旧 `sys_permission/sys_role_permission` 不再维护，授权来源统一为角色菜单关系。
 
-五张实体表主键是非自增 BIGINT，由 MyBatis-Plus `ASSIGN_ID` 生成；内置角色、菜单和示例部门使用固定种子 ID，账号由初始化命令生成 ID。`version` 用于防止旧表单覆盖，`session_version` 用于会话失效。
+六张实体表主键是非自增 BIGINT，由 MyBatis-Plus `ASSIGN_ID` 生成；内置角色、菜单和示例部门使用固定种子 ID，账号由初始化命令生成 ID。`version` 用于防止旧表单覆盖，`session_version` 用于会话失效。IP 封禁表的 version 同时隔离解除前尚未结束的登录尝试；unblocked_by 保留历史操作人 ID，不建立用户外键。
 
 ## 生成与初始化
 
@@ -27,7 +28,7 @@
 
 生成器按外键依赖倒序 DROP、正序 CREATE 与插入种子，保持外键检查开启。新增表必须在生成器登记依赖顺序。
 
-要求 MySQL 8.0.16+、InnoDB、utf8mb4。只在专用空库执行汇总文件。初始化内容为 SUPER_ADMIN、四个管理 PAGE 及角色页面关联，还有以下可编辑的示例组织：
+要求 MySQL 8.0.16+、InnoDB、utf8mb4。只在专用空库执行汇总文件。初始化内容为 SUPER_ADMIN、六个管理 PAGE 及角色页面关联，还有以下可编辑的示例组织：
 
 | ID | 名称 | 上级 |
 |---|---|---|
@@ -43,6 +44,12 @@ SQL不创建用户，也不包含管理员密码或固定哈希。按[快速开�
 
 **逐表与汇总文件含 DROP TABLE，会删除数据，不能用于已有库升级。** 已有库应备份、核对真实结构和数据，再使用定向增量SQL。MySQL DDL 不能依靠事务回滚，代码与数据库须匹配切换。添加示例组织只执行对应INSERT和明确的用户部门关联，不能重放初始化文件。
 
+## 已有库增加 IP 封禁表
+
+八表版本升级只新增 `sys_ip_block`，不修改既有账号、密码或关联。先备份目标库并确认尚无同名表，从 `业务/IP封禁表.sql` 单独提取完整 `CREATE TABLE sys_ip_block (...)` 与后面的 `CREATE INDEX`，在已确认的数据库执行；保留 `SET NAMES utf8mb4` 与 `SET time_zone = '+08:00'`，**不得执行文件中的 DROP TABLE**。已有同名表时先检查结构，不重复执行或覆盖。
+
+核对唯一键 `uk_ip_block_source`、索引 `ix_ip_block_status_time`、两个 CHECK 及空表状态，再启动新版后端。应用默认启用 IP 防护，缺表会导致业务请求失败。此表无需账号或菜单种子，也不改变已有角色关系。DDL 在 MySQL 中自动提交，操作前后的备份与行数、哈希应留存。回滚代码时保留新增表及封禁历史，不运行重建脚本。
+
 ## 时区与验证
 
 数据库 DATETIME 使用 Asia/Shanghai（UTC+8），脚本设置会话 `+08:00`；公共 API Instant 仍使用 UTC/Z。既有日期是否需要转换须单独核对，不能重复加 8 小时。
@@ -55,4 +62,4 @@ SQL不创建用户，也不包含管理员密码或固定哈希。按[快速开�
 ./mvnw.cmd "-Dtest=LocalSchemaInspectionTest,LocalInfrastructureTest" "-Dsf.test.localSchema=true" "-Dsf.test.localInfrastructure=true" test
 ```
 
-LocalSchemaInspectionTest 只接受 loopback:3306 的 streamfusion 库，检查八表、字段、用户名排序规则和唯一索引；旧结构未迁移时应失败。LocalInfrastructureTest 只检查 SELECT 1 与 Redis PING。两项默认跳过，不能将跳过计为通过，也不能将依赖连通当作业务验收。
+LocalSchemaInspectionTest 只接受 loopback:3306 的 streamfusion 库，检查九表、字段、用户名排序规则和唯一索引；旧结构未迁移时应失败。LocalInfrastructureTest 只检查 SELECT 1 与 Redis PING。两项默认跳过，不能将跳过计为通过，也不能将依赖连通当作业务验收。

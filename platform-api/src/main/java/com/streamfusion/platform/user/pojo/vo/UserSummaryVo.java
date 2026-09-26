@@ -2,6 +2,7 @@ package com.streamfusion.platform.user.pojo.vo;
 
 import com.streamfusion.platform.access.pojo.vo.RoleVo;
 import io.swagger.v3.oas.annotations.media.Schema;
+import java.time.Instant;
 import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -29,7 +30,7 @@ public class UserSummaryVo {
     @Schema(description = "头像标识")
     private String avatarKey;
 
-    /** 账号状态：0待改密，1正常，2封禁。 */
+    /** 账号状态：0待改密，1正常，2停用。 */
     @Schema(description = "账号状态")
     private Integer status;
 
@@ -44,4 +45,10 @@ public class UserSummaryVo {
     /** 编辑版本，十进制字符串。 */
     @Schema(description = "编辑版本")
     private String version;
+
+    @Schema(description = "错误密码登录限制截止时间，与手动停用状态独立")
+    private Instant lockedUntil;
+
+    @Schema(description = "当前是否处于错误密码临时登录限制")
+    private boolean loginRestricted;
 }

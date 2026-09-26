@@ -73,6 +73,11 @@ public class PasswordService {
     }
 
     public String initialPasswordHash() {
+        return encode(initialPassword());
+    }
+
+    /** Only create/reset workflows may return this value in their one-time success response. */
+    public String initialPassword() {
         String value = properties.initialPassword();
         if (value == null || value.isBlank()) {
             throw BusinessException.error(ErrorCode.INITIAL_PASSWORD_UNAVAILABLE);
@@ -82,7 +87,7 @@ public class PasswordService {
         } catch (BusinessException ex) {
             throw BusinessException.error(ErrorCode.INITIAL_PASSWORD_UNAVAILABLE);
         }
-        return encode(value);
+        return value;
     }
 
     public void validateReplacement(String currentPassword, String newPassword) {

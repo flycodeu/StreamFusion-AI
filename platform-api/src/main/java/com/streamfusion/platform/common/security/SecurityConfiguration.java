@@ -4,6 +4,7 @@ import com.streamfusion.platform.auth.security.SessionGuardFilter;
 import com.streamfusion.platform.auth.service.CurrentUserService;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.web.ApiErrorWriter;
+import com.streamfusion.platform.loginrecord.service.LoginRecordService;
 import jakarta.servlet.DispatcherType;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
@@ -27,6 +28,7 @@ public class SecurityConfiguration {
             HttpSecurity http,
             ApiErrorWriter writer,
             CurrentUserService current,
+            LoginRecordService loginRecords,
             SecurityContextRepository contexts,
             HttpSessionCsrfTokenRepository csrf,
             @Value("${springdoc.api-docs.enabled:true}") boolean docsEnabled)
@@ -35,18 +37,13 @@ public class SecurityConfiguration {
                 authorize -> {
                     authorize.dispatcherTypeMatchers(DispatcherType.ERROR).permitAll();
                     authorize.requestMatchers("/actuator/health").permitAll();
-                    authorize.requestMatchers("/auth/csrf", "/auth/login").permitAll();
                     authorize
                             .requestMatchers(
-                                    "/auth/**",
-                                    "/user/**",
-                                    "/menus",
-                                    "/menus/**",
-                                    "/roles",
-                                    "/roles/**",
-                                    "/departments",
-                                    "/departments/**")
-                            .authenticated();
+                                    "/auth/csrf",
+                                    "/auth/login",
+                                    "/auth/login/challenge",
+                                    "/auth/login/secure")
+                            .permitAll();
                     if (docsEnabled) {
                         authorize
                                 .requestMatchers(
@@ -56,8 +53,10 @@ public class SecurityConfiguration {
                                         "/swagger-ui/**")
                                 .permitAll();
                     }
-                    // Known API roots reach the MVC module interceptor; unknown roots remain
-                    // denied until they are explicitly registered as an application module.
+                    // TraceFilter recognizes registered @ModuleAccess paths before this chain.
+                    // The error-contract boundary also preserves existing business URL behavior.
+                    authorize.requestMatchers(ApiErrorWriter::isBusinessRequest).authenticated();
+                    // MVC still rejects undeclared business handlers; unknown roots stay denied.
                     authorize.anyRequest().denyAll();
                 });
         http.formLogin(AbstractHttpConfigurer::disable)
@@ -76,7 +75,8 @@ public class SecurityConfiguration {
                 config -> config.securityContextRepository(contexts).requireExplicitSave(true));
         http.csrf(config -> config.csrfTokenRepository(csrf));
         http.addFilterAfter(
-                new SessionGuardFilter(current, writer), SecurityContextHolderFilter.class);
+                new SessionGuardFilter(current, writer, loginRecords),
+                SecurityContextHolderFilter.class);
         return http.build();
     }
 

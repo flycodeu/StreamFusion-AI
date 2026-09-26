@@ -65,7 +65,7 @@ class RoleIntegrationTest {
         mvc.perform(get("/roles/" + roleId + "/menus").session(admin.session()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.selectedPageIds.length()").value(0))
-                .andExpect(jsonPath("$.data.tree[0].children.length()").value(4));
+                .andExpect(jsonPath("$.data.tree[0].children.length()").value(6));
         write(
                 put("/roles/" + roleId + "/menus"),
                 admin,
@@ -76,7 +76,7 @@ class RoleIntegrationTest {
                                 "SELECT COUNT(*) FROM sys_role_menu WHERE role_id=?",
                                 Integer.class,
                                 Long.parseLong(roleId)))
-                .isEqualTo(4);
+                .isEqualTo(6);
         write(
                 put("/roles/" + roleId + "/menus"),
                 admin,
@@ -371,7 +371,7 @@ class RoleIntegrationTest {
                                 "SELECT menu_id FROM sys_role_menu WHERE role_id=?",
                                 Long.class,
                                 Long.parseLong(newRole)))
-                .containsExactlyInAnyOrder(1002L, 1003L, 1004L, 1005L);
+                .containsExactlyInAnyOrder(1002L, 1003L, 1004L, 1005L, 1006L, 1007L);
 
         write(
                 put("/roles/" + existingRole + "/menus"),

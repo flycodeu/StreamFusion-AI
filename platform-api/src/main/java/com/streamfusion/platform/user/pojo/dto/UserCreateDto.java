@@ -1,6 +1,7 @@
 package com.streamfusion.platform.user.pojo.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -45,4 +46,7 @@ public class UserCreateDto {
             nullable = true,
             requiredMode = Schema.RequiredMode.NOT_REQUIRED)
     private Integer gender;
+
+    @Schema(description = "所属部门ID，最多20个；省略或空数组表示不分配部门")
+    private List<String> departmentIds;
 }

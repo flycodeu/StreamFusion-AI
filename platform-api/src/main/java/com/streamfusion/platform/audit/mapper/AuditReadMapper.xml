@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.streamfusion.platform.audit.mapper.AuditReadMapper">
+    <sql id="summaryColumns">
+        l.id, l.actor_id, u.username, u.nickname, l.target_type, l.target_id,
+        l.action, l.result, l.reason_code, l.trace_id, l.created_at
+    </sql>
+    <select id="page" resultType="com.streamfusion.platform.audit.pojo.dto.AuditRow">
+        SELECT <include refid="summaryColumns"/>
+        FROM sys_operation_log l LEFT JOIN sys_user u ON u.id = l.actor_id
+        <where>
+            <if test="q.userPattern != null">
+                AND (u.username LIKE #{q.userPattern} ESCAPE '!' OR u.nickname LIKE #{q.userPattern} ESCAPE '!'
+                <if test="q.actorId != null">OR l.actor_id = #{q.actorId}</if>)
+            </if>
+            <if test="q.action != null">AND l.action = #{q.action}</if>
+            <if test="q.module != null">AND l.target_type = #{q.module}</if>
+            <if test="q.result != null">AND l.result = #{q.result}</if>
+            <if test="q.traceId != null">AND l.trace_id = #{q.traceId}</if>
+            <if test="q.startTime != null">AND l.created_at &gt;= #{q.startTime}</if>
+            <if test="q.endTime != null">AND l.created_at &lt;= #{q.endTime}</if>
+        </where>
+        ORDER BY l.created_at DESC, l.id DESC
+    </select>
+    <select id="detail" resultType="com.streamfusion.platform.audit.pojo.dto.AuditRow">
+        SELECT <include refid="summaryColumns"/>, l.source_ip, l.changes
+        FROM sys_operation_log l LEFT JOIN sys_user u ON u.id = l.actor_id
+        WHERE l.id = #{id}
+    </select>
+</mapper>

@@ -8,6 +8,7 @@ import com.streamfusion.platform.auth.pojo.dto.SessionPrincipalDto;
 import com.streamfusion.platform.auth.pojo.vo.AuthUserVo;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
+import com.streamfusion.platform.loginrecord.service.LoginRecordService;
 import com.streamfusion.platform.menu.service.MenuService;
 import com.streamfusion.platform.user.converter.UserVoConverter;
 import com.streamfusion.platform.user.pojo.dto.UserProfileUpdateDto;
@@ -37,6 +38,7 @@ public class ProfileService {
     private final PasswordService passwords;
     private final AuditService audit;
     private final Clock clock;
+    private final LoginRecordService loginRecords;
     private final TransactionTemplate transactions;
 
     public ProfileService(
@@ -50,6 +52,7 @@ public class ProfileService {
             PasswordService passwords,
             AuditService audit,
             Clock clock,
+            LoginRecordService loginRecords,
             PlatformTransactionManager manager) {
         this.users = users;
         this.rules = rules;
@@ -61,6 +64,7 @@ public class ProfileService {
         this.passwords = passwords;
         this.audit = audit;
         this.clock = clock;
+        this.loginRecords = loginRecords;
         this.transactions = new TransactionTemplate(manager);
         this.transactions.setIsolationLevel(
                 org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
@@ -130,6 +134,7 @@ public class ProfileService {
                                     != 1) {
                         throw BusinessException.error(ErrorCode.UNAUTHORIZED);
                     }
+                    loginRecords.endAll(user.getId(), "PASSWORD_CHANGED");
                     audit.record(
                             user.getId(),
                             "USER",

@@ -12,7 +12,7 @@ CREATE TABLE sys_user (
     phone VARCHAR(32) NULL COMMENT '联系电话',
     email VARCHAR(254) NULL COMMENT '联系邮箱',
     gender TINYINT NOT NULL DEFAULT 0 COMMENT '性别：0未设置、1男、2女',
-    status TINYINT NOT NULL DEFAULT 0 COMMENT '账号状态：0待改密、1正常、2封禁',
+    status TINYINT NOT NULL DEFAULT 0 COMMENT '账号状态：0待改密、1正常、2停用',
     must_change_password BOOLEAN NOT NULL DEFAULT TRUE COMMENT '强制改密标记',
     session_version BIGINT NOT NULL DEFAULT 0 COMMENT '会话版本',
     failed_login_count INT NOT NULL DEFAULT 0 COMMENT '连续登录失败次数',

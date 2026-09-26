@@ -1,6 +1,6 @@
 # 开发基础约定
 
-本文说明工程配置、管理后端与验证方式。登录和管理后端已实现；业务前端、视频推理、节点同步和生产部署仍待完成。
+本文说明工程配置、管理功能与验证方式。登录、系统管理前后端、操作记录和服务信息已有实现；视频推理、节点同步和生产部署仍待完成。
 
 ## 本地环境检查
 
@@ -38,7 +38,7 @@ MySQL 驱动、Redis/Lettuce 和 Spring Security 版本由 Spring Boot 管理。
 
 标准覆盖入口为 Spring 配置；不使用 REDIS_URL，避免 URL 中数据库号覆盖单独的 database 配置。
 普通开发变量为上述 DB_* / REDIS_*；local 文件中可直接修改连接参数。
-表结构只维护 platform-api/sql/业务 中的八份逐表文件，sql/汇总/streamfusion-mysql.sql 由 scripts/export-sql.ps1 自动生成。
+表结构只维护 platform-api/sql/业务 中的九份逐表文件，sql/汇总/streamfusion-mysql.sql 由 scripts/export-sql.ps1 自动生成。旧版八表库须先增加 sys_ip_block，再启动启用 IP 防护的新版后端，步骤见 [SQL 指南](platform-api/sql/README.md#已有库增加-ip-封禁表)。
 首次运行前，按 [SQL 指南](platform-api/sql/README.md)手动初始化专用空库；应用不自动建库、建表或升级。
 脚本先 DROP 再 CREATE，会清空目标表；已有数据的库禁止用它升级。本地已经初始化的数据库无需重导。
 SQL 仅初始化内置角色、管理 PAGE 及可调整的示例组织，不包含默认用户或固定密码哈希。首次账号由下面的非 Web 引导创建。
@@ -78,7 +78,7 @@ JDBC URL 的 connectionTimeZone 也应为 Asia/Shanghai（含生产 DB_URL），
 
 使用已构建的 JAR 和完成初始化的数据库。`--bootstrap-admin` 强制使用非 Web 模式，结束后退出；普通 API 启动不会创建账号。用户表非空或已经存在成功引导记录时拒绝再次引导。
 
-默认账号方式见 [README 的初始化命令](README.md#4-初始化数据库与首位管理员)：通过 `SF_BOOTSTRAP_PASSWORD` 提供一次性临时密码，并加 `--platform.bootstrap.default-admin=true`。临时密码需为 8～64 位且不含空白或控制字符；创建后必须首次改密。不要将密码写进 SQL、启动参数或仓库文件。
+默认账号方式见 [README 的初始化命令](README.md#4-初始化数据库与首位管理员)：使用 `--platform.bootstrap.default-admin=true`。dev/local 默认账号为 `admin`、临时密码为 `StreamFusion@123`；可通过 `SF_AUTH_INITIAL_PASSWORD` 覆盖开发默认值，或用 `SF_BOOTSTRAP_PASSWORD` 单独覆盖本次引导。prod 须显式提供引导密码。创建后必须首次改密；已有账号不受默认值变更影响。真实密码不要写入 SQL、启动参数或仓库。
 
 需要自行输入账号、昵称和强密码时，在 `platform-api` 目录的交互终端执行：
 
@@ -93,8 +93,8 @@ java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=local 
 | platform.bootstrap.username / SF_BOOTSTRAP_USERNAME | admin | 默认账号方式的登录名 |
 | platform.bootstrap.nickname / SF_BOOTSTRAP_NICKNAME | 超级管理员 | 默认账号方式的显示名 |
 | platform.bootstrap.department-id / SF_BOOTSTRAP_DEPARTMENT_ID | 2002 | 两种引导方式共用的初始部门 ID；默认关联示例研发部门 |
-| SF_BOOTSTRAP_PASSWORD | 无 | 仅默认账号引导读取；完成后移除环境变量 |
-| platform.auth.initial-password / SF_AUTH_INITIAL_PASSWORD | 无 | 后续新建/重置普通用户使用的统一初始密码，须满足运行期密码规则 |
+| SF_BOOTSTRAP_PASSWORD | dev/local 缺省沿用初始密码；prod 必填 | 本次默认管理员引导密码 |
+| platform.auth.initial-password / SF_AUTH_INITIAL_PASSWORD | dev/local 为 StreamFusion@123；prod 必填 | 后续新建/重置普通用户使用，成功响应仅当次返回临时密码；首次登录须改密 |
 
 不需要初始部门时，在任一引导命令后加 `--platform.bootstrap.department-id=`，或在私有配置中将该项设为空。指定的部门不存在时引导整体失败，不留下半个账号。账号、SUPER_ADMIN 关联、全部 PAGE 关联、可选部门关联和引导审计在同一事务中保存。
 
@@ -107,7 +107,7 @@ java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=local 
 API 客户端需按以下顺序对接：
 
 1. `GET /auth/csrf`，保存 Cookie 及响应 `data.headerName`、`data.token`。
-2. `POST /auth/login`，发送账号、密码，携带刚取得的 CSRF 请求头及 Cookie。
+2. `GET /auth/login/challenge` 获取一次性挑战，按前端 `src/api/auth/cipher.ts` 使用 ECDH P-256、HKDF-SHA256、AES-GCM 加密账号和密码，再 `POST /auth/login/secure` 提交密文、携带 CSRF 与 Cookie。`/auth/login` 旧入口默认关闭。
 3. 登录会轮换会话和 CSRF；重新请求 `/auth/csrf`，再读取 `GET /auth/me`。待改密账号只允许本人信息、改密和退出等入口。
 4. 写请求继续携带最新 CSRF 令牌和 Cookie。`PUT /auth/password` 改密成功后重新登录；`POST /auth/logout` 撤销当前会话。
 
@@ -115,7 +115,28 @@ API 客户端需按以下顺序对接：
 
 管理模块使用“用户 → 有效角色 → 有效 PAGE 及祖先 → module_key”授权。普通管理者可通过其管理 PAGE 管理普通对象，授予自己尚未持有的页面；超级管理员身份授予/移除及本人敏感操作仍有对象保护。SUPER_ADMIN 默认拥有全部 PAGE 关系，新建 PAGE 在同一事务补齐它的关联；没有绕过菜单状态的角色名放行逻辑。
 
-管理 API 编辑使用单个 `version` 检查旧表单冲突，删除需要 `If-Match: "版本值"`。这是并发保护，不是业务版本历史。返回和错误沿用统一 `R` 与 `traceId`；管理审计保存对象及关系摘要，不记录密码或完整请求。审计查询 API、前端登录与管理页面、动态路由消费者尚未实现。
+管理 API 编辑使用单个 `version` 检查旧表单冲突，删除需要 `If-Match: "版本值"`。这是并发保护，不是业务版本历史。返回和错误沿用统一 `R` 与 `traceId`；管理审计保存对象及关系摘要，不记录密码或完整请求。管理前端与动态路由已接入，新增领域页面参见 [前端开发约定](platform-web/DEVELOPMENT.md)。
+
+### IP 登录防护
+
+同一规范化 IP 在十分钟窗口累计二十次登录失败后写入 `sys_ip_block`。封禁无到期时间，应用或 Redis 重启不会解除。成功登录不清除同一 IP 的失败累计；原账号五次连续失败锁十五分钟的保护继续生效。封禁后拒绝登录与业务接口，已有会话同样受限；健康检查、退出及用于退出的 CSRF 获取保留。
+
+超级管理员须从未封禁的地址进入“系统管理 → 操作记录 → IP 封禁”，查询并确认解除。查询和解除接口同时检查 `audit` PAGE 与 SUPER_ADMIN 身份，普通操作日志查看者没有解封权限。解除使用 `If-Match` 防止旧记录覆盖，新世代使解除前的未完成登录尝试不能再次封禁。封禁与解除写入操作记录。
+
+| 环境变量 | 默认值 | 用途 |
+|---|---|---|
+| SF_IP_GUARD_ENABLED | true | 启用来源防护；普通测试显式关闭，专项测试显式开启 |
+| SF_IP_FAILURE_THRESHOLD | 20 | 同一 IP 的失败阈值 |
+| SF_IP_FAILURE_WINDOW | 10m | 失败计数窗口，修改不解除已封禁地址 |
+| SF_IP_RESOURCE_LIMIT | 120 | 同一 IP 的 CSRF、登录挑战及提交共享请求上限 |
+| SF_IP_RESOURCE_WINDOW | 1m | 请求计数窗口；超过返回 429 与 Retry-After，不单独生成永久封禁 |
+| SF_TRUSTED_PROXIES | prod 为空；dev/local 为 127.0.0.1,::1 | 逗号分隔的可信代理精确 IP，最多 32 个，不使用任意来源通配 |
+
+失败计数、资源限频及挑战一次性消费由 Redis 原子操作完成；故障返回依赖不可用，不静默放行。失败窗口为首次失败起计的固定窗口。每个挑战只允许成功领取一次，凭据从日志与审计中排除。前端已登录的密码表单从 `GET /auth/password-policy` 获取实际规则，按 Unicode 码点计数，服务器仍作最终校验。
+
+**代理配置：** 默认使用 TCP 对端 IP，只在对端命中可信代理列表时解释 `X-Forwarded-For`，从右向左寻找首个不可信来源。Vite 开发代理将客户端传入的来源链覆盖为实际 socket 地址，并删除 `Forwarded` 和 `X-Real-IP`。生产边缘代理也必须清理外部来源头，后端仅信任真实代理地址；不要将客户端网段加入代理白名单。否则会将多人错误合并到代理 IP，或允许伪造来源。IP 封禁与账号锁定只是登录防护，不表示已实现恶意软件检测或流量攻击防御。参见 [Spring Boot 代理说明](https://docs.spring.io/spring-boot/3.5/how-to/webserver.html)及 [OWASP 认证防护](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html)。
+
+**应急恢复：** 优先由另一未封禁地址的超级管理员在页面解除。所有管理员共用被封禁出口时，由有数据库权限的运维备份目标记录，核实 `source_ip`、`id` 与 `version` 后，在维护事务内定向更新该行 `status='RELEASED'`、`unblocked_at=当前北京时间`、`unblocked_by=NULL`、`version=version+1`，更新条件必须同时匹配原 id、version、BLOCKED，并确认仅一行。保留工单及前后记录；直接数据库恢复不会自动写应用审计。不删除整表、不重置其他 IP、不将关闭防护作为常规解封操作。Redis 旧计数无需清除，新版本已隔离旧世代。
 
 ### 应用配置
 

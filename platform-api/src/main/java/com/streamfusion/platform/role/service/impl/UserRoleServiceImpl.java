@@ -105,9 +105,10 @@ public class UserRoleServiceImpl implements UserRoleService {
                 || (actorId == id && superAdmin && !selected.contains(superAdminRoleId))) {
             throw BusinessException.error(ErrorCode.PROTECTED_ACCOUNT);
         }
-        if (!target.getVersion().equals(version) || version == Long.MAX_VALUE) {
+        if (!target.getVersion().equals(version)) {
             throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
         }
+        com.streamfusion.platform.common.validation.VersionCounter.requireIncrementable(version);
         List<Long> previous = roles.userRoleIds(id);
         Set<Long> previousIds = new HashSet<>(previous);
         for (Long roleId : selected)

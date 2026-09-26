@@ -23,7 +23,7 @@ public class UserQueryDto extends PageQueryDto {
             requiredMode = Schema.RequiredMode.NOT_REQUIRED)
     private String keyword;
 
-    /** 账号状态筛选：0待改密，1正常，2封禁；空表示全部。 */
+    /** 账号状态筛选：0待改密，1正常，2停用；空表示全部。 */
     @Schema(
             description = "账号状态筛选",
             allowableValues = {"0", "1", "2"},

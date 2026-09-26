@@ -9,6 +9,7 @@ import com.streamfusion.platform.auth.service.CurrentUserService;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.security.ModuleAuthorizationService;
+import com.streamfusion.platform.common.security.ModuleRegistry;
 import com.streamfusion.platform.menu.mapper.MenuMapper;
 import com.streamfusion.platform.menu.pojo.dto.MenuTreeQueryDto;
 import com.streamfusion.platform.menu.pojo.dto.MenuUpdateDto;
@@ -47,6 +48,7 @@ public class MenuServiceImpl implements MenuService {
     private final AccessMapper access;
     private final CurrentUserService currentUser;
     private final ModuleAuthorizationService authorization;
+    private final ModuleRegistry modules;
     private final AuditService audit;
     private final Clock clock;
 
@@ -116,7 +118,7 @@ public class MenuServiceImpl implements MenuService {
                 "SUCCESS",
                 null,
                 context,
-                Map.of("name", menu.getName()));
+                auditSummary(menu.getName(), menu.getRouteName(), menu.getParentId()));
         return view(menu.getId());
     }
 
@@ -132,9 +134,10 @@ public class MenuServiceImpl implements MenuService {
         Map<Long, MenuEntity> byId = byId(all);
         MenuEntity current = byId.get(menuId);
         if (current == null) throw BusinessException.error(ErrorCode.NOT_FOUND);
-        if (current.getVersion() != version || version == Long.MAX_VALUE) {
+        if (current.getVersion() != version) {
             throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
         }
+        com.streamfusion.platform.common.validation.VersionCounter.requireIncrementable(version);
         if (!current.getType().equals(values.type()))
             throw BusinessException.error(ErrorCode.CONFLICT);
         if ("PAGE".equals(current.getType())
@@ -175,7 +178,7 @@ public class MenuServiceImpl implements MenuService {
                 "SUCCESS",
                 null,
                 context,
-                Map.of("name", values.name()));
+                auditSummary(values.name(), values.routeName(), values.parentId()));
         return view(menuId);
     }
 
@@ -210,7 +213,15 @@ public class MenuServiceImpl implements MenuService {
                 "SUCCESS",
                 null,
                 context,
-                Map.of("name", target.getName()));
+                auditSummary(target.getName(), target.getRouteName(), target.getParentId()));
+    }
+
+    private static Map<String, Object> auditSummary(String name, String code, Long parentId) {
+        Map<String, Object> summary = new HashMap<>();
+        summary.put("name", name);
+        summary.put("code", code);
+        summary.put("parentId", parentId == null ? null : parentId.toString());
+        return summary;
     }
 
     private Actor lockAndRequireActor() {
@@ -337,11 +348,12 @@ public class MenuServiceImpl implements MenuService {
         return toVo(menu, matchedChildren);
     }
 
-    private static MenuRouteVo published(
+    private MenuRouteVo published(
             MenuEntity menu, Map<Long, List<MenuEntity>> children, Set<Long> authorized) {
         if (!menu.getEnabled()) return null;
         if ("PAGE".equals(menu.getType())) {
-            if (!authorized.contains(menu.getId())) return null;
+            if (!authorized.contains(menu.getId()) || !modules.contains(menu.getModuleKey()))
+                return null;
             return new MenuRouteVo(
                     Long.toString(menu.getId()),
                     menu.getName(),
@@ -351,6 +363,7 @@ public class MenuServiceImpl implements MenuService {
                     menu.getRouteName(),
                     menu.getPath(),
                     menu.getComponentKey(),
+                    menu.getModuleKey(),
                     null);
         }
         List<MenuRouteVo> descendants = new ArrayList<>();
@@ -366,6 +379,7 @@ public class MenuServiceImpl implements MenuService {
                         menu.getType(),
                         menu.getIcon(),
                         menu.getVisible(),
+                        null,
                         null,
                         null,
                         null,

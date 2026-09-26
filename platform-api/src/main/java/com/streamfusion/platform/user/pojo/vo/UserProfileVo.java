@@ -39,7 +39,7 @@ public class UserProfileVo {
     @Schema(description = "性别")
     private Integer gender;
 
-    /** 账号状态：0待改密，1正常，2封禁。 */
+    /** 账号状态：0待改密，1正常，2停用。 */
     @Schema(description = "账号状态")
     private Integer status;
 

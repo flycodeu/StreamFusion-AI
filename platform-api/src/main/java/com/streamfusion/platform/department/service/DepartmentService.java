@@ -28,6 +28,11 @@ public interface DepartmentService {
     UserDepartmentsVo assign(
             String userId, UserDepartmentsUpdateDto input, AuditContextDto context);
 
+    /**
+     * Shares the create/update transaction; the user workflow owns its single version increment.
+     */
+    void assignForUserWrite(long userId, List<String> departmentIds, AuditContextDto context);
+
     Map<Long, List<DepartmentVo>> forUsers(List<Long> userIds);
 
     void removeUserBindings(long userId);

@@ -2,17 +2,26 @@ package com.streamfusion.platform.auth.controller;
 
 import com.streamfusion.platform.audit.pojo.dto.AuditContextDto;
 import com.streamfusion.platform.auth.config.AuthProperties;
+import com.streamfusion.platform.auth.guard.LoginProtection;
+import com.streamfusion.platform.auth.pojo.dto.EncryptedLoginDto;
 import com.streamfusion.platform.auth.pojo.dto.LoginDto;
 import com.streamfusion.platform.auth.pojo.dto.PasswordChangeDto;
 import com.streamfusion.platform.auth.pojo.vo.AuthUserVo;
 import com.streamfusion.platform.auth.pojo.vo.CsrfVo;
+import com.streamfusion.platform.auth.pojo.vo.LoginChallengeVo;
+import com.streamfusion.platform.auth.pojo.vo.PasswordPolicyVo;
 import com.streamfusion.platform.auth.security.SessionDependencyFilter;
 import com.streamfusion.platform.auth.service.AuthenticationService;
 import com.streamfusion.platform.auth.service.CurrentUserService;
+import com.streamfusion.platform.auth.service.LoginCipherService;
 import com.streamfusion.platform.auth.service.ProfileService;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
+import com.streamfusion.platform.common.pojo.dto.PageQueryDto;
+import com.streamfusion.platform.common.pojo.vo.PageResultVo;
 import com.streamfusion.platform.common.response.R;
+import com.streamfusion.platform.loginrecord.pojo.vo.LoginRecordVo;
+import com.streamfusion.platform.loginrecord.service.LoginRecordService;
 import com.streamfusion.platform.user.pojo.dto.UserProfileUpdateDto;
 import com.streamfusion.platform.user.pojo.vo.UserProfileVo;
 import io.swagger.v3.oas.annotations.Operation;
@@ -23,6 +32,7 @@ import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
@@ -49,6 +59,9 @@ public class AuthController {
     private final SecurityContextRepository contexts;
     private final SessionAuthenticationStrategy strategy;
     private final AuthProperties properties;
+    private final LoginCipherService loginCipher;
+    private final LoginProtection protection;
+    private final LoginRecordService loginRecords;
 
     @Operation(summary = "获取 CSRF 信息")
     @GetMapping("/csrf")
@@ -56,10 +69,37 @@ public class AuthController {
         return R.success(new CsrfVo(token.getHeaderName(), token.getToken()));
     }
 
+    @Operation(summary = "获取一次性登录加密挑战")
+    @GetMapping("/login/challenge")
+    public R<LoginChallengeVo> loginChallenge(
+            HttpServletRequest request, HttpServletResponse response) {
+        response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+        return R.success(loginCipher.challenge(request));
+    }
+
+    @Operation(summary = "加密登录")
+    @PostMapping("/login/secure")
+    public R<Void> secureLogin(
+            @RequestBody EncryptedLoginDto input,
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        return protection.attempt(
+                request,
+                () -> completeLogin(loginCipher.decrypt(input, request), request, response));
+    }
+
     @Operation(summary = "登录")
     @PostMapping("/login")
     public R<Void> login(
             @RequestBody LoginDto input, HttpServletRequest request, HttpServletResponse response) {
+        if (!properties.allowLegacyLogin()) {
+            throw BusinessException.error(ErrorCode.METHOD_NOT_ALLOWED);
+        }
+        return protection.attempt(request, () -> completeLogin(input, request, response));
+    }
+
+    private R<Void> completeLogin(
+            LoginDto input, HttpServletRequest request, HttpServletResponse response) {
         var existing = SecurityContextHolder.getContext().getAuthentication();
         if (existing != null
                 && existing.isAuthenticated()
@@ -79,9 +119,15 @@ public class AuthController {
             SecurityContextHolder.setContext(context);
             // Redis flush-mode=immediate persists this attribute before the successful response.
             contexts.saveContext(context, request, response);
+            loginRecords.start(principal, request);
             authentication.recordLogin(principal, AuditContextDto.from(request));
         } catch (RuntimeException ex) {
             SecurityContextHolder.clearContext();
+            try {
+                loginRecords.end(loginRecords.activity(request), "LOGIN_ABORTED", false);
+            } catch (RuntimeException cleanup) {
+                LOG.warn("Failed login history cleanup could not complete");
+            }
             try {
                 if (request.getSession(false) != null) request.getSession(false).invalidate();
             } catch (RuntimeException cleanup) {
@@ -97,6 +143,27 @@ public class AuthController {
     @GetMapping("/me")
     public R<AuthUserVo> me() {
         return R.success(profiles.me());
+    }
+
+    @Operation(summary = "分页查询本人的成功登录历史")
+    @GetMapping("/login-records/page")
+    public R<PageResultVo<LoginRecordVo>> loginRecords(
+            @ParameterObject @ModelAttribute PageQueryDto query) {
+        return R.success(loginRecords.mine(query));
+    }
+
+    @Operation(summary = "获取当前密码规则")
+    @GetMapping("/password-policy")
+    public R<PasswordPolicyVo> passwordPolicy() {
+        current.requireUser();
+        return R.success(
+                new PasswordPolicyVo(
+                        properties.minPasswordLength(),
+                        properties.maxPasswordLength(),
+                        properties.requireUppercase(),
+                        properties.requireLowercase(),
+                        properties.requireDigit(),
+                        properties.requireSymbol()));
     }
 
     @Operation(summary = "修改个人资料")
@@ -131,8 +198,10 @@ public class AuthController {
     @PostMapping("/logout")
     public R<Void> logout(HttpServletRequest request, HttpServletResponse response) {
         var principal = current.principal();
+        var activity = loginRecords.activity(request);
         destroySession(request, response);
         try {
+            loginRecords.end(activity, "LOGOUT", true);
             authentication.recordLogout(principal, AuditContextDto.from(request));
         } catch (RuntimeException ex) {
             if (!SessionDependencyFilter.dependencyFailure(ex)) throw ex;

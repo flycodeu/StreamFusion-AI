@@ -15,8 +15,8 @@ public enum UserStatus {
     /** 正常。 */
     NORMAL(1, "正常"),
 
-    /** 封禁。 */
-    BANNED(2, "封禁");
+    /** 管理员手动停用。 */
+    BANNED(2, "停用");
 
     /** 数据库存储编码。 */
     @Schema(description = "数据库存储编码")

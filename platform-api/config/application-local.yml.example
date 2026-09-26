@@ -1,5 +1,8 @@
 # Copy to application-local.yml and select the local profile.
 # This example is public; the copied file is ignored by Git.
+platform:
+  auth:
+    initial-password: ${SF_AUTH_INITIAL_PASSWORD:StreamFusion@123}
 spring:
   datasource:
     # Example for a local server only; production must configure verified TLS.

@@ -7,5 +7,5 @@ import io.swagger.v3.oas.annotations.media.Schema;
 public record MenuPageVo(
         @Schema(description = "路由名称") String routeName,
         @Schema(description = "路由路径") String path,
-        @Schema(description = "前端组件键") String componentKey,
+        @Schema(description = "页面文件路径，相对views且不带.vue，兼容旧组件键") String componentKey,
         @Schema(description = "后端模块键") String moduleKey) {}

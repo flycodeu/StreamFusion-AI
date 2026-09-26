@@ -1,4 +1,5 @@
 import { ApiRequestError, invalidResponse } from './error'
+import { isBusinessApiPath } from './path'
 import { parseEnvelope, responseContext } from './response'
 import { send } from './transport'
 import type { ApiResult, CsrfToken, RequestOptions } from './types'
@@ -7,6 +8,7 @@ export interface ClientHooks {
   getCsrf: () => CsrfToken | null
   getIdentityEpoch: () => number
   onAuthFailure: (error: ApiRequestError, epoch: number) => void
+  onForbidden: (error: ApiRequestError, epoch: number) => Promise<void>
 }
 
 /** Explicit assembly avoids importing session/router into the HTTP layer or silently disabling it. */
@@ -15,17 +17,20 @@ export function createApiClient(hooks: ClientHooks) {
     !hooks ||
     typeof hooks.getCsrf !== 'function' ||
     typeof hooks.getIdentityEpoch !== 'function' ||
-    typeof hooks.onAuthFailure !== 'function'
+    typeof hooks.onAuthFailure !== 'function' ||
+    typeof hooks.onForbidden !== 'function'
   ) {
     throw new ApiRequestError('INVALID_REQUEST', '请求客户端未正确初始化')
   }
   let notifiedEpoch: number | undefined
   const notified = new Set<string>()
+  let authorizationEpoch: number | undefined
+  let authorizationRevision = 0
+  let synchronizing: { epoch: number; promise: Promise<void> } | undefined
 
   return async function request<T>(options: RequestOptions<T>): Promise<ApiResult<T>> {
     if (
-      typeof options.path !== 'string' ||
-      !/^\/(?:user|auth|roles|menus|departments)(?:\/|$)/.test(options.path) ||
+      !isBusinessApiPath(options.path) ||
       ![200, 201].includes(options.successStatus) ||
       typeof options.decode !== 'function'
     ) {
@@ -34,6 +39,12 @@ export function createApiClient(hooks: ClientHooks) {
     const epoch = hooks.getIdentityEpoch()
     if (!Number.isSafeInteger(epoch) || epoch < 0)
       throw new ApiRequestError('INVALID_REQUEST', '身份状态未初始化')
+    if (authorizationEpoch !== epoch) {
+      authorizationEpoch = epoch
+      authorizationRevision = 0
+      synchronizing = undefined
+    }
+    const authorizationAtStart = authorizationRevision
     const current = () => hooks.getIdentityEpoch() === epoch && !options.signal?.aborted
     const cancelled = () => new ApiRequestError('REQUEST_CANCELLED', '请求已取消')
     try {
@@ -61,7 +72,39 @@ export function createApiClient(hooks: ClientHooks) {
         throw cancelled()
       if (
         error instanceof ApiRequestError &&
+        error.status === 403 &&
+        error.code === 'FORBIDDEN' &&
+        options.path !== '/auth' &&
+        !options.path.startsWith('/auth/')
+      ) {
+        // Share one refresh across both concurrent refusals and late responses from that batch.
+        if (!synchronizing || synchronizing.epoch !== epoch) {
+          if (authorizationAtStart === authorizationRevision) {
+            authorizationRevision++
+            const task = { epoch, promise: Promise.resolve() }
+            synchronizing = task
+            task.promise = Promise.resolve()
+              .then(() => {
+                if (hooks.getIdentityEpoch() === epoch) return hooks.onForbidden(error, epoch)
+              })
+              .catch(() => {
+                // Authorization synchronization must not replace the original business error.
+              })
+              .finally(() => {
+                if (synchronizing === task) {
+                  authorizationRevision++
+                  synchronizing = undefined
+                }
+              })
+          }
+        }
+        if (synchronizing?.epoch === epoch) await synchronizing.promise
+        if (!current()) throw cancelled()
+      }
+      if (
+        error instanceof ApiRequestError &&
         (error.status === 401 ||
+          error.code === 'IP_BLOCKED' ||
           error.code === 'PASSWORD_CHANGE_REQUIRED' ||
           error.code === 'CSRF_INVALID')
       ) {

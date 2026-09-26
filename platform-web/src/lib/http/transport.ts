@@ -1,4 +1,5 @@
 import { ApiRequestError, isTraceId } from './error'
+import { isTransportApiPath } from './path'
 import type { RawHttpResponse, TransportOptions } from './types'
 
 function invalid(): never {
@@ -8,20 +9,7 @@ function invalid(): never {
 function prepare(options: TransportOptions): { url: string; headers: Headers; body?: string } {
   const { path, method, body, params, ifMatch, csrf } = options
   if (!['GET', 'POST', 'PUT', 'DELETE'].includes(method)) invalid()
-  if (typeof path !== 'string' || !path.startsWith('/') || /[?#\\\s]/.test(path)) invalid()
-  let parsed: URL
-  try {
-    parsed = new URL(path, 'http://same-origin.invalid')
-  } catch {
-    invalid()
-  }
-  if (parsed.origin !== 'http://same-origin.invalid' || parsed.pathname !== path) invalid()
-  if (!(
-    /^\/(?:user|auth|roles|menus|departments)(?:\/|$)/.test(path) || path === '/actuator/health'
-  ))
-    invalid()
-  // Encoded separators/dot segments cannot escape the declared API boundary.
-  if (/%(?:2e|2f|5c|25)/i.test(path)) invalid()
+  if (!isTransportApiPath(path)) invalid()
   if (method === 'GET' && (body !== undefined || ifMatch !== undefined)) invalid()
   if (ifMatch !== undefined && !/^"(?:0|[1-9]\d*)"$/.test(ifMatch)) invalid()
 
@@ -66,7 +54,9 @@ function prepare(options: TransportOptions): { url: string; headers: Headers; bo
     headers.set('Content-Type', 'application/json')
   }
   const suffix = query.toString()
-  return { url: path + (suffix ? `?${suffix}` : ''), headers, body: serialized }
+  // Development separates API requests from SPA routes; production keeps its root API contract.
+  const url = (import.meta.env.DEV ? '/api' : '') + path + (suffix ? `?${suffix}` : '')
+  return { url, headers, body: serialized }
 }
 
 /** The only fetch call. Deadline includes consuming the response body; never retries. */

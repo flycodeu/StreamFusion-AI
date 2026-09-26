@@ -1,11 +1,14 @@
 package com.streamfusion.platform.user.pojo.vo;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.streamfusion.platform.access.pojo.vo.RoleVo;
 import io.swagger.v3.oas.annotations.media.Schema;
+import java.time.Instant;
 import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 /** 用户详情。 */
 @Data
@@ -41,7 +44,7 @@ public class UserVo {
     @Schema(description = "性别")
     private Integer gender;
 
-    /** 账号状态：0待改密，1正常，2封禁。 */
+    /** 账号状态：0待改密，1正常，2停用。 */
     @Schema(description = "账号状态")
     private Integer status;
 
@@ -60,4 +63,16 @@ public class UserVo {
     /** 编辑版本，十进制字符串。 */
     @Schema(description = "编辑版本")
     private String version;
+
+    /** Returned only once after an authorized create/reset succeeds. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    @ToString.Exclude
+    @Schema(description = "本次创建或重置成功的临时密码，仅当次返回")
+    private String temporaryPassword;
+
+    @Schema(description = "错误密码登录限制截止时间，与手动停用状态独立")
+    private Instant lockedUntil;
+
+    @Schema(description = "当前是否处于错误密码临时登录限制")
+    private boolean loginRestricted;
 }

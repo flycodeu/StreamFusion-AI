@@ -6,12 +6,16 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.streamfusion.platform.audit.mapper.AuditReferenceMapper;
 import com.streamfusion.platform.audit.mapper.OperationLogMapper;
 import com.streamfusion.platform.audit.pojo.entity.OperationLogEntity;
+import com.streamfusion.platform.audit.service.AuditChanges;
+import com.streamfusion.platform.audit.service.AuditReferences;
 import com.streamfusion.platform.audit.service.impl.AuditServiceImpl;
 import com.streamfusion.platform.auth.pojo.dto.LoginDto;
 import com.streamfusion.platform.auth.pojo.dto.PasswordChangeDto;
 import com.streamfusion.platform.user.pojo.entity.UserEntity;
+import com.streamfusion.platform.user.pojo.vo.UserVo;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -59,14 +63,26 @@ class PojoContractTest {
     }
 
     @Test
+    void temporaryPasswordIsOmittedFromNormalViewsAndNeverPrintedByGeneratedMethods()
+            throws Exception {
+        var user = new UserVo();
+        assertThat(json.writeValueAsString(user)).doesNotContain("temporaryPassword");
+        user.setTemporaryPassword("SyntheticInitial1!");
+        assertThat(user.toString()).doesNotContain("SyntheticInitial1!");
+        assertThat(json.readTree(json.writeValueAsString(user)).path("temporaryPassword").asText())
+                .isEqualTo("SyntheticInitial1!");
+    }
+
+    @Test
     void auditSummaryStoresExplicitFieldsAndRejectsSecretsOrOversizedRelations() throws Exception {
         OperationLogMapper mapper = mock(OperationLogMapper.class);
         when(mapper.insert(any(OperationLogEntity.class))).thenReturn(1);
         var audit =
                 new AuditServiceImpl(
                         mapper,
-                        json,
-                        Clock.fixed(Instant.parse("2026-09-26T00:00:00Z"), ZoneOffset.UTC));
+                        Clock.fixed(Instant.parse("2026-09-26T00:00:00Z"), ZoneOffset.UTC),
+                        new AuditChanges(json),
+                        new AuditReferences(mock(AuditReferenceMapper.class)));
         audit.record(
                 1L,
                 "ROLE",

@@ -2,6 +2,7 @@ package com.streamfusion.platform;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
+import static org.mockito.Mockito.mock;
 
 import com.streamfusion.platform.auth.config.AuthProperties;
 import com.streamfusion.platform.auth.pojo.dto.LoginDto;
@@ -11,6 +12,7 @@ import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.exception.details.ValidationDetails;
 import com.streamfusion.platform.common.pojo.dto.PageQueryDto;
+import com.streamfusion.platform.common.security.ModuleRegistry;
 import com.streamfusion.platform.department.pojo.dto.DepartmentWriteDto;
 import com.streamfusion.platform.department.service.DepartmentRules;
 import com.streamfusion.platform.menu.pojo.dto.MenuWriteDto;
@@ -75,7 +77,7 @@ class DtoValidationContractTest {
         menu.setSortOrder(0);
         menu.setVisible(true);
         menu.setEnabled(true);
-        invalidField(() -> new MenuRules().write(menu), "parentId");
+        invalidField(() -> new MenuRules(mock(ModuleRegistry.class)).write(menu), "parentId");
     }
 
     @Test
@@ -207,6 +209,7 @@ class DtoValidationContractTest {
                         Duration.ofMinutes(30),
                         Duration.ofHours(8),
                         true,
+                        false,
                         initialPassword,
                         0,
                         0));

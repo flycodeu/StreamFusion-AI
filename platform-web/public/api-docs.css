@@ -1,0 +1,20 @@
+body {
+  margin: 0;
+  background: #fff;
+}
+#document-status {
+  margin: 28px;
+  color: #536057;
+  font: 14px/1.8 sans-serif;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.swagger-ui .info {
+  margin: 24px 0;
+}
+.swagger-ui .info .title {
+  font-size: 24px;
+}
+.swagger-ui .wrapper {
+  padding: 0 20px;
+}

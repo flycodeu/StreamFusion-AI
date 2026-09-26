@@ -143,7 +143,7 @@ class IdentityIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.isSuperAdmin").value(true))
                 .andExpect(jsonPath("$.data.permissions").doesNotExist())
-                .andExpect(jsonPath("$.data.modules.length()").value(4))
+                .andExpect(jsonPath("$.data.modules.length()").value(7))
                 .andExpect(jsonPath("$.data.user.status").value(1))
                 .andExpect(jsonPath("$.data.user.id").isString())
                 .andExpect(jsonPath("$.data.user.version").isString())
@@ -287,6 +287,139 @@ class IdentityIntegrationTest {
         assertThat(users.getById(Long.parseLong(id)).getStatus()).isEqualTo(2);
         adminAction(admin, id, "/enable", "2", 0);
         assertThat(login("Worker01", "Initial1!")).isNotNull();
+    }
+
+    @Test
+    void temporaryPasswordIsReturnedOnlyBySuccessfulCreateAndReset() throws Exception {
+        var admin = admin();
+        Csrf csrf = csrf(admin);
+        var created =
+                mvc.perform(
+                                post("/user")
+                                        .session(admin)
+                                        .header(csrf.header(), csrf.token())
+                                        .contentType("application/json")
+                                        .content("{\"username\":\"Worker01\"}"))
+                        .andExpect(status().isCreated())
+                        .andExpect(header().string("Cache-Control", "no-store"))
+                        .andExpect(jsonPath("$.data.temporaryPassword").value("Initial1!"))
+                        .andReturn();
+        String id =
+                json.readTree(created.getResponse().getContentAsString())
+                        .path("data")
+                        .path("id")
+                        .asText();
+        var previousSession = login("Worker01", "Initial1!");
+        mvc.perform(
+                        post("/user/" + id + "/reset-password")
+                                .session(admin)
+                                .header(csrf.header(), csrf.token())
+                                .contentType("application/json")
+                                .content("{\"version\":\"0\"}"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(header().string("ETag", "\"1\""))
+                .andExpect(jsonPath("$.data.temporaryPassword").value("Initial1!"))
+                .andExpect(jsonPath("$.data.version").value("1"))
+                .andExpect(jsonPath("$.data.mustChangePassword").value(true));
+        mvc.perform(get("/auth/me").session(previousSession)).andExpect(status().isUnauthorized());
+        mvc.perform(get("/user/" + id).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.temporaryPassword").doesNotExist());
+        mvc.perform(get("/user/page").session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[*].temporaryPassword").doesNotExist());
+        mvc.perform(
+                        post("/user/" + id + "/reset-password")
+                                .session(admin)
+                                .header(csrf.header(), csrf.token())
+                                .contentType("application/json")
+                                .content("{\"version\":\"0\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.data.temporaryPassword").doesNotExist());
+        assertThat(
+                        jdbc.queryForList(
+                                "SELECT changes FROM sys_operation_log WHERE target_type='USER'",
+                                String.class))
+                .allSatisfy(
+                        value -> {
+                            if (value != null)
+                                assertThat(value).doesNotContain("Initial1!", "temporaryPassword");
+                        });
+    }
+
+    @Test
+    void userAndOptionalDepartmentsSaveAtomicallyWithOneEditVersion() throws Exception {
+        var admin = admin();
+        Csrf csrf = csrf(admin);
+        var created =
+                mvc.perform(
+                                post("/user")
+                                        .session(admin)
+                                        .header(csrf.header(), csrf.token())
+                                        .contentType("application/json")
+                                        .content(
+                                                "{\"username\":\"Worker01\",\"nickname\":\"首次\",\"departmentIds\":[\"2002\",\"2003\"]}"))
+                        .andExpect(status().isCreated())
+                        .andExpect(jsonPath("$.data.version").value("0"))
+                        .andExpect(jsonPath("$.data.departments.length()").value(2))
+                        .andReturn();
+        String id =
+                json.readTree(created.getResponse().getContentAsString())
+                        .path("data")
+                        .path("id")
+                        .asText();
+        mvc.perform(
+                        put("/user/" + id)
+                                .session(admin)
+                                .header(csrf.header(), csrf.token())
+                                .contentType("application/json")
+                                .content(
+                                        "{\"nickname\":\"已编辑\",\"version\":\"0\",\"departmentIds\":[\"2003\"]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value("1"))
+                .andExpect(jsonPath("$.data.departments.length()").value(1));
+        mvc.perform(
+                        put("/user/" + id)
+                                .session(admin)
+                                .header(csrf.header(), csrf.token())
+                                .contentType("application/json")
+                                .content("{\"nickname\":\"保留部门\",\"version\":\"1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value("2"))
+                .andExpect(jsonPath("$.data.departments[0].id").value("2003"));
+        mvc.perform(
+                        put("/user/" + id)
+                                .session(admin)
+                                .header(csrf.header(), csrf.token())
+                                .contentType("application/json")
+                                .content(
+                                        "{\"nickname\":\"应回滚\",\"version\":\"2\",\"departmentIds\":[\"999999\"]}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/user/" + id).session(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.nickname").value("保留部门"))
+                .andExpect(jsonPath("$.data.version").value("2"))
+                .andExpect(jsonPath("$.data.departments[0].id").value("2003"));
+        mvc.perform(
+                        put("/user/" + id)
+                                .session(admin)
+                                .header(csrf.header(), csrf.token())
+                                .contentType("application/json")
+                                .content(
+                                        "{\"nickname\":\"已清空\",\"version\":\"2\",\"departmentIds\":[]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.version").value("3"))
+                .andExpect(jsonPath("$.data.departments.length()").value(0));
+        mvc.perform(
+                        post("/user")
+                                .session(admin)
+                                .header(csrf.header(), csrf.token())
+                                .contentType("application/json")
+                                .content(
+                                        "{\"username\":\"InvalidUser\",\"departmentIds\":[\"999999\"]}"))
+                .andExpect(status().isBadRequest());
+        assertThat(users.findByUsername("InvalidUser")).isNull();
     }
 
     @Test
@@ -458,7 +591,9 @@ class IdentityIntegrationTest {
                         "mustChangePassword",
                         "departments",
                         "roles",
-                        "version");
+                        "version",
+                        "lockedUntil",
+                        "loginRestricted");
 
         var listing =
                 mvc.perform(get("/user/page").session(admin))
@@ -478,7 +613,9 @@ class IdentityIntegrationTest {
                         "status",
                         "departments",
                         "roles",
-                        "version");
+                        "version",
+                        "lockedUntil",
+                        "loginRestricted");
 
         var me = mvc.perform(get("/auth/me").session(admin)).andExpect(status().isOk()).andReturn();
         JsonNode identity = json.readTree(me.getResponse().getContentAsString()).path("data");
@@ -666,7 +803,7 @@ class IdentityIntegrationTest {
         mvc.perform(get("/user/page").session(admin)).andExpect(status().isForbidden());
         mvc.perform(get("/auth/me").session(admin))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.modules.length()").value(3));
+                .andExpect(jsonPath("$.data.modules.length()").value(6));
 
         jdbc.update("INSERT INTO sys_role_menu(role_id,menu_id) VALUES (1,1002)");
         mvc.perform(get("/user/page").session(admin)).andExpect(status().isOk());

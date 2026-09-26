@@ -299,9 +299,10 @@ public class RoleServiceImpl implements RoleService {
         RoleEntity role = requireRole(id);
         if ("SUPER_ADMIN".equals(role.getCode()))
             throw BusinessException.error(ErrorCode.FORBIDDEN);
-        if (!role.getVersion().equals(version) || version == Long.MAX_VALUE) {
+        if (!role.getVersion().equals(version)) {
             throw BusinessException.error(versionError);
         }
+        com.streamfusion.platform.common.validation.VersionCounter.requireIncrementable(version);
         return role;
     }
 

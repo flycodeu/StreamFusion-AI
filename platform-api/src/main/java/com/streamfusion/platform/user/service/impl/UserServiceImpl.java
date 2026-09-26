@@ -3,6 +3,7 @@ package com.streamfusion.platform.user.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.spring.service.impl.ServiceImpl;
+import com.streamfusion.platform.common.validation.VersionCounter;
 import com.streamfusion.platform.user.mapper.UserMapper;
 import com.streamfusion.platform.user.pojo.entity.UserEntity;
 import com.streamfusion.platform.user.pojo.enums.UserStatus;
@@ -68,7 +69,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserEntity> impleme
                         .set(UserEntity::getGender, gender)
                         .set(UserEntity::getUpdatedBy, actorId)
                         .set(UserEntity::getUpdatedAt, now)
-                        .setIncrBy(UserEntity::getVersion, 1));
+                        .set(UserEntity::getVersion, VersionCounter.next(version)));
     }
 
     @Override
@@ -81,14 +82,19 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserEntity> impleme
 
     @Override
     public int changeStatus(long id, long version, int newStatus, long actorId, LocalDateTime now) {
+        UserEntity observed = getById(id);
+        if (observed == null || observed.getVersion() != version) return 0;
+        long nextSession = VersionCounter.next(observed.getSessionVersion());
+        long nextVersion = VersionCounter.next(version);
         return baseMapper.update(
                 null,
                 new LambdaUpdateWrapper<UserEntity>()
                         .eq(UserEntity::getId, id)
                         .eq(UserEntity::getVersion, version)
                         .set(UserEntity::getStatus, newStatus)
-                        .setIncrBy(UserEntity::getSessionVersion, 1)
-                        .setIncrBy(UserEntity::getVersion, 1)
+                        .eq(UserEntity::getSessionVersion, observed.getSessionVersion())
+                        .set(UserEntity::getSessionVersion, nextSession)
+                        .set(UserEntity::getVersion, nextVersion)
                         .set(UserEntity::getUpdatedBy, actorId)
                         .set(UserEntity::getUpdatedAt, now));
     }
@@ -105,12 +111,20 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserEntity> impleme
             long expectedSessionVersion,
             String newHash,
             LocalDateTime now) {
+        UserEntity observed = getById(id);
+        if (observed == null || observed.getSessionVersion() != expectedSessionVersion) return 0;
+        VersionCounter.requireIncrementable(observed.getVersion());
+        VersionCounter.requireIncrementable(observed.getSessionVersion());
         return baseMapper.changePassword(id, expectedHash, expectedSessionVersion, newHash, now);
     }
 
     @Override
     public int resetPassword(
             long id, long version, String newHash, long actorId, LocalDateTime now) {
+        UserEntity observed = getById(id);
+        if (observed == null || observed.getVersion() != version) return 0;
+        VersionCounter.requireIncrementable(observed.getVersion());
+        VersionCounter.requireIncrementable(observed.getSessionVersion());
         return baseMapper.resetPassword(id, version, newHash, actorId, now);
     }
 

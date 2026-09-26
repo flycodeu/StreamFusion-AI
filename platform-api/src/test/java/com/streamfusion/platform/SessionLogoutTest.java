@@ -14,12 +14,15 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.streamfusion.platform.auth.config.AuthProperties;
 import com.streamfusion.platform.auth.controller.AuthController;
+import com.streamfusion.platform.auth.guard.LoginProtection;
 import com.streamfusion.platform.auth.pojo.dto.SessionPrincipalDto;
 import com.streamfusion.platform.auth.security.SessionDependencyFilter;
 import com.streamfusion.platform.auth.service.AuthenticationService;
 import com.streamfusion.platform.auth.service.CurrentUserService;
+import com.streamfusion.platform.auth.service.LoginCipherService;
 import com.streamfusion.platform.auth.service.ProfileService;
 import com.streamfusion.platform.common.web.ApiErrorWriter;
+import com.streamfusion.platform.loginrecord.service.LoginRecordService;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -58,7 +61,10 @@ class SessionLogoutTest {
                     current,
                     mock(SecurityContextRepository.class),
                     mock(SessionAuthenticationStrategy.class),
-                    mock(AuthProperties.class));
+                    mock(AuthProperties.class),
+                    mock(LoginCipherService.class),
+                    mock(LoginProtection.class),
+                    mock(LoginRecordService.class));
     private final MapSessionRepository repository =
             spy(new MapSessionRepository(new ConcurrentHashMap<>()));
     private final SessionRepositoryFilter<MapSession> sessions =

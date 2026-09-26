@@ -16,6 +16,7 @@ public record AuthProperties(
         @DefaultValue("30m") Duration idleTimeout,
         @DefaultValue("8h") Duration absoluteTimeout,
         @DefaultValue("true") boolean secureCookie,
+        @DefaultValue("false") boolean allowLegacyLogin,
         @DefaultValue("") String initialPassword,
         @DefaultValue("0") long workerId,
         @DefaultValue("0") long datacenterId) {

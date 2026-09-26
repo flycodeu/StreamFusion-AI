@@ -1,7 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { send } from './transport'
 
+beforeEach(() => vi.stubEnv('DEV', true))
+
 afterEach(() => {
+  vi.unstubAllEnvs()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
   vi.useRealTimers()
@@ -20,13 +23,27 @@ describe('HTTP transport', () => {
     '/menus/9007199254740993',
     '/departments',
     '/departments/9007199254740993',
+    '/camera',
+    '/camera/devices/9007199254740993',
+    '/audit-log/events',
     '/actuator/health',
-  ])('preserves the allowed same-origin path: %s', async (path) => {
+  ])('routes canonical API paths through the development proxy: %s', async (path) => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('{}'))
     vi.stubGlobal('fetch', fetchMock)
     await send({ path, method: 'GET' })
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(path)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api${path}`)
   })
+
+  it.each(['/camera/devices', '/actuator/health'])(
+    'preserves the existing root API contract in production: %s',
+    async (path) => {
+      vi.stubEnv('DEV', false)
+      const fetchMock = vi.fn().mockResolvedValue(new Response('{}'))
+      vi.stubGlobal('fetch', fetchMock)
+      await send({ path, method: 'GET' })
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(path)
+    },
+  )
 
   it('encodes query parameters, preserves false/zero, and uses same-origin credentials', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('{}'))
@@ -36,7 +53,7 @@ describe('HTTP transport', () => {
       method: 'GET',
       params: { enabled: false, page: 0, q: 'a&b', skip: null },
     })
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('/user/page?enabled=false&page=0&q=a%26b')
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/user/page?enabled=false&page=0&q=a%26b')
     const options = fetchMock.mock.calls[0]?.[1]
     expect(options.credentials).toBe('same-origin')
     expect(options.redirect).toBe('error')
@@ -79,20 +96,30 @@ describe('HTTP transport', () => {
     '/roles/%2fprivate',
     '/menus/%5cprivate',
     '/user/page?q=secret',
-    '/userland',
-    '/users',
-    '/authentication',
-    '/authentic',
-    '/role',
-    '/roles-admin',
-    '/menu',
-    '/menus-extra',
-    '/department',
-    '/departments-private',
+    '/camera/./devices',
+    '/camera/%2E/devices',
+    '/camera/\\devices',
+    '/camera//devices',
+    '/camera/devices/',
+    '/camera/device list',
+    '/camera/manage.vue',
+    '/camera/manage%2evue',
+    '/index.html',
+    '/assets/main.js',
+    '/assets',
+    '/src/camera/manage',
+    '/public/config',
+    '/node_modules/vue',
+    '/@vite/client',
+    '/@fs/private',
     '/api',
+    '/api/camera',
+    '/API/camera',
+    '/actuator/env',
     '/actuator/health/extra',
-    '/private',
     '/user/page#fragment',
+    '',
+    '/',
   ])('rejects unsafe path before sending: %s', async (path) => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

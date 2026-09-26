@@ -53,6 +53,11 @@ class ProfileConfigurationTest {
                                     .isEqualTo(level);
                             assertThat(environment.containsProperty("local-only-marker"))
                                     .isEqualTo(profile.equals("local"));
+                            assertThat(environment.getProperty("platform.auth.initial-password"))
+                                    .isEqualTo(
+                                            profile.equals("dev") || profile.equals("local")
+                                                    ? "StreamFusion@123"
+                                                    : "");
                             assertThat(
                                             environment.getProperty(
                                                     "management.endpoints.web.exposure.include"))

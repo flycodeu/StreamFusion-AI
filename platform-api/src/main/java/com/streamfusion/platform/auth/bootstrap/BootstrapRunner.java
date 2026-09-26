@@ -9,6 +9,7 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnNotWebApplication;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -24,6 +25,11 @@ public class BootstrapRunner implements ApplicationRunner {
         Long departmentId = environment.getProperty("platform.bootstrap.department-id", Long.class);
         if (environment.getProperty("platform.bootstrap.default-admin", Boolean.class, false)) {
             String initialPassword = environment.getProperty("SF_BOOTSTRAP_PASSWORD");
+            if ((initialPassword == null || initialPassword.isBlank())
+                    && environment.acceptsProfiles(Profiles.of("dev", "local"))
+                    && !environment.acceptsProfiles(Profiles.of("prod"))) {
+                initialPassword = environment.getProperty("platform.auth.initial-password");
+            }
             if (initialPassword == null || initialPassword.isBlank()) {
                 throw new IllegalStateException(
                         "SF_BOOTSTRAP_PASSWORD is required for default administrator bootstrap");

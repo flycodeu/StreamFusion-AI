@@ -30,15 +30,14 @@ public final class ModuleAuthorizationInterceptor implements HandlerInterceptor 
         if (!(handler instanceof HandlerMethod method)) {
             return true;
         }
-        ModuleAccess access = moduleAccessOf(method);
-        if (access == null) {
+        String module = ModuleRegistry.moduleOf(method);
+        if (module == null) {
             // 认证/个人中心由认证控制器负责；其他业务控制器必须显式声明模块。
             // 仅豁免已实现的认证接口；新路径或新方法仍默认拒绝。
             if (isAuthenticationEndpoint(request, method) || isInfrastructure(request)) return true;
             errors.write(request, response, ErrorCode.FORBIDDEN);
             return false;
         }
-        String module = access.value().strip();
         if (module.isEmpty()) {
             errors.write(request, response, ErrorCode.FORBIDDEN);
             return false;
@@ -52,13 +51,6 @@ public final class ModuleAuthorizationInterceptor implements HandlerInterceptor 
         }
     }
 
-    private static ModuleAccess moduleAccessOf(HandlerMethod method) {
-        ModuleAccess methodAccess = method.getMethodAnnotation(ModuleAccess.class);
-        return methodAccess != null
-                ? methodAccess
-                : method.getBeanType().getAnnotation(ModuleAccess.class);
-    }
-
     private static boolean isAuthenticationEndpoint(
             HttpServletRequest request, HandlerMethod handler) {
         if (handler.getMethod().getDeclaringClass() != AuthController.class) return false;
@@ -68,6 +60,10 @@ public final class ModuleAuthorizationInterceptor implements HandlerInterceptor 
         return switch (handler.getMethod().getName()) {
             case "csrf" -> read && path.equals("/auth/csrf");
             case "login" -> method.equals("POST") && path.equals("/auth/login");
+            case "loginChallenge" -> read && path.equals("/auth/login/challenge");
+            case "passwordPolicy" -> read && path.equals("/auth/password-policy");
+            case "loginRecords" -> read && path.equals("/auth/login-records/page");
+            case "secureLogin" -> method.equals("POST") && path.equals("/auth/login/secure");
             case "me" -> read && path.equals("/auth/me");
             case "update" -> method.equals("PUT") && path.equals("/auth/me");
             case "password" -> method.equals("PUT") && path.equals("/auth/password");

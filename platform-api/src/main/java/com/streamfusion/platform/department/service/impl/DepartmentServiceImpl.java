@@ -38,6 +38,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
@@ -115,7 +116,15 @@ public class DepartmentServiceImpl implements DepartmentService {
         } catch (DataIntegrityViolationException ex) {
             throw BusinessException.error(ErrorCode.CONFLICT);
         }
-        audit.record(actorId, "DEPT", dept.getId(), "DEPT_CREATE", "SUCCESS", null, context);
+        audit.record(
+                actorId,
+                "DEPT",
+                dept.getId(),
+                "DEPT_CREATE",
+                "SUCCESS",
+                null,
+                context,
+                auditSummary(dept.getName(), dept.getParentId()));
         return node(dept, 0, List.of());
     }
 
@@ -131,9 +140,10 @@ public class DepartmentServiceImpl implements DepartmentService {
         Map<Long, DepartmentEntity> byId = byId(all);
         DepartmentEntity current = byId.get(deptId);
         if (current == null) throw BusinessException.error(ErrorCode.NOT_FOUND);
-        if (!current.getVersion().equals(version) || version == Long.MAX_VALUE) {
+        if (!current.getVersion().equals(version)) {
             throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
         }
+        com.streamfusion.platform.common.validation.VersionCounter.requireIncrementable(version);
         validatePlacement(values.parentId(), deptId, byId, children(all));
         uniqueSibling(values, deptId, all);
         try {
@@ -152,7 +162,15 @@ public class DepartmentServiceImpl implements DepartmentService {
         } catch (DataIntegrityViolationException ex) {
             throw BusinessException.error(ErrorCode.CONFLICT);
         }
-        audit.record(actorId, "DEPT", deptId, "DEPT_UPDATE", "SUCCESS", null, context);
+        audit.record(
+                actorId,
+                "DEPT",
+                deptId,
+                "DEPT_UPDATE",
+                "SUCCESS",
+                null,
+                context,
+                auditSummary(values.name(), values.parentId()));
         DepartmentEntity updated = departments.selectById(deptId);
         return node(updated, counts().getOrDefault(deptId, 0L), List.of());
     }
@@ -182,11 +200,22 @@ public class DepartmentServiceImpl implements DepartmentService {
         } catch (DataIntegrityViolationException ex) {
             throw BusinessException.error(ErrorCode.CONFLICT);
         }
-        Map<String, Object> deletedSnapshot = new HashMap<>();
-        deletedSnapshot.put("name", target.getName());
-        deletedSnapshot.put("parentId", string(target.getParentId()));
         audit.record(
-                actorId, "DEPT", deptId, "DEPT_DELETE", "SUCCESS", null, context, deletedSnapshot);
+                actorId,
+                "DEPT",
+                deptId,
+                "DEPT_DELETE",
+                "SUCCESS",
+                null,
+                context,
+                auditSummary(target.getName(), target.getParentId()));
+    }
+
+    private static Map<String, Object> auditSummary(String name, Long parentId) {
+        Map<String, Object> summary = new HashMap<>();
+        summary.put("name", name);
+        summary.put("parentId", string(parentId));
+        return summary;
     }
 
     @Override
@@ -216,9 +245,40 @@ public class DepartmentServiceImpl implements DepartmentService {
         if (!superAdmin && (actorId == id || access.isSuperAdmin(id))) {
             throw BusinessException.error(ErrorCode.PROTECTED_ACCOUNT);
         }
-        if (!target.getVersion().equals(version) || version == Long.MAX_VALUE) {
+        if (!target.getVersion().equals(version)) {
             throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
         }
+        com.streamfusion.platform.common.validation.VersionCounter.requireIncrementable(version);
+        if (!replaceUserBindings(id, selected, actorId, context)) return userDepartments(userId);
+        if (!users.update(
+                null,
+                new LambdaUpdateWrapper<UserEntity>()
+                        .eq(UserEntity::getId, id)
+                        .eq(UserEntity::getVersion, version)
+                        .setIncrBy(UserEntity::getVersion, 1)
+                        .set(UserEntity::getUpdatedAt, now())
+                        .set(UserEntity::getUpdatedBy, actorId))) {
+            throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
+        }
+        return userDepartments(userId);
+    }
+
+    @Override
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void assignForUserWrite(
+            long userId, List<String> departmentIds, AuditContextDto context) {
+        List<Long> selected = rules.departmentIds(departmentIds);
+        long actorId = lockActor();
+        UserEntity target = users.lockById(userId);
+        if (target == null) throw BusinessException.error(ErrorCode.NOT_FOUND);
+        if (!access.isSuperAdmin(actorId) && (actorId == userId || access.isSuperAdmin(userId))) {
+            throw BusinessException.error(ErrorCode.PROTECTED_ACCOUNT);
+        }
+        replaceUserBindings(userId, selected, actorId, context);
+    }
+
+    private boolean replaceUserBindings(
+            long id, List<Long> selected, long actorId, AuditContextDto context) {
         Map<Long, DepartmentEntity> available = byId(load());
         if (!available.keySet().containsAll(selected)) {
             throw BusinessException.error(ErrorCode.VALIDATION_ERROR);
@@ -227,21 +287,11 @@ public class DepartmentServiceImpl implements DepartmentService {
         for (DepartmentVo dept : forUsers(List.of(id)).getOrDefault(id, List.of())) {
             previous.add(Long.parseLong(dept.getId()));
         }
-        if (previous.equals(new HashSet<>(selected))) return userDepartments(userId);
+        if (previous.equals(new HashSet<>(selected))) return false;
         departments.deleteUserBindings(id);
         LocalDateTime now = now();
         for (Long deptId : selected) {
             departments.insertUserBinding(id, deptId, now, actorId);
-        }
-        if (!users.update(
-                null,
-                new LambdaUpdateWrapper<UserEntity>()
-                        .eq(UserEntity::getId, id)
-                        .eq(UserEntity::getVersion, version)
-                        .setIncrBy(UserEntity::getVersion, 1)
-                        .set(UserEntity::getUpdatedAt, now)
-                        .set(UserEntity::getUpdatedBy, actorId))) {
-            throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
         }
         audit.record(
                 actorId,
@@ -255,7 +305,7 @@ public class DepartmentServiceImpl implements DepartmentService {
                         "beforeDepartmentIds",
                                 previous.stream().sorted().map(String::valueOf).toList(),
                         "afterDepartmentIds", selected.stream().map(String::valueOf).toList()));
-        return userDepartments(userId);
+        return true;
     }
 
     @Override

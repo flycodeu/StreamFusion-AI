@@ -1,40 +1,23 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { ElTabs, ElTabPane } from 'element-plus'
-import 'element-plus/es/components/tabs/style/css'
-import 'element-plus/es/components/tab-pane/style/css'
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
+import { ElConfigProvider } from 'element-plus'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import AdminLayout from './layouts/AdminLayout.vue'
-import HomeView from './views/HomeView.vue'
+import { sessionState } from './session/state'
 
-const activePage = ref('home')
+const route = useRoute()
+const standalone = computed(() => route.path === '/login' || route.path === '/unavailable')
 </script>
 
 <template>
-  <AdminLayout>
-    <ElTabs v-model="activePage" class="page-tabs" aria-label="页面标签">
-      <ElTabPane label="首页" name="home">
-        <HomeView />
-      </ElTabPane>
-    </ElTabs>
-  </AdminLayout>
+  <ElConfigProvider :locale="zhCn">
+    <RouterView v-if="standalone" />
+    <AdminLayout
+      v-else
+      :display-name="sessionState.me?.user.nickname || sessionState.me?.user.username"
+    >
+      <RouterView />
+    </AdminLayout>
+  </ElConfigProvider>
 </template>
-
-<style scoped>
-.page-tabs :deep(.el-tabs__header) {
-  margin: 0;
-  padding: 0 var(--content-spacing);
-  background: #fff;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.page-tabs :deep(.el-tabs__nav-wrap::after) {
-  display: none;
-}
-.page-tabs :deep(.el-tabs__item) {
-  min-width: 64px;
-  height: 42px;
-  font-size: 13px;
-}
-.page-tabs :deep(.el-tabs__content) {
-  min-height: calc(100dvh - var(--header-height) - 43px);
-}
-</style>

@@ -5,13 +5,19 @@ import AdminSidebar from './components/AdminSidebar.vue'
 import AdminContent from './components/AdminContent.vue'
 
 defineProps<{ displayName?: string }>()
-const collapsed = ref(false)
+const collapsed = ref(typeof globalThis.innerWidth === 'number' && globalThis.innerWidth <= 680)
 </script>
 
 <template>
   <div class="admin-layout">
     <a class="skip-link" href="#main-content">跳转到内容</a>
     <AdminSidebar :collapsed="collapsed" />
+    <button
+      v-if="!collapsed"
+      class="sidebar-backdrop"
+      aria-label="关闭侧栏"
+      @click="collapsed = true"
+    />
     <div class="workspace">
       <AdminHeader
         :collapsed="collapsed"
@@ -45,6 +51,19 @@ const collapsed = ref(false)
 .workspace {
   flex: 1;
   min-width: 0;
-  background: #f8faf8;
+  background: #f4f6f8;
+}
+.sidebar-backdrop {
+  display: none;
+}
+@media (max-width: 680px) {
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0 0 0 216px;
+    z-index: 19;
+    border: 0;
+    background: #00000030;
+  }
 }
 </style>

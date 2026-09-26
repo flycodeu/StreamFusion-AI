@@ -6,7 +6,7 @@
 
 [快速开始](#快速开始) · [系统架构](#系统架构) · [开发指南](DEVELOPMENT.md) · [公共协议](contracts/README.md) · [路线图](#路线图) · [反馈问题](https://github.com/flycodeu/StreamFusion-AI/issues)
 
-> **项目状态：早期开发。** 已实现登录会话、用户、角色、部门、菜单管理后端与操作审计写入。前端目前提供管理布局和连接检查，业务页面、动态路由及视频推理链路仍在开发中。
+> **项目状态：早期开发。** 已实现登录会话、用户、角色、部门、菜单管理前后端、文件路径动态路由与操作审计写入。视频推理与节点协同链路仍在开发中。
 
 ## 项目介绍
 
@@ -18,8 +18,8 @@ StreamFusion AI 的目标是让视频分析任务可以被统一配置、在算�
 
 | 模块 | 当前已实现 | 尚未实现 |
 |---|---|---|
-| Platform API | Redis Session 登录与改密、用户/角色/部门/菜单管理、PAGE 模块授权、操作审计写入、健康检查、OpenAPI / Swagger UI | 审计查询 API、相机、任务及事件 API |
-| Platform Web | 顶部栏与可收起侧栏、未登录身份展示、后端连接检查、超时与错误提示、手动重试 | 登录页、业务管理页面、动态路由、视频预览 |
+| Platform API | Redis Session 登录与改密、用户/角色/部门/菜单管理、PAGE 模块授权、操作审计写入与查询、服务信息采集、健康检查、OpenAPI / Swagger UI | 相机、任务及事件 API |
+| Platform Web | 加密登录、个人信息、用户/角色/部门/菜单页面、操作记录、服务信息、按文件路径动态路由、查询/勾选/列设置、后端连接检查 | 视频预览与视频业务页面 |
 | Node Agent | 独立环境与配置、健康接口、接口文档、请求日志 | 节点注册、心跳、任务同步、进程监督 |
 | Algorithm Runtime | 独立环境与配置、健康接口、接口文档、请求日志 | 拉流、解码、模型推理、事件与证据 |
 | 工程基础 | 依赖锁定、环境检查、日志轮转与脱敏、质量检查、CI 工作流、协议样例校验 | 自动部署、部署编排 |
@@ -35,7 +35,7 @@ StreamFusion AI 的目标是让视频分析任务可以被统一配置、在算�
 
 ```mermaid
 flowchart LR
-    WEB["Platform Web<br/>管理界面"] -->|"健康检查"| API["Platform API<br/>配置与业务管理"]
+    WEB["Platform Web<br/>管理界面"] -->|"登录、权限菜单与管理 API"| API["Platform API<br/>配置与业务管理"]
     AGENT["Node Agent<br/>节点协调"] -.->|"任务同步与结果上传（规划）"| API
     AGENT -.->|"Worker 监督（规划）"| RUNTIME["Algorithm Runtime<br/>视频与算法执行"]
     CAMERA["视频源"] -.->|"媒体接入（规划）"| RUNTIME
@@ -113,22 +113,24 @@ Pop-Location
 先准备项目数据库和 Redis，并按 [数据库与安全配置说明](DEVELOPMENT.md#mysqlmybatis-plusredis)
 填写后端 local 配置；公共示例不会自动提供数据库凭证或创建数据库。
 首次使用请按 [SQL 指南](platform-api/sql/README.md)手动初始化专用空库；应用启动不建表、不迁移。
-初始化建立八张业务表、SUPER_ADMIN、管理 PAGE 和示例组织“飞云科技公司 / 研发部门 / 运维部门”，不创建账号或写入固定密码哈希。示例组织可通过管理 API 修改，解除成员和子部门引用后可删除；普通新建用户不会自动加入示例部门。脚本含 DROP，已有数据的库不要重复导入。
+初始化建立九张业务表、SUPER_ADMIN、管理 PAGE 和示例组织“飞云科技公司 / 研发部门 / 运维部门”，不创建账号或写入固定密码哈希。示例组织可通过管理 API 修改，解除成员和子部门引用后可删除；普通新建用户不会自动加入示例部门。脚本含 DROP，已有数据的库不要重复导入。旧版八表数据库须先按 [SQL 指南](platform-api/sql/README.md#已有库增加-ip-封禁表)增加 IP 封禁表，再启动新版后端。
 
-构建完成并配置好 local 数据源后，在仓库根目录执行一次非 Web 引导。临时密码从输入提示读取，不写入命令历史：
+构建完成并配置好 local 数据源后，在仓库根目录执行一次非 Web 引导：
 
 ```powershell
 Push-Location platform-api
-$env:SF_BOOTSTRAP_PASSWORD = [System.Net.NetworkCredential]::new('', (Read-Host '首位管理员临时密码' -AsSecureString)).Password
 try {
     java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=local --bootstrap-admin --platform.bootstrap.default-admin=true
 } finally {
-    Remove-Item Env:SF_BOOTSTRAP_PASSWORD
     Pop-Location
 }
 ```
 
 默认账号名为 `admin`，显示名为“超级管理员”，关联示例研发部门；账号、名称和部门均可配置。首次登录必须改密后才能使用管理 API。引导仅在无用户且无成功引导记录时执行，不会覆盖已有账号。交互式强密码引导、无部门初始化和配置项见[开发指南](DEVELOPMENT.md#首位管理员初始化)。
+
+`dev` / `local` 的默认临时密码为 **`StreamFusion@123`**，用于首次显式引导，以及普通用户的新建和密码重置。`SF_AUTH_INITIAL_PASSWORD` 可替换新建/重置密码，默认引导也会使用该值；`SF_BOOTSTRAP_PASSWORD` 可单独覆盖本次管理员引导密码。已有账号的密码不会随配置变化。管理界面仅在新建或重置成功后显示当次临时密码，账号首次登录仍须改密。
+
+`prod` 不提供默认密码：管理员引导须显式提供 `SF_BOOTSTRAP_PASSWORD`，普通用户新建/重置须设置 `SF_AUTH_INITIAL_PASSWORD`。不要将生产密码写入仓库；可通过安全输入提示或部署环境注入。
 
 ### 5. 启动服务
 
@@ -154,7 +156,7 @@ try {
 
 Windows 下通过 `pnpm dev` 或 `scripts/start.ps1 web` 重复启动时，会先关闭同一项目、同一端口的旧 Vite 实例。若占用者是其他程序或无法确认归属，则保留该进程并显示 PID；可手动处理，或用 `pnpm dev --port 8091` 临时指定空闲端口。启动器支持 `--port`、`--host`、`--mode` 参数；其他系统保留 Vite 的端口冲突检查。可在 `platform-web` 目录执行 `pnpm test:dev-start` 验证重复启动及无关进程保护。
 
-打开 Web，应显示后端“运行正常”。运行以下命令检查默认端口：
+打开 Web，使用初始化账号登录；首页可以检查后端连接。运行以下命令检查默认端口：
 
 ```powershell
 .\scripts\check-health.ps1
@@ -162,7 +164,9 @@ Windows 下通过 `pnpm dev` 或 `scripts/start.ps1 web` 重复启动时，会�
 
 各终端使用 `Ctrl+C` 停止服务。
 
-前端尚无登录及管理业务页面。直接对接 API 时，先用 `GET /auth/csrf` 取得令牌，保留 `SF_SESSION` Cookie，再调用 `/auth/login`；登录后重新获取 CSRF 令牌供后续写请求使用。详情见[登录与模块授权](DEVELOPMENT.md#登录与模块授权)。新建和重置普通用户前还需配置 `SF_AUTH_INITIAL_PASSWORD`，它与一次性引导密码分别管理。
+前端登录使用挑战公钥与密文登录接口，默认关闭旧明文登录入口。登录后重新获取 CSRF 令牌供写请求使用，详情见[登录与模块授权](DEVELOPMENT.md#登录与模块授权)。新建和重置普通用户使用 `SF_AUTH_INITIAL_PASSWORD`；dev/local 提供上述开发临时密码，prod 须显式配置。页面路径、接口分层和新增菜单方法见[前端开发约定](platform-web/DEVELOPMENT.md)。
+
+登录来源防护默认在同一 IP 十分钟内累计二十次失败后封禁，**不会自动解除**。超级管理员从其他未封禁地址进入“系统管理 → 操作记录 → IP 封禁”手动解除。阈值、可信代理、限频及应急恢复见[IP 登录防护](DEVELOPMENT.md#ip-登录防护)。本轮账号体验和 IP 防护的完整验收仍待完成。
 
 <details>
 <summary>不使用启动脚本</summary>
@@ -293,7 +297,9 @@ StreamFusion-AI/
 - [x] 管理端布局与服务状态页
 - [x] Redis Session 登录、用户/角色/部门/菜单管理后端
 - [x] PAGE 模块授权、用户路由快照与操作审计写入
-- [ ] 登录与管理业务页面、前端动态路由、审计查询 API
+- [x] 登录与管理业务页面、按页面文件路径加载动态路由
+- [ ] 操作审计查询与服务资源信息页面的完整验收
+- [ ] 账号体验与 IP 登录防护的完整验收
 - [ ] 真实视频接入、解码与单路模型推理
 - [ ] 节点注册、任务同步与 Runtime 监督
 - [ ] 相机、场景、模型和任务管理

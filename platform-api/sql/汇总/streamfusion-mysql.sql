@@ -2,6 +2,8 @@ SET NAMES utf8mb4;
 SET time_zone = '+08:00';
 SET FOREIGN_KEY_CHECKS = 1;
 
+DROP TABLE IF EXISTS `sys_login_record`;
+DROP TABLE IF EXISTS `sys_ip_block`;
 DROP TABLE IF EXISTS `sys_operation_log`;
 DROP TABLE IF EXISTS `sys_role_menu`;
 DROP TABLE IF EXISTS `sys_user_dept`;
@@ -49,7 +51,7 @@ CREATE TABLE sys_user (
     phone VARCHAR(32) NULL COMMENT '联系电话',
     email VARCHAR(254) NULL COMMENT '联系邮箱',
     gender TINYINT NOT NULL DEFAULT 0 COMMENT '性别：0未设置、1男、2女',
-    status TINYINT NOT NULL DEFAULT 0 COMMENT '账号状态：0待改密、1正常、2封禁',
+    status TINYINT NOT NULL DEFAULT 0 COMMENT '账号状态：0待改密、1正常、2停用',
     must_change_password BOOLEAN NOT NULL DEFAULT TRUE COMMENT '强制改密标记',
     session_version BIGINT NOT NULL DEFAULT 0 COMMENT '会话版本',
     failed_login_count INT NOT NULL DEFAULT 0 COMMENT '连续登录失败次数',
@@ -104,7 +106,7 @@ CREATE TABLE sys_menu (
     type VARCHAR(16) NOT NULL COMMENT '类型：DIRECTORY、PAGE',
     route_name VARCHAR(64) NULL COMMENT '路由名称',
     path VARCHAR(200) NULL COMMENT '路由路径',
-    component_key VARCHAR(64) NULL COMMENT '组件键',
+    component_key VARCHAR(64) NULL COMMENT '页面文件路径，兼容旧组件键',
     module_key VARCHAR(64) NULL COMMENT '模块键',
     icon VARCHAR(64) NULL COMMENT '图标键',
     sort_order INT NOT NULL DEFAULT 0 COMMENT '排序值',
@@ -134,10 +136,25 @@ INSERT INTO sys_menu (id, parent_id, name, type, icon, sort_order, visible, enab
 VALUES (1001, NULL, '系统管理', 'DIRECTORY', 'settings', 0, TRUE, TRUE);
 INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, sort_order, visible, enabled)
 VALUES
-    (1002, 1001, '用户管理', 'PAGE', 'SystemUsers', '/system/users', 'SYSTEM_USERS', 'user', 0, TRUE, TRUE),
-    (1003, 1001, '角色管理', 'PAGE', 'SystemRoles', '/system/roles', 'SYSTEM_ROLES', 'role', 1, TRUE, TRUE),
-    (1004, 1001, '菜单管理', 'PAGE', 'SystemMenus', '/system/menus', 'SYSTEM_MENUS', 'menu', 2, TRUE, TRUE),
-    (1005, 1001, '部门管理', 'PAGE', 'SystemDepartments', '/system/departments', 'SYSTEM_DEPARTMENTS', 'department', 3, TRUE, TRUE);
+    (1002, 1001, '用户管理', 'PAGE', 'SystemUsers', '/system/users', '/system/User', 'user', 0, TRUE, TRUE),
+    (1003, 1001, '角色管理', 'PAGE', 'SystemRoles', '/system/roles', '/system/Role', 'role', 1, TRUE, TRUE),
+    (1004, 1001, '菜单管理', 'PAGE', 'SystemMenus', '/system/menus', '/system/Menu', 'menu', 2, TRUE, TRUE),
+    (1005, 1001, '部门管理', 'PAGE', 'SystemDepartments', '/system/departments', '/system/Department', 'department', 3, TRUE, TRUE),
+    (1006, 1001, '操作记录', 'PAGE', 'audit', '/system/Audit', '/system/Audit', 'audit', 4, TRUE, TRUE),
+    (1007, 1001, '服务信息', 'PAGE', 'server', '/system/Server', '/system/Server', 'server', 5, TRUE, TRUE);
+
+UPDATE sys_menu SET icon = 'audit' WHERE id = 1006;
+UPDATE sys_menu SET icon = 'server' WHERE id = 1007;
+UPDATE sys_menu SET icon = 'user' WHERE id = 1002;
+UPDATE sys_menu SET icon = 'role' WHERE id = 1003;
+UPDATE sys_menu SET icon = 'menu' WHERE id = 1004;
+UPDATE sys_menu SET icon = 'department' WHERE id = 1005;
+
+-- 监控面板初始菜单
+INSERT INTO sys_menu (id, parent_id, name, type, icon, sort_order, visible, enabled)
+VALUES (1008, NULL, '监控面板', 'DIRECTORY', 'monitor', 1, TRUE, TRUE);
+INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, icon, sort_order, visible, enabled)
+VALUES (1009, 1008, '接口文档', 'PAGE', 'MonitorApiDocs', '/monitor/ApiDocs', '/monitor/ApiDocs', 'api-docs', 'menu', 0, TRUE, TRUE);
 
 -- 用户角色关联表.sql
 CREATE TABLE sys_user_role (
@@ -205,3 +222,47 @@ CREATE TABLE sys_operation_log (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='操作审计';
 CREATE INDEX ix_operation_created ON sys_operation_log(created_at, id);
 CREATE INDEX ix_operation_target ON sys_operation_log(target_type, target_id, created_at);
+
+-- IP封禁表.sql
+CREATE TABLE sys_ip_block (
+    id BIGINT NOT NULL COMMENT '雪花ID',
+    source_ip VARCHAR(45) NOT NULL COMMENT '规范化的IPv4或IPv6来源地址',
+    status VARCHAR(16) NOT NULL COMMENT 'BLOCKED封禁、RELEASED解除',
+    reason_code VARCHAR(64) NOT NULL COMMENT '封禁原因编码',
+    failed_attempts INT NOT NULL COMMENT '触发封禁时的失败次数',
+    window_seconds INT NOT NULL COMMENT '失败计数窗口秒数',
+    blocked_at DATETIME(6) NOT NULL COMMENT '最近封禁时间',
+    unblocked_at DATETIME(6) NULL COMMENT '最近解除时间',
+    unblocked_by BIGINT NULL COMMENT '执行解除的历史用户ID，不关联账号生命周期',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT '并发版本及失败计数世代',
+    PRIMARY KEY (id),
+    CONSTRAINT uk_ip_block_source UNIQUE (source_ip),
+    CONSTRAINT ck_ip_block_status CHECK (status IN ('BLOCKED', 'RELEASED')),
+    CONSTRAINT ck_ip_block_counters CHECK (failed_attempts >= 0 AND window_seconds > 0 AND version >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='来源IP安全封禁';
+CREATE INDEX ix_ip_block_status_time ON sys_ip_block(status, blocked_at, id);
+
+-- 登录记录表.sql
+CREATE TABLE sys_login_record (
+    id BIGINT NOT NULL COMMENT '独立登录记录雪花ID，不是SessionID',
+    user_id BIGINT NOT NULL COMMENT '历史用户ID，不随账号删除，不设外键',
+    username VARCHAR(32) NOT NULL COMMENT '登录时账号快照',
+    nickname VARCHAR(64) NULL COMMENT '登录时昵称快照',
+    session_version BIGINT NOT NULL COMMENT '登录时安全版本，用于判断后续失效',
+    source_ip VARCHAR(45) NOT NULL COMMENT '规范化可信来源IP',
+    region_type VARCHAR(32) NOT NULL COMMENT '本机内网公网等来源分类',
+    region VARCHAR(256) NOT NULL COMMENT '离线地区或配置本地网段名称',
+    browser VARCHAR(64) NOT NULL COMMENT '浏览器类别，来自客户端声明',
+    os VARCHAR(64) NOT NULL COMMENT '操作系统类别，来自客户端声明',
+    login_at DATETIME(6) NOT NULL COMMENT '成功登录时间，北京时间',
+    last_activity_at DATETIME(6) NOT NULL COMMENT '节流后最后记录活动时间，北京时间',
+    absolute_expires_at DATETIME(6) NOT NULL COMMENT '登录时确定的绝对到期时间，北京时间',
+    idle_timeout_seconds INT NOT NULL COMMENT '登录时闲置期限秒数',
+    activity_interval_seconds INT NOT NULL COMMENT '登录时活动记录节流秒数',
+    ended_at DATETIME(6) NULL COMMENT '明确结束时间，北京时间；超时可查询时推断',
+    end_reason VARCHAR(32) NULL COMMENT '明确结束原因；未设置时按期限和账号安全版本判断',
+    PRIMARY KEY (id),
+    CONSTRAINT ck_login_record_limits CHECK (idle_timeout_seconds > 0 AND activity_interval_seconds > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='成功登录会话历史，无会话凭据';
+CREATE INDEX ix_login_record_user_time ON sys_login_record(user_id, login_at, id);
+CREATE INDEX ix_login_record_user_end ON sys_login_record(user_id, end_reason);

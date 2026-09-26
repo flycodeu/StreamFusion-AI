@@ -64,7 +64,7 @@ class BootstrapContextTest {
         var user = users.getById(id);
         assertThat(user.getStatus()).isEqualTo(UserStatus.NORMAL.getCode());
         assertThat(user.getMustChangePassword()).isFalse();
-        assertThat(count("sys_role_menu")).isEqualTo(4);
+        assertThat(count("sys_role_menu")).isEqualTo(7);
         assertThat(count("sys_user_dept")).isZero();
     }
 
@@ -97,7 +97,7 @@ class BootstrapContextTest {
                                         + " WHERE ur.user_id=?",
                                 Integer.class,
                                 id))
-                .isEqualTo(4);
+                .isEqualTo(7);
 
         assertThat(
                         jdbc.queryForObject(
@@ -115,7 +115,7 @@ class BootstrapContextTest {
         assertThat(users.getById(id)).isEqualTo(user);
         assertThat(count("sys_user")).isEqualTo(1);
         assertThat(count("sys_user_role")).isEqualTo(1);
-        assertThat(count("sys_role_menu")).isEqualTo(4);
+        assertThat(count("sys_role_menu")).isEqualTo(7);
         assertThat(
                         jdbc.queryForObject(
                                 "SELECT dept_id FROM sys_user_dept WHERE user_id=?",
@@ -144,11 +144,11 @@ class BootstrapContextTest {
     @Test
     void defaultBootstrapPreservesAlreadySeededPageBindings() throws Exception {
         IdentitySchema.initialize(source);
-        assertThat(count("sys_role_menu")).isEqualTo(4);
+        assertThat(count("sys_role_menu")).isEqualTo(7);
         bootstrap.initializeDefaultAdmin("admin", null, "starter@2026", null);
         assertThat(count("sys_user")).isEqualTo(1);
         assertThat(count("sys_user_role")).isEqualTo(1);
-        assertThat(count("sys_role_menu")).isEqualTo(4);
+        assertThat(count("sys_role_menu")).isEqualTo(7);
     }
 
     @Test
@@ -175,6 +175,37 @@ class BootstrapContextTest {
                 new MockEnvironment().withProperty("platform.bootstrap.default-admin", "true");
         var runner = new BootstrapRunner(service, environment);
         assertThatThrownBy(() -> runner.run(new DefaultApplicationArguments()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SF_BOOTSTRAP_PASSWORD");
+        verifyNoInteractions(service);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"dev", "local"})
+    void developmentBootstrapUsesItsConfiguredInitialPassword(String profile) {
+        BootstrapService service = mock(BootstrapService.class);
+        var settings =
+                new MockEnvironment()
+                        .withProperty("platform.bootstrap.default-admin", "true")
+                        .withProperty("platform.bootstrap.username", "admin")
+                        .withProperty("platform.auth.initial-password", "StreamFusion@123");
+        settings.setActiveProfiles(profile);
+        new BootstrapRunner(service, settings).run(new DefaultApplicationArguments());
+        verify(service).initializeDefaultAdmin("admin", null, "StreamFusion@123", null);
+    }
+
+    @Test
+    void productionBootstrapNeverFallsBackToTheDevelopmentCredential() {
+        BootstrapService service = mock(BootstrapService.class);
+        var settings =
+                new MockEnvironment()
+                        .withProperty("platform.bootstrap.default-admin", "true")
+                        .withProperty("platform.auth.initial-password", "StreamFusion@123");
+        settings.setActiveProfiles("dev", "prod");
+        assertThatThrownBy(
+                        () ->
+                                new BootstrapRunner(service, settings)
+                                        .run(new DefaultApplicationArguments()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("SF_BOOTSTRAP_PASSWORD");
         verifyNoInteractions(service);
