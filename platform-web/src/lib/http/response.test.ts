@@ -17,7 +17,7 @@ function raw(
       contentType: 'application/json',
       traceId: trace,
       etag: '"7"',
-      location: '/api/v1/users/1',
+      location: '/user/1',
       retryAfter: null,
       ...overrides,
     },
@@ -42,7 +42,7 @@ describe('R response parser', () => {
           traceId: trace,
           timestamp: '2026-09-16T07:00:00.123456Z',
           etag: '"7"',
-          location: '/api/v1/users/1',
+          location: '/user/1',
         },
       })
     },

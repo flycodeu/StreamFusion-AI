@@ -1,10 +1,16 @@
 package com.streamfusion.platform.common.web;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.Instant;
 import org.slf4j.MDC;
 
+@Schema(description = "非业务路径错误响应")
 public record ApiError(
-        String code, String message, Object data, String traceId, Instant timestamp) {
+        @Schema(description = "错误编码") String code,
+        @Schema(description = "错误说明") String message,
+        @Schema(description = "错误数据") Object data,
+        @Schema(description = "跟踪ID") String traceId,
+        @Schema(description = "响应时间") Instant timestamp) {
     public static ApiError fromStatus(int status) {
         String code =
                 switch (status) {

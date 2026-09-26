@@ -7,6 +7,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.QueryTimeoutException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
@@ -14,6 +16,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.AuthenticationTrustResolverImpl;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.validation.BindException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -90,5 +93,16 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<Object> unexpected(Exception ex, HttpServletRequest request) {
         LOG.error("Unhandled request exception", ex);
         return writer.entity(request, 500, ErrorCode.INTERNAL_ERROR, null, new HttpHeaders());
+    }
+
+    @ExceptionHandler({
+        DataAccessResourceFailureException.class,
+        QueryTimeoutException.class,
+        CannotCreateTransactionException.class
+    })
+    public ResponseEntity<Object> dependencyUnavailable(Exception ex, HttpServletRequest request) {
+        LOG.warn("Request dependency unavailable");
+        return writer.entity(
+                request, 503, ErrorCode.DEPENDENCY_UNAVAILABLE, null, new HttpHeaders());
     }
 }

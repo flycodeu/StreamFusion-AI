@@ -24,8 +24,16 @@ public final class ApiErrorWriter {
     public static boolean isBusinessRequest(HttpServletRequest request) {
         Object original = request.getAttribute(RequestDispatcher.ERROR_REQUEST_URI);
         String uri = original instanceof String value ? value : request.getRequestURI();
-        String prefix = request.getContextPath() + "/api/v1";
-        return uri.equals(prefix) || uri.startsWith(prefix + "/");
+        String context = request.getContextPath();
+        return matchesModule(uri, context + "/user")
+                || matchesModule(uri, context + "/auth")
+                || matchesModule(uri, context + "/menus")
+                || matchesModule(uri, context + "/roles")
+                || matchesModule(uri, context + "/departments");
+    }
+
+    private static boolean matchesModule(String uri, String module) {
+        return uri.equals(module) || uri.startsWith(module + "/");
     }
 
     public ResponseEntity<Object> entity(

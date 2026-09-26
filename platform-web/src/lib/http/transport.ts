@@ -16,7 +16,10 @@ function prepare(options: TransportOptions): { url: string; headers: Headers; bo
     invalid()
   }
   if (parsed.origin !== 'http://same-origin.invalid' || parsed.pathname !== path) invalid()
-  if (!(path.startsWith('/api/v1/') || path === '/actuator/health')) invalid()
+  if (!(
+    /^\/(?:user|auth|roles|menus|departments)(?:\/|$)/.test(path) || path === '/actuator/health'
+  ))
+    invalid()
   // Encoded separators/dot segments cannot escape the declared API boundary.
   if (/%(?:2e|2f|5c|25)/i.test(path)) invalid()
   if (method === 'GET' && (body !== undefined || ifMatch !== undefined)) invalid()

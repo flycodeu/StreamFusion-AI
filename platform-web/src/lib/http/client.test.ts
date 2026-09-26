@@ -28,7 +28,7 @@ function hooks(): ClientHooks {
   }
 }
 const options = (): RequestOptions<unknown> => ({
-  path: '/api/v1/users',
+  path: '/user/page',
   method: 'GET',
   successStatus: 200,
   decode: (value) => value,
@@ -39,6 +39,50 @@ describe('business HTTP client', () => {
     expect(() => createApiClient({} as ClientHooks)).toThrow(
       expect.objectContaining({ code: 'INVALID_REQUEST' }),
     )
+  })
+
+  it.each([
+    '/user',
+    '/user/page',
+    '/user/9007199254740993',
+    '/auth',
+    '/auth/me',
+    '/roles',
+    '/roles/page',
+    '/roles/9007199254740993/menus',
+    '/menus',
+    '/menus/9007199254740993',
+    '/departments',
+    '/departments/9007199254740993',
+  ])('accepts the declared business module path: %s', async (path) => {
+    const fetchMock = vi.fn().mockResolvedValue(response())
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(createApiClient(hooks())({ ...options(), path })).resolves.toMatchObject({
+      data: null,
+    })
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(path)
+  })
+
+  it.each([
+    '/userland',
+    '/users',
+    '/authentication',
+    '/authentic',
+    '/role',
+    '/roles-admin',
+    '/menu',
+    '/menus-extra',
+    '/department',
+    '/departments-private',
+    '/api',
+    '/private',
+  ])('rejects paths outside the declared modules: %s', async (path) => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(createApiClient(hooks())({ ...options(), path })).rejects.toMatchObject({
+      code: 'INVALID_REQUEST',
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('notifies again if a refreshed CSRF token is rejected within the same identity', async () => {

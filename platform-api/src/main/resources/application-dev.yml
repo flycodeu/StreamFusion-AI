@@ -1,4 +1,7 @@
 # Shared development defaults. Keep credentials outside the repository.
+platform:
+  auth:
+    secure-cookie: ${SF_AUTH_SECURE_COOKIE:false}
 spring:
   datasource:
     url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/streamfusion?connectionTimeZone=Asia/Shanghai&connectTimeout=3000&socketTimeout=5000}

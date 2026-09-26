@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.streamfusion.platform.access.mapper.AccessMapper">
+    <resultMap id="roleVo" type="com.streamfusion.platform.access.pojo.vo.RoleVo">
+        <constructor>
+            <idArg column="id" javaType="java.lang.String"/>
+            <arg column="code" javaType="java.lang.String"/>
+            <arg column="name" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="userRoleAssignment" type="com.streamfusion.platform.access.pojo.dto.UserRoleAssignmentDto">
+        <constructor>
+            <arg column="user_id" javaType="java.lang.Long"/>
+            <arg column="id" javaType="java.lang.String"/>
+            <arg column="code" javaType="java.lang.String"/>
+            <arg column="name" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <select id="lockSuperAdminRole" resultType="java.lang.Long" flushCache="true">
+        SELECT id
+        FROM sys_role
+        WHERE code = 'SUPER_ADMIN' AND status = 'ENABLED'
+        FOR UPDATE
+    </select>
+
+    <select id="findRoles" resultMap="roleVo">
+        SELECT r.id, r.code, r.name
+        FROM sys_role r
+        INNER JOIN sys_user_role ur ON ur.role_id = r.id
+        WHERE ur.user_id = #{userId} AND r.status = 'ENABLED'
+        ORDER BY r.code
+    </select>
+
+    <select id="isSuperAdmin" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1 FROM sys_user_role ur
+            JOIN sys_role r ON r.id = ur.role_id
+            WHERE ur.user_id = #{userId} AND r.code = 'SUPER_ADMIN' AND r.status = 'ENABLED'
+        )
+    </select>
+
+    <select id="findRolesForUsers" resultMap="userRoleAssignment">
+        SELECT ur.user_id, r.id, r.code, r.name
+        FROM sys_role r
+        INNER JOIN sys_user_role ur ON ur.role_id = r.id
+        WHERE r.status = 'ENABLED'
+        <choose>
+            <when test="userIds != null and !userIds.isEmpty()">
+                AND ur.user_id IN
+                <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+                    #{userId}
+                </foreach>
+            </when>
+            <otherwise>AND 1 = 0</otherwise>
+        </choose>
+        ORDER BY ur.user_id, r.code
+    </select>
+
+    <sql id="activePageSource">
+        FROM sys_menu m
+        INNER JOIN sys_role_menu rm ON rm.menu_id = m.id
+        INNER JOIN sys_role r ON r.id = rm.role_id
+        INNER JOIN sys_user_role ur ON ur.role_id = r.id
+        LEFT JOIN sys_menu p1 ON p1.id = m.parent_id
+        LEFT JOIN sys_menu p2 ON p2.id = p1.parent_id
+        LEFT JOIN sys_menu p3 ON p3.id = p2.parent_id
+        LEFT JOIN sys_menu p4 ON p4.id = p3.parent_id
+        WHERE ur.user_id = #{userId}
+          AND r.status = 'ENABLED'
+          AND m.type = 'PAGE' AND m.enabled = TRUE
+          AND (p1.id IS NULL OR (p1.type = 'DIRECTORY' AND p1.enabled = TRUE))
+          AND (p2.id IS NULL OR (p2.type = 'DIRECTORY' AND p2.enabled = TRUE))
+          AND (p3.id IS NULL OR (p3.type = 'DIRECTORY' AND p3.enabled = TRUE))
+          AND (p4.id IS NULL OR (p4.type = 'DIRECTORY' AND p4.enabled = TRUE))
+          AND p4.parent_id IS NULL
+    </sql>
+
+    <select id="findModules" resultType="java.lang.String">
+        SELECT DISTINCT m.module_key
+        <include refid="activePageSource"/>
+        ORDER BY m.module_key
+    </select>
+
+    <select id="hasModuleAccess" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1
+            <include refid="activePageSource"/>
+              AND m.module_key = #{module}
+        )
+    </select>
+
+    <insert id="bindAllPages">
+        INSERT INTO sys_role_menu (role_id, menu_id, created_at, created_by)
+        SELECT r.id, m.id, #{now}, NULL FROM sys_role r CROSS JOIN sys_menu m
+        WHERE r.id = #{roleId} AND r.code = 'SUPER_ADMIN' AND m.type = 'PAGE'
+          AND NOT EXISTS (
+            SELECT 1 FROM sys_role_menu rm WHERE rm.role_id = r.id AND rm.menu_id = m.id
+          )
+    </insert>
+
+    <insert id="bindRole">
+        INSERT INTO sys_user_role (user_id, role_id, created_at, created_by)
+        VALUES (#{userId}, #{roleId}, #{now}, NULL)
+    </insert>
+</mapper>

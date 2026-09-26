@@ -6,7 +6,7 @@
 
 [快速开始](#快速开始) · [系统架构](#系统架构) · [开发指南](DEVELOPMENT.md) · [公共协议](contracts/README.md) · [路线图](#路线图) · [反馈问题](https://github.com/flycodeu/StreamFusion-AI/issues)
 
-> **项目状态：早期开发。** 当前具备工程基础、MySQL / Redis 接入、RBAC 表结构与管理端布局。登录、用户管理及视频推理业务尚未实现，暂不具备生产使用条件。
+> **项目状态：早期开发。** 已实现登录会话、用户、角色、部门、菜单管理后端与操作审计写入。前端目前提供管理布局和连接检查，业务页面、动态路由及视频推理链路仍在开发中。
 
 ## 项目介绍
 
@@ -18,7 +18,7 @@ StreamFusion AI 的目标是让视频分析任务可以被统一配置、在算�
 
 | 模块 | 当前已实现 | 尚未实现 |
 |---|---|---|
-| Platform API | MySQL / Redis 接入、RBAC 初始化 SQL、Security 基础、健康检查、分环境配置、统一错误、OpenAPI JSON | 登录、用户与权限管理、相机、任务及事件 API |
+| Platform API | Redis Session 登录与改密、用户/角色/部门/菜单管理、PAGE 模块授权、操作审计写入、健康检查、OpenAPI / Swagger UI | 审计查询 API、相机、任务及事件 API |
 | Platform Web | 顶部栏与可收起侧栏、未登录身份展示、后端连接检查、超时与错误提示、手动重试 | 登录页、业务管理页面、动态路由、视频预览 |
 | Node Agent | 独立环境与配置、健康接口、接口文档、请求日志 | 节点注册、心跳、任务同步、进程监督 |
 | Algorithm Runtime | 独立环境与配置、健康接口、接口文档、请求日志 | 拉流、解码、模型推理、事件与证据 |
@@ -26,6 +26,8 @@ StreamFusion AI 的目标是让视频分析任务可以被统一配置、在算�
 
 后端健康检查包含 MySQL 与 Redis 连通性；返回 `UP` 不代表业务链路已验收。Python 接口中的 `mode=skeleton` 表示当前为空壳实现。
 公共协议为设计基线，不代表节点同步链路已经运行；CI 结果以 [GitHub Actions](https://github.com/flycodeu/StreamFusion-AI/actions) 的实际记录为准。
+
+角色选择页面后获得对应模块的已实现操作。普通管理者可通过其管理 PAGE 管理普通对象、配置自己尚未持有的页面；超级管理员身份仍受单独保护。SUPER_ADMIN 的全部 PAGE 关系由初始化及新建页面维护，鉴权继续检查实际关联与启用状态。部门仅表示组织归属，不授予权限；用户可加入多个部门，无主部门。
 
 ## 系统架构
 
@@ -106,19 +108,36 @@ Pop-Location
 安装后可从根目录执行 `.\scripts\doctor.ps1`，检查工具链、Python 解释器、依赖与默认端口。
 该脚本只诊断，不安装软件，也不停止占用端口的进程。
 
-### 4. 启动服务
+### 4. 初始化数据库与首位管理员
 
 先准备项目数据库和 Redis，并按 [数据库与安全配置说明](DEVELOPMENT.md#mysqlmybatis-plusredis)
 填写后端 local 配置；公共示例不会自动提供数据库凭证或创建数据库。
 首次使用请按 [SQL 指南](platform-api/sql/README.md)手动初始化专用空库；应用启动不建表、不迁移。
-初始化仅建立 RBAC 表结构与内置角色，不创建默认用户。脚本含 DROP，已有数据的库不要重复导入。
-个人开发推荐将下面 API 命令中的 `-Profile dev` 换为 `-Profile local`。
-使用 dev 时需提供 DB_USERNAME / DB_PASSWORD 等环境变量。
+初始化建立八张业务表、SUPER_ADMIN、管理 PAGE 和示例组织“飞云科技公司 / 研发部门 / 运维部门”，不创建账号或写入固定密码哈希。示例组织可通过管理 API 修改，解除成员和子部门引用后可删除；普通新建用户不会自动加入示例部门。脚本含 DROP，已有数据的库不要重复导入。
+
+构建完成并配置好 local 数据源后，在仓库根目录执行一次非 Web 引导。临时密码从输入提示读取，不写入命令历史：
+
+```powershell
+Push-Location platform-api
+$env:SF_BOOTSTRAP_PASSWORD = [System.Net.NetworkCredential]::new('', (Read-Host '首位管理员临时密码' -AsSecureString)).Password
+try {
+    java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=local --bootstrap-admin --platform.bootstrap.default-admin=true
+} finally {
+    Remove-Item Env:SF_BOOTSTRAP_PASSWORD
+    Pop-Location
+}
+```
+
+默认账号名为 `admin`，显示名为“超级管理员”，关联示例研发部门；账号、名称和部门均可配置。首次登录必须改密后才能使用管理 API。引导仅在无用户且无成功引导记录时执行，不会覆盖已有账号。交互式强密码引导、无部门初始化和配置项见[开发指南](DEVELOPMENT.md#首位管理员初始化)。
+
+### 5. 启动服务
+
+个人开发推荐使用 `local`；使用 `dev` 时需提供 `DB_USERNAME` / `DB_PASSWORD` 等环境变量。
 
 在仓库根目录打开四个终端，每个终端执行一条命令：
 
 ```powershell
-.\scripts\start.ps1 api -Profile dev
+.\scripts\start.ps1 api -Profile local
 .\scripts\start.ps1 web
 .\scripts\start.ps1 agent
 .\scripts\start.ps1 runtime
@@ -129,6 +148,7 @@ Pop-Location
 | Web | http://127.0.0.1:8090 |
 | API 健康检查 | http://127.0.0.1:8080/actuator/health |
 | API 接口描述（开发环境） | http://127.0.0.1:8080/v3/api-docs |
+| API Swagger UI（开发环境） | http://127.0.0.1:8080/swagger-ui.html |
 | Agent 健康检查 / 接口文档 | http://127.0.0.1:8100/health · http://127.0.0.1:8100/docs |
 | Runtime 健康检查 / 接口文档 | http://127.0.0.1:8101/health · http://127.0.0.1:8101/docs |
 
@@ -141,6 +161,8 @@ Windows 下通过 `pnpm dev` 或 `scripts/start.ps1 web` 重复启动时，会�
 ```
 
 各终端使用 `Ctrl+C` 停止服务。
+
+前端尚无登录及管理业务页面。直接对接 API 时，先用 `GET /auth/csrf` 取得令牌，保留 `SF_SESSION` Cookie，再调用 `/auth/login`；登录后重新获取 CSRF 令牌供后续写请求使用。详情见[登录与模块授权](DEVELOPMENT.md#登录与模块授权)。新建和重置普通用户前还需配置 `SF_AUTH_INITIAL_PASSWORD`，它与一次性引导密码分别管理。
 
 <details>
 <summary>不使用启动脚本</summary>
@@ -189,7 +211,7 @@ java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=prod
 | `SERVER_PORT` | HTTP 端口，默认 `8080` |
 | `LOCAL_CONFIG_PATH` | local 配置文件位置，仅 local 环境使用 |
 
-`prod` 只是配置环境，不代表当前骨架已经具备认证、HTTPS 或生产部署能力。
+`prod` 默认启用 Secure Cookie、关闭接口文档；HTTPS、反向代理和生产部署仍需自行配置与验证。认证功能已实现，选择 profile 本身不代表生产部署完成。
 
 ### 前端与算法节点
 
@@ -214,8 +236,8 @@ Agent 与 Runtime 在各自目录使用 `uv run --locked python -m app` 启动�
 | 本地环境检查 | 仓库根目录 | `.\scripts\doctor.ps1` |
 | 运行中的服务检查 | 仓库根目录 | `.\scripts\check-health.ps1` |
 
-测试覆盖配置与健康响应、安全基础、错误与日志、H2 建表与重建及基本约束、管理端布局和协议样例。
-真实 MySQL 检查需显式启用，说明见 [SQL 指南](platform-api/sql/README.md#验证)；普通测试不连接本机数据库。
+测试覆盖登录/改密/会话失效、管理操作及授权边界、审计事务、H2 建表与约束、配置与错误、管理端布局和协议样例。
+真实 MySQL 与 Redis HTTP 检查需显式启用，命令及隔离要求见[开发指南](DEVELOPMENT.md#验证命令)；普通测试不连接本机数据库。
 Python 的 Ruff、mypy 命令和格式化方法见 [开发指南](DEVELOPMENT.md#验证命令)。
 GitHub Actions 配置了 Windows / Linux 检查矩阵，不包含部署操作。
 这些检查不能替代完整浏览器链路、真实视频、推理精度或 GPU 性能验收。
@@ -269,7 +291,9 @@ StreamFusion-AI/
 - [x] 代码质量检查、CI 工作流与公共协议样例
 - [x] MySQL / Redis 接入与 RBAC 初始化 SQL
 - [x] 管理端布局与服务状态页
-- [ ] Redis Session 登录、用户与部门管理、角色权限及动态路由
+- [x] Redis Session 登录、用户/角色/部门/菜单管理后端
+- [x] PAGE 模块授权、用户路由快照与操作审计写入
+- [ ] 登录与管理业务页面、前端动态路由、审计查询 API
 - [ ] 真实视频接入、解码与单路模型推理
 - [ ] 节点注册、任务同步与 Runtime 监督
 - [ ] 相机、场景、模型和任务管理

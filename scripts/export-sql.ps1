@@ -5,8 +5,8 @@ $sqlDirectory = Join-Path $PSScriptRoot '../platform-api/sql'
 $businessDirectory = Join-Path $sqlDirectory '业务'
 $aggregateDirectory = Join-Path $sqlDirectory '汇总'
 # Dependency order only; table definitions and seed data live in these files.
-$names = @('部门表.sql', '用户表.sql', '角色表.sql', '权限表.sql', '菜单表.sql',
-    '用户角色关联表.sql', '角色权限关联表.sql', '操作审计表.sql')
+$names = @('部门表.sql', '用户表.sql', '角色表.sql', '菜单表.sql',
+    '用户角色关联表.sql', '用户部门关联表.sql', '角色菜单关联表.sql', '操作审计表.sql')
 $actual = @(Get-ChildItem -LiteralPath $businessDirectory -Filter '*.sql' |
     Select-Object -ExpandProperty Name)
 if (Compare-Object $names $actual) { throw 'Register every table file in dependency order before exporting.' }

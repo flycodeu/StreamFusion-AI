@@ -1,6 +1,7 @@
 package com.streamfusion.platform.common.web;
 
 import com.streamfusion.platform.common.exception.ErrorCode;
+import io.swagger.v3.oas.annotations.Hidden;
 import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
+@Hidden
 public class ApiErrorController implements ErrorController {
     private final ApiErrorWriter writer;
 

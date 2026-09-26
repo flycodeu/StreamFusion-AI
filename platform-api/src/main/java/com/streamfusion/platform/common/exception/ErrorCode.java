@@ -6,6 +6,13 @@ import com.streamfusion.platform.common.exception.details.ValidationDetails;
 public enum ErrorCode {
     VALIDATION_ERROR(400, "请检查请求参数", ValidationDetails.class),
     UNAUTHORIZED(401, "请先登录"),
+    LOGIN_FAILED(401, "账号或密码错误，或暂时无法登录"),
+    PASSWORD_CHANGE_REQUIRED(403, "请先修改密码"),
+    CURRENT_PASSWORD_INVALID(400, "原密码不正确"),
+    USERNAME_TAKEN(409, "账号已被使用"),
+    PROTECTED_ACCOUNT(403, "此账号不能通过用户管理修改"),
+    BOOTSTRAP_UNAVAILABLE(409, "当前数据库不允许首次管理员初始化"),
+    INITIAL_PASSWORD_UNAVAILABLE(503, "初始密码配置缺失或不符合规则，请联系运维"),
     FORBIDDEN(403, "无权执行此操作"),
     CSRF_INVALID(403, "请求凭证已失效，请刷新后重试"),
     NOT_FOUND(404, "请求的资源不存在"),

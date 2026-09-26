@@ -14,8 +14,9 @@ __pycache__/
 .vscode/
 .DS_Store
 *.tsbuildinfo
-# Local planning documents and personal AI collaboration instructions
+# Local notes and workspace instructions
 /docs/
+/platform/
 /AGENTS.md
 # Local toolchains and editor metadata
 .tools/

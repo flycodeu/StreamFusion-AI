@@ -25,7 +25,7 @@ export function createApiClient(hooks: ClientHooks) {
   return async function request<T>(options: RequestOptions<T>): Promise<ApiResult<T>> {
     if (
       typeof options.path !== 'string' ||
-      !options.path.startsWith('/api/v1/') ||
+      !/^\/(?:user|auth|roles|menus|departments)(?:\/|$)/.test(options.path) ||
       ![200, 201].includes(options.successStatus) ||
       typeof options.decode !== 'function'
     ) {

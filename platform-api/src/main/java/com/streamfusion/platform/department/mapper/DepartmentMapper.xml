@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.streamfusion.platform.department.mapper.DepartmentMapper">
+    <resultMap id="memberCount" type="com.streamfusion.platform.department.mapper.DepartmentMemberCount">
+        <constructor>
+            <arg column="dept_id" javaType="java.lang.Long"/>
+            <arg column="member_count" javaType="java.lang.Long"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="userDepartment" type="com.streamfusion.platform.department.mapper.UserDepartmentAssignment">
+        <constructor>
+            <arg column="user_id" javaType="java.lang.Long"/>
+            <idArg column="id" javaType="java.lang.String"/>
+            <arg column="name" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <select id="memberCounts" resultMap="memberCount">
+        SELECT ud.dept_id, COUNT(*) AS member_count
+        FROM sys_user_dept ud
+        GROUP BY ud.dept_id
+    </select>
+
+    <select id="userDepartments" resultMap="userDepartment">
+        SELECT ud.user_id, d.id, d.name
+        FROM sys_user_dept ud
+        JOIN sys_dept d ON d.id = ud.dept_id
+        <choose>
+            <when test="userIds != null and !userIds.isEmpty()">
+                WHERE ud.user_id IN
+                <foreach collection="userIds" item="userId" open="(" separator="," close=")">
+                    #{userId}
+                </foreach>
+            </when>
+            <otherwise>WHERE 1 = 0</otherwise>
+        </choose>
+        ORDER BY ud.user_id, d.sort_order, d.id
+    </select>
+
+    <select id="userCount" resultType="java.lang.Long">
+        SELECT COUNT(*) FROM sys_user_dept WHERE dept_id = #{deptId}
+    </select>
+    <delete id="deleteUserBindings">
+        DELETE FROM sys_user_dept WHERE user_id = #{userId}
+    </delete>
+    <insert id="insertUserBinding">
+        INSERT INTO sys_user_dept(user_id, dept_id, created_at, created_by)
+        VALUES(#{userId}, #{deptId}, #{now}, #{actorId})
+    </insert>
+</mapper>

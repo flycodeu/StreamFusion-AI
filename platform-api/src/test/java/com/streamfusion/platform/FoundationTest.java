@@ -2,6 +2,8 @@ package com.streamfusion.platform;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.PatternLayout;
@@ -12,10 +14,12 @@ import com.streamfusion.platform.common.config.PlatformProperties;
 import com.streamfusion.platform.common.logging.LogRedactor;
 import com.streamfusion.platform.common.logging.SafeExceptionConverter;
 import com.streamfusion.platform.common.logging.SafeMessageConverter;
+import com.streamfusion.platform.common.security.ModuleAuthorizationInterceptor;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -37,6 +41,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -47,6 +52,14 @@ import org.springframework.web.bind.annotation.RestController;
 @ActiveProfiles("test")
 @Import({FoundationTest.TestEndpoints.class, FoundationTest.TestOnlySecurity.class})
 class FoundationTest {
+    // 基础设施夹具不依赖业务授权，替换仅作用于此测试上下文。
+    @MockitoBean private ModuleAuthorizationInterceptor moduleAuthorization;
+
+    @BeforeEach
+    void isolateModuleAuthorization() throws Exception {
+        when(moduleAuthorization.preHandle(any(), any(), any())).thenReturn(true);
+    }
+
     // Exercise MVC error handling without opening these paths in production.
     @TestConfiguration(proxyBeanMethods = false)
     static class TestOnlySecurity {

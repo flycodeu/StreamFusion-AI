@@ -7,7 +7,7 @@ import org.springframework.core.env.Environment;
 import org.springframework.core.env.Profiles;
 
 @Configuration
-@EnableConfigurationProperties(PlatformProperties.class)
+@EnableConfigurationProperties({PlatformProperties.class, ServerProperties.class})
 public class FoundationConfiguration {
     public FoundationConfiguration(ServerProperties server, Environment environment) {
         int port = server.getPort() == null ? 8080 : server.getPort();

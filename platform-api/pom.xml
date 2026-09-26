@@ -15,12 +15,24 @@
     <description>P0-W01 modular monolith skeleton</description>
     <properties>
         <java.version>21</java.version>
+        <mybatis-plus.version>3.5.17</mybatis-plus.version>
     </properties>
     <dependencies>
         <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <scope>provided</scope>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
             <groupId>com.baomidou</groupId>
             <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
-            <version>3.5.17</version>
+            <version>${mybatis-plus.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-jsqlparser</artifactId>
+            <version>${mybatis-plus.version}</version>
         </dependency>
         <dependency>
             <groupId>com.mysql</groupId>
@@ -30,6 +42,10 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.session</groupId>
+            <artifactId>spring-session-data-redis</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -47,7 +63,7 @@
         </dependency>
         <dependency>
             <groupId>org.springdoc</groupId>
-            <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
             <version>2.8.17</version>
         </dependency>
         <dependency>
@@ -65,6 +81,13 @@
         </dependency>
     </dependencies>
     <build>
+        <resources>
+            <resource><directory>src/main/resources</directory></resource>
+            <resource>
+                <directory>src/main/java</directory>
+                <includes><include>**/mapper/*Mapper.xml</include></includes>
+            </resource>
+        </resources>
         <testResources>
             <testResource><directory>src/test/resources</directory></testResource>
             <testResource>
@@ -74,6 +97,19 @@
             </testResource>
         </testResources>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>${lombok.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>com.diffplug.spotless</groupId>
                 <artifactId>spotless-maven-plugin</artifactId>
@@ -91,6 +127,14 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
             </plugin>
         </plugins>
     </build>

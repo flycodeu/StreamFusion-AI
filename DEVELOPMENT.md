@@ -1,6 +1,6 @@
 # 开发基础约定
 
-本文描述工程基础，不代表视频推理、节点同步或生产部署已实现。
+本文说明工程配置、管理后端与验证方式。登录和管理后端已实现；业务前端、视频推理、节点同步和生产部署仍待完成。
 
 ## 本地环境检查
 
@@ -27,7 +27,7 @@ PyCharm 分别使用 `node-agent/.venv`、`runtime/.venv`，不要选择父目�
 
 后端开发运行需要 MySQL 和 Redis。MyBatis-Plus 使用 Boot 3 专用 starter；
 MySQL 驱动、Redis/Lettuce 和 Spring Security 版本由 Spring Boot 管理。
-不重复引入 MyBatis starter，不创建空 Mapper、通用 RedisUtils 或尚无业务消费者的分页插件。
+不重复引入 MyBatis starter；分页使用现有 MyBatis-Plus 插件，不创建无业务消费者的空 Mapper 或通用 RedisUtils。
 
 | 环境 | 连接来源 |
 |---|---|
@@ -41,6 +41,7 @@ MySQL 驱动、Redis/Lettuce 和 Spring Security 版本由 Spring Boot 管理。
 表结构只维护 platform-api/sql/业务 中的八份逐表文件，sql/汇总/streamfusion-mysql.sql 由 scripts/export-sql.ps1 自动生成。
 首次运行前，按 [SQL 指南](platform-api/sql/README.md)手动初始化专用空库；应用不自动建库、建表或升级。
 脚本先 DROP 再 CREATE，会清空目标表；已有数据的库禁止用它升级。本地已经初始化的数据库无需重导。
+SQL 仅初始化内置角色、管理 PAGE 及可调整的示例组织，不包含默认用户或固定密码哈希。首次账号由下面的非 Web 引导创建。
 
 从示例复制 local 文件并填写连接信息后，使用：
 
@@ -62,7 +63,7 @@ JDBC URL 的 connectionTimeZone 也应为 Asia/Shanghai（含生产 DB_URL），
 /actuator/health 检查数据库与 Redis 连通性，失败返回 DOWN/503，且不公开连接细节。
 健康检查不校验业务表是否存在；初始化是否成功需单独核对。
 
-普通 `mvnw.cmd verify` 无需本机数据库，H2 检查组件装配、汇总 SQL 建表/重建与基础约束，不证明 MySQL 完全兼容。
+普通 `mvnw.cmd verify` 无需本机数据库，H2 检查管理业务、组件装配、汇总 SQL 建表/重建与约束，不证明 MySQL 排序规则、JSON 类型或并发行为完全兼容。
 真实本地连接检查需明确启用，只有 SELECT 1 与 Redis PING，不写数据：
 
 ```powershell
@@ -71,20 +72,50 @@ JDBC URL 的 connectionTimeZone 也应为 Asia/Shanghai（含生产 DB_URL），
 ```
 
 汇总生成、重建限制和真实 MySQL 元数据检查见 [SQL 指南](platform-api/sql/README.md)。
-其中 LocalSchemaInspectionTest 只读检查本机现有表和字段备注，不执行初始化或任何写操作。
+其中 LocalSchemaInspectionTest 只读检查本机现有表、字段、账号唯一约束和排序规则等断言，不执行初始化或任何写操作；并非完整结构差异工具。
 
-### Spring Security 基础
+### 首位管理员初始化
 
-当前仅引入安全边界和用户等表结构，尚无登录接口或用户认证提供者：
+使用已构建的 JAR 和完成初始化的数据库。`--bootstrap-admin` 强制使用非 Web 模式，结束后退出；普通 API 启动不会创建账号。用户表非空或已经存在成功引导记录时拒绝再次引导。
 
-- GET /actuator/health 公开；接口文档开启时 GET /v3/api-docs 公开，prod 默认关闭文档。
-- 其余请求默认拒绝；匿名安全请求返回 JSON 401，不跳登录页面、不发 Basic 挑战。
-- 保留 CSRF；缺少 CSRF 的写请求返回 JSON 403。
-- 不生成默认 user 或随机密码，不启用 formLogin、HTTP Basic、默认 logout。
-- 复用现有错误体与 traceId，不建立第二套错误模型。
-- 登录设计采用 Redis Session + 安全 Cookie；当前尚未实现会话登录，不提供 JWT/JDBC 双路线。
+默认账号方式见 [README 的初始化命令](README.md#4-初始化数据库与首位管理员)：通过 `SF_BOOTSTRAP_PASSWORD` 提供一次性临时密码，并加 `--platform.bootstrap.default-admin=true`。临时密码需为 8～64 位且不含空白或控制字符；创建后必须首次改密。不要将密码写进 SQL、启动参数或仓库文件。
 
-后续登录功能要显式开放对应入口并实现认证，不可临时改为全局 permitAll。
+需要自行输入账号、昵称和强密码时，在 `platform-api` 目录的交互终端执行：
+
+```powershell
+java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=local --bootstrap-admin
+```
+
+交互入口创建正常状态账号，密码须满足运行期规则：默认 8～64 位，同时包含大写、小写字母、数字和特殊字符，禁止空白及控制字符。它要求可读取密码的控制台，不适合无交互的管道输入。
+
+| 配置 / 环境变量 | 默认值 | 用途 |
+|---|---|---|
+| platform.bootstrap.username / SF_BOOTSTRAP_USERNAME | admin | 默认账号方式的登录名 |
+| platform.bootstrap.nickname / SF_BOOTSTRAP_NICKNAME | 超级管理员 | 默认账号方式的显示名 |
+| platform.bootstrap.department-id / SF_BOOTSTRAP_DEPARTMENT_ID | 2002 | 两种引导方式共用的初始部门 ID；默认关联示例研发部门 |
+| SF_BOOTSTRAP_PASSWORD | 无 | 仅默认账号引导读取；完成后移除环境变量 |
+| platform.auth.initial-password / SF_AUTH_INITIAL_PASSWORD | 无 | 后续新建/重置普通用户使用的统一初始密码，须满足运行期密码规则 |
+
+不需要初始部门时，在任一引导命令后加 `--platform.bootstrap.department-id=`，或在私有配置中将该项设为空。指定的部门不存在时引导整体失败，不留下半个账号。账号、SUPER_ADMIN 关联、全部 PAGE 关联、可选部门关联和引导审计在同一事务中保存。
+
+示例组织“飞云科技公司 / 研发部门 / 运维部门”只是 SQL 初始数据，可通过部门 API 改名、移动，解除成员和子部门引用后删除。超级管理员可以调整本人及其他超管的部门归属；普通新建用户不自动关联部门。部门仅表示组织归属，不参与授权，也没有主部门。
+
+### 登录与模块授权
+
+认证采用 Spring Security、Spring Session Redis 与 `SF_SESSION` Cookie；Cookie 带 HttpOnly、SameSite=Lax。dev/local 允许本机 HTTP，prod 默认启用 Secure Cookie，应通过 HTTPS 访问。空闲超时默认 30 分钟、绝对时长默认 8 小时；连续第 5 次登录失败锁定 15 分钟。改密、重置或封禁后，数据库会话版本使旧会话失效。
+
+API 客户端需按以下顺序对接：
+
+1. `GET /auth/csrf`，保存 Cookie 及响应 `data.headerName`、`data.token`。
+2. `POST /auth/login`，发送账号、密码，携带刚取得的 CSRF 请求头及 Cookie。
+3. 登录会轮换会话和 CSRF；重新请求 `/auth/csrf`，再读取 `GET /auth/me`。待改密账号只允许本人信息、改密和退出等入口。
+4. 写请求继续携带最新 CSRF 令牌和 Cookie。`PUT /auth/password` 改密成功后重新登录；`POST /auth/logout` 撤销当前会话。
+
+`GET /actuator/health`、CSRF 和登录入口公开；开启文档时 `/v3/api-docs`、`/swagger-ui.html` 可访问，prod 默认关闭。Swagger UI 不代替会话登录或 CSRF 获取。未知业务入口默认拒绝；未登录返回统一 JSON 401，缺少 CSRF 的写请求返回 403，不启用表单登录、HTTP Basic 或默认随机密码用户。
+
+管理模块使用“用户 → 有效角色 → 有效 PAGE 及祖先 → module_key”授权。普通管理者可通过其管理 PAGE 管理普通对象，授予自己尚未持有的页面；超级管理员身份授予/移除及本人敏感操作仍有对象保护。SUPER_ADMIN 默认拥有全部 PAGE 关系，新建 PAGE 在同一事务补齐它的关联；没有绕过菜单状态的角色名放行逻辑。
+
+管理 API 编辑使用单个 `version` 检查旧表单冲突，删除需要 `If-Match: "版本值"`。这是并发保护，不是业务版本历史。返回和错误沿用统一 `R` 与 `traceId`；管理审计保存对象及关系摘要，不记录密码或完整请求。审计查询 API、前端登录与管理页面、动态路由消费者尚未实现。
 
 ### 应用配置
 
@@ -98,7 +129,9 @@ JDBC URL 的 connectionTimeZone 也应为 Asia/Shanghai（含生产 DB_URL），
 | server.port / SERVER_PORT | 8080 | 1–65535；仅 test 允许 0 |
 | streamfusion.work-dir / SF_API_WORK_DIR | .run | 可写目录或可写的现有祖先目录 |
 | streamfusion.shutdown-grace / SF_API_SHUTDOWN_GRACE | 15s | 1–120s，停机阶段等待 |
-| API_DOCS_ENABLED | dev/local 为 true，prod 为 false | 控制 /v3/api-docs |
+| API_DOCS_ENABLED | dev/local 为 true，prod 为 false | 同时控制 /v3/api-docs 与 Swagger UI |
+| SF_AUTH_IDLE_TIMEOUT / SF_AUTH_ABSOLUTE_TIMEOUT | 30m / 8h | 会话空闲与绝对超时；绝对时长不得小于空闲超时且不超过 1 天 |
+| SF_AUTH_SECURE_COOKIE | dev/local 为 false，prod 为 true | 是否仅通过 HTTPS 发送会话 Cookie |
 
 目前没有异步控制器或出站 HTTP 调用，不预留通用请求超时配置；新增真实调用时在调用边界定义超时。
 Java 日志系统在配置对象绑定前初始化，启动失败也可能生成日志目录。
@@ -168,6 +201,18 @@ Java 输出带 +08:00 的北京时间文本日志；Python 的既有 UTC JSON �
 | 两个 Python 工程分别执行 | `uv run --locked ruff check app tests`、`uv run --locked ruff format --check app tests`、`uv run --locked mypy`、`uv run --locked python -m pytest -q` |
 | 仓库根目录 | `uv run --project algorithm-node/node-agent --locked python -m pytest contracts/tests -q` |
 | 仓库根目录 | `./scripts/export-sql.ps1 -Check` |
+
+默认后端测试使用 H2 与模拟会话，真实基础设施用例默认跳过。以下命令在 `platform-api` 目录执行，并先确认目标和配置：
+
+```powershell
+# 本机 MySQL 结构检查 + MySQL/Redis 连通性检查，仅执行只读查询和 PING
+.\mvnw.cmd "-Dtest=LocalSchemaInspectionTest,LocalInfrastructureTest" "-Dsf.test.localSchema=true" "-Dsf.test.localInfrastructure=true" test
+
+# 真实 HTTP + Redis 会话：使用测试 H2；需要专用本机 Redis 127.0.0.1:16379
+.\mvnw.cmd "-Dtest=RedisSessionIntegrationTest" "-Dsf.test.redisSession=true" test
+```
+
+Redis HTTP 用例会在测试命名空间写入和删除会话，不能指向生产 Redis；它不连接业务 MySQL。MySQL 结构检查不会迁移数据库，旧结构需要先按独立增量方案升级。测试数量和运行结果以本次 Maven 报告为准，不把跳过项当作通过，也不把 H2/连通性通过当作真实数据库并发或完整业务验收。
 
 GitHub Actions 在 push、PR 或手动触发时检查 Windows/Linux 构建、格式、类型和测试；
 只读权限、固定 action 提交、无部署步骤、不使用生产密钥。远端运行结果以实际 Actions 为准。

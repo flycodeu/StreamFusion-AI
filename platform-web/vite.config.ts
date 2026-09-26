@@ -10,6 +10,9 @@ export default defineConfig(({ mode }) => {
       port: 8090,
       strictPort: true,
       proxy: {
+        '^/(user|auth|roles|menus|departments)(?:[/?]|$)': {
+          target: env.API_TARGET || 'http://127.0.0.1:8080',
+        },
         '/actuator': { target: env.API_TARGET || 'http://127.0.0.1:8080' },
       },
     },

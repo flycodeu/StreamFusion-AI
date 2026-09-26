@@ -2,6 +2,7 @@ package com.streamfusion.platform.common.response;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.streamfusion.platform.common.exception.ErrorCode;
+import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.Instant;
 import java.util.Objects;
 import org.slf4j.MDC;
@@ -10,7 +11,13 @@ import org.slf4j.MDC;
  * JSON body only. HTTP status and headers remain the controller/error boundary's responsibility.
  */
 @JsonInclude(JsonInclude.Include.ALWAYS)
-public record R<T>(String code, String msg, T data, String traceId, Instant timestamp) {
+@Schema(description = "统一接口响应")
+public record R<T>(
+        @Schema(description = "结果编码") String code,
+        @Schema(description = "结果说明") String msg,
+        @Schema(description = "业务数据") T data,
+        @Schema(description = "链路ID") String traceId,
+        @Schema(description = "响应时间") Instant timestamp) {
     public R {
         Objects.requireNonNull(timestamp);
         if (traceId == null || !traceId.matches("[a-f0-9]{32}")) {

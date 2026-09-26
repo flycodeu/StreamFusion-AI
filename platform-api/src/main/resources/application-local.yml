@@ -1,4 +1,7 @@
 # Load personal configuration only when the local profile is selected.
+platform:
+  auth:
+    secure-cookie: ${SF_AUTH_SECURE_COOKIE:false}
 # Required on purpose: a missing local file must not silently use other defaults.
 spring:
   config:

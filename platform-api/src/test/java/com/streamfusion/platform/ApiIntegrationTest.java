@@ -1,6 +1,8 @@
 package com.streamfusion.platform;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -11,14 +13,16 @@ import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.exception.details.ValidationDetails;
 import com.streamfusion.platform.common.response.R;
+import com.streamfusion.platform.common.security.ModuleAuthorizationInterceptor;
 import com.streamfusion.platform.common.web.ApiErrorWriter;
 import com.streamfusion.platform.common.web.ApiExceptionHandler;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.RequestDispatcher;
-import java.net.URI;
+import jakarta.servlet.http.HttpServletResponse;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -41,6 +45,7 @@ import org.springframework.security.config.annotation.method.configuration.Enabl
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.validation.BeanPropertyBindingResult;
@@ -60,6 +65,14 @@ class ApiIntegrationTest {
     private final JdbcTemplate jdbc;
     private final ApiErrorWriter writer;
     private final ObjectMapper mapper;
+
+    // 此测试只验证通用响应、事务及方法鉴权；模块鉴权在独立测试和身份集成测试中覆盖。
+    @MockitoBean private ModuleAuthorizationInterceptor moduleAuthorization;
+
+    @BeforeEach
+    void isolateModuleAuthorization() throws Exception {
+        when(moduleAuthorization.preHandle(any(), any(), any())).thenReturn(true);
+    }
 
     @Autowired
     ApiIntegrationTest(
@@ -81,7 +94,7 @@ class ApiIntegrationTest {
         @Bean
         @Order(0)
         SecurityFilterChain fixtureSecurity(HttpSecurity http) throws Exception {
-            return http.securityMatcher("/api/v1/test-only/**")
+            return http.securityMatcher("/user/test-only/**")
                     .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
                     .build();
         }
@@ -113,7 +126,7 @@ class ApiIntegrationTest {
     }
 
     @RestController
-    @RequestMapping("/api/v1/test-only")
+    @RequestMapping("/user/test-only")
     static class TestEndpoints {
         private final FailingService service;
 
@@ -127,10 +140,11 @@ class ApiIntegrationTest {
         }
 
         @PostMapping("/created")
-        ResponseEntity<R<String>> created() {
-            return ResponseEntity.created(URI.create("/api/v1/test-only/object"))
-                    .eTag("\"7\"")
-                    .body(R.success("value"));
+        @ResponseStatus(HttpStatus.CREATED)
+        R<String> created(HttpServletResponse response) {
+            response.setHeader(HttpHeaders.LOCATION, "/user/test-only/object");
+            response.setHeader(HttpHeaders.ETAG, "\"7\"");
+            return R.success("value");
         }
 
         @GetMapping("/empty")
@@ -185,10 +199,7 @@ class ApiIntegrationTest {
         headers.set("X-Trace-Id", TRACE);
         headers.setContentType(MediaType.APPLICATION_JSON);
         return client.exchange(
-                "/api/v1/test-only" + path,
-                method,
-                new HttpEntity<>(body, headers),
-                JsonNode.class);
+                "/user/test-only" + path, method, new HttpEntity<>(body, headers), JsonNode.class);
     }
 
     private void envelope(ResponseEntity<JsonNode> response, int status, String code) {
@@ -229,12 +240,12 @@ class ApiIntegrationTest {
     void creationPreservesStatusAndHeaders() throws Exception {
         mvc.perform(
                         org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(
-                                        "/api/v1/test-only/created")
+                                        "/user/test-only/created")
                                 .with(
                                         org.springframework.security.test.web.servlet.request
                                                 .SecurityMockMvcRequestPostProcessors.csrf()))
                 .andExpect(status().isCreated())
-                .andExpect(header().string("Location", "/api/v1/test-only/object"))
+                .andExpect(header().string("Location", "/user/test-only/object"))
                 .andExpect(header().string("ETag", "\"7\""))
                 .andExpect(jsonPath("$.data").value("value"));
     }
@@ -276,7 +287,7 @@ class ApiIntegrationTest {
             binding.addError(field);
             binding.addError(field);
         }
-        var request = new MockHttpServletRequest("GET", "/api/v1/test-only/fields");
+        var request = new MockHttpServletRequest("GET", "/user/test-only/fields");
         try (var ignored = MDC.putCloseable("traceId", TRACE)) {
             var response =
                     new ApiExceptionHandler(writer)
@@ -329,7 +340,7 @@ class ApiIntegrationTest {
                                         })
                                 .requestAttr(
                                         RequestDispatcher.ERROR_REQUEST_URI,
-                                        "/api/v1/test-only/object")
+                                        "/user/test-only/object")
                                 .requestAttr(RequestDispatcher.ERROR_STATUS_CODE, httpStatus))
                 .andExpect(status().is(httpStatus))
                 .andExpect(jsonPath("$.code").value(code));
@@ -346,10 +357,10 @@ class ApiIntegrationTest {
 
     @Test
     void methodAuthorizationIsNotAnInternalError() throws Exception {
-        mvc.perform(get("/api/v1/test-only/restricted").with(user("reader")))
+        mvc.perform(get("/user/test-only/restricted").with(user("reader")))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("FORBIDDEN"));
-        mvc.perform(get("/api/v1/test-only/restricted"))
+        mvc.perform(get("/user/test-only/restricted"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
     }
@@ -365,7 +376,7 @@ class ApiIntegrationTest {
                                         })
                                 .requestAttr(
                                         RequestDispatcher.ERROR_REQUEST_URI,
-                                        "/api/v1/test-only/object")
+                                        "/user/test-only/object")
                                 .requestAttr(RequestDispatcher.ERROR_STATUS_CODE, 503))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value("DEPENDENCY_UNAVAILABLE"))
@@ -384,7 +395,7 @@ class ApiIntegrationTest {
 
     @Test
     void writerDoesNotOverwriteCommittedResponseOrWriteHeadBody() throws Exception {
-        var request = new MockHttpServletRequest("GET", "/api/v1/users");
+        var request = new MockHttpServletRequest("GET", "/user");
         var response = new MockHttpServletResponse();
         response.getWriter().write("already sent");
         response.flushBuffer();

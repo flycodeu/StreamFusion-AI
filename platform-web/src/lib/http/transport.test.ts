@@ -8,15 +8,35 @@ afterEach(() => {
 })
 
 describe('HTTP transport', () => {
+  it.each([
+    '/user',
+    '/user/page',
+    '/auth',
+    '/auth/me',
+    '/roles',
+    '/roles/page',
+    '/roles/9007199254740993/menus',
+    '/menus',
+    '/menus/9007199254740993',
+    '/departments',
+    '/departments/9007199254740993',
+    '/actuator/health',
+  ])('preserves the allowed same-origin path: %s', async (path) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}'))
+    vi.stubGlobal('fetch', fetchMock)
+    await send({ path, method: 'GET' })
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(path)
+  })
+
   it('encodes query parameters, preserves false/zero, and uses same-origin credentials', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('{}'))
     vi.stubGlobal('fetch', fetchMock)
     await send({
-      path: '/api/v1/users',
+      path: '/user/page',
       method: 'GET',
       params: { enabled: false, page: 0, q: 'a&b', skip: null },
     })
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/users?enabled=false&page=0&q=a%26b')
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/user/page?enabled=false&page=0&q=a%26b')
     const options = fetchMock.mock.calls[0]?.[1]
     expect(options.credentials).toBe('same-origin')
     expect(options.redirect).toBe('error')
@@ -28,7 +48,7 @@ describe('HTTP transport', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('{}'))
     vi.stubGlobal('fetch', fetchMock)
     await send({
-      path: '/api/v1/users/9007199254740993',
+      path: '/user/9007199254740993',
       method: 'PUT',
       body: { deptId: null, roleIds: [], version: '9007199254740993' },
       ifMatch: '"7"',
@@ -45,14 +65,34 @@ describe('HTTP transport', () => {
   })
 
   it.each([
-    'https://example.invalid/api/v1/users',
-    '//example.invalid/api/v1/users',
-    '/api/v1/../private',
-    '/api/v1/%2e%2e/private',
-    '/api/v1/%252e%252e/private',
-    '/api/v1/users?q=secret',
+    'https://example.invalid/user/page',
+    '//example.invalid/user/page',
+    '/user/../private',
+    '/user/%2e%2e/private',
+    '/user/%252e%252e/private',
+    '/auth/../private',
+    '/auth/%2fprivate',
+    '/user/%5cprivate',
+    '/roles/../private',
+    '/menus/%2e%2e/private',
+    '/departments/%252fprivate',
+    '/roles/%2fprivate',
+    '/menus/%5cprivate',
+    '/user/page?q=secret',
+    '/userland',
+    '/users',
+    '/authentication',
+    '/authentic',
+    '/role',
+    '/roles-admin',
+    '/menu',
+    '/menus-extra',
+    '/department',
+    '/departments-private',
+    '/api',
+    '/actuator/health/extra',
     '/private',
-    '/api/v1/users#fragment',
+    '/user/page#fragment',
   ])('rejects unsafe path before sending: %s', async (path) => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
@@ -66,14 +106,14 @@ describe('HTTP transport', () => {
     const circular: Record<string, unknown> = { password: 'secret' }
     circular.self = circular
     for (const body of [circular, { id: 1n }, { n: Infinity }, { callback: () => 1 }]) {
-      await expect(send({ path: '/api/v1/users', method: 'POST', body })).rejects.toMatchObject({
+      await expect(send({ path: '/user/page', method: 'POST', body })).rejects.toMatchObject({
         code: 'INVALID_REQUEST',
         message: '请求参数不合法',
       })
     }
     await expect(
       send({
-        path: '/api/v1/users',
+        path: '/user/page',
         method: 'POST',
         csrf: { headerName: 'Authorization', token: 'secret' },
       }),
@@ -85,7 +125,7 @@ describe('HTTP transport', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     await expect(
-      send({ path: '/api/v1/users', method: 'GET', signal: AbortSignal.abort() }),
+      send({ path: '/user/page', method: 'GET', signal: AbortSignal.abort() }),
     ).rejects.toMatchObject({ code: 'REQUEST_CANCELLED' })
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -107,7 +147,7 @@ describe('HTTP transport', () => {
         return Promise.resolve(response)
       })
       vi.stubGlobal('fetch', fetchMock)
-      const pending = send({ path: '/api/v1/users', method: 'POST', body: {}, timeoutMs: 50 })
+      const pending = send({ path: '/user/page', method: 'POST', body: {}, timeoutMs: 50 })
       const assertion = expect(pending).rejects.toMatchObject({
         code: 'REQUEST_TIMEOUT',
         status: stage === 'body' ? 200 : undefined,
@@ -123,7 +163,7 @@ describe('HTTP transport', () => {
     const response = new Response('{}', { status: 503, headers: { 'X-Trace-Id': 'a'.repeat(32) } })
     vi.spyOn(response, 'text').mockRejectedValue(new TypeError('broken stream'))
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
-    await expect(send({ path: '/api/v1/users', method: 'GET' })).rejects.toMatchObject({
+    await expect(send({ path: '/user/page', method: 'GET' })).rejects.toMatchObject({
       code: 'NETWORK_ERROR',
       status: 503,
       traceId: 'a'.repeat(32),
