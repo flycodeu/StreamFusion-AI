@@ -4,13 +4,15 @@ import type { CsrfToken } from '../../lib/http/types'
 import { encryptLogin } from './cipher'
 import { parseAuthUser, parseProfile } from './types'
 import type { AuthUser, UserProfile } from './types'
+import type { LoginCaptchaAnswer } from './captcha'
 
-export async function getCsrf(): Promise<CsrfToken> {
+export async function getCsrf(signal?: AbortSignal): Promise<CsrfToken> {
   return (
     await request({
       path: '/auth/csrf',
       method: 'GET',
       successStatus: 200,
+      signal,
       decode(value) {
         const row = object(value)
         return { headerName: string(row.headerName), token: string(row.token) }
@@ -25,7 +27,11 @@ export async function getMe(): Promise<AuthUser> {
   ).data
 }
 
-export async function login(username: string, password: string): Promise<void> {
+export async function login(
+  username: string,
+  password: string,
+  captcha: LoginCaptchaAnswer,
+): Promise<void> {
   const challenge = (
     await request({
       path: '/auth/login/challenge',
@@ -40,7 +46,7 @@ export async function login(username: string, password: string): Promise<void> {
       },
     })
   ).data
-  const body = await encryptLogin(challenge, username, password)
+  const body = await encryptLogin(challenge, username, password, captcha)
   await request({
     path: '/auth/login/secure',
     method: 'POST',

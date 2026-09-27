@@ -64,7 +64,8 @@ class SessionLogoutTest {
                     mock(AuthProperties.class),
                     mock(LoginCipherService.class),
                     mock(LoginProtection.class),
-                    mock(LoginRecordService.class));
+                    mock(LoginRecordService.class),
+                    mock(com.streamfusion.platform.auth.captcha.CaptchaService.class));
     private final MapSessionRepository repository =
             spy(new MapSessionRepository(new ConcurrentHashMap<>()));
     private final SessionRepositoryFilter<MapSession> sessions =

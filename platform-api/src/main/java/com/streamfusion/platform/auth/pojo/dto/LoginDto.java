@@ -33,4 +33,12 @@ public class LoginDto {
             nullable = false,
             requiredMode = Schema.RequiredMode.REQUIRED)
     private String password;
+
+    @Schema(description = "验证码ID，必须位于加密登录报文内")
+    private String captchaId;
+
+    @JsonProperty(access = JsonProperty.Access.WRITE_ONLY)
+    @ToString.Exclude
+    @Schema(description = "验证码答案，仅位于加密登录报文内", accessMode = Schema.AccessMode.WRITE_ONLY)
+    private String captchaAnswer;
 }

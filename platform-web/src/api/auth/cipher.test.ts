@@ -7,7 +7,7 @@ function b64(bytes: Uint8Array): string {
 }
 
 describe('encrypted login envelope', () => {
-  it('seals both account and password for a one-time server challenge', async () => {
+  it('seals account, password and captcha together for a one-time server challenge', async () => {
     vi.stubGlobal('crypto', webcrypto)
     const server = (await webcrypto.subtle.generateKey(
       { name: 'ECDH', namedCurve: 'P-256' },
@@ -24,9 +24,12 @@ describe('encrypted login envelope', () => {
       },
       'Admin01',
       'AdminPass1!',
+      { captchaId: 'abcdef0123456789abcdef0123456789', captchaAnswer: 'A2B3C' },
     )
     expect(JSON.stringify(body)).not.toContain('Admin01')
     expect(JSON.stringify(body)).not.toContain('AdminPass1!')
+    expect(JSON.stringify(body)).not.toContain('abcdef0123456789abcdef0123456789')
+    expect(JSON.stringify(body)).not.toContain('A2B3C')
     const client = await webcrypto.subtle.importKey(
       'spki',
       Buffer.from(body.clientPublicKey, 'base64url'),
@@ -64,6 +67,8 @@ describe('encrypted login envelope', () => {
     expect(JSON.parse(new TextDecoder().decode(clear))).toEqual({
       username: 'Admin01',
       password: 'AdminPass1!',
+      captchaId: 'abcdef0123456789abcdef0123456789',
+      captchaAnswer: 'A2B3C',
     })
     vi.unstubAllGlobals()
   })

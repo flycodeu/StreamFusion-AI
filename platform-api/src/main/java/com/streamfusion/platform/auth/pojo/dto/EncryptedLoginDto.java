@@ -8,4 +8,5 @@ public record EncryptedLoginDto(
         @Schema(description = "一次性挑战ID") String challengeId,
         @Schema(description = "客户端P-256公钥，base64url") String clientPublicKey,
         @Schema(description = "AES-GCM随机向量，base64url") String iv,
-        @Schema(description = "加密的账号密码报文，base64url") String ciphertext) {}
+        @Schema(description = "加密登录JSON，base64url；解密后必须包含username、password、captchaId、captchaAnswer")
+                String ciphertext) {}

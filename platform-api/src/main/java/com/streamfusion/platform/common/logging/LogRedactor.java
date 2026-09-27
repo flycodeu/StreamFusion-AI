@@ -7,7 +7,7 @@ public final class LogRedactor {
     private static final Pattern BEARER = Pattern.compile("(?i)\\bBearer\\s+[^\\s,;\"']+");
     private static final Pattern SECRET =
             Pattern.compile(
-                    "(?i)([\"']?(?:password|passwd|token|secret|api[_-]?key|access[_-]?key|access[_-]?token|authorization)[\"']?\\s*[:=]\\s*)(?:\"[^\"]*\"|'[^']*'|[^\\s,;&}]+)");
+                    "(?i)([\"']?(?:captcha[_-]?answer|password|passwd|token|secret|api[_-]?key|access[_-]?key|access[_-]?token|authorization)[\"']?\\s*[:=]\\s*)(?:\"[^\"]*\"|'[^']*'|[^\\s,;&}]+)");
 
     private LogRedactor() {}
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
 import { routeLocationKey, useRouter } from 'vue-router'
+import { ArrowDown } from '@element-plus/icons-vue'
 import {
   ElBreadcrumb,
   ElBreadcrumbItem,
@@ -76,7 +77,7 @@ async function command(value: string): Promise<void> {
         <span class="account-name" :title="displayName || '未登录'">{{
           displayName || '未登录'
         }}</span>
-        <span aria-hidden="true">⌄</span>
+        <ArrowDown class="account-chevron" aria-hidden="true" />
       </button>
       <template #dropdown
         ><ElDropdownMenu>
@@ -144,6 +145,11 @@ async function command(value: string): Promise<void> {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.account-chevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
 }
 @media (max-width: 680px) {
   .topbar {

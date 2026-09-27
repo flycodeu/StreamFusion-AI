@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElAlert, ElButton, ElCheckbox, ElForm, ElFormItem, ElInput, ElMessage } from 'element-plus'
 import { Hide, View } from '@element-plus/icons-vue'
@@ -10,31 +10,53 @@ import {
   readRememberedLogin,
   saveRememberedLogin,
 } from '../../session/rememberedLogin'
-import { accountHint, passwordHint } from '../../utils/loginValidation'
+import { accountHint, captchaHint, passwordHint } from '../../utils/loginValidation'
 import { ApiRequestError } from '../../lib/http/error'
+import { systemConfig } from '../../config/system'
+import { loginValidation } from '../../config/validation'
+import { useLoginCaptcha } from '../../features/auth/useLoginCaptcha'
+import { captchaErrorMessage, loginErrorMessage } from '../../features/auth/loginFeedback'
 
 const router = useRouter()
 const route = useRoute()
-const brandIcon = `${import.meta.env.BASE_URL}streamfusion.svg`
+const brandIcon = systemConfig.logo
 const form = reactive({ username: '', password: '' })
-const touched = reactive({ username: false, password: false })
+const touched = reactive({ username: false, password: false, captcha: false })
+const {
+  challenge: captcha,
+  answer: captchaAnswer,
+  requesting: captchaRequesting,
+  imageReady: captchaImageReady,
+  imageSource: captchaImage,
+  ready: captchaReady,
+  error: captchaError,
+  refresh: refreshCaptcha,
+  imageLoaded,
+  imageFailed,
+  submission: captchaSubmission,
+} = useLoginCaptcha()
 const remember = ref(false)
 const showPassword = ref(false)
 const busy = ref(false)
-const error = ref(
-  route.query.reason === 'ip-blocked' ? '当前 IP 已被封禁，请联系超级管理员解除限制' : '',
-)
-const errorTraceId = ref('')
+const loginEstablished = ref(false)
+const error = ref(route.query.reason === 'ip-blocked' ? '登录暂时受限，请联系管理员' : '')
 const storageNotice = ref('')
+const feedback = computed(
+  () => captchaErrorMessage(captchaError.value) || error.value || storageNotice.value,
+)
 const accountError = computed(() => (touched.username ? accountHint(form.username.trim()) : ''))
 const passwordError = computed(() => (touched.password ? passwordHint(form.password) : ''))
+const captchaInputError = computed(() => (touched.captcha ? captchaHint(captchaAnswer.value) : ''))
 let edited = false
 let rememberRevision = 0
 let hadSaved = false
+let active = true
 
 onMounted(async () => {
+  void refreshCaptcha()
   try {
     const saved = await readRememberedLogin()
+    if (!active) return
     hadSaved = !!saved
     if (saved && !edited) {
       Object.assign(form, saved)
@@ -44,11 +66,26 @@ onMounted(async () => {
     /* Remembering is optional; a disabled browser store never blocks login. */
   }
 })
-function changed(field: 'username' | 'password') {
+onUnmounted(() => {
+  active = false
+})
+function captchaImageEvent(event: globalThis.Event, loaded: boolean) {
+  const id = (event.target as globalThis.HTMLImageElement).dataset.captchaId
+  if (id) (loaded ? imageLoaded : imageFailed)(id)
+}
+async function replaceCaptcha(): Promise<void> {
+  if (busy.value || loginEstablished.value) return
+  touched.captcha = false
+  error.value = ''
+  await refreshCaptcha()
+}
+function reloadPage() {
+  globalThis.location.reload()
+}
+function changed(field: 'username' | 'password' | 'captcha') {
   edited = true
   touched[field] = true
   error.value = ''
-  errorTraceId.value = ''
 }
 async function rememberChanged(): Promise<void> {
   edited = true
@@ -64,16 +101,19 @@ async function rememberChanged(): Promise<void> {
   }
 }
 async function submit(): Promise<void> {
-  if (busy.value) return
-  touched.username = touched.password = true
-  if (accountError.value || passwordError.value) return
+  if (busy.value || loginEstablished.value || !captchaReady.value) return
+  touched.username = touched.password = touched.captcha = true
+  if (accountError.value || passwordError.value || captchaInputError.value) return
+  const verification = captchaSubmission()
+  if (!verification) return
   busy.value = true
   error.value = ''
-  errorTraceId.value = ''
   try {
     const account = form.username.trim()
     const password = form.password
-    await signIn(account, password)
+    await signIn(account, password, verification)
+    loginEstablished.value = true
+    if (!active) return
     // A temporary credential must not remain saved after the required password change.
     const revision = rememberRevision
     try {
@@ -84,6 +124,7 @@ async function submit(): Promise<void> {
     } catch {
       ElMessage.warning('登录成功，浏览器未能保存本机凭据')
     }
+    if (!active) return
     form.password = ''
     const next =
       typeof route.query.next === 'string' &&
@@ -93,19 +134,20 @@ async function submit(): Promise<void> {
         : '/home'
     await router.replace(next)
   } catch (cause) {
-    if (cause instanceof ApiRequestError) {
-      errorTraceId.value = cause.traceId
-      if (cause.code === 'LOGIN_FAILED')
-        error.value =
-          '账号或密码错误，或登录暂时受限。连续 5 次错误会限制登录 15 分钟，可稍后重试或联系管理员重置密码。'
-      else if (cause.code === 'IP_BLOCKED')
-        error.value = '当前 IP 已被封禁，请联系超级管理员解除限制'
-      else if (cause.status === 429 || cause.code.includes('LOCKED'))
-        error.value = '登录尝试过于频繁，请稍后重试'
-      else if (cause.code === 'NETWORK_ERROR' || cause.code === 'REQUEST_TIMEOUT')
-        error.value = '暂时无法连接服务，请检查网络后重试'
-      else error.value = cause.message
-    } else error.value = '登录未完成，请重试'
+    if (!active) return
+    if (
+      loginEstablished.value ||
+      sessionState.me ||
+      (cause instanceof ApiRequestError && cause.code === 'LOGIN_RESTORE_FAILED')
+    ) {
+      loginEstablished.value = true
+      error.value = '已完成登录，页面暂未打开，请刷新页面继续'
+      return
+    }
+    error.value = loginErrorMessage(cause)
+    // Every attempted login consumes its code, including an incorrect account or password.
+    touched.captcha = false
+    await refreshCaptcha()
   } finally {
     busy.value = false
   }
@@ -116,9 +158,9 @@ async function submit(): Promise<void> {
   <main class="login-page">
     <section class="login-visual" aria-label="平台品牌展示">
       <a class="login-brand" href="/login"
-        ><img :src="brandIcon" alt="StreamFusion" width="38" height="38" /><span
-          >StreamFusion <strong>AI</strong></span
-        ></a
+        ><img :src="brandIcon" alt="" width="38" height="38" /><span>{{
+          systemConfig.name
+        }}</span></a
       >
       <div class="visual-content">
         <div class="stream-illustration" aria-hidden="true">
@@ -198,14 +240,14 @@ async function submit(): Promise<void> {
             <image :href="brandIcon" x="246" y="140" width="68" height="68" />
           </svg>
         </div>
-        <h2>连接视频与智能</h2>
-        <p>StreamFusion AI 视频分析平台</p>
+        <h2>{{ systemConfig.loginTagline }}</h2>
+        <p>{{ systemConfig.name }} {{ systemConfig.description }}</p>
       </div>
     </section>
     <section class="login-form-region">
       <div class="login-card">
         <div class="mobile-brand">
-          <img :src="brandIcon" alt="" width="34" height="34" />StreamFusion AI
+          <img :src="brandIcon" alt="" width="34" height="34" />{{ systemConfig.name }}
         </div>
         <h1>账号登录</h1>
         <ElForm
@@ -253,26 +295,75 @@ async function submit(): Promise<void> {
               ></template>
             </ElInput>
           </ElFormItem>
+          <ElFormItem label="验证码" :error="captchaInputError" class="captcha-field">
+            <div class="captcha-row">
+              <button
+                class="captcha-image"
+                type="button"
+                :disabled="busy || captchaRequesting || (!!captcha && !captchaImageReady)"
+                :aria-busy="captchaRequesting || (!!captcha && !captchaImageReady)"
+                aria-label="刷新图片验证码"
+                title="点击换一张验证码"
+                @click="replaceCaptcha"
+              >
+                <img
+                  v-if="captcha"
+                  :key="captcha.captchaId"
+                  :src="captchaImage"
+                  :data-captcha-id="captcha.captchaId"
+                  alt="图片验证码，点击换一张"
+                  width="120"
+                  height="40"
+                  :class="{ 'is-loading': !captchaImageReady }"
+                  @load="captchaImageEvent($event, true)"
+                  @error="captchaImageEvent($event, false)"
+                />
+                <span v-if="!captchaImageReady" class="captcha-placeholder">{{
+                  captchaRequesting || captcha ? '加载中…' : '点击获取'
+                }}</span>
+              </button>
+              <ElInput
+                id="captcha"
+                v-model="captchaAnswer"
+                name="captcha"
+                aria-label="验证码"
+                placeholder="验证码"
+                autocomplete="off"
+                autocapitalize="off"
+                :spellcheck="false"
+                :maxlength="loginValidation.captcha.length"
+                :disabled="busy || !captchaReady"
+                :validate-event="false"
+                @input="changed('captcha')"
+                @blur="touched.captcha = true"
+              />
+            </div>
+          </ElFormItem>
           <div class="login-options">
             <ElCheckbox v-model="remember" :disabled="busy" @change="rememberChanged"
               >记住账号和密码</ElCheckbox
             >
           </div>
           <ElAlert
-            v-if="error || storageNotice"
+            v-if="feedback"
             class="login-error"
-            :title="error || storageNotice"
-            :type="error ? 'error' : 'warning'"
+            :title="feedback"
+            :type="error || captchaError ? 'error' : 'warning'"
             :closable="false"
             show-icon
+          />
+          <ElButton v-if="loginEstablished" class="login-submit" type="primary" @click="reloadPage"
+            >刷新页面</ElButton
           >
-            <div v-if="error && errorTraceId" class="login-trace">
-              请求标识 <code>{{ errorTraceId }}</code>
-            </div>
-          </ElAlert>
-          <ElButton class="login-submit" native-type="submit" type="primary" :loading="busy">{{
-            busy ? '正在登录' : '登录'
-          }}</ElButton>
+          <ElButton
+            v-else
+            class="login-submit"
+            native-type="submit"
+            type="primary"
+            :loading="busy"
+            :disabled="!captchaReady"
+            >{{ busy ? '正在登录' : '登录' }}</ElButton
+          >
         </ElForm>
       </div>
     </section>
@@ -301,10 +392,6 @@ async function submit(): Promise<void> {
   font-size: 21px;
   font-weight: 600;
   color: #26374e;
-}
-.login-brand strong {
-  color: #2878e8;
-  font-weight: 600;
 }
 .visual-content {
   margin: auto 0;
@@ -335,16 +422,23 @@ async function submit(): Promise<void> {
   align-items: center;
   justify-content: center;
   padding: 40px;
+  min-width: 0;
 }
 .login-card {
   width: 100%;
-  max-width: 390px;
+  max-width: 460px;
+  min-width: 0;
+  padding: 34px 32px;
+  border: 1px solid #e1e7ef;
+  border-radius: 12px;
+  background: #fff;
 }
 h1 {
-  margin: 0 0 42px;
+  margin: 0 0 34px;
   font-size: 25px;
   font-weight: 600;
   color: #303133;
+  text-align: center;
 }
 .login-card :deep(.el-form-item) {
   margin-bottom: 28px;
@@ -358,6 +452,54 @@ h1 {
 }
 .login-options {
   margin: -8px 0 20px 54px;
+}
+.captcha-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+.captcha-row :deep(.el-input) {
+  flex: 1;
+  min-width: 0;
+}
+.captcha-image {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: 0 0 120px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid #dce4ee;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #f5f8fc;
+  color: #6b7d94;
+  cursor: pointer;
+}
+.captcha-image:hover:not(:disabled) {
+  border-color: var(--el-color-primary);
+}
+.captcha-image:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 3px;
+}
+.captcha-image:disabled {
+  cursor: default;
+}
+.captcha-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.captcha-image img.is-loading {
+  visibility: hidden;
+}
+.captcha-placeholder {
+  position: absolute;
+  font-size: 12px;
 }
 .password-eye {
   display: grid;
@@ -383,18 +525,8 @@ h1 {
 .login-error {
   margin-bottom: 20px;
 }
-.login-trace {
-  margin-top: 4px;
-  overflow-wrap: anywhere;
-  user-select: all;
-}
 .mobile-brand {
   display: none;
-}
-@media (min-width: 1500px) {
-  .login-form-region {
-    padding-right: 12%;
-  }
 }
 @media (max-width: 900px) {
   .login-visual {
@@ -409,6 +541,12 @@ h1 {
   .login-form-region {
     padding: 28px;
   }
+  .login-card {
+    padding: 30px 24px;
+  }
+  .captcha-image {
+    flex-basis: 100px;
+  }
 }
 @media (max-width: 720px) {
   .login-page {
@@ -419,15 +557,30 @@ h1 {
   }
   .login-form-region {
     width: 100%;
-    padding: 26px;
+    padding: 20px;
   }
   .mobile-brand {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-bottom: 40px;
+    justify-content: center;
+    margin-bottom: 28px;
     font-size: 20px;
     font-weight: 600;
+  }
+}
+@media (max-width: 380px) {
+  .login-form-region {
+    padding: 12px;
+  }
+  .login-card {
+    padding: 28px 18px;
+  }
+  .captcha-row {
+    gap: 8px;
+  }
+  .captcha-image {
+    flex-basis: 92px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

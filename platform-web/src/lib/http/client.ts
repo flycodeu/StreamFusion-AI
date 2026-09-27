@@ -7,7 +7,7 @@ import type { ApiResult, CsrfToken, RequestOptions } from './types'
 export interface ClientHooks {
   getCsrf: () => CsrfToken | null
   getIdentityEpoch: () => number
-  onAuthFailure: (error: ApiRequestError, epoch: number) => void
+  onAuthFailure: (error: ApiRequestError, epoch: number, path: string) => void
   onForbidden: (error: ApiRequestError, epoch: number) => Promise<void>
 }
 
@@ -117,7 +117,7 @@ export function createApiClient(hooks: ClientHooks) {
           if (category === 'CSRF_INVALID' || !notified.has(category)) {
             if (category !== 'CSRF_INVALID') notified.add(category)
             try {
-              hooks.onAuthFailure(error, epoch)
+              hooks.onAuthFailure(error, epoch, options.path)
             } catch {
               // No exception values: callbacks can capture sensitive session state.
               console.error('Authentication failure callback failed')

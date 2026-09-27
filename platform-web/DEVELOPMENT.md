@@ -67,11 +67,25 @@
 
 ### 登录与记住密码
 
-登录先获取一次性挑战，再用 Web Crypto 的 ECDH / HKDF / AES-GCM 加密账号密码后提交。生产环境仍须 HTTPS，以保护页面、公钥交换和会话 Cookie。
+登录页在匿名会话中先获取 CSRF，再通过 `POST /auth/captcha` 生成图片验证码。响应仅含随机 `captchaId`、到期时间和同源图片地址；前端校验地址必须等于该 ID 对应的 `/auth/captcha/{captchaId}/image`，原生图片请求沿用当前会话 Cookie。开发环境增加 `/api` 代理前缀，生产环境使用后端原路径。
+
+验证码在密码下方，左侧图片按钮支持点击和键盘换图，右侧填写 5 位字母数字。元数据与图片都准备好后才能登录；请求生成和图片加载期间禁止并行换图。图片加载失败或超过 8 秒时显示重试入口，2 分钟过期后清除图片与输入。登录失败会清空输入并生成新码；卸载页面会取消未完成的验证码请求，旧图片事件不会改变新验证码状态。前端没有关闭验证码的开关。
+
+提交时先获取加密挑战，再用 Web Crypto 的 ECDH / HKDF / AES-GCM 将账号、密码、`captchaId` 和 `captchaAnswer` 一起加密，外层请求不携带明文验证码。服务端执行验证码会话绑定、到期检查和一次性消费，前端格式提示不能代替服务端校验。主要入口是 `src/api/auth/captcha.ts`、`src/features/auth/useLoginCaptcha.ts`、`src/api/auth/cipher.ts` 和 `src/pages/auth/LoginView.vue`。生产环境仍须 HTTPS，以保护页面、公钥交换和会话 Cookie。
+
+服务器已完成登录，但后续身份读取或跳转失败时，界面提供“刷新页面”恢复入口，不再向已登录会话申请匿名验证码。会话已被替换等认证拒绝仍按原有会话失效流程处理。
+
+登录页通过 `src/features/auth/loginFeedback.ts` 映射简洁提示，不直接展示服务端文案、请求标识或管理页诊断组件。验证码签发前每次准备 CSRF，遇到 UNAUTHORIZED/CSRF_INVALID 仅恢复一次；验证码的恢复由该流程负责，通用客户端不再并发刷新。HTTP 响应和后端日志保留排查信息，实际登录提交不自动重放。
 
 “记住账号和密码”默认关闭，仅在认证成功后保存，最长保留 30 天。账号和密码一起加密存入当前浏览器的 IndexedDB，密钥为不可导出的 CryptoKey；不写明文 localStorage。取消勾选会删除保存内容，修改密码后也会清除。临时密码要求首次改密时不保存；浏览器禁用存储时仍可正常登录。
 
 此方式用于本机自动填充，同源脚本仍能使用保存的密钥解密，因此不提供 XSS 防护或操作系统级凭据保险箱能力。共享设备应保持不勾选，也可通过浏览器清除该站点数据删除保存内容。代码位于 `src/session/rememberedLogin.ts`；登录输入校验在 `src/utils/loginValidation.ts`，后端仍执行最终校验。
+
+### 公共前端配置
+
+`src/config/system.ts` 维护系统名称、Logo、登录标语和说明，由登录页、侧栏和启动入口实际使用；修改名称或 Logo 后，浏览器标题和图标同步使用该配置。`index.html` 的初始标题为“应用加载中”，启动后由该配置设置系统名称，图标保留加载前的静态默认值。
+
+`src/config/validation.ts` 只管理账号、登录密码长度及验证码格式的输入提示约定，`src/utils/loginValidation.ts` 负责中文反馈。新密码的强度与长度策略仍从后端 `/auth/password-policy` 获取，不能通过前端配置放宽后端规则；不要在该目录放置密钥、客户端 secret、租户开关或没有消费者的预留配置。
 
 ### 用户管理
 
@@ -154,6 +168,7 @@ pnpm dev
 | ---------------------------------------- | --------------------------- | ------------------------- |
 | `request({ path: '/camera/page', ... })` | `/api/camera/page`          | `/camera/page`            |
 | 登录挑战                                 | `/api/auth/login/challenge` | `/auth/login/challenge`   |
+| 生成验证码                               | `/api/auth/captcha`         | `/auth/captcha`           |
 | 健康检查                                 | `/api/actuator/health`      | `/actuator/health`        |
 
 这使开发环境的 `/camera/manage` 页面导航与 API 代理互不干扰。生产构建保留现有后端根路径 API 协议；Vite 的开发代理不会包含在构建产物中。
@@ -184,16 +199,17 @@ pnpm exec vitest run src/router/dynamic/views.test.ts src/router/dynamic/routes.
 pnpm exec vitest run src/lib/http/client.test.ts src/lib/http/transport.test.ts src/api/health/api.test.ts
 ```
 
-| 现象                        | 检查入口                                                                                                                               |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| 菜单没有出现                | 浏览器 `/auth/me` 响应（开发为 `/api/auth/me`）中的 routes/modules；角色 PAGE 授权、启用祖先和 visible；`src/router/dynamic/routes.ts` |
-| 提示页面配置不可用          | `componentKey` 对应文件是否存在、大小写是否一致、是否带了 `.vue`、当前部署是否包含该文件；`src/router/dynamic/views.ts`                |
-| 菜单保存提示 moduleKey 无效 | 后端控制器是否已启动并声明匹配的 `@ModuleAccess`；`ModuleRegistry`、`MenuRules`                                                        |
-| 401 或自动回登录页          | 会话 Cookie、会话有效期、后端用户状态；`src/session/`、`src/api/client.ts`                                                             |
-| 403 或 CSRF_INVALID         | 实际模块授权、写请求 CSRF；`ModuleAuthorizationInterceptor`、`src/lib/http/client.ts`                                                  |
-| 新菜单出现但接口报 403      | 核对实际监听进程的启动时间及 `/v3/api-docs` 是否包含新接口；新增后端控制器后需重新编译并重启后端，数据库菜单变更不会热加载 Java 类     |
-| 409 或版本冲突              | 当前记录是否被其他用户修改，重新加载最新 version；对应领域 `src/api/`                                                                  |
-| 开发 API 返回 HTML 或 404   | 请求是否经过 `/api`、Vite `API_TARGET`、后端实际接口路径；`vite.config.ts`、`src/lib/http/transport.ts`                                |
-| 页面刷新出现服务器 404      | 部署的 SPA fallback 与 API 转发规则                                                                                                    |
+| 现象                        | 检查入口                                                                                                                                 |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| 菜单没有出现                | 浏览器 `/auth/me` 响应（开发为 `/api/auth/me`）中的 routes/modules；角色 PAGE 授权、启用祖先和 visible；`src/router/dynamic/routes.ts`   |
+| 提示页面配置不可用          | `componentKey` 对应文件是否存在、大小写是否一致、是否带了 `.vue`、当前部署是否包含该文件；`src/router/dynamic/views.ts`                  |
+| 菜单保存提示 moduleKey 无效 | 后端控制器是否已启动并声明匹配的 `@ModuleAccess`；`ModuleRegistry`、`MenuRules`                                                          |
+| 401 或自动回登录页          | 会话 Cookie、会话有效期、后端用户状态；`src/session/`、`src/api/client.ts`                                                               |
+| 403 或 CSRF_INVALID         | 实际模块授权、写请求 CSRF；`ModuleAuthorizationInterceptor`、`src/lib/http/client.ts`                                                    |
+| 新菜单出现但接口报 403      | 核对实际监听进程的启动时间及 `/v3/api-docs` 是否包含新接口；新增后端控制器后需重新编译并重启后端，数据库菜单变更不会热加载 Java 类       |
+| 409 或版本冲突              | 当前记录是否被其他用户修改，重新加载最新 version；对应领域 `src/api/`                                                                    |
+| 开发 API 返回 HTML 或 404   | 请求是否经过 `/api`、Vite `API_TARGET`、后端实际接口路径；`vite.config.ts`、`src/lib/http/transport.ts`                                  |
+| 验证码无法获取或一直加载    | 后端是否已重新编译并重启；`POST /auth/captcha` 的 CSRF、当前匿名会话 Cookie，以及其返回图片地址的状态；点击图片重新获取，不要复用过期 ID |
+| 页面刷新出现服务器 404      | 部署的 SPA fallback 与 API 转发规则                                                                                                      |
 
 排查请求失败时保留错误码、时间和 `traceId`，用其关联后端日志。不要将密码、会话 Cookie、完整凭据写入日志或文档。

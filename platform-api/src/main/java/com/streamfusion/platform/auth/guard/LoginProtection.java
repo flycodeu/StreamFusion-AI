@@ -23,6 +23,7 @@ public class LoginProtection {
         } catch (BusinessException failure) {
             if (properties.enabled()
                     && (failure.code() == ErrorCode.LOGIN_FAILED
+                            || failure.code() == ErrorCode.CAPTCHA_INVALID
                             || failure.code() == ErrorCode.VALIDATION_ERROR)) {
                 String ip = addresses.resolve(request);
                 Object saved = request.getAttribute(GENERATION);

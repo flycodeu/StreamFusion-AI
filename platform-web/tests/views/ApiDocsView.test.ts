@@ -1,7 +1,9 @@
 // @vitest-environment vue-renderer
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createRenderer, nextTick } from 'vue'
+import { nextTick } from 'vue'
 import type { App } from 'vue'
+import { node, nodes, renderer, text } from '../support/renderer'
+import type { Host } from '../support/renderer'
 import { clearIdentity } from '../../src/session/state'
 import ApiDocsView from '../../src/views/monitor/ApiDocs.vue'
 
@@ -28,51 +30,6 @@ vi.mock('element-plus', async () => {
   }
 })
 
-interface Host {
-  type: string
-  text: string
-  props: Record<string, unknown>
-  children: Host[]
-  parent: Host | null
-}
-const node = (type: string, text = ''): Host => ({
-  type,
-  text,
-  props: {},
-  children: [],
-  parent: null,
-})
-const renderer = createRenderer<Host, Host>({
-  createElement: (type) => node(type),
-  createText: (text) => node('#text', text),
-  createComment: (text) => node('#comment', text),
-  setText: (target, text) => {
-    target.text = text
-  },
-  setElementText: (target, text) => {
-    target.text = text
-    target.children = []
-  },
-  patchProp: (target, key, _, value) => {
-    target.props[key] = value
-  },
-  insert(target, parent, anchor) {
-    if (target.parent) target.parent.children.splice(target.parent.children.indexOf(target), 1)
-    const position = anchor ? parent.children.indexOf(anchor) : -1
-    parent.children.splice(position < 0 ? parent.children.length : position, 0, target)
-    target.parent = parent
-  },
-  remove(target) {
-    if (target.parent) target.parent.children.splice(target.parent.children.indexOf(target), 1)
-  },
-  parentNode: (target) => target.parent,
-  nextSibling: (target) => {
-    const siblings = target.parent?.children || []
-    return siblings[siblings.indexOf(target) + 1] || null
-  },
-})
-const nodes = (root: Host): Host[] => [root, ...root.children.flatMap(nodes)]
-const text = (root: Host): string => root.text + root.children.map(text).join('')
 const button = (root: Host, label: string) =>
   nodes(root).find((item) => item.type === 'button' && text(item).includes(label))!
 let app: App | null = null

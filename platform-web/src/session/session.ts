@@ -1,6 +1,7 @@
 import { ApiRequestError } from '../lib/http/error'
 import * as auth from '../api/auth/api'
 import type { AuthUser } from '../api/auth/types'
+import type { LoginCaptchaAnswer } from '../api/auth/captcha'
 import { clearIdentity, sessionState, setIdentity } from './state'
 import { forgetRememberedLogin } from './rememberedLogin'
 import { notifyOtherTabs } from './crossTab'
@@ -21,9 +22,9 @@ function requireCurrentEpoch(epoch: number): void {
   if (sessionState.epoch !== epoch) throw new ApiRequestError('REQUEST_CANCELLED', '请求已取消')
 }
 
-export async function refreshCsrf(): Promise<void> {
+export async function refreshCsrf(signal?: AbortSignal): Promise<void> {
   const epoch = sessionState.epoch
-  const token = await auth.getCsrf()
+  const token = await auth.getCsrf(signal)
   requireCurrentEpoch(epoch)
   sessionState.csrf = token
 }
@@ -61,16 +62,34 @@ export async function restoreSession(): Promise<void> {
   }
 }
 
-export async function signIn(username: string, password: string): Promise<void> {
+export async function signIn(
+  username: string,
+  password: string,
+  captcha: LoginCaptchaAnswer,
+): Promise<void> {
   const epoch = sessionState.epoch
   if (!sessionState.csrf) await refreshCsrf()
   requireCurrentEpoch(epoch)
-  await auth.login(username, password)
+  await auth.login(username, password, captcha)
   requireCurrentEpoch(epoch)
   clearIdentity()
   notifyOtherTabs()
-  await refreshCsrf()
-  await refreshIdentity()
+  try {
+    await refreshCsrf()
+    await refreshIdentity()
+  } catch (cause) {
+    // The cookie is already authenticated. A temporary read failure must not restart anonymous login.
+    if (
+      cause instanceof ApiRequestError &&
+      (cause.code === 'REQUEST_CANCELLED' || cause.status === 401 || cause.code === 'IP_BLOCKED')
+    )
+      throw cause
+    throw new ApiRequestError(
+      'LOGIN_RESTORE_FAILED',
+      '登录成功，但未能加载账户信息，请刷新页面继续',
+      cause instanceof ApiRequestError ? cause : {},
+    )
+  }
   sessionState.ready = true
 }
 

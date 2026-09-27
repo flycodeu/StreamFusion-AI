@@ -6,9 +6,9 @@ import { sessionState } from '../../session/state'
 import { buildMenuRoutes } from '../../router/dynamic/routes'
 import AppIcon from '../../components/icons/AppIcon.vue'
 import SidebarMenu from './SidebarMenu.vue'
+import { systemConfig } from '../../config/system'
 
 defineProps<{ collapsed: boolean }>()
-const brandIcon = `${import.meta.env.BASE_URL}streamfusion.svg`
 const route = inject(routeLocationKey, null)
 const navigation = computed(
   () => buildMenuRoutes(sessionState.me?.routes ?? [], sessionState.me?.modules ?? []).navigation,
@@ -22,9 +22,9 @@ const navigation = computed(
     :class="{ 'is-collapsed': collapsed }"
     aria-label="主导航"
   >
-    <RouterLink class="brand" to="/home" aria-label="StreamFusion AI 首页">
-      <img :src="brandIcon" alt="" width="30" height="30" />
-      <span class="brand-name">StreamFusion AI</span>
+    <RouterLink class="brand" to="/home" :aria-label="`${systemConfig.name} 首页`">
+      <img :src="systemConfig.logo" alt="" width="30" height="30" />
+      <span class="brand-name">{{ systemConfig.name }}</span>
     </RouterLink>
     <nav aria-label="功能菜单" class="navigation">
       <ElMenu

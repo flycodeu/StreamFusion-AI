@@ -51,6 +51,7 @@ describe('business HTTP client', () => {
     expect(state.onAuthFailure).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ code: 'IP_BLOCKED' }),
       1,
+      '/user/page',
     )
     expect(state.onForbidden).not.toHaveBeenCalled()
   })
@@ -127,6 +128,26 @@ describe('business HTTP client', () => {
       code: 'CSRF_INVALID',
     })
     expect(state.onAuthFailure).toHaveBeenCalledTimes(2)
+    expect(state.onAuthFailure).toHaveBeenLastCalledWith(
+      expect.objectContaining({ code: 'CSRF_INVALID' }),
+      1,
+      '/user/page',
+    )
+  })
+
+  it('passes the captcha request path to session handling without retrying its write', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response(null, 403, 'CSRF_INVALID'))
+    vi.stubGlobal('fetch', fetchMock)
+    const state = hooks()
+    await expect(
+      createApiClient(state)({ ...options(), path: '/auth/captcha', method: 'POST' }),
+    ).rejects.toMatchObject({ code: 'CSRF_INVALID' })
+    expect(state.onAuthFailure).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ code: 'CSRF_INVALID' }),
+      1,
+      '/auth/captcha',
+    )
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('decodes only the data once and returns typed data to the API function', async () => {

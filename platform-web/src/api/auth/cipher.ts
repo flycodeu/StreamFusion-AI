@@ -1,3 +1,5 @@
+import type { LoginCaptchaAnswer } from './captcha'
+
 interface Challenge {
   challengeId: string
   serverPublicKey: string
@@ -19,6 +21,7 @@ export async function encryptLogin(
   challenge: Challenge,
   username: string,
   password: string,
+  captcha: LoginCaptchaAnswer,
 ): Promise<{ challengeId: string; clientPublicKey: string; iv: string; ciphertext: string }> {
   if (!/^[a-f0-9]{32}$/.test(challenge.challengeId)) throw new Error('Invalid login challenge')
   const subtle = crypto.subtle
@@ -50,7 +53,14 @@ export async function encryptLogin(
   const encrypted = await subtle.encrypt(
     { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(challenge.challengeId) },
     key,
-    new TextEncoder().encode(JSON.stringify({ username, password })),
+    new TextEncoder().encode(
+      JSON.stringify({
+        username,
+        password,
+        captchaId: captcha.captchaId,
+        captchaAnswer: captcha.captchaAnswer,
+      }),
+    ),
   )
   const publicKey = await subtle.exportKey('spki', pair.publicKey)
   return {

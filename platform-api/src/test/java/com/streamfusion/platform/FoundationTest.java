@@ -172,8 +172,8 @@ class FoundationTest {
     void redactsCredentialsAndBoundsLogMessages() {
         String safe =
                 LogRedactor.redact(
-                        "password=dummy-secret rtsp://alice:private@camera/stream Bearer dummy-token");
-        assertThat(safe).doesNotContain("dummy-secret", "alice:private", "dummy-token");
+                        "captchaAnswer=ABC23 password=dummy-secret rtsp://alice:private@camera/stream Bearer dummy-token");
+        assertThat(safe).doesNotContain("ABC23", "dummy-secret", "alice:private", "dummy-token");
         assertThat(LogRedactor.redact("x".repeat(20000))).hasSize(16384);
     }
 

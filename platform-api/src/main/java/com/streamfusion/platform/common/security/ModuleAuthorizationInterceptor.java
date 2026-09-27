@@ -59,6 +59,8 @@ public final class ModuleAuthorizationInterceptor implements HandlerInterceptor 
         boolean read = "GET".equals(method) || "HEAD".equals(method);
         return switch (handler.getMethod().getName()) {
             case "csrf" -> read && path.equals("/auth/csrf");
+            case "captcha" -> method.equals("POST") && path.equals("/auth/captcha");
+            case "captchaImage" -> read && path.matches("/auth/captcha/[0-9a-f]{32}/image");
             case "loginChallenge" -> read && path.equals("/auth/login/challenge");
             case "passwordPolicy" -> read && path.equals("/auth/password-policy");
             case "loginRecords" -> read && path.equals("/auth/login-records/page");

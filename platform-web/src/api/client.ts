@@ -9,7 +9,7 @@ export const request = createApiClient({
     const { synchronizeAuthorization } = await import('../session/authorizationSync')
     await synchronizeAuthorization(epoch)
   },
-  onAuthFailure: (error, epoch) => {
+  onAuthFailure: (error, epoch, path) => {
     if (error.code === 'IP_BLOCKED') {
       clearIdentity()
       if (globalThis.location && globalThis.location.pathname !== '/login')
@@ -33,6 +33,7 @@ export const request = createApiClient({
       if (globalThis.location) globalThis.location.assign('/change-password')
     } else if (error.code === 'CSRF_INVALID') {
       sessionState.csrf = null
+      if (path === '/auth/captcha') return
       void import('./auth/api')
         .then(async ({ getCsrf }) => {
           const token = await getCsrf()

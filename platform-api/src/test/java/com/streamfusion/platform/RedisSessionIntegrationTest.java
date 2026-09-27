@@ -51,11 +51,22 @@ class RedisSessionIntegrationTest {
     @Autowired BootstrapService bootstrap;
     @Autowired ObjectMapper json;
     @MockitoSpyBean RedisSessionRepository repository;
+
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.streamfusion.platform.auth.captcha.CaptchaImageGenerator captchaImages;
+
     private CookieManager cookies;
     private HttpClient client;
 
     @BeforeEach
     void prepare() throws Exception {
+        org.mockito.Mockito.when(captchaImages.generate())
+                .thenReturn(
+                        new com.streamfusion.platform.auth.captcha.CaptchaImageGenerator.Generated(
+                                SecureLoginSupport.CAPTCHA_ANSWER,
+                                new com.streamfusion.platform.auth.captcha.CaptchaImageGenerator()
+                                        .generate()
+                                        .image()));
         IdentitySchema.initialize(source);
         bootstrap.initialize("Admin01", null, "AdminPass1!", null);
         cookies = new CookieManager(null, CookiePolicy.ACCEPT_ALL);
@@ -328,8 +339,16 @@ class RedisSessionIntegrationTest {
 
     private Map<String, String> loginEnvelope(HttpClient browser, String username, String password)
             throws Exception {
+        JsonNode csrf = data(send(browser, "GET", "/auth/csrf", null, null));
+        JsonNode captcha = data(send(browser, "POST", "/auth/captcha", null, csrf));
         JsonNode challenge = data(send(browser, "GET", "/auth/login/challenge", null, null));
-        return SecureLoginSupport.encrypt(json, challenge, username, password);
+        return SecureLoginSupport.encrypt(
+                json,
+                challenge,
+                username,
+                password,
+                captcha.path("captchaId").asText(),
+                SecureLoginSupport.CAPTCHA_ANSWER);
     }
 
     private static String decodedId(String cookie) {

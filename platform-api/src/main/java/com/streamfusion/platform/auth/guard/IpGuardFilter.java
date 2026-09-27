@@ -23,9 +23,13 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @RequiredArgsConstructor
 public class IpGuardFilter extends OncePerRequestFilter {
     private static final Set<String> RESOURCES =
-            Set.of("GET /auth/csrf", "GET /auth/login/challenge", "POST /auth/login/secure");
+            Set.of(
+                    "GET /auth/csrf",
+                    "GET /auth/login/challenge",
+                    "POST /auth/login/secure",
+                    "POST /auth/captcha");
     private static final Set<String> RESOURCE_PATHS =
-            Set.of("/auth/csrf", "/auth/login/challenge", "/auth/login/secure");
+            Set.of("/auth/csrf", "/auth/login/challenge", "/auth/login/secure", "/auth/captcha");
     private final IpGuardProperties properties;
     private final ClientIpResolver addresses;
     private final IpBlockService blocks;
@@ -74,9 +78,11 @@ public class IpGuardFilter extends OncePerRequestFilter {
             String ip = addresses.resolve(request);
             if (!route.equals("GET /auth/csrf"))
                 request.setAttribute(LoginProtection.GENERATION, blocks.requireAllowed(ip));
-            if (RESOURCE_PATHS.contains(path) && !RESOURCES.contains(route))
+            boolean captchaImage = path.matches("/auth/captcha/[0-9a-f]{32}/image");
+            boolean resource = RESOURCES.contains(route) || (captchaImage && method.equals("GET"));
+            if ((RESOURCE_PATHS.contains(path) || path.startsWith("/auth/captcha/")) && !resource)
                 throw BusinessException.error(ErrorCode.METHOD_NOT_ALLOWED);
-            if (RESOURCES.contains(route)) {
+            if (resource) {
                 var counter = store.resource(ip);
                 if (counter.count() > properties.resourceLimit()) {
                     response.setHeader("Retry-After", Long.toString(counter.retryAfterSeconds()));

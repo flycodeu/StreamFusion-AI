@@ -69,7 +69,7 @@ class LoginCipherIntegrationTest extends SecureLoginSupport {
                                         .getResponse()
                                         .getContentAsString())
                         .path("data");
-        String envelope = encrypt(challenge);
+        String envelope = encrypt(challenge, session, "AdminPass1!");
         assertThat(envelope).doesNotContain("Admin01", "AdminPass1!");
         mvc.perform(
                         post("/auth/login/secure")
@@ -169,12 +169,25 @@ class LoginCipherIntegrationTest extends SecureLoginSupport {
                                         csrf.path("headerName").asText(),
                                         csrf.path("token").asText())
                                 .contentType("application/json")
-                                .content(encrypt(challenge, password)))
+                                .content(encrypt(challenge, session, password)))
                 .andExpect(status().isOk());
     }
 
     private String encrypt(JsonNode challenge) throws Exception {
         return encrypt(challenge, "AdminPass1!");
+    }
+
+    private String encrypt(JsonNode challenge, MockHttpSession session, String password)
+            throws Exception {
+        var captcha = SecureLoginSupport.captcha(mvc, json, session);
+        return json.writeValueAsString(
+                SecureLoginSupport.encrypt(
+                        json,
+                        challenge,
+                        "Admin01",
+                        password,
+                        captcha.path("captchaId").asText(),
+                        SecureLoginSupport.CAPTCHA_ANSWER));
     }
 
     private String encrypt(JsonNode challenge, String password) throws Exception {

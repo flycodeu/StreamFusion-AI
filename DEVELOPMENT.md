@@ -38,7 +38,7 @@ MySQL 驱动、Redis/Lettuce 和 Spring Security 版本由 Spring Boot 管理。
 
 标准覆盖入口为 Spring 配置；不使用 REDIS_URL，避免 URL 中数据库号覆盖单独的 database 配置。
 普通开发变量为上述 DB_* / REDIS_*；local 文件中可直接修改连接参数。
-表结构只维护 platform-api/sql/业务 中的十份逐表文件，sql/汇总/streamfusion-mysql.sql 由 scripts/export-sql.ps1 自动生成。当前必需结构包括 sys_ip_block 和 sys_login_record，旧版库须按实际缺项升级，步骤见 [SQL 指南](platform-api/sql/README.md#已有库升级)。
+表结构只维护 platform-api/sql/业务 中的十份逐表文件，sql/汇总/streamfusion-mysql.sql 由 scripts/export-sql.ps1 自动生成。当前必需结构包括 sys_ip_block 和 sys_login_record，旧版库须按实际缺项升级，步骤见 [SQL 指南](platform-api/sql/README.md#运行库与菜单配置)。
 首次运行前，按 [SQL 指南](platform-api/sql/README.md)手动初始化专用空库；应用不自动建库、建表或升级。
 脚本先 DROP 再 CREATE，会清空目标表；已有数据的库禁止用它升级。本地已经初始化的数据库无需重导。
 SQL 仅初始化内置角色、管理 PAGE 及可调整的示例组织，不包含默认用户或固定密码哈希。首次账号由下面的非 Web 引导创建。
@@ -107,9 +107,12 @@ java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=local 
 API 客户端需按以下顺序对接：
 
 1. `GET /auth/csrf`，保存 Cookie 及响应 `data.headerName`、`data.token`。
-2. `GET /auth/login/challenge` 获取一次性挑战，按前端 `src/api/auth/cipher.ts` 使用 ECDH P-256、HKDF-SHA256、AES-GCM 加密账号和密码，再 `POST /auth/login/secure` 提交密文、携带 CSRF 与 Cookie。
-3. 登录会轮换会话和 CSRF；重新请求 `/auth/csrf`，再读取 `GET /auth/me`。待改密账号只允许本人信息、改密和退出等入口。
-4. 写请求继续携带最新 CSRF 令牌和 Cookie。`PUT /auth/password` 改密成功后重新登录；`POST /auth/logout` 撤销当前会话。
+2. 携带 CSRF 和 Cookie 调用 `POST /auth/captcha`，得到 `captchaId`、`expiresAt`、站内 `imageUrl`；以同一 Cookie 读取 PNG 图片。验证码包含 5 位字母数字，大小写不敏感，有效期两分钟。
+3. `GET /auth/login/challenge` 获取一次性挑战，按前端 `src/api/auth/cipher.ts` 使用 ECDH P-256、HKDF-SHA256、AES-GCM 一同加密 `username`、`password`、`captchaId`、`captchaAnswer`，再 `POST /auth/login/secure` 提交密文、携带 CSRF 与 Cookie。
+4. 登录会轮换会话和 CSRF；重新请求 `/auth/csrf`，再读取 `GET /auth/me`。待改密账号只允许本人信息、改密和退出等入口。
+5. 写请求继续携带最新 CSRF 令牌和 Cookie。`PUT /auth/password` 改密成功后重新登录；`POST /auth/logout` 撤销当前会话。
+
+每个匿名会话在 Redis 中只有一个有效验证码。换图原子替换旧码；校验时原子消费，答案错误或后续账号密码错误均不能重复使用；迟到的旧码请求不能消耗新码。前端在登录失败后清空验证码输入并重新取图。图片与发行响应均禁止缓存，接口不返回文本答案；验证码错误返回 `CAPTCHA_INVALID`。生成图片和读取资源受限流保护，Redis 故障时明确失败。验证码无需新增数据库表，生产仍须使用 HTTPS。
 
 同一账号只允许一个有效登录。新登录在账号行锁中递增 `session_version`，将旧登录记录标记为 `REPLACED`；Spring Session 最终保存成功后才提交登录 SQL，保存失败不撤销旧登录。`GET /auth/session` 只读检查有效性，不刷新空闲时限；前台每次检查完成后间隔 15 秒再请求，隐藏标签暂停。
 

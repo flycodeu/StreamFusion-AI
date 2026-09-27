@@ -9,6 +9,7 @@ const auth = vi.hoisted(() => ({
   changePassword: vi.fn(),
 }))
 const signal = vi.hoisted(() => ({ notify: vi.fn() }))
+const captcha = { captchaId: '0123456789abcdef0123456789abcdef', captchaAnswer: 'A2B3C' }
 vi.mock('../api/auth/api', () => auth)
 vi.mock('./crossTab', () => ({ notifyOtherTabs: signal.notify }))
 vi.mock('./rememberedLogin', () => ({
@@ -79,7 +80,7 @@ describe('shared cookie identity rebuilding', () => {
     sessionState.csrf = { headerName: 'X-CSRF-TOKEN', token: 'csrf' }
     const pending = deferred<void>()
     auth.login.mockReturnValue(pending.promise)
-    const signingIn = signIn('operator', 'example')
+    const signingIn = signIn('operator', 'example', captcha)
     const rejected = expect(signingIn).rejects.toMatchObject({ code: 'REQUEST_CANCELLED' })
     reloadSharedSession()
     pending.resolve()
@@ -89,13 +90,37 @@ describe('shared cookie identity rebuilding', () => {
   })
 
   it('notifies after successful server login even when the following identity refresh fails', async () => {
+    const { ApiRequestError } = await import('../lib/http/error')
     const { sessionState } = await import('./state')
     const { signIn } = await import('./session')
     sessionState.csrf = { headerName: 'X-CSRF-TOKEN', token: 'csrf' }
     auth.login.mockResolvedValue(undefined)
-    auth.getCsrf.mockRejectedValue(new Error('network unavailable'))
-    await expect(signIn('operator', 'example')).rejects.toThrow('network unavailable')
+    auth.getCsrf.mockRejectedValue(
+      new ApiRequestError('NETWORK_ERROR', 'network unavailable', {
+        traceId: '0123456789abcdef0123456789abcdef',
+        status: 503,
+      }),
+    )
+    await expect(signIn('operator', 'example', captcha)).rejects.toMatchObject({
+      code: 'LOGIN_RESTORE_FAILED',
+      traceId: '0123456789abcdef0123456789abcdef',
+      status: 503,
+    })
     expect(signal.notify).toHaveBeenCalledOnce()
+  })
+
+  it('preserves an authentication rejection received while reading the newly established session', async () => {
+    const { ApiRequestError } = await import('../lib/http/error')
+    const { sessionState } = await import('./state')
+    const { signIn } = await import('./session')
+    sessionState.csrf = { headerName: 'X-CSRF-TOKEN', token: 'csrf' }
+    auth.login.mockResolvedValue(undefined)
+    auth.getCsrf.mockRejectedValue(
+      new ApiRequestError('SESSION_REPLACED', 'replaced', { status: 401 }),
+    )
+    await expect(signIn('operator', 'example', captcha)).rejects.toMatchObject({
+      code: 'SESSION_REPLACED',
+    })
   })
 
   it.each(['logout', 'password'] as const)(
@@ -113,7 +138,7 @@ describe('shared cookie identity rebuilding', () => {
     const { signIn } = await import('./session')
     sessionState.csrf = { headerName: 'X-CSRF-TOKEN', token: 'csrf' }
     auth.login.mockRejectedValue(new Error('rejected'))
-    await expect(signIn('operator', 'example')).rejects.toThrow('rejected')
+    await expect(signIn('operator', 'example', captcha)).rejects.toThrow('rejected')
     expect(signal.notify).not.toHaveBeenCalled()
   })
 })

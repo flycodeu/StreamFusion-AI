@@ -50,6 +50,8 @@ class IpGuardIntegrationTest {
     @Autowired BootstrapService bootstrap;
     @Autowired IpBlockService blocks;
     @MockitoBean LoginGuardStore store;
+    @MockitoBean com.streamfusion.platform.auth.captcha.CaptchaStore captchaStore;
+    @MockitoBean com.streamfusion.platform.auth.captcha.CaptchaImageGenerator captchaImages;
     @MockitoSpyBean IpBlockMapper mapper;
     private JdbcTemplate jdbc;
     private MockHttpSession admin;
@@ -60,6 +62,8 @@ class IpGuardIntegrationTest {
         IdentitySchema.initialize(source);
         jdbc = new JdbcTemplate(source);
         claimEachChallengeOnce(store);
+        com.streamfusion.platform.support.SecureLoginSupport.configureCaptchas(
+                captchaStore, captchaImages);
         var counters = new ConcurrentHashMap<String, AtomicLong>();
         when(store.failure(anyString(), anyLong()))
                 .thenAnswer(
@@ -328,6 +332,30 @@ class IpGuardIntegrationTest {
     }
 
     @Test
+    void captchaFailureCountsAgainstIpWithoutIncreasingAccountPasswordFailures() throws Exception {
+        var challengeResult =
+                mvc.perform(get("/auth/login/challenge")).andExpect(status().isOk()).andReturn();
+        var session = (MockHttpSession) challengeResult.getRequest().getSession(false);
+        var challenge =
+                json.readTree(challengeResult.getResponse().getContentAsByteArray()).path("data");
+        var envelope =
+                com.streamfusion.platform.support.SecureLoginSupport.encrypt(
+                        json, challenge, "GuardAdmin", "GuardAdmin1!");
+        mvc.perform(
+                        post("/auth/login/secure")
+                                .session(session)
+                                .with(csrf())
+                                .with(ip("192.0.2.72"))
+                                .contentType("application/json")
+                                .content(json.writeValueAsBytes(envelope)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("CAPTCHA_INVALID"));
+        verify(store).failure("192.0.2.72", 0L);
+        assertThat(count("SELECT failed_login_count FROM sys_user WHERE username='GuardAdmin'"))
+                .isZero();
+    }
+
+    @Test
     void resourceRateLimitPrecedesAnonymousSessionCreationAndDoesNotPermanentlyBlock()
             throws Exception {
         when(store.resource("192.0.2.30")).thenReturn(new LoginGuardStore.Counter(121, 53));
@@ -335,7 +363,10 @@ class IpGuardIntegrationTest {
                 java.util.List.of(
                         get("/auth/login/challenge"),
                         head("/auth/login/challenge"),
-                        get("/auth/csrf"))) {
+                        get("/auth/csrf"),
+                        post("/auth/captcha"),
+                        get("/auth/captcha/" + "a".repeat(32) + "/image"),
+                        head("/auth/captcha/" + "a".repeat(32) + "/image"))) {
             var result =
                     mvc.perform(request.with(ip("192.0.2.30")))
                             .andExpect(status().isTooManyRequests())

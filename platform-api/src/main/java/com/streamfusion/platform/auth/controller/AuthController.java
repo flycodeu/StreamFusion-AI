@@ -1,6 +1,7 @@
 package com.streamfusion.platform.auth.controller;
 
 import com.streamfusion.platform.audit.pojo.dto.AuditContextDto;
+import com.streamfusion.platform.auth.captcha.CaptchaService;
 import com.streamfusion.platform.auth.config.AuthProperties;
 import com.streamfusion.platform.auth.guard.LoginProtection;
 import com.streamfusion.platform.auth.pojo.dto.EncryptedLoginDto;
@@ -8,6 +9,7 @@ import com.streamfusion.platform.auth.pojo.dto.LoginDto;
 import com.streamfusion.platform.auth.pojo.dto.PasswordChangeDto;
 import com.streamfusion.platform.auth.pojo.dto.SessionPrincipalDto;
 import com.streamfusion.platform.auth.pojo.vo.AuthUserVo;
+import com.streamfusion.platform.auth.pojo.vo.CaptchaVo;
 import com.streamfusion.platform.auth.pojo.vo.CsrfVo;
 import com.streamfusion.platform.auth.pojo.vo.LoginChallengeVo;
 import com.streamfusion.platform.auth.pojo.vo.PasswordPolicyVo;
@@ -36,8 +38,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseCookie;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -66,11 +71,32 @@ public class AuthController {
     private final LoginCipherService loginCipher;
     private final LoginProtection protection;
     private final LoginRecordService loginRecords;
+    private final CaptchaService captchas;
 
     @Operation(summary = "获取 CSRF 信息")
     @GetMapping("/csrf")
     public R<CsrfVo> csrf(CsrfToken token) {
         return R.success(new CsrfVo(token.getHeaderName(), token.getToken()));
+    }
+
+    @Operation(summary = "创建或刷新登录验证码", description = "需CSRF及匿名会话；同一会话仅保留一个验证码，2分钟过期。")
+    @PostMapping("/captcha")
+    public R<CaptchaVo> captcha(HttpServletRequest request, HttpServletResponse response) {
+        response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+        return R.success(captchas.create(request));
+    }
+
+    @Operation(summary = "读取当前会话的验证码图片", description = "返回PNG，不消费验证码，不延长验证码有效期。")
+    @GetMapping(value = "/captcha/{id:[0-9a-f]{32}}/image", produces = MediaType.IMAGE_PNG_VALUE)
+    public ResponseEntity<byte[]> captchaImage(
+            @PathVariable String id, HttpServletRequest request) {
+        return ResponseEntity.ok()
+                .contentType(MediaType.IMAGE_PNG)
+                .cacheControl(CacheControl.noStore())
+                .header(HttpHeaders.PRAGMA, "no-cache")
+                .header(HttpHeaders.EXPIRES, "0")
+                .header("X-Content-Type-Options", "nosniff")
+                .body(captchas.image(request, id));
     }
 
     @Operation(summary = "获取一次性登录加密挑战")
@@ -100,6 +126,7 @@ public class AuthController {
                 && !(existing instanceof AnonymousAuthenticationToken)) {
             throw BusinessException.error(ErrorCode.CONFLICT);
         }
+        captchas.verify(request, input.getCaptchaId(), input.getCaptchaAnswer());
         try {
             authentication.authenticate(
                     input.getUsername(),
