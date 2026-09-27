@@ -5,7 +5,6 @@
   font-synthesis: none;
   --text-primary: #303133;
   --text-secondary: #606266;
-  --text-tertiary: #909399;
   --surface-muted: #f5f7fa;
   --border-subtle: #e4e7ed;
 }
@@ -31,18 +30,6 @@ a {
   padding: 20px var(--content-spacing);
   width: 100%;
 }
-.page-title {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-.page-title h1 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-}
 .search-form {
   background: #fff;
   border: 1px solid var(--border-subtle);
@@ -60,19 +47,6 @@ a {
 .search-form .status-field {
   width: 140px;
 }
-.data-panel,
-.form-panel {
-  background: #fff;
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-}
-.data-panel {
-  padding: 16px;
-}
-.form-panel {
-  padding: 24px;
-  max-width: 650px;
-}
 .el-table {
   --el-table-header-bg-color: #f5f7fa;
   --el-table-header-text-color: #606266;
@@ -82,14 +56,6 @@ a {
 }
 .el-table .table-actions-column > .cell {
   overflow: visible;
-}
-.table-footer {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 18px;
-}
-.form-error {
-  color: var(--el-color-danger);
 }
 .el-dialog {
   max-width: calc(100vw - 32px);

@@ -45,6 +45,7 @@ export const renderer = createRenderer<Host, Host>({
   },
   remove(target) {
     if (target.parent) target.parent.children.splice(target.parent.children.indexOf(target), 1)
+    target.parent = null
   },
   parentNode: (target) => target.parent,
   nextSibling: (target) => {

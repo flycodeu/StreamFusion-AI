@@ -97,7 +97,14 @@ test(
         signal: AbortSignal.timeout(5000),
       });
       assert.equal(response.status, 200);
-      assert.match(await response.text(), /<title>StreamFusion AI<\/title>/);
+      const html = await response.text();
+      assert.match(html, /<div\s+id="app"\s*>/);
+      assert.match(html, /<script\s+type="module"\s+src="\/src\/main\.ts"/);
+      const entry = await fetch(`http://127.0.0.1:${port}/src/main.ts`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      assert.equal(entry.status, 200);
+      assert.match(await entry.text(), /createApp\(App\)/);
     } finally {
       await stopProject(port);
       for (const instance of instances) {

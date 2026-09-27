@@ -18,8 +18,8 @@ StreamFusion AI 的目标是让视频分析任务可以被统一配置、在算�
 
 | 模块 | 当前已实现 | 尚未实现 |
 |---|---|---|
-| Platform API | 加密登录与单账号单会话、强制登出、改密、用户/角色/部门/菜单管理、PAGE 模块授权、审计与登录记录、IP 防护、服务采集、健康检查、OpenAPI | 相机、任务及事件 API |
-| Platform Web | 登录与个人中心、管理页面、操作记录、服务信息、接口文档及 JSON 导出、文件路径动态路由、异常恢复、会话结束弹窗与跨标签同步 | 视频预览与视频业务页面 |
+| Platform API | 加密登录与图片验证码、单账号单会话、强制登出、改密、用户/角色/部门/菜单管理、PAGE 模块授权、审计与登录记录、IP 防护、服务采集、健康检查、OpenAPI | 用户权限来源聚合、相机、任务及事件 API |
+| Platform Web | 登录与个人中心、管理页面、操作记录、服务信息、接口文档及 JSON 导出、文件路径动态路由、异常恢复、会话结束弹窗与跨标签同步、统一品牌与输入配置 | 用户权限来源详情、视频预览与视频业务页面 |
 | Node Agent | 独立环境与配置、健康接口、接口文档、请求日志 | 节点注册、心跳、任务同步、进程监督 |
 | Algorithm Runtime | 独立环境与配置、健康接口、接口文档、请求日志 | 拉流、解码、模型推理、事件与证据 |
 | 工程基础 | 依赖锁定、环境检查、日志轮转与脱敏、质量检查、CI 工作流、协议样例校验 | 自动部署、部署编排 |
@@ -167,7 +167,11 @@ Windows 下通过 `pnpm dev` 或 `scripts/start.ps1 web` 重复启动时，会�
 
 各终端使用 `Ctrl+C` 停止服务。
 
+健康脚本检查服务响应与前端页面入口；页面标题由前端统一配置设置，检查不依赖系统名称。HTML通过不代表浏览器交互已验收。
+
 登录使用挑战公钥与密文接口。登录后重新获取 CSRF 令牌供写请求使用，详情见[登录与模块授权](DEVELOPMENT.md#登录与模块授权)。新建和重置普通用户使用 `SF_AUTH_INITIAL_PASSWORD`；dev/local 提供上述开发临时密码，prod 须显式配置。页面路径、接口分层和新增菜单方法见[前端开发约定](platform-web/DEVELOPMENT.md)。
+
+登录需输入5位字母数字图片验证码，忽略大小写、两分钟有效。换图会替换当前会话的旧码，登录失败后清空输入并换图；验证码答案与账号密码一起进入密文请求。普通登录错误显示简洁提示，响应和后端日志保留诊断字段。
 
 同一账号只保留一个有效会话；新登录成功后，旧会话下一次请求被拒绝。前台页面定期检查会话，显示新登录的时间和来源；隐藏或离线页面恢复后检查。用户管理的“更多 → 强制登出”可撤销受管理账号的会话，仍执行本人和超级账号保护。同一浏览器的标签共享 Cookie，并同步当前登录身份。
 
@@ -228,6 +232,8 @@ java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=prod
 
 前端需要改变后端地址时，复制 [环境变量示例](platform-web/.env.example) 为 `platform-web/.env.local`，
 修改 `API_TARGET` 后重启 Vite。默认开发请求链为浏览器 → Vite `/api` 代理 → Platform API。构建后的前端使用同源根路径 API；`pnpm preview` 只预览构建产物，完整运行需由静态服务器配置 API 反向代理，具体路径见[开发指南](DEVELOPMENT.md#前端生产访问路径)。
+
+系统名称、Logo和登录文案集中在[system.ts](platform-web/src/config/system.ts)，输入提示规则位于[validation.ts](platform-web/src/config/validation.ts)。后端仍执行最终校验，新密码强度由后端策略提供。
 
 Agent 与 Runtime 在各自目录使用 `uv run --locked python -m app` 启动。
 需要自定义时，将各自的 `.env.example` 复制为 `.env.local`，分别使用 `SF_AGENT_*` 和 `SF_RUNTIME_*` 配置；

@@ -22,6 +22,7 @@ foreach ($check in $checks) {
 }
 if ('web' -in $Services) {
     $page = Invoke-WebRequest 'http://127.0.0.1:8090/' -TimeoutSec 10 -UseBasicParsing
-    if ($page.Content -notmatch '<title>StreamFusion AI</title>') { throw 'Unexpected web page' }
+    if ($page.Content -notmatch '<div\s+id="app"\s*>' -or
+        $page.Content -notmatch '<script\b[^>]*type="module"[^>]*src=') { throw 'Unexpected web page' }
     Write-Output 'PASS frontend HTML (browser rendering requires separate verification)'
 }

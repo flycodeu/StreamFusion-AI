@@ -1,7 +1,9 @@
 // @vitest-environment vue-renderer
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createRenderer, nextTick } from 'vue'
+import { nextTick } from 'vue'
 import type { App, Component } from 'vue'
+import { node, renderer } from '../support/renderer'
+import type { Host as HostNode } from '../support/renderer'
 import type { Department } from '../../src/api/departments/types'
 import type { MenuNode } from '../../src/api/menus/types'
 import type { Role, RoleMenus } from '../../src/api/roles/types'
@@ -162,46 +164,6 @@ vi.mock('element-plus', async () => {
   }
 })
 
-interface HostNode {
-  type: string
-  text: string
-  props: Record<string, unknown>
-  children: HostNode[]
-  parent: HostNode | null
-}
-function node(type: string, text = ''): HostNode {
-  return { type, text, props: {}, children: [], parent: null }
-}
-const renderer = createRenderer<HostNode, HostNode>({
-  createElement: (type) => node(type),
-  createText: (text) => node('#text', text),
-  createComment: (text) => node('#comment', text),
-  setText: (target, text) => {
-    target.text = text
-  },
-  setElementText: (target, text) => {
-    target.text = text
-    target.children = []
-  },
-  patchProp: (target, key, _, value) => {
-    target.props[key] = value
-  },
-  insert(target, parent, anchor) {
-    if (target.parent) target.parent.children.splice(target.parent.children.indexOf(target), 1)
-    const index = anchor ? parent.children.indexOf(anchor) : -1
-    parent.children.splice(index < 0 ? parent.children.length : index, 0, target)
-    target.parent = parent
-  },
-  remove(target) {
-    if (target.parent) target.parent.children.splice(target.parent.children.indexOf(target), 1)
-    target.parent = null
-  },
-  parentNode: (target) => target.parent,
-  nextSibling: (target) => {
-    const siblings = target.parent?.children || []
-    return siblings[siblings.indexOf(target) + 1] || null
-  },
-})
 const apps: App[] = []
 async function flush() {
   for (let i = 0; i < 5; i++) {
@@ -531,6 +493,46 @@ describe('management page interactions', () => {
       status: undefined,
     })
   })
+
+  it.each([
+    { name: 'user', component: UserView, entry: user, load: api.getUsers, remove: api.deleteUser },
+    { name: 'role', component: RoleView, entry: role, load: api.getRoles, remove: api.deleteRole },
+  ])(
+    'keeps the current $name page when an older deletion finishes after navigation',
+    async ({ component, entry, load, remove }) => {
+      load.mockResolvedValue({ items: [entry('21')], total: 41, page: 2, size: 20 })
+      const pending = deferred<void>()
+      remove.mockReturnValue(pending.promise)
+      const root = await mount(component)
+      const pagination = findAll(root, 'ElPagination')[0]!
+      const setPage = pagination.props['onUpdate:currentPage'] as (value: number) => void
+      setPage(2)
+      const control =
+        component === UserView
+          ? findAll(root, 'ElDropdownItem').find((item) => content(item) === '删除用户')!
+          : button(root, '删除')
+      const removing = (control.props.onClick as () => Promise<void>)()
+      await flush()
+      expect(remove).toHaveBeenCalledOnce()
+
+      setPage(3)
+      load.mockResolvedValue({ items: [entry('41')], total: 41, page: 3, size: 20 })
+      await (pagination.props.onChange as () => Promise<void>)()
+      load.mockClear()
+      pending.resolve()
+      await removing
+      await flush()
+
+      expect(load).toHaveBeenCalledExactlyOnceWith({
+        page: 3,
+        size: 20,
+        keyword: undefined,
+        status: undefined,
+      })
+      expect(findAll(root, 'ElPagination')[0]!.props['current-page']).toBe(3)
+      expect(findAll(root, 'ElTable')[0]!.props.data).toEqual([entry('41')])
+    },
+  )
 
   it('uses the full department tree for delete protection and parent choices after searching', async () => {
     const child = department('2', '研发')

@@ -159,7 +159,7 @@ class DtoValidationContractTest {
         assertThat(schema(PasswordChangeDto.class, "newPassword").description()).isEqualTo("新密码");
         BusinessException unavailable =
                 catchThrowableOfType(
-                        () -> passwords("short").initialPasswordHash(), BusinessException.class);
+                        () -> passwords("short").initialPassword(), BusinessException.class);
         assertThat(unavailable.code()).isEqualTo(ErrorCode.INITIAL_PASSWORD_UNAVAILABLE);
         assertThat(unavailable.safeDetails()).isNull();
     }

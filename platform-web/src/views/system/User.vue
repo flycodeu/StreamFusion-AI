@@ -405,13 +405,20 @@ async function resetPasswords(users: UserSummary[]): Promise<void> {
 async function remove(row: UserSummary): Promise<void> {
   if (deleting.value) return
   const inScope = captureScope()
+  const current = sequence
   deleting.value = true
   try {
     await ElMessageBox.confirm(`删除用户“${row.username}”？`, '确认删除', { type: 'warning' })
     if (!inScope()) return
     await api.deleteUser(row)
     if (!inScope()) return
-    if (rows.value.length === 1 && page.value > 1) page.value--
+    if (
+      current === sequence &&
+      rows.value.length === 1 &&
+      rows.value[0]?.id === row.id &&
+      page.value > 1
+    )
+      page.value--
     await load()
   } catch (cause) {
     if (inScope() && cause !== 'cancel' && cause !== 'close') error.value = cause

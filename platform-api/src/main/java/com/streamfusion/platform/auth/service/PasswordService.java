@@ -72,10 +72,6 @@ public class PasswordService {
         matches(password, dummyHash);
     }
 
-    public String initialPasswordHash() {
-        return encode(initialPassword());
-    }
-
     /** Only create/reset workflows may return this value in their one-time success response. */
     public String initialPassword() {
         String value = properties.initialPassword();

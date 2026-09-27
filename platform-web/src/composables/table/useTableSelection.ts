@@ -2,7 +2,6 @@ import { computed, shallowRef } from 'vue'
 
 export function useTableSelection<Row>() {
   const selectedRows = shallowRef<Row[]>([])
-  const selectionCount = computed(() => selectedRows.value.length)
   const singleSelected = computed(() =>
     selectedRows.value.length === 1 ? selectedRows.value[0] : null,
   )
@@ -15,5 +14,5 @@ export function useTableSelection<Row>() {
     selectedRows.value = []
   }
 
-  return { selectedRows, selectionCount, singleSelected, setSelection, clearSelection }
+  return { selectedRows, singleSelected, setSelection, clearSelection }
 }

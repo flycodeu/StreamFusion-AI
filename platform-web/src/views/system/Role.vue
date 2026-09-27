@@ -171,13 +171,20 @@ async function changeStatus(role: Role): Promise<void> {
 async function remove(role: Role): Promise<void> {
   if (deleting.value) return
   const inScope = captureScope()
+  const current = sequence
   deleting.value = true
   try {
     await ElMessageBox.confirm(`删除角色“${role.name}”？`, '确认删除', { type: 'warning' })
     if (!inScope()) return
     await api.deleteRole(role)
     if (!inScope()) return
-    if (rows.value.length === 1 && page.value > 1) page.value--
+    if (
+      current === sequence &&
+      rows.value.length === 1 &&
+      rows.value[0]?.id === role.id &&
+      page.value > 1
+    )
+      page.value--
     await load()
   } catch (cause) {
     if (inScope() && cause !== 'cancel' && cause !== 'close') error.value = cause
