@@ -12,7 +12,10 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 
-/** Shared MVC, security filter and servlet error output, with an explicit legacy boundary. */
+/**
+ * Shared MVC, security filter and servlet error output: business requests use R; other paths use
+ * ApiError.
+ */
 @Component
 public final class ApiErrorWriter {
     static final String MODULE_REQUEST_ATTRIBUTE = ApiErrorWriter.class.getName() + ".module";

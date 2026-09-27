@@ -2,7 +2,7 @@
 
 这里维护可公开的 JSON Schema 和合成样例，与实现语言无关。
 当前四份 schemaVersion=1.0 的协议是设计基线，不代表对应接口已实现。
-本次仅纳入版本控制及自动校验，未改变协议语义。
+Schema、样例与自动校验共同维护协议基线；管理端 HTTP 接口独立实现。
 
 | Schema / 同名 example | 边界 |
 |---|---|
@@ -28,7 +28,7 @@ uv run --project algorithm-node/node-agent --locked python -m pytest contracts/t
 
 ## HTTP 基础约定
 
-Platform管理端 `/api/v1` 的普通JSON成功与失败统一使用 `R<T>`：
+Platform 管理端使用 `/auth`、`/user`、`/roles`、`/menus`、`/departments`、`/audit` 等后端根路径，普通业务 JSON 成功与失败统一使用 `R<T>`。开发浏览器由前端传输层添加 `/api`，Vite 代理转发时去掉该前缀；它不是后端 API 版本前缀。
 
 ```json
 {
@@ -40,7 +40,9 @@ Platform管理端 `/api/v1` 的普通JSON成功与失败统一使用 `R<T>`：
 }
 ```
 
-成功业务数据放data；无数据也保留null。错误保留真实4xx/5xx，使用字符串错误码与安全msg，不能HTTP200包装失败。创建使用201并保留Location，其他普通业务成功使用200。当前只实现公共封装与拒绝出口，登录及CRUD尚未开放。
+成功业务数据放data；无数据也保留null。错误保留真实4xx/5xx，使用字符串错误码与安全msg，不能HTTP200包装失败。创建使用201并保留Location，其他普通业务成功使用200。认证、用户、角色、菜单、部门、审计查询、登录记录、IP防护及监控接口已实现，字段以当前Controller、DTO/VO和运行版本OpenAPI为准。
+
+登录先获取CSRF和一次性挑战，再向 `POST /auth/login/secure` 提交密文；没有公开明文登录入口。业务写请求带CSRF，通常通过body.version校验并发；删除及用户强制登出使用 `If-Match`。ID和version均为十进制字符串。
 
 业务异常通过 `throw BusinessException.error(ErrorCode.CONFLICT)` 交统一异常处理；Security/CSRF和Servlet错误分派采用相同外壳，CSRF拒绝为403/CSRF_INVALID。业务响应设置no-store，响应头X-Trace-Id与正文一致。
 
@@ -67,18 +69,16 @@ Actuator健康与OpenAPI成功响应保持原样。非业务底座错误及Pytho
 | 405 | METHOD_NOT_ALLOWED | 方法不支持，保留 Allow 头 |
 | 500 | INTERNAL_ERROR | 未处理异常 |
 
-Java 还预留 401 UNAUTHORIZED、403 FORBIDDEN、409 CONFLICT、415 UNSUPPORTED_MEDIA_TYPE、
-429 RATE_LIMITED 等状态映射；这不表示已实现登录、权限或限流。
+Java 管理端已使用 401 UNAUTHORIZED、403 FORBIDDEN、409 CONFLICT、415 UNSUPPORTED_MEDIA_TYPE、
+429 RATE_LIMITED 等状态映射。单账号单会话还使用401 SESSION_REPLACED和SESSION_FORCED_LOGOUT，前端根据错误码显示安全的会话结束摘要；不解析msg来决定逻辑。
 Python 非 404/405 的显式 HTTPException 当前返回 HTTP_ERROR，
 后续新增这些业务错误时需要同步映射与测试。
 容器或代理在应用之前拒绝的请求不保证返回这个错误外壳。
 
-未来分页查询统一 page 从 1 开始、size 默认 20 / 最大 100；
-尚无列表接口，暂不创建分页基类或响应对象；第一个列表接口落地时实施校验与默认值。
-引入游标分页时另行定义。
+管理分页的page从1开始、size默认20/最大100，使用公共PageQueryDto和PageResultVo；响应data包含items/page/size/total。引入游标分页时另行定义。
 
 ## 在线接口描述
 
-- Java：/v3/api-docs，prod 默认关闭；只提供 OpenAPI JSON，不包含 Swagger UI。
+- Java：`/v3/api-docs`提供OpenAPI JSON，prod默认关闭；管理端监控面板提供固定同源Swagger UI嵌入和JSON导出。
 - Agent / Runtime：/openapi.json 与 /docs，DOCS_ENABLED=false 可关闭。
-- 尚无业务端点；协议 Schema 不是已经上线的 HTTP 路由。
+- 上述管理接口已实现；TaskSpec、Runtime Event、Agent Sync的Schema仍不是已经上线的任务/视频业务路由。
