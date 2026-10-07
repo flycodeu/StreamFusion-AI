@@ -46,6 +46,10 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 @ActiveProfiles("test")
 @EnabledIfSystemProperty(named = "sf.test.redisSession", matches = "true")
 class RedisSessionIntegrationTest {
+    // Session tests initialize their own schema after context startup; job lifecycle is separate.
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.streamfusion.platform.camera.access.service.CameraAccessWorker cameraAccessWorker;
+
     @LocalServerPort int port;
     @Autowired DataSource source;
     @Autowired BootstrapService bootstrap;

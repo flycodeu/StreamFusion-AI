@@ -31,7 +31,7 @@ export function createApiClient(hooks: ClientHooks) {
   return async function request<T>(options: RequestOptions<T>): Promise<ApiResult<T>> {
     if (
       !isBusinessApiPath(options.path) ||
-      ![200, 201].includes(options.successStatus) ||
+      ![200, 201, 202].includes(options.successStatus) ||
       typeof options.decode !== 'function'
     ) {
       throw new ApiRequestError('INVALID_REQUEST', '请求参数不合法')

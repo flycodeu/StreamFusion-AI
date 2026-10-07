@@ -37,6 +37,30 @@ function directory(children: MenuRoute[], values: Partial<MenuRoute> = {}): Menu
 }
 
 describe('backend menu route assembly', () => {
+  it('preserves server navigation order without classifying translated directory titles', () => {
+    const menus = [
+      directory([page()], { id: '1100', name: '视频管理' }),
+      directory([page({ id: '201', routeName: 'newBusiness', path: '/business/new' })], {
+        id: '200',
+        name: '系统管理',
+      }),
+      directory([page({ id: '301', routeName: 'settings', path: '/settings/manage' })], {
+        id: '300',
+        name: '基础设置',
+      }),
+      directory([page({ id: '401', routeName: 'monitor', path: '/monitor/manage' })], {
+        id: '400',
+        name: '运行面板',
+      }),
+    ]
+    expect(buildMenuRoutes(menus, ['camera'], resolve).navigation.map((item) => item.id)).toEqual([
+      '1100',
+      '200',
+      '300',
+      '400',
+    ])
+  })
+
   it.each(['/public', '/Public/file', '/node_modules', '/NODE_MODULES/vue'])(
     'rejects reserved static root %s',
     (path) => {

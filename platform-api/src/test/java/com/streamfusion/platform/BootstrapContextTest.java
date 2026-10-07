@@ -64,7 +64,7 @@ class BootstrapContextTest {
         var user = users.getById(id);
         assertThat(user.getStatus()).isEqualTo(UserStatus.NORMAL.getCode());
         assertThat(user.getMustChangePassword()).isFalse();
-        assertThat(count("sys_role_menu")).isEqualTo(7);
+        assertThat(count("sys_role_menu")).isEqualTo(10);
         assertThat(count("sys_user_dept")).isZero();
     }
 
@@ -97,7 +97,7 @@ class BootstrapContextTest {
                                         + " WHERE ur.user_id=?",
                                 Integer.class,
                                 id))
-                .isEqualTo(7);
+                .isEqualTo(10);
 
         assertThat(
                         jdbc.queryForObject(
@@ -115,7 +115,7 @@ class BootstrapContextTest {
         assertThat(users.getById(id)).isEqualTo(user);
         assertThat(count("sys_user")).isEqualTo(1);
         assertThat(count("sys_user_role")).isEqualTo(1);
-        assertThat(count("sys_role_menu")).isEqualTo(7);
+        assertThat(count("sys_role_menu")).isEqualTo(10);
         assertThat(
                         jdbc.queryForObject(
                                 "SELECT dept_id FROM sys_user_dept WHERE user_id=?",
@@ -144,11 +144,11 @@ class BootstrapContextTest {
     @Test
     void defaultBootstrapPreservesAlreadySeededPageBindings() throws Exception {
         IdentitySchema.initialize(source);
-        assertThat(count("sys_role_menu")).isEqualTo(7);
+        assertThat(count("sys_role_menu")).isEqualTo(10);
         bootstrap.initializeDefaultAdmin("admin", null, "starter@2026", null);
         assertThat(count("sys_user")).isEqualTo(1);
         assertThat(count("sys_user_role")).isEqualTo(1);
-        assertThat(count("sys_role_menu")).isEqualTo(7);
+        assertThat(count("sys_role_menu")).isEqualTo(10);
     }
 
     @Test

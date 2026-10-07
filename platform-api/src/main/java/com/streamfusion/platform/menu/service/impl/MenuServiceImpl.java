@@ -24,6 +24,7 @@ import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -96,6 +97,7 @@ public class MenuServiceImpl implements MenuService {
         LocalDateTime now = now();
         MenuEntity menu = new MenuEntity();
         fill(menu, values);
+        menu.setNavigationGroup("BUSINESS");
         menu.setVersion(0L);
         menu.setCreatedAt(now);
         menu.setUpdatedAt(now);
@@ -247,6 +249,7 @@ public class MenuServiceImpl implements MenuService {
                                         MenuEntity::getModuleKey,
                                         MenuEntity::getIcon,
                                         MenuEntity::getSortOrder,
+                                        MenuEntity::getNavigationGroup,
                                         MenuEntity::getVisible,
                                         MenuEntity::getEnabled,
                                         MenuEntity::getVersion)
@@ -278,7 +281,17 @@ public class MenuServiceImpl implements MenuService {
         for (MenuEntity menu : all) {
             result.computeIfAbsent(menu.getParentId(), ignored -> new ArrayList<>()).add(menu);
         }
+        // Database order already preserves sort/id within each partition. Names and seed IDs
+        // are editable/deployment-specific, so only explicit metadata anchors the final groups.
+        List<MenuEntity> roots = result.get(null);
+        if (roots != null) roots.sort(Comparator.comparingInt(MenuServiceImpl::navigationRank));
         return result;
+    }
+
+    private static int navigationRank(MenuEntity menu) {
+        if ("SYSTEM".equals(menu.getNavigationGroup())) return 1;
+        if ("MONITOR".equals(menu.getNavigationGroup())) return 2;
+        return 0;
     }
 
     private static int depth(long id, Map<Long, MenuEntity> byId, Set<Long> seen) {

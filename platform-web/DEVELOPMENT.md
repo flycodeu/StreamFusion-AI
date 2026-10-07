@@ -4,9 +4,9 @@
 
 ## 新增一个业务页面
 
-以相机管理为例，依次完成页面、接口和菜单配置：
+相机管理、视频分组和相机授权已包含在初始化菜单中，无需重复创建。以下以相机页面说明新增同类业务页面的接入方式：
 
-1. 新建 `src/views/camera/manage.vue`，编写相机管理页面。
+1. 页面放在 `src/views/`。现有相机管理文件为 `src/views/camera/Manage.vue`。
 2. 在 `src/api/camera/` 内编写该领域的接口函数与响应类型，统一使用 `src/api/client.ts` 导出的 `request`。
 3. 后端实际控制器或接口声明 `@ModuleAccess("camera")`。控制器需要由 Spring 注册为 MVC 接口。
 4. 在菜单管理中新增 PAGE，页面路径填写 `/camera/manage`，唯一键填写 `camera`，选择所属目录。
@@ -16,7 +16,7 @@
 
 | 配置项         | 示例值                        | 用途                          |
 | -------------- | ----------------------------- | ----------------------------- |
-| 前端文件       | `src/views/camera/manage.vue` | 实际页面                      |
+| 前端文件       | `src/views/camera/Manage.vue` | 实际页面                      |
 | `path`         | `/camera/manage`              | 浏览器路由地址                |
 | `routeName`    | `camera`                      | 全局唯一的页面键              |
 | `componentKey` | 缺省时为 `/camera/manage`     | 定位 `views` 下的页面文件     |

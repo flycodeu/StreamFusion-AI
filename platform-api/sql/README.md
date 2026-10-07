@@ -1,6 +1,6 @@
 # 数据库 SQL
 
-十份 `业务/` 逐表 SQL 是唯一维护源；`汇总/streamfusion-mysql.sql` 由 `scripts/export-sql.ps1` 生成，不手工修改。应用不自动执行 SQL，无 Flyway；初始化 SQL 不打包进应用 JAR，使用源码仓库中的汇总文件初始化数据库。
+24 份 `业务/` 逐表 SQL 是唯一维护源；`汇总/streamfusion-mysql.sql` 由 `scripts/export-sql.ps1` 生成，不手工修改。应用不自动执行 SQL，无 Flyway；初始化 SQL 不打包进应用 JAR，使用源码仓库中的汇总文件初始化数据库。
 
 ## 当前结构
 
@@ -8,15 +8,19 @@
 |---|---|---|
 | 用户 | sys_user | PBKDF2 密码哈希、待改密/正常/停用状态、登录冷却、会话失效版本；账号大小写无关唯一 |
 | 角色与授权 | sys_role、sys_user_role、sys_role_menu | 用户关联角色，角色关联 PAGE；SUPER_ADMIN 获得全部 PAGE，目录不作为授权关系 |
-| 菜单 | sys_menu | 目录与页面树、路由和模块键，模块鉴权与导航共用有效页面授权 |
+| 菜单 | sys_menu | 目录与页面树、路由和模块键；根导航BUSINESS在前、SYSTEM及MONITOR固定最后，鉴权仍沿有效页面关系 |
 | 部门 | sys_dept、sys_user_dept | 多根组织树、多部门且无主部门；组织归属不产生权限 |
 | 审计 | sys_operation_log | 操作者、目标、动作、结果、来源及受控变更快照 |
 | IP 防护 | sys_ip_block | 规范化来源地址、封禁与人工解除状态、失败次数、时间及并发版本；无自动解封 |
 | 登录记录 | sys_login_record | 成功登录时的账号与来源快照、活动及到期时间、结束原因；不保存 Session ID 或凭据 |
+| 相机资产 | camera_device、camera_channel、camera_stream_profile、camera_create_request | 可选设备、稳定通道、多码流、受会话约束的幂等创建回执 |
+| 接入配置 | camera_source、camera_source_endpoint、camera_source_credential、camera_profile_locator | 设备/平台/RTSP连接、可空驱动、品牌提示、加密凭据；档案可没有码流与定位 |
+| 发现与导入 | camera_access_job、camera_access_import_item | 有界发现/整批导入、短期加密连接、后台分页计数与逐项去重结果 |
+| 视频分组与范围 | camera_group、camera_user_scope、camera_user_group_grant、camera_user_channel_grant | 独立分组与账户组/点位授权，不复用部门权限 |
 
 用户、角色、菜单、部门均硬删除，数据库没有软删除字段；用户与角色删除后允许使用新 ID 重新创建同名对象。账号列明确使用 `utf8mb4_0900_as_ci`，以 `UNIQUE(username)` 保持大小写无关唯一。授权来源统一为角色菜单关系。
 
-七张实体表主键是非自增 BIGINT，由 MyBatis-Plus 生成；三张关联表使用联合主键。内置角色、菜单和示例部门使用固定种子 ID，账号由初始化命令生成 ID。`version` 用于防止旧表单覆盖，`session_version` 用于会话失效。IP 封禁表的 version 同时隔离解除前尚未结束的登录尝试；unblocked_by 保留历史操作人 ID，不建立用户外键。审计和登录记录同样保留历史身份，用户删除不会级联删除这些记录。
+原身份模块七张实体表主键是非自增 BIGINT，由 MyBatis-Plus 生成；三张关联表使用联合主键。相机资源继续使用雪花 ID，定位与账户范围以所属资源 ID 为主键，授权关系使用联合主键。内置角色、菜单和示例部门使用固定种子 ID，账号由初始化命令生成 ID。`version` 用于防止旧表单覆盖，`session_version` 用于会话失效。IP 封禁表的 version 同时隔离解除前尚未结束的登录尝试；unblocked_by 保留历史操作人 ID，不建立用户外键。审计和登录记录同样保留历史身份，用户删除不会级联删除这些记录。
 
 ## 生成与初始化
 
@@ -27,9 +31,9 @@
 ./scripts/export-sql.ps1 -Check
 ```
 
-生成器按外键依赖倒序 DROP、正序 CREATE 与插入种子，保持外键检查开启。新增表必须在生成器登记依赖顺序。
+生成器按外键依赖倒序 DROP、正序 CREATE 与插入种子，保持外键检查开启。默认码流的循环复合外键通过 DEFERRED CONSTRAINT 在两表存在后添加，重建前先解除此边。新增表必须在生成器登记依赖顺序。
 
-要求 MySQL 8.0.16+、InnoDB、utf8mb4。只在专用空库执行汇总文件。初始化内容为 SUPER_ADMIN、两个目录、七个 PAGE 及角色页面关联，还有以下可编辑的示例组织：
+要求 MySQL 8.0.17+、InnoDB、utf8mb4；本轮实际验证版本为 8.0.36。相机外部身份键使用区分大小写和尾空格的 `utf8mb4_0900_bin`，该规则从 [MySQL 8.0.17](https://dev.mysql.com/doc/relnotes/mysql/8.0/en/news-8-0-17.html) 开始提供，因此不能沿用旧版 8.0.16 的最低要求。只在专用空库执行汇总文件。初始化内容为 SUPER_ADMIN、三个目录、十个 PAGE 及角色页面关联，还有以下可编辑的示例组织：
 
 | ID | 名称 | 上级 |
 |---|---|---|
@@ -46,6 +50,8 @@
 | 监控面板（1008） | 操作记录（1006） | audit |
 | 监控面板（1008） | 服务信息（1007） | server |
 | 监控面板（1008） | 接口文档（1009） | api-docs |
+| 视频管理（1100） | 相机管理（1101）、视频分组（1103） | camera |
+| 视频管理（1100） | 相机授权（1104） | camera_scope |
 
 Windows MySQL 客户端的 `SOURCE` 对中文文件路径存在兼容问题。先在仓库根目录将汇总文件复制为仅含 ASCII 的临时相对路径，再从同一目录启动客户端。该副本只是导入文件，不作为维护源；每次导入前重新复制最新汇总。替换 `YOUR_DB_USER` 为可创建专用开发数据库的账号；`-p` 会交互询问密码，密码不要写入命令：
 
@@ -65,7 +71,7 @@ SOURCE .run/streamfusion-mysql.sql;
 
 `SOURCE` 路径相对于启动 MySQL 客户端时的目录。若该库已存在，先检查是否为空并确认用途；有任何业务表时停止，不继续导入。数据库名自定义时，同步修改后端 JDBC URL；应用账号至少需要该库的查询、新增、更新和删除权限。
 
-首次导入后、管理员引导前，执行以下只读核对。应分别得到十个表名，以及 `users=0`、`roles=1`、`directories=2`、`pages=7`、`super_admin_pages=7`、`departments=3`：
+首次导入后、管理员引导前，执行以下只读核对。应分别得到24个表名，以及 `users=0`、`roles=1`、`directories=3`、`pages=10`、`super_admin_pages=10`、`departments=3`：
 
 ```sql
 SHOW TABLES;
@@ -91,7 +97,7 @@ SQL不创建用户，也不包含管理员密码或固定哈希。按[快速开�
 
 ## 运行库与菜单配置
 
-仓库只维护当前完整结构和种子，不维护历史版本升级目录。已有运行库保留业务数据；需要调整时，先备份并将真实结构与当前完整 SQL 对照，再执行此次差异。执行记录与备份保留在本地 `.run`，不重放初始化文件。
+当前维护24表初始化和 `升级/20261006-cf01-ux.sql`，后者只适用于已有来源分类、尚无导航分区/整批进度字段的MANAGEMENT-07版23表库。旧camera/access/management增量已移出当前SQL目录，归档为本地历史执行材料，不作为当前安装路径。其他旧结构须单独核对；不要叠加试跑。停写、备份并恢复预演后执行当前增量，保留业务数据，移除旧接入来源PAGE及其冗余关系；详见 [CF01-MIGRATION](CF01-MIGRATION.md)。
 
 `component_key` 直接采用 `views` 下的页面路径，不再接受 `SYSTEM_*` 等旧组件别名。操作记录和服务信息的组件与默认 URL 统一为 `/monitor/Audit`、`/monitor/Server`。以下页面已包含在完整初始化中；运行期新增菜单通过管理页面完成：
 
@@ -101,7 +107,7 @@ SQL不创建用户，也不包含管理员密码或固定哈希。按[快速开�
 | 服务信息 | 监控面板 | server | /monitor/Server | server |
 | 接口文档 | 监控面板 | api-docs | /monitor/ApiDocs | api-docs |
 
-监控面板为 DIRECTORY，建议图标 `monitor`、排序 1；操作记录、服务信息、接口文档排序分别为 0、1、2；接口文档为 PAGE，建议图标 `menu`。创建 PAGE 会在同一事务自动关联 SUPER_ADMIN；普通角色需在角色管理中明确授权。当前菜单界面不单独输入模块键，新建时由页面唯一标识推导，所以接口文档填写 `api-docs`。初始化 SQL 的路由名称 `MonitorApiDocs` 已显式配置 `module_key='api-docs'`，不需要修改；通过 API 创建时才可分别传入 `routeName` 与 `moduleKey`。
+监控面板为 DIRECTORY，建议图标 `monitor`；根目录按导航分区排序，BUSINESS在前，SYSTEM、MONITOR固定最后，同分区再按sort/id排序；操作记录、服务信息、接口文档排序分别为 0、1、2；接口文档为 PAGE，建议图标 `menu`。创建 PAGE 会在同一事务自动关联 SUPER_ADMIN；普通角色需在角色管理中明确授权。当前菜单界面不单独输入模块键，新建时由页面唯一标识推导，所以接口文档填写 `api-docs`。初始化 SQL 的路由名称 `MonitorApiDocs` 已显式配置 `module_key='api-docs'`，不需要修改；通过 API 创建时才可分别传入 `routeName` 与 `moduleKey`。
 
 ## 时区与验证
 
@@ -117,4 +123,4 @@ SQL不创建用户，也不包含管理员密码或固定哈希。按[快速开�
 ./mvnw.cmd "-Dtest=LocalSchemaInspectionTest,LocalInfrastructureTest" "-Dsf.test.localSchema=true" "-Dsf.test.localInfrastructure=true" test
 ```
 
-LocalSchemaInspectionTest 只接受 loopback:3306 的 streamfusion 库，检查十表、字段、用户名排序规则和唯一索引；旧结构未迁移时应失败。LocalInfrastructureTest 只检查 SELECT 1 与 Redis PING。两项默认跳过，不能将跳过计为通过，也不能将依赖连通当作业务验收。
+LocalSchemaInspectionTest 只接受 loopback:3306 的 streamfusion 库，启动时检查全部24张应用表的必要列；测试进一步核对十张系统表的106列、字段注释、时区、用户名排序规则和唯一索引；旧结构未迁移时应失败。LocalInfrastructureTest 只检查 SELECT 1 与 Redis PING。两项默认跳过，不能将跳过计为通过，也不能将依赖连通当作业务验收。

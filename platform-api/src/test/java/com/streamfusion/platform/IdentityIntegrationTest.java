@@ -136,7 +136,7 @@ class IdentityIntegrationTest extends SecureLoginSupport {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.isSuperAdmin").value(true))
                 .andExpect(jsonPath("$.data.permissions").doesNotExist())
-                .andExpect(jsonPath("$.data.modules.length()").value(7))
+                .andExpect(jsonPath("$.data.modules.length()").value(9))
                 .andExpect(jsonPath("$.data.user.status").value(1))
                 .andExpect(jsonPath("$.data.user.id").isString())
                 .andExpect(jsonPath("$.data.user.version").isString())
@@ -812,7 +812,7 @@ class IdentityIntegrationTest extends SecureLoginSupport {
         mvc.perform(get("/user/page").session(admin)).andExpect(status().isForbidden());
         mvc.perform(get("/auth/me").session(admin))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.modules.length()").value(6));
+                .andExpect(jsonPath("$.data.modules.length()").value(8));
 
         jdbc.update("INSERT INTO sys_role_menu(role_id,menu_id) VALUES (1,1002)");
         mvc.perform(get("/user/page").session(admin)).andExpect(status().isOk());

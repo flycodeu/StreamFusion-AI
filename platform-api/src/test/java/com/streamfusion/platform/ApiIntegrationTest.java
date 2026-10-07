@@ -69,6 +69,10 @@ class ApiIntegrationTest {
     // 此测试只验证通用响应、事务及方法鉴权；模块鉴权在独立测试和身份集成测试中覆盖。
     @MockitoBean private ModuleAuthorizationInterceptor moduleAuthorization;
 
+    // Response-contract fixtures deliberately have no camera/identity schema.
+    @MockitoBean
+    private com.streamfusion.platform.camera.access.service.CameraAccessWorker cameraAccessWorker;
+
     @BeforeEach
     void isolateModuleAuthorization() throws Exception {
         when(moduleAuthorization.preHandle(any(), any(), any())).thenReturn(true);

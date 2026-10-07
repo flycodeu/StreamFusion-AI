@@ -1,5 +1,6 @@
 package com.streamfusion.platform.common.exception;
 
+import com.streamfusion.platform.common.exception.details.CameraReferenceDetails;
 import com.streamfusion.platform.common.exception.details.SessionEndedDetails;
 import com.streamfusion.platform.common.exception.details.ValidationDetails;
 
@@ -24,6 +25,7 @@ public enum ErrorCode {
     METHOD_NOT_ALLOWED(405, "请求方法不支持"),
     NOT_ACCEPTABLE(406, "响应格式不支持"),
     CONFLICT(409, "操作与当前状态冲突"),
+    CAMERA_REFERENCED(409, "相机资源仍被引用，请先解除关联", CameraReferenceDetails.class),
     VERSION_CONFLICT(409, "数据已更新，请刷新后重试"),
     VERSION_EXHAUSTED(409, "版本计数已达上限，请联系管理员维护，不能自动重置"),
     PRECONDITION_FAILED(412, "数据版本已变化，请刷新后重试"),

@@ -99,7 +99,7 @@ class LocalSchemaInspectionTest {
                             .isNotBlank();
                     count++;
                 }
-                assertThat(count).isEqualTo(105);
+                assertThat(count).isEqualTo(106);
             }
             try (var rows =
                     sql.executeQuery(

@@ -17,7 +17,7 @@ export interface RequestOptions<T> {
   params?: Record<string, string | number | boolean | null | undefined>
   body?: unknown
   ifMatch?: string
-  successStatus: 200 | 201
+  successStatus: 200 | 201 | 202
   decode: Parser<T>
   signal?: AbortSignal
   timeoutMs?: number

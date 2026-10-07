@@ -55,6 +55,9 @@ class FoundationTest {
     // 基础设施夹具不依赖业务授权，替换仅作用于此测试上下文。
     @MockitoBean private ModuleAuthorizationInterceptor moduleAuthorization;
 
+    @MockitoBean
+    private com.streamfusion.platform.camera.access.service.CameraAccessWorker cameraAccessWorker;
+
     @BeforeEach
     void isolateModuleAuthorization() throws Exception {
         when(moduleAuthorization.preHandle(any(), any(), any())).thenReturn(true);

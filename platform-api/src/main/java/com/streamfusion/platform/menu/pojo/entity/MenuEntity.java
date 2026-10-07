@@ -45,6 +45,9 @@ public class MenuEntity {
     @Schema(description = "排序值")
     private Integer sortOrder;
 
+    @Schema(description = "根导航分区：BUSINESS、SYSTEM或MONITOR，由系统维护")
+    private String navigationGroup;
+
     @Schema(description = "导航显示状态")
     private Boolean visible;
 

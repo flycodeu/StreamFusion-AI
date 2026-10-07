@@ -17,6 +17,7 @@ import com.streamfusion.platform.common.response.R;
 import com.streamfusion.platform.common.security.ModuleAccess;
 import com.streamfusion.platform.support.IdentitySchema;
 import com.streamfusion.platform.support.SecureLoginSupport;
+import java.util.List;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -41,7 +42,7 @@ import org.springframework.web.bind.annotation.RestController;
         })
 @AutoConfigureMockMvc
 @ActiveProfiles({"test", "dynamic-module-test"})
-@Import({MenuIntegrationTest.CameraEndpoints.class, MenuIntegrationTest.UndeclaredEndpoints.class})
+@Import({MenuIntegrationTest.ExampleEndpoints.class, MenuIntegrationTest.UndeclaredEndpoints.class})
 class MenuIntegrationTest extends SecureLoginSupport {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
@@ -94,8 +95,8 @@ class MenuIntegrationTest extends SecureLoginSupport {
         mvc.perform(get("/menus").session(auth.session()).param("name", "用户"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("SUCCESS"))
-                .andExpect(jsonPath("$.data[1].name").value("测试管理"))
-                .andExpect(jsonPath("$.data[1].children[0].page.path").value("/test/users"));
+                .andExpect(jsonPath("$.data[0].name").value("测试管理"))
+                .andExpect(jsonPath("$.data[0].children[0].page.path").value("/test/users"));
         mvc.perform(get("/menus").session(auth.session()).param("type", "PAGE"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[1].children.length()").value(1));
@@ -153,10 +154,10 @@ class MenuIntegrationTest extends SecureLoginSupport {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data").isEmpty());
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_role_menu", Integer.class))
-                .isEqualTo(7);
+                .isEqualTo(10);
         mvc.perform(get("/auth/me").session(auth.session()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.routes.length()").value(2));
+                .andExpect(jsonPath("$.data.routes.length()").value(3));
         assertThat(
                         jdbc.queryForObject(
                                 "SELECT COUNT(*) FROM sys_operation_log WHERE target_type='MENU' AND result='SUCCESS'",
@@ -189,7 +190,7 @@ class MenuIntegrationTest extends SecureLoginSupport {
                                         """))
                 .andExpect(status().isBadRequest());
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_menu", Integer.class))
-                .isEqualTo(9);
+                .isEqualTo(13);
 
         jdbc.update("DELETE FROM sys_role_menu WHERE role_id=1 AND menu_id=1004");
         mvc.perform(get("/menus").session(auth.session()))
@@ -201,14 +202,14 @@ class MenuIntegrationTest extends SecureLoginSupport {
     @Test
     void newControllerModuleNeedsOnlyItsDeclarationAndPageGrant() throws Exception {
         Csrf auth = admin();
-        mvc.perform(get("/camera/probe"))
+        mvc.perform(get("/example/probe"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("UNAUTHORIZED"))
                 .andExpect(jsonPath("$.msg").exists());
-        mvc.perform(post("/camera/probe").session(auth.session()))
+        mvc.perform(post("/example/probe").session(auth.session()))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("CSRF_INVALID"));
-        mvc.perform(get("/camera/probe").session(auth.session()))
+        mvc.perform(get("/example/probe").session(auth.session()))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("FORBIDDEN"))
                 .andExpect(jsonPath("$.msg").exists());
@@ -216,35 +217,35 @@ class MenuIntegrationTest extends SecureLoginSupport {
                 create(
                         auth,
                         """
-                {"name":"相机管理","type":"PAGE","routeName":"camera","path":"/camera/manage","sortOrder":1,"visible":true,"enabled":true}
+                {"name":"示例功能","type":"PAGE","routeName":"example","path":"/example/manage","sortOrder":1,"visible":true,"enabled":true}
                 """);
-        assertThat(page.path("page").path("componentKey").asText()).isEqualTo("/camera/manage");
-        assertThat(page.path("page").path("moduleKey").asText()).isEqualTo("camera");
+        assertThat(page.path("page").path("componentKey").asText()).isEqualTo("/example/manage");
+        assertThat(page.path("page").path("moduleKey").asText()).isEqualTo("example");
         assertThat(
                         jdbc.queryForObject(
                                 "SELECT COUNT(*) FROM sys_role_menu WHERE role_id=1 AND menu_id=?",
                                 Integer.class,
                                 Long.parseLong(page.path("id").asText())))
                 .isEqualTo(1);
-        mvc.perform(get("/camera/probe").session(auth.session()))
+        mvc.perform(get("/example/probe").session(auth.session()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data").value("camera"));
+                .andExpect(jsonPath("$.data").value("example"));
         mvc.perform(get("/dynamic/undeclared").session(auth.session()))
                 .andExpect(status().isForbidden());
         mvc.perform(get("/auth/me").session(auth.session()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.routes[2].componentKey").value("/camera/manage"))
-                .andExpect(jsonPath("$.data.routes[2].moduleKey").value("camera"));
+                .andExpect(jsonPath("$.data.routes[1].componentKey").value("/example/manage"))
+                .andExpect(jsonPath("$.data.routes[1].moduleKey").value("example"));
         jdbc.update(
                 "DELETE FROM sys_role_menu WHERE role_id=1 AND menu_id=?",
                 Long.parseLong(page.path("id").asText()));
-        mvc.perform(get("/camera/probe").session(auth.session()))
+        mvc.perform(get("/example/probe").session(auth.session()))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("FORBIDDEN"));
         mvc.perform(get("/auth/me").session(auth.session()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.routes.length()").value(2))
-                .andExpect(jsonPath("$.data.modules.length()").value(7));
+                .andExpect(jsonPath("$.data.routes.length()").value(3))
+                .andExpect(jsonPath("$.data.modules.length()").value(9));
     }
 
     @Test
@@ -268,12 +269,100 @@ class MenuIntegrationTest extends SecureLoginSupport {
         mvc.perform(get("/auth/me").session(auth.session()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.isSuperAdmin").value(true))
-                .andExpect(jsonPath("$.data.modules.length()").value(7))
-                .andExpect(jsonPath("$.data.routes.length()").value(2));
+                .andExpect(jsonPath("$.data.modules.length()").value(9))
+                .andExpect(jsonPath("$.data.routes.length()").value(3));
         // Configuration remains manageable even when this service version cannot serve its module.
         mvc.perform(get("/menus").session(auth.session()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data[2].children[0].page.moduleKey").value("future-module"));
+                .andExpect(jsonPath("$.data[1].children[0].page.moduleKey").value("future-module"));
+    }
+
+    @Test
+    void navigationPartitionsUseMetadataAndKeepFutureBusinessBeforeRenamedSystemRoots()
+            throws Exception {
+        Csrf auth = admin();
+        // Existing installations can have a generated monitor root ID instead of seed 1008.
+        jdbc.update(
+                "INSERT INTO sys_menu(id,name,type,sort_order,navigation_group) "
+                        + "VALUES (8800,'运行设施','DIRECTORY',0,'MONITOR')");
+        jdbc.update("UPDATE sys_menu SET parent_id=8800 WHERE parent_id=1008");
+        jdbc.update("DELETE FROM sys_menu WHERE id=1008");
+        write(
+                put("/menus/1001"),
+                auth,
+                """
+                {"name":"基础设置","type":"DIRECTORY","sortOrder":0,"visible":true,"enabled":true,"version":"0"}
+                """,
+                200);
+        String later = businessDirectory(auth, "后续业务", "LaterBusiness", 10000);
+        // A business title equal to the old system label must not move it into a system partition.
+        String earlier = businessDirectory(auth, "系统管理", "EarlierBusiness", 7);
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT navigation_group FROM sys_menu WHERE id=1001",
+                                String.class))
+                .isEqualTo("SYSTEM");
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT navigation_group FROM sys_menu WHERE id=?",
+                                String.class,
+                                Long.parseLong(later)))
+                .isEqualTo("BUSINESS");
+        List<String> expectedRoots = List.of("1100", earlier, later, "1001", "8800");
+        var me =
+                mvc.perform(get("/auth/me").session(auth.session()))
+                        .andExpect(status().isOk())
+                        .andReturn();
+        var routes =
+                json.readTree(me.getResponse().getContentAsString()).path("data").path("routes");
+        var tree =
+                mvc.perform(get("/menus").session(auth.session()))
+                        .andExpect(status().isOk())
+                        .andReturn();
+        var roots = json.readTree(tree.getResponse().getContentAsString()).path("data");
+        assertThat(routes.size()).isEqualTo(expectedRoots.size());
+        assertThat(roots.size()).isEqualTo(expectedRoots.size());
+        for (int index = 0; index < expectedRoots.size(); index++) {
+            assertThat(routes.path(index).path("id").asText()).isEqualTo(expectedRoots.get(index));
+            assertThat(roots.path(index).path("id").asText()).isEqualTo(expectedRoots.get(index));
+        }
+    }
+
+    @Test
+    void sourceManagementKeepsCameraPageAuthorizationWithoutASeparateSourcePage() throws Exception {
+        Csrf auth = admin();
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM sys_menu WHERE route_name='CameraSources'",
+                                Integer.class))
+                .isZero();
+        // Leave only the camera PAGE granting camera, while SUPER_ADMIN still needs that PAGE.
+        jdbc.update("DELETE FROM sys_role_menu WHERE menu_id=1103");
+        mvc.perform(get("/camera-sources/options").session(auth.session()))
+                .andExpect(status().isOk());
+        jdbc.update("DELETE FROM sys_role_menu WHERE menu_id=1101");
+        mvc.perform(get("/camera-sources/options").session(auth.session()))
+                .andExpect(status().isForbidden());
+    }
+
+    private String businessDirectory(Csrf auth, String name, String key, int sort)
+            throws Exception {
+        String root =
+                create(
+                                auth,
+                                """
+                                {"name":"%s","type":"DIRECTORY","sortOrder":%d,"visible":true,"enabled":true}
+                                """
+                                        .formatted(name, sort))
+                        .path("id")
+                        .asText();
+        create(
+                auth,
+                """
+                {"parentId":"%s","name":"业务页","type":"PAGE","routeName":"%s","path":"/business/%s","componentKey":"/system/User","moduleKey":"user","sortOrder":0,"visible":true,"enabled":true}
+                """
+                        .formatted(root, key, key));
+        return root;
     }
 
     @Test
@@ -353,16 +442,16 @@ class MenuIntegrationTest extends SecureLoginSupport {
 
     @RestController
     @Profile("dynamic-module-test")
-    @ModuleAccess("camera")
-    static class CameraEndpoints {
-        @GetMapping("/camera/probe")
+    @ModuleAccess("example")
+    static class ExampleEndpoints {
+        @GetMapping("/example/probe")
         R<String> read() {
-            return R.success("camera");
+            return R.success("example");
         }
 
-        @PostMapping("/camera/probe")
+        @PostMapping("/example/probe")
         R<String> write() {
-            return R.success("camera");
+            return R.success("example");
         }
     }
 
@@ -425,7 +514,7 @@ class MenuIntegrationTest extends SecureLoginSupport {
                 .andExpect(jsonPath("$.data.children.length()").value(0));
         mvc.perform(get("/auth/me").session(auth.session()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.routes.length()").value(2));
+                .andExpect(jsonPath("$.data.routes.length()").value(3));
         mvc.perform(get("/menus").session(auth.session()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[1].enabled").value(false));

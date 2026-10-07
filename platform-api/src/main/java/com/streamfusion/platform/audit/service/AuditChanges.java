@@ -19,7 +19,30 @@ public class AuditChanges {
     static final int MAX_JSON_LENGTH = 1_048_576;
     static final int MAX_IDS = 1000;
     private static final Set<String> TEXT =
-            Set.of("name", "code", "username", "nickname", "parentId");
+            Set.of(
+                    "name",
+                    "code",
+                    "username",
+                    "nickname",
+                    "parentId",
+                    "version",
+                    "beforeVersion",
+                    "afterVersion",
+                    "addedGroupCount",
+                    "removedGroupCount",
+                    "addedCameraCount",
+                    "removedCameraCount",
+                    "groupIdsSummary",
+                    "cameraIdsSummary",
+                    "beforeGroupId",
+                    "afterGroupId",
+                    "beforeLifecycle",
+                    "afterLifecycle",
+                    "beforeDefaultProfileId",
+                    "afterDefaultProfileId",
+                    "label",
+                    "usageHint",
+                    "enabled");
     private static final Map<String, String> RELATIONS =
             Map.of(
                     "roleIds",

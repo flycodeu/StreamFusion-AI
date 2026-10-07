@@ -42,6 +42,23 @@ const fieldNames: Record<string, string> = {
   traceId: '请求标识',
   sourceIp: '来源IP',
   status: '状态',
+  sourceId: '接入来源',
+  sourceVersion: '来源版本',
+  cameraVersion: '相机版本',
+  cameraId: '相机',
+  streamProfileId: '码流',
+  defaultPreviewProfileId: '默认码流',
+  replacementDefaultProfileId: '替换后的默认码流',
+  networkPolicyKey: '批准网络策略',
+  groupId: '视频分组',
+  groupIds: '分组授权',
+  cameraIds: '相机授权',
+  confirmation: '影响确认',
+  clientRequestId: '创建请求标识',
+  label: '码流标签',
+  host: '媒体主机',
+  port: '媒体端口',
+  lifecycle: '配置状态',
 }
 const fieldErrors = computed(() => {
   const error = detail.value

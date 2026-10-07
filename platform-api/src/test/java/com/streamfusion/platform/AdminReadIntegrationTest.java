@@ -104,11 +104,11 @@ class AdminReadIntegrationTest extends SecureLoginSupport {
                 .andExpect(jsonPath("$.data.enabled").value(true));
         mvc.perform(get("/auth/me").session(session))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.routes[1].name").value("监控面板"))
-                .andExpect(jsonPath("$.data.routes[1].children[0].moduleKey").value("audit"))
-                .andExpect(jsonPath("$.data.routes[1].children[1].moduleKey").value("server"))
-                .andExpect(jsonPath("$.data.routes[1].children[2].moduleKey").value("api-docs"))
-                .andExpect(jsonPath("$.data.routes[1].children[2].path").value("/monitor/ApiDocs"));
+                .andExpect(jsonPath("$.data.routes[2].name").value("监控面板"))
+                .andExpect(jsonPath("$.data.routes[2].children[0].moduleKey").value("audit"))
+                .andExpect(jsonPath("$.data.routes[2].children[1].moduleKey").value("server"))
+                .andExpect(jsonPath("$.data.routes[2].children[2].moduleKey").value("api-docs"))
+                .andExpect(jsonPath("$.data.routes[2].children[2].path").value("/monitor/ApiDocs"));
         jdbc.update("UPDATE sys_menu SET enabled=FALSE WHERE id=1008");
         mvc.perform(get("/api-docs/status").session(session))
                 .andExpect(status().isForbidden())

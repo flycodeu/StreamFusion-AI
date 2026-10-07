@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.streamfusion.platform.camera.mapper.CameraChannelMapper">
+    <sql id="projection">
+        c.*, s.adapter_type AS source_type, s.connection_category, s.vendor_hint,
+        s.name AS source_display_name, s.version AS source_version,
+        d.device_type, d.manufacturer, d.model
+    </sql>
+    <sql id="joinedAssets">
+        camera_channel c JOIN camera_source s ON s.id=c.source_id
+        LEFT JOIN camera_device d ON d.id=c.device_id AND d.source_id=c.source_id
+    </sql>
+    <select id="pageVisible" resultType="com.streamfusion.platform.camera.mapper.CameraAssetRow">
+        SELECT <include refid="projection"/> FROM <include refid="joinedAssets"/>
+        WHERE <include refid="com.streamfusion.platform.camera.mapper.CameraScopeMapper.visibleCamera"/>
+        <if test="filter.name != null">
+            AND LOWER(c.name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!'
+        </if>
+        <if test="filter.sourceId != null">AND c.source_id=#{filter.sourceId}</if>
+        <if test="filter.adapterType != null">AND s.adapter_type=#{filter.adapterType}</if>
+        <if test="filter.lifecycle != null">AND c.lifecycle=#{filter.lifecycle}</if>
+        <if test="filter.groups != null">
+            <choose>
+                <when test="!filter.groups.isEmpty()">
+                    AND c.group_id IN
+                    <foreach collection="filter.groups" item="group" open="(" separator="," close=")">#{group}</foreach>
+                </when>
+                <otherwise>AND 1=0</otherwise>
+            </choose>
+        </if>
+        ORDER BY c.created_at DESC,c.id DESC
+    </select>
+    <select id="visible" resultType="com.streamfusion.platform.camera.mapper.CameraAssetRow">
+        SELECT <include refid="projection"/> FROM <include refid="joinedAssets"/>
+        WHERE c.id=#{id} AND <include refid="com.streamfusion.platform.camera.mapper.CameraScopeMapper.visibleCamera"/>
+    </select>
+</mapper>

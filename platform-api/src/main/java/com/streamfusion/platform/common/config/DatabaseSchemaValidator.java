@@ -56,6 +56,12 @@ public class DatabaseSchemaValidator implements ApplicationRunner {
         required.put("sys_user_role", Set.of("user_id", "role_id", "created_at", "created_by"));
         required.put("sys_user_dept", Set.of("user_id", "dept_id", "created_at", "created_by"));
         required.put("sys_role_menu", Set.of("role_id", "menu_id", "created_at", "created_by"));
+        required.put(
+                "camera_user_group_grant",
+                Set.of("user_id", "group_id", "created_at", "created_by"));
+        required.put(
+                "camera_user_channel_grant",
+                Set.of("user_id", "channel_id", "created_at", "created_by"));
     }
 
     @Override

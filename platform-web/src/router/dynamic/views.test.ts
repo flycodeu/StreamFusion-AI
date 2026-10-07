@@ -8,6 +8,9 @@ const departmentPage: PageLoader = async () => ({ default: { name: 'Department' 
 describe('file-based business page resolution', () => {
   it('discovers business pages while fixed application pages remain outside the manifest', () => {
     expect(availablePagePaths).toEqual([
+      '/camera-group/Manage',
+      '/camera-scope/Manage',
+      '/camera/Manage',
       '/monitor/ApiDocs',
       '/monitor/Audit',
       '/monitor/Server',
@@ -24,6 +27,7 @@ describe('file-based business page resolution', () => {
       '/error/ForbiddenView',
       '/error/UnavailableView',
       '/error/RouteUnavailableView',
+      '/camera-source/Manage',
     ]) {
       expect(availablePagePaths).not.toContain(path)
       expect(resolvePage(path)).toBeUndefined()

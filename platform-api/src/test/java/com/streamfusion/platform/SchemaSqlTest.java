@@ -37,6 +37,31 @@ class SchemaSqlTest {
         assertInitialData();
     }
 
+    @Test
+    void navigationMetadataDefaultsNewDirectoriesToBusinessAndRejectsUnknownPartitions()
+            throws Exception {
+        try (var sql = connection.createStatement()) {
+            sql.executeUpdate(
+                    "INSERT INTO sys_menu(id,name,type) VALUES (9800,'新增业务','DIRECTORY')");
+            try (var rows =
+                    sql.executeQuery(
+                            "SELECT navigation_group FROM sys_menu WHERE id IN (1001,1008,9800) ORDER BY id")) {
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getString(1)).isEqualTo("SYSTEM");
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getString(1)).isEqualTo("MONITOR");
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getString(1)).isEqualTo("BUSINESS");
+                assertThat(rows.next()).isFalse();
+            }
+            assertThatThrownBy(
+                            () ->
+                                    sql.executeUpdate(
+                                            "UPDATE sys_menu SET navigation_group='UNKNOWN' WHERE id=9800"))
+                    .isInstanceOf(SQLException.class);
+        }
+    }
+
     private void assertInitialData() throws Exception {
         try (var sql = connection.createStatement()) {
             try (var rows = sql.executeQuery("SELECT id FROM sys_user")) {
@@ -75,7 +100,7 @@ class SchemaSqlTest {
                             "SELECT COUNT(*) FROM sys_role_menu rm"
                                     + " JOIN sys_role r ON r.id=rm.role_id WHERE r.code='SUPER_ADMIN'")) {
                 assertThat(rows.next()).isTrue();
-                assertThat(rows.getInt(1)).isEqualTo(7);
+                assertThat(rows.getInt(1)).isEqualTo(10);
             }
             assertThatThrownBy(() -> sql.executeQuery("SELECT * FROM sys_permission"))
                     .isInstanceOf(SQLException.class);
@@ -144,7 +169,7 @@ class SchemaSqlTest {
             }
             try (var rows = sql.executeQuery("SELECT COUNT(*) FROM sys_role_menu")) {
                 assertThat(rows.next()).isTrue();
-                assertThat(rows.getInt(1)).isEqualTo(7);
+                assertThat(rows.getInt(1)).isEqualTo(10);
             }
         }
     }

@@ -12,6 +12,9 @@ import org.springframework.test.context.ActiveProfiles;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 class PlatformApplicationTest {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.streamfusion.platform.camera.access.service.CameraAccessWorker cameraAccessWorker;
+
     private final TestRestTemplate client;
 
     @Autowired

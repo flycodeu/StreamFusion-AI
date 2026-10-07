@@ -83,7 +83,7 @@ class LoginCipherIntegrationTest extends SecureLoginSupport {
         mvc.perform(get("/auth/me").session(session))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.user.username").value("Admin01"))
-                .andExpect(jsonPath("$.data.routes[0].children[0].moduleKey").value("user"));
+                .andExpect(jsonPath("$.data.routes[1].children[0].moduleKey").value("user"));
         JsonNode freshCsrf =
                 json.readTree(
                                 mvc.perform(get("/auth/csrf").session(session))

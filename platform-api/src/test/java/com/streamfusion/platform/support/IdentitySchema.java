@@ -39,6 +39,16 @@ public final class IdentitySchema {
                         .replace("SET FOREIGN_KEY_CHECKS = 1;", "")
                         .replace("SET time_zone = '+08:00';", "SET TIME ZONE '+08:00';")
                         .replace("changes JSON", "changes CLOB")
+                        .replace("result_summary JSON", "result_summary CLOB")
+                        .replace(
+                                "name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_as_ci",
+                                "name VARCHAR_IGNORECASE(64)")
+                        .replace("CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin", "")
+                        .replace("CHARACTER SET ascii COLLATE ascii_bin", "")
+                        .replace("CHARACTER SET ascii", "")
+                        .replaceAll(
+                                "(?s)-- BEGIN MYSQL DEFERRED DROP.*?-- END MYSQL DEFERRED DROP",
+                                "ALTER TABLE IF EXISTS camera_channel DROP CONSTRAINT IF EXISTS fk_camera_default_profile;")
                         .replace(MYSQL_USERNAME_COLUMN, "username VARCHAR_IGNORECASE(32)");
         ScriptUtils.executeSqlScript(
                 connection,

@@ -18,7 +18,19 @@ import org.springframework.stereotype.Component;
 @Component
 @RequiredArgsConstructor
 public class AuditReferences {
-    private static final Set<String> TYPES = Set.of("USER", "ROLE", "DEPT", "MENU", "IP_BLOCK");
+    private static final Set<String> TYPES =
+            Set.of(
+                    "USER",
+                    "ROLE",
+                    "DEPT",
+                    "MENU",
+                    "IP_BLOCK",
+                    "CAMERA",
+                    "CAMERA_PROFILE",
+                    "CAMERA_DEVICE",
+                    "CAMERA_SOURCE",
+                    "CAMERA_GROUP",
+                    "CAMERA_SCOPE");
     private final AuditReferenceMapper mapper;
 
     public Map<String, AuditReferenceVo> current(Collection<Request> requests) {

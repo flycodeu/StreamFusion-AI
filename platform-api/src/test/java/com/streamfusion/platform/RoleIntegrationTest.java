@@ -64,11 +64,30 @@ class RoleIntegrationTest extends SecureLoginSupport {
                 """,
                         201);
         String roleId = role.path("id").asText();
-        mvc.perform(get("/roles/" + roleId + "/menus").session(admin.session()))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.selectedPageIds.length()").value(0))
-                .andExpect(jsonPath("$.data.tree[0].children.length()").value(4))
-                .andExpect(jsonPath("$.data.tree[1].children.length()").value(3));
+        var selection =
+                mvc.perform(get("/roles/" + roleId + "/menus").session(admin.session()))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.data.selectedPageIds.length()").value(0))
+                        .andReturn();
+        String systemRoot =
+                jdbc.queryForObject(
+                                "SELECT parent_id FROM sys_menu WHERE path='/system/menus' AND module_key='menu'",
+                                Long.class)
+                        .toString();
+        String monitorRoot =
+                jdbc.queryForObject(
+                                "SELECT parent_id FROM sys_menu WHERE path='/monitor/Server' AND module_key='server'",
+                                Long.class)
+                        .toString();
+        Map<String, Integer> childCounts = new HashMap<>();
+        json.readTree(selection.getResponse().getContentAsString())
+                .path("data")
+                .path("tree")
+                .forEach(
+                        node ->
+                                childCounts.put(
+                                        node.path("id").asText(), node.path("children").size()));
+        assertThat(childCounts).containsEntry(systemRoot, 4).containsEntry(monitorRoot, 3);
         write(
                 put("/roles/" + roleId + "/menus"),
                 admin,

@@ -14,6 +14,7 @@ CREATE TABLE sys_menu (
     module_key VARCHAR(64) NULL COMMENT '模块键',
     icon VARCHAR(64) NULL COMMENT '图标键',
     sort_order INT NOT NULL DEFAULT 0 COMMENT '排序值',
+    navigation_group VARCHAR(16) NOT NULL DEFAULT 'BUSINESS' COMMENT '根导航分区，由系统维护',
     visible BOOLEAN NOT NULL DEFAULT TRUE COMMENT '导航显示标记',
     enabled BOOLEAN NOT NULL DEFAULT TRUE COMMENT '启用标记',
     version BIGINT NOT NULL DEFAULT 0 COMMENT '编辑版本',
@@ -26,6 +27,7 @@ CREATE TABLE sys_menu (
     CONSTRAINT uq_menu_path UNIQUE (path),
     CONSTRAINT fk_menu_parent FOREIGN KEY (parent_id) REFERENCES sys_menu(id),
     CONSTRAINT ck_menu_version CHECK (version >= 0),
+    CONSTRAINT ck_menu_navigation_group CHECK (navigation_group IN ('BUSINESS', 'SYSTEM', 'MONITOR')),
     CONSTRAINT ck_menu_shape CHECK (
         (type = 'DIRECTORY' AND route_name IS NULL AND path IS NULL
          AND component_key IS NULL AND module_key IS NULL)
@@ -36,11 +38,11 @@ CREATE TABLE sys_menu (
 CREATE INDEX ix_menu_parent ON sys_menu(parent_id, sort_order, id);
 
 -- 系统管理初始菜单
-INSERT INTO sys_menu (id, parent_id, name, type, icon, sort_order, visible, enabled)
-VALUES (1001, NULL, '系统管理', 'DIRECTORY', 'settings', 0, TRUE, TRUE);
+INSERT INTO sys_menu (id, parent_id, name, type, icon, sort_order, navigation_group, visible, enabled)
+VALUES (1001, NULL, '系统管理', 'DIRECTORY', 'settings', 9000, 'SYSTEM', TRUE, TRUE);
 -- 先创建目录，再插入带外键的子页面。
-INSERT INTO sys_menu (id, parent_id, name, type, icon, sort_order, visible, enabled)
-VALUES (1008, NULL, '监控面板', 'DIRECTORY', 'monitor', 1, TRUE, TRUE);
+INSERT INTO sys_menu (id, parent_id, name, type, icon, sort_order, navigation_group, visible, enabled)
+VALUES (1008, NULL, '监控面板', 'DIRECTORY', 'monitor', 10000, 'MONITOR', TRUE, TRUE);
 INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, icon, sort_order, visible, enabled)
 VALUES
     (1002, 1001, '用户管理', 'PAGE', 'SystemUsers', '/system/users', '/system/User', 'user', 'user', 0, TRUE, TRUE),
@@ -53,3 +55,12 @@ VALUES
 -- 监控面板初始菜单
 INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, icon, sort_order, visible, enabled)
 VALUES (1009, 1008, '接口文档', 'PAGE', 'MonitorApiDocs', '/monitor/ApiDocs', '/monitor/ApiDocs', 'api-docs', 'menu', 2, TRUE, TRUE);
+
+-- BEGIN CAMERA MENU SEEDS
+INSERT INTO sys_menu (id, parent_id, name, type, icon, sort_order, visible, enabled)
+VALUES (1100, NULL, '视频管理', 'DIRECTORY', 'monitor', 0, TRUE, TRUE);
+INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, icon, sort_order, visible, enabled)
+VALUES
+    (1101, 1100, '相机管理', 'PAGE', 'CameraManage', '/camera/manage', '/camera/Manage', 'camera', 'monitor', 0, TRUE, TRUE),
+    (1103, 1100, '视频分组', 'PAGE', 'CameraGroups', '/camera/groups', '/camera-group/Manage', 'camera', 'department', 2, TRUE, TRUE),
+    (1104, 1100, '相机授权', 'PAGE', 'CameraScopes', '/camera/scopes', '/camera-scope/Manage', 'camera_scope', 'role', 3, TRUE, TRUE);
