@@ -1,5 +1,11 @@
+<script setup lang="ts">
+defineProps<{ compact?: boolean }>()
+</script>
+
 <template>
-  <div class="table-actions" role="group" aria-label="行操作"><slot /></div>
+  <div class="table-actions" :class="{ 'is-compact': compact }" role="group" aria-label="行操作">
+    <slot />
+  </div>
 </template>
 
 <style scoped>
@@ -26,6 +32,13 @@
 }
 .table-actions :deep(.el-switch) {
   min-height: 32px;
+}
+.table-actions.is-compact {
+  gap: 12px;
+}
+.table-actions.is-compact :deep(.el-button.is-link) {
+  min-width: 32px;
+  padding: 4px 0;
 }
 @media (pointer: coarse) {
   .table-actions :deep(.el-button) {

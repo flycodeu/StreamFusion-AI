@@ -127,12 +127,20 @@ onMounted(load)
 </script>
 <template>
   <div class="content-page">
-    <ElForm class="search-form" inline @submit.prevent="search"
-      ><ElFormItem label="相机名称"><ElInput v-model="name" clearable maxlength="128" /></ElFormItem
-      ><ElFormItem label="视频分组"><GroupSelect v-model="groupId" clearable /></ElFormItem>
+    <ElForm class="search-form camera-search-form" inline @submit.prevent="search"
+      ><ElFormItem label="相机名称"
+        ><ElInput
+          v-model="name"
+          class="search-field"
+          placeholder="搜索相机名称"
+          clearable
+          maxlength="128" /></ElFormItem
+      ><ElFormItem label="视频分组"
+        ><GroupSelect v-model="groupId" class="search-field" clearable
+      /></ElFormItem>
       <ElFormItem><ElCheckbox v-model="includeDescendants">包含下级</ElCheckbox></ElFormItem>
       <ElFormItem label="配置状态"
-        ><ElSelect v-model="lifecycle" clearable placeholder="全部状态"
+        ><ElSelect v-model="lifecycle" class="status-field" clearable placeholder="全部状态"
           ><ElOption
             v-for="(label, value) in lifecycleLabels"
             :key="value"
@@ -179,18 +187,28 @@ onMounted(load)
           prop="name"
           label="相机名称"
           min-width="200"
+          show-overflow-tooltip
         />
-        <ElTableColumn v-if="columns.includes('groupPath')" label="视频分组" min-width="220"
+        <ElTableColumn
+          v-if="columns.includes('groupPath')"
+          label="视频分组"
+          min-width="160"
+          show-overflow-tooltip
           ><template #default="{ row }">{{ row.groupPath || '待归档' }}</template></ElTableColumn
         >
-        <ElTableColumn v-if="columns.includes('source')" label="接入来源" min-width="200"
+        <ElTableColumn
+          v-if="columns.includes('source')"
+          label="接入来源"
+          min-width="200"
+          show-overflow-tooltip
           ><template #default="{ row }"
-            >{{ row.sourceDisplayName }}（{{
+            ><div>{{ row.sourceDisplayName }}</div>
+            <span class="table-secondary">{{
               connectionLabel(row.sourceType, row.connectionCategory)
-            }}）</template
+            }}</span></template
           ></ElTableColumn
         >
-        <ElTableColumn v-if="columns.includes('lifecycle')" label="配置状态" min-width="130"
+        <ElTableColumn v-if="columns.includes('lifecycle')" label="配置状态" width="110"
           ><template #default="{ row }"
             ><ElTag :type="row.lifecycle === 'ENABLED' ? 'success' : 'info'">{{
               lifecycleLabels[asCamera(row).lifecycle]
@@ -199,22 +217,24 @@ onMounted(load)
         >
         <ElTableColumn
           label="操作"
-          :min-width="canManage ? 328 : 126"
+          :width="canManage ? 244 : 116"
           fixed="right"
           class-name="table-actions-column"
           :resizable="false"
           ><template #default="{ row }"
-            ><TableActions
-              ><ElButton plain type="primary" @click="detailId = row.cameraId">详情 / 编辑</ElButton
+            ><TableActions compact
+              ><ElButton link type="primary" @click="detailId = row.cameraId">详情 / 编辑</ElButton
               ><template v-if="canManage"
                 ><ElButton
-                  plain
+                  link
+                  type="primary"
                   :disabled="deleting"
                   @click="placement = { cameraId: row.cameraId, action: 'move' }"
                   >{{ row.lifecycle === 'PENDING_ASSIGNMENT' ? '归档' : '移组' }}</ElButton
                 ><ElButton
                   v-if="row.lifecycle !== 'PENDING_ASSIGNMENT'"
-                  plain
+                  link
+                  type="primary"
                   :disabled="deleting"
                   @click="
                     placement = {
@@ -223,7 +243,7 @@ onMounted(load)
                     }
                   "
                   >{{ row.lifecycle === 'ENABLED' ? '停用' : '启用' }}</ElButton
-                ><ElButton plain type="danger" :disabled="deleting" @click="remove(asCamera(row))"
+                ><ElButton link type="danger" :disabled="deleting" @click="remove(asCamera(row))"
                   >删除</ElButton
                 ></template
               ></TableActions
@@ -277,3 +297,27 @@ onMounted(load)
     />
   </div>
 </template>
+<style scoped>
+.camera-search-form {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 16px 18px;
+}
+.camera-search-form :deep(.el-form-item) {
+  margin: 0;
+}
+.camera-search-form :deep(.search-field) {
+  width: 200px;
+}
+@media (max-width: 680px) {
+  .camera-search-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .camera-search-form :deep(.search-field) {
+    width: 100%;
+  }
+}
+</style>

@@ -72,6 +72,7 @@ onBeforeUnmount(() => {
 </script>
 <template>
   <ElDialog
+    class="management-dialog"
     :model-value="true"
     title="手动添加相机"
     width="min(680px, calc(100vw - 32px))"
@@ -104,11 +105,7 @@ onBeforeUnmount(() => {
             ><ElInput v-model="form.name" maxlength="128" placeholder="例如：高炉东侧"
           /></ElFormItem>
           <DeviceConnectionFields v-model="form" :adapters="adapters" />
-          <ElFormItem label="视频分组"
-            ><GroupSelect v-model="groupId" clearable /><span class="field-note"
-              >可留空，稍后分组。</span
-            ></ElFormItem
-          >
+          <ElFormItem label="视频分组"><GroupSelect v-model="groupId" clearable /></ElFormItem>
           <ElFormItem label="备注"
             ><ElInput v-model="form.remark" type="textarea" maxlength="500"
           /></ElFormItem>
@@ -131,10 +128,3 @@ onBeforeUnmount(() => {
     </template>
   </ElDialog>
 </template>
-<style scoped>
-.field-note {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  line-height: 1.6;
-}
-</style>

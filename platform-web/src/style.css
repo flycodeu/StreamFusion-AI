@@ -60,6 +60,45 @@ a {
 .el-dialog {
   max-width: calc(100vw - 32px);
 }
+/* Opt-in management containers keep actions visible while long forms scroll. */
+.el-dialog.management-dialog {
+  --el-dialog-margin-top: 5vh;
+  display: flex;
+  flex-direction: column;
+  max-height: 90dvh;
+  margin-bottom: 0;
+  padding: 0;
+}
+.management-dialog > .el-dialog__header,
+.camera-detail-drawer > .el-drawer__header {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 20px 48px 20px 24px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.management-dialog > .el-dialog__body {
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+}
+.management-dialog > .el-dialog__footer,
+.camera-detail-drawer > .el-drawer__footer {
+  flex-shrink: 0;
+  padding: 16px 24px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--el-bg-color);
+}
+.camera-detail-drawer > .el-drawer__body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+}
+.table-secondary {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
 .el-message-box {
   width: 440px;
   max-width: calc(100vw - 32px);
@@ -121,6 +160,18 @@ a {
   }
 }
 @media (max-width: 680px) {
+  .management-dialog > .el-dialog__header,
+  .camera-detail-drawer > .el-drawer__header {
+    padding-left: 16px;
+  }
+  .management-dialog > .el-dialog__body,
+  .camera-detail-drawer > .el-drawer__body {
+    padding: 16px;
+  }
+  .management-dialog > .el-dialog__footer,
+  .camera-detail-drawer > .el-drawer__footer {
+    padding: 12px 16px;
+  }
   .search-form .el-form-item {
     margin-right: 0;
     display: flex;

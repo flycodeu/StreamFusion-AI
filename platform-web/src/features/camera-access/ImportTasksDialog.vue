@@ -59,6 +59,7 @@ onMounted(load)
 </script>
 <template>
   <ElDialog
+    class="management-dialog"
     :model-value="true"
     :title="retrying ? '重试平台导入' : selected ? '导入进度' : '导入任务'"
     width="min(960px, calc(100vw - 32px))"

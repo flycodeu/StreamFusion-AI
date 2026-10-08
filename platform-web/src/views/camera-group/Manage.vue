@@ -187,20 +187,28 @@ onMounted(load)
 <template>
   <div class="content-page">
     <ElForm class="search-form" inline @submit.prevent="search"
-      ><ElFormItem label="分组名称"><ElInput v-model="name" clearable maxlength="64" /></ElFormItem
+      ><ElFormItem label="分组名称"
+        ><ElInput
+          v-model="name"
+          class="search-field"
+          placeholder="搜索分组名称"
+          clearable
+          maxlength="64" /></ElFormItem
       ><ElFormItem
         ><ElButton native-type="submit" type="primary" :loading="loading">查询</ElButton
         ><ElButton @click="resetSearch">重置</ElButton></ElFormItem
       ></ElForm
     >
     <RequestError :error="error" />
+    <nav class="group-location" aria-label="分组浏览位置">
+      <div>
+        <span class="group-location-label">当前分组</span>
+        <strong>{{ parent?.name || '根目录' }}</strong>
+      </div>
+      <ElButton v-if="parent" @click="up">返回</ElButton>
+    </nav>
     <TablePanel>
       <template #actions
-        ><ElButton v-if="parent" @click="up">返回上级</ElButton
-        ><span>{{
-          [...ancestors.map((item) => item.name), parent?.name].filter(Boolean).join(' / ') ||
-          '根目录'
-        }}</span
         ><ElButton v-if="canManage" type="primary" :disabled="saving" @click="openCreate"
           >新建分组</ElButton
         ></template
@@ -213,28 +221,28 @@ onMounted(load)
         border
         empty-text="当前层级暂无分组"
       >
-        <ElTableColumn prop="name" label="分组名称" min-width="200" />
+        <ElTableColumn prop="name" label="分组名称" min-width="240" show-overflow-tooltip />
         <ElTableColumn prop="visibleCameraCount" label="可见相机数" min-width="140" />
         <ElTableColumn prop="sortOrder" label="排序" min-width="100" />
         <ElTableColumn
           label="操作"
-          min-width="252"
+          width="220"
           fixed="right"
           class-name="table-actions-column"
           :resizable="false"
           ><template #default="{ row }"
-            ><TableActions
-              ><ElButton plain type="primary" @click="enter(asGroup(row))">进入</ElButton
+            ><TableActions compact
+              ><ElButton link type="primary" @click="enter(asGroup(row))">查看下级</ElButton
               ><ElButton
                 v-if="canManage"
-                plain
+                link
                 type="primary"
                 :disabled="saving"
                 @click="openEdit(asGroup(row))"
                 >编辑</ElButton
               ><ElButton
                 v-if="canManage"
-                plain
+                link
                 type="danger"
                 :disabled="saving"
                 @click="remove(asGroup(row))"
@@ -254,6 +262,7 @@ onMounted(load)
       /></template>
     </TablePanel>
     <ElDialog
+      class="management-dialog"
       v-model="dialog"
       :title="editing ? '编辑视频分组' : '新建视频分组'"
       width="600px"
@@ -289,3 +298,31 @@ onMounted(load)
     </ElDialog>
   </div>
 </template>
+<style scoped>
+.group-location {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--el-bg-color);
+}
+.group-location > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.group-location-label {
+  margin-right: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.group-location strong {
+  font-size: 15px;
+}
+.group-location > .el-button {
+  flex-shrink: 0;
+}
+</style>

@@ -140,7 +140,11 @@ onMounted(load)
   <div class="content-page">
     <ElForm class="search-form" inline @submit.prevent="search"
       ><ElFormItem label="账户"
-        ><ElInput v-model="name" clearable placeholder="账号或昵称" /></ElFormItem
+        ><ElInput
+          v-model="name"
+          class="search-field"
+          clearable
+          placeholder="账号或昵称" /></ElFormItem
       ><ElFormItem
         ><ElButton type="primary" native-type="submit" :loading="loading">查询</ElButton
         ><ElButton @click="resetSearch">重置</ElButton></ElFormItem
@@ -171,8 +175,8 @@ onMounted(load)
           class-name="table-actions-column"
           :resizable="false"
           ><template #default="{ row }"
-            ><TableActions
-              ><ElButton plain type="primary" @click="open(asUser(row))">{{
+            ><TableActions compact
+              ><ElButton link type="primary" @click="open(asUser(row))">{{
                 row.isSuperAdmin ? '查看范围' : '配置范围'
               }}</ElButton></TableActions
             ></template
@@ -188,9 +192,10 @@ onMounted(load)
       /></template>
     </TablePanel>
     <ElDialog
+      class="management-dialog camera-scope-dialog"
       v-model="dialog"
       :title="`相机范围 · ${target?.nickname || target?.username || ''}`"
-      width="900px"
+      width="1100px"
       destroy-on-close
       :close-on-click-modal="!saving"
       :close-on-press-escape="!saving"
@@ -218,47 +223,54 @@ onMounted(load)
           {{ scope.effectiveSummary.enabledCameraCount }} 路。统计于
           {{ formatDateTime(scope.effectiveSummary.computedAt) }}，不代表可播放数量。
         </p>
-        <template v-if="scope.mode === 'CUSTOM'">
-          <ElInput v-model="selectedSearch" clearable placeholder="筛选已选资源，便于定位和移除" />
-          <section class="selected-grants">
-            <strong>已授分组 {{ groupIds.length }} / 200</strong>
-            <div>
-              <ElTag
-                v-for="id in visibleSelected(groupIds, groupNames)"
-                :key="id"
-                :closable="!saving"
-                @close="groupIds = groupIds.filter((item) => item !== id)"
-                >{{ groupNames[id] || id }}</ElTag
-              >
-            </div>
-            <strong>直接相机 {{ cameraIds.length }} / 2000</strong>
-            <div>
-              <ElTag
-                v-for="id in visibleSelected(cameraIds, cameraNames)"
-                :key="id"
-                :closable="!saving"
-                @close="cameraIds = cameraIds.filter((item) => item !== id)"
-                >{{ cameraNames[id] || id }}</ElTag
-              >
-            </div>
+        <div v-if="scope.mode === 'CUSTOM'" class="scope-columns">
+          <aside class="selected-resources">
+            <h2>已选资源</h2>
+            <ElInput v-model="selectedSearch" clearable placeholder="筛选已选资源" />
+            <section class="selected-grants">
+              <strong>已授分组 {{ groupIds.length }} / 200</strong>
+              <div>
+                <ElTag
+                  v-for="id in visibleSelected(groupIds, groupNames)"
+                  :key="id"
+                  :title="groupNames[id] || id"
+                  :closable="!saving"
+                  @close="groupIds = groupIds.filter((item) => item !== id)"
+                  >{{ groupNames[id] || id }}</ElTag
+                >
+              </div>
+              <strong>直接相机 {{ cameraIds.length }} / 2000</strong>
+              <div>
+                <ElTag
+                  v-for="id in visibleSelected(cameraIds, cameraNames)"
+                  :key="id"
+                  :title="cameraNames[id] || id"
+                  :closable="!saving"
+                  @close="cameraIds = cameraIds.filter((item) => item !== id)"
+                  >{{ cameraNames[id] || id }}</ElTag
+                >
+              </div>
+            </section>
+          </aside>
+          <section class="scope-candidates" aria-label="选择授权资源">
+            <ElTabs v-model="tab"
+              ><ElTabPane label="选择分组" name="group"
+                ><GrantPicker
+                  v-if="tab === 'group'"
+                  v-model="groupIds"
+                  kind="group"
+                  :disabled="saving"
+                  @label="(id, label) => (groupNames[id] = label)" /></ElTabPane
+              ><ElTabPane label="选择单独相机" name="camera"
+                ><GrantPicker
+                  v-if="tab === 'camera'"
+                  v-model="cameraIds"
+                  kind="camera"
+                  :disabled="saving"
+                  @label="(id, label) => (cameraNames[id] = label)" /></ElTabPane
+            ></ElTabs>
           </section>
-          <ElTabs v-model="tab"
-            ><ElTabPane label="选择分组" name="group"
-              ><GrantPicker
-                v-if="tab === 'group'"
-                v-model="groupIds"
-                kind="group"
-                :disabled="saving"
-                @label="(id, label) => (groupNames[id] = label)" /></ElTabPane
-            ><ElTabPane label="选择单独相机" name="camera"
-              ><GrantPicker
-                v-if="tab === 'camera'"
-                v-model="cameraIds"
-                kind="camera"
-                :disabled="saving"
-                @label="(id, label) => (cameraNames[id] = label)" /></ElTabPane
-          ></ElTabs>
-        </template>
+        </div>
       </template>
       <template #footer
         ><ElButton :disabled="saving" @click="dialog = false">关闭</ElButton
@@ -270,6 +282,26 @@ onMounted(load)
   </div>
 </template>
 <style scoped>
+.scope-columns {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(0, 2fr);
+  gap: 24px;
+  margin-top: 24px;
+}
+.selected-resources {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--surface-muted);
+}
+.selected-resources h2 {
+  font-size: 15px;
+  margin: 0 0 16px;
+}
+.scope-candidates {
+  min-width: 0;
+}
 .selected-grants {
   display: grid;
   gap: 10px;
@@ -281,5 +313,18 @@ onMounted(load)
   gap: 6px;
   max-height: 180px;
   overflow: auto;
+}
+.selected-grants :deep(.el-tag) {
+  max-width: 100%;
+}
+.selected-grants :deep(.el-tag__content) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 800px) {
+  .scope-columns {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
 }
 </style>

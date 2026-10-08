@@ -96,6 +96,12 @@ vi.mock('element-plus', async () => {
     vLoading: {},
     ElMessage: { success: api.success },
     ElMessageBox: { confirm: api.confirm },
+    ElDrawer: defineComponent({
+      inheritAttrs: false,
+      setup(_, { attrs, slots }) {
+        return () => h('ElDrawer', attrs, [slots.default?.(), slots.footer?.()])
+      },
+    }),
     ElAlert: defineComponent({
       setup(_, { attrs, slots }) {
         return () => h('ElAlert', attrs, [String(attrs.title), slots.default?.()])
@@ -795,15 +801,62 @@ describe('camera management interaction boundaries', () => {
     const root = await mount(DetailDialog, { cameraId: '10', canManage: true })
     await click(root, '连接设置')
     await settle()
-    expect(nodes(root).filter((item) => item.type === 'ElDialog')).toHaveLength(1)
+    expect(nodes(root).filter((item) => item.type === 'ElDrawer')).toHaveLength(1)
+    expect(nodes(root).filter((item) => item.type === 'ElDialog')).toHaveLength(0)
     expect(field(root, '连接名称')).toBeDefined()
     expect(button(root, '保存本地资料')).toBeUndefined()
     await click(root, '关闭')
     await click(root, '编辑')
     await settle()
-    expect(nodes(root).filter((item) => item.type === 'ElDialog')).toHaveLength(1)
+    expect(nodes(root).filter((item) => item.type === 'ElDrawer')).toHaveLength(1)
+    expect(nodes(root).filter((item) => item.type === 'ElDialog')).toHaveLength(0)
     expect(field(root, '码流标签')).toBeDefined()
     expect(button(root, '保存本地资料')).toBeUndefined()
+  })
+  it('protects an unsaved camera draft from reload and shared settings until saved or reverted', async () => {
+    api.getCamera.mockResolvedValue({ ...camera, sourceId: '1', sourceVersion: '4' })
+    const root = await mount(DetailDialog, { cameraId: '10', canManage: true })
+    await setField(root, '相机名称', '未保存的名称')
+    expect(button(root, '刷新资料').props.disabled).toBe(true)
+    expect(button(root, '连接设置').props.disabled).toBe(true)
+    expect(button(root, '编辑').props.disabled).toBe(true)
+    expect(button(root, '删除').props.disabled).toBe(true)
+    await click(root, '刷新资料')
+    expect(api.getCamera).toHaveBeenCalledOnce()
+    expect(field(root, '相机名称').props.modelValue).toBe('未保存的名称')
+    await click(root, '撤销修改')
+    expect(field(root, '相机名称').props.modelValue).toBe(camera.name)
+    expect(button(root, '连接设置').props.disabled).toBe(false)
+    await click(root, '编辑')
+    await settle()
+    expect(field(root, '码流标签')).toBeDefined()
+  })
+  it('keeps local changes after a rejected save and resets the draft only after a successful save', async () => {
+    const root = await mount(DetailDialog, { cameraId: '10', canManage: true })
+    await setField(root, '相机名称', ' 新名称 ')
+    api.updateCamera.mockRejectedValueOnce(new ApiRequestError('VERSION_CONFLICT', '资料已更新'))
+    await click(root, '保存本地资料')
+    expect(field(root, '相机名称').props.modelValue).toBe(' 新名称 ')
+    expect(button(root, '编辑').props.disabled).toBe(true)
+    api.updateCamera.mockResolvedValueOnce({ ...camera, name: '新名称', version: '4' })
+    await click(root, '保存本地资料')
+    expect(field(root, '相机名称').props.modelValue).toBe('新名称')
+    expect(button(root, '撤销修改')).toBeUndefined()
+    expect(button(root, '编辑').props.disabled).toBe(false)
+  })
+  it('requires explicit discard to close a dirty camera detail from either close entry', async () => {
+    const closed = vi.fn()
+    const root = await mount(DetailDialog, { cameraId: '10', canManage: true, onClose: closed })
+    await setField(root, '备注', '保留这段草稿')
+    api.confirm.mockRejectedValueOnce('cancel')
+    await click(root, '关闭')
+    expect(closed).not.toHaveBeenCalled()
+    expect(field(root, '备注').props.modelValue).toBe('保留这段草稿')
+    const drawer = nodes(root).find((item) => item.type === 'ElDrawer')!
+    await (drawer.props['before-close'] as () => Promise<void>)()
+    expect(api.confirm).toHaveBeenCalledTimes(2)
+    expect(closed).toHaveBeenCalledOnce()
+    expect(api.updateCamera).not.toHaveBeenCalled()
   })
   it('edits a saved connection in the access container and returns without opening another dialog', async () => {
     const root = await mount(CreateDialog, {

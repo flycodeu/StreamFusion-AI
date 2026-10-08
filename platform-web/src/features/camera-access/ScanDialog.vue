@@ -265,6 +265,7 @@ onBeforeUnmount(() => {
 </script>
 <template>
   <ElDialog
+    class="management-dialog"
     :model-value="true"
     title="指定网段搜索"
     width="min(980px, calc(100vw - 32px))"
