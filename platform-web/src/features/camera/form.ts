@@ -60,3 +60,19 @@ export function useCreateRequest<T extends object>() {
     },
   }
 }
+
+export function effectiveUsage(profile: {
+  usageHint: string
+  classification?: { usageHint: string }
+}): string {
+  return profile.classification?.usageHint ?? profile.usageHint
+}
+export function streamLabel(profile: {
+  label: string
+  usageHint: string
+  classification?: { usageHint: string; origin: string }
+}): string {
+  return profile.classification?.origin === 'NAME_RULE'
+    ? usageLabel(profile.classification.usageHint)
+    : profile.label
+}

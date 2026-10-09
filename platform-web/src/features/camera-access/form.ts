@@ -135,8 +135,9 @@ export function initialSelections(candidates: AccessCandidate[]): CandidateSelec
       profileIds: candidate.profiles.map((profile) => profile.profileId),
       ...(candidate.profiles.length
         ? {
-            defaultProfileId: (candidate.profiles.find((profile) => profile.usageHint === 'MAIN') ??
-              candidate.profiles[0])!.profileId,
+            defaultProfileId: (candidate.profiles.find(
+              (profile) => (profile.classification?.usageHint ?? profile.usageHint) === 'MAIN',
+            ) ?? candidate.profiles[0])!.profileId,
           }
         : {}),
     }))

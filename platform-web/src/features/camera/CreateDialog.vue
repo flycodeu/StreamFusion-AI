@@ -313,7 +313,7 @@ const statusLabels = {
           v-else-if="step === 0"
           type="primary"
           :loading="busy"
-          :disabled="loading || !options.methods.length"
+          :disabled="loading || !options.methods.includes(connection.method)"
           @click="start()"
           >{{
             createFrozen

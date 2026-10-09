@@ -16,7 +16,13 @@ import * as api from '../../api/camera/api'
 import type { Camera, CameraProfile, InitialProfile, ProfileUpdate } from '../../api/camera/types'
 import CameraDialogFrame from './CameraDialogFrame.vue'
 import RequestError from '../../components/feedback/RequestError.vue'
-import { isRequestRejected, usageLabel, usageOptions, useCreateRequest } from './form'
+import {
+  isRequestRejected,
+  usageLabel,
+  usageOptions,
+  useCreateRequest,
+  effectiveUsage,
+} from './form'
 import type { UsageHint } from './form'
 import { usePageScope } from '../../composables/usePageScope'
 
@@ -167,6 +173,9 @@ onBeforeUnmount(() => {
           maxlength="64"
           :placeholder="profileId ? '' : '留空则自动命名'"
       /></ElFormItem>
+      <p v-if="profile?.classification?.origin === 'NAME_RULE'" class="classification-note">
+        已自动识别为{{ usageLabel(effectiveUsage(profile)) }}；用途保持“未指定”时沿用自动识别。
+      </p>
       <ElFormItem label="用途"
         ><ElSelect v-model="form.usageHint"
           ><ElOption

@@ -94,6 +94,8 @@ public class CameraAccessJobsService {
                 adapters.methods(),
                 "adapters",
                 adapters.descriptors(),
+                "platformPresets",
+                adapters.platformPresets(),
                 "networkPolicies",
                 properties.networkPolicyOptions(),
                 "diagnostics",
@@ -625,6 +627,14 @@ public class CameraAccessJobsService {
                     v.put("profileId", "p" + p);
                     v.put("name", safe(profile.name()));
                     v.put("usageHint", profile.usageHint());
+                    v.put(
+                            "classification",
+                            CameraStreamClassification.classify(
+                                    profile.usageHint(),
+                                    "UNKNOWN".equals(profile.usageHint())
+                                            ? "UNKNOWN"
+                                            : "DEVICE_REPORTED",
+                                    profile.name()));
                     v.put("videoCodec", profile.codec());
                     v.put("width", profile.width());
                     v.put("height", profile.height());

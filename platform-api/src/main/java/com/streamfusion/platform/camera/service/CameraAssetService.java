@@ -20,6 +20,7 @@ import com.streamfusion.platform.camera.pojo.dto.CameraUpdateDto;
 import com.streamfusion.platform.camera.pojo.entity.CameraChannelEntity;
 import com.streamfusion.platform.camera.pojo.entity.CameraDeviceEntity;
 import com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity;
+import com.streamfusion.platform.camera.pojo.vo.CameraDeviceGroupVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraDeviceVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraProfileVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraVo;
@@ -75,6 +76,24 @@ public class CameraAssetService {
     public PageResultVo<CameraVo> page(CameraQueryDto query) {
         if (query == null) throw invalid("query");
         Actor actor = access.readActor();
+        var filter = queryFilter(query);
+        var page = channels.pageVisible(query.toPage(), filter, access.visibility(actor));
+        Map<Long, String> paths =
+                groups.paths(
+                        page.getRecords().stream()
+                                .map(CameraChannelEntity::getGroupId)
+                                .filter(Objects::nonNull)
+                                .distinct()
+                                .toList());
+        return PageResultVo.from(
+                page,
+                page.getRecords().stream()
+                        .map(row -> view(row, actor, paths.get(row.getGroupId()), null))
+                        .toList());
+    }
+
+    private CameraChannelMapper.Filter queryFilter(CameraQueryDto query) {
+        if (query == null) throw invalid("query");
         String name = CameraAssetRules.text(query.getName(), 128, "name", true);
         if (name != null) name = name.replace("!", "!!").replace("%", "!%").replace("_", "!_");
         Long sourceId = optionalId(query.getSourceId(), "sourceId");
@@ -83,16 +102,52 @@ public class CameraAssetService {
             throw invalid("lifecycle");
         if (query.getAdapterType() != null && !sources.supportsAdapter(query.getAdapterType()))
             throw invalid("adapterType");
-        var filter =
-                new CameraChannelMapper.Filter(
-                        name,
-                        sourceId,
-                        query.getAdapterType(),
-                        query.getLifecycle(),
-                        groupId == null
-                                ? null
-                                : groups.queryGroupIds(groupId, query.isIncludeDescendants()));
-        var page = channels.pageVisible(query.toPage(), filter, access.visibility(actor));
+        return new CameraChannelMapper.Filter(
+                name,
+                sourceId,
+                query.getAdapterType(),
+                query.getLifecycle(),
+                groupId == null
+                        ? null
+                        : groups.queryGroupIds(groupId, query.isIncludeDescendants()));
+    }
+
+    @Transactional(readOnly = true)
+    public PageResultVo<CameraDeviceGroupVo> deviceGroups(CameraQueryDto query) {
+        Actor actor = access.readActor();
+        var filter = queryFilter(query);
+        var page = channels.pageDeviceGroups(query.toPage(), filter, access.visibility(actor));
+        return PageResultVo.from(
+                page,
+                page.getRecords().stream()
+                        .map(
+                                row ->
+                                        new CameraDeviceGroupVo(
+                                                row.getGroupKey(),
+                                                row.getName(),
+                                                row.isIdentified(),
+                                                row.getManufacturer(),
+                                                row.getModel(),
+                                                row.getSourceDisplayName(),
+                                                row.getSourceType(),
+                                                row.getConnectionCategory(),
+                                                row.getChannelCount(),
+                                                row.getEnabledCount(),
+                                                row.getDisabledCount(),
+                                                row.getPendingCount()))
+                        .toList());
+    }
+
+    @Transactional(readOnly = true)
+    public PageResultVo<CameraVo> deviceChannels(String groupKey, CameraQueryDto query) {
+        if (groupKey == null || !groupKey.matches("[dc][1-9][0-9]{0,18}"))
+            throw invalid("groupKey");
+        DecimalInput.id(groupKey.substring(1), "groupKey");
+        Actor actor = access.readActor();
+        var filter = queryFilter(query);
+        var page =
+                channels.pageDeviceChannels(
+                        query.toPage(), groupKey, filter, access.visibility(actor));
         Map<Long, String> paths =
                 groups.paths(
                         page.getRecords().stream()
@@ -694,7 +749,9 @@ public class CameraAssetService {
                 instant(value.getParametersObservedAt()),
                 value.getParametersOrigin(),
                 value.getVersion().toString(),
-                locators.summary(value.getId(), actor.superAdmin()));
+                locators.summary(value.getId(), actor.superAdmin()),
+                CameraStreamClassification.classify(
+                        value.getUsageHint(), value.getUsageOrigin(), value.getSourceLabel()));
     }
 
     private static CameraDeviceVo deviceView(CameraDeviceEntity value) {

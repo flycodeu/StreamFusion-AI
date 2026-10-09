@@ -49,6 +49,11 @@ public record CameraAccessCatalog(
             throw new CameraAdapterException("DISCOVERY_LIMIT_EXCEEDED");
     }
 
+    /** Platform pages may contain channels owned by different devices. */
+    public Device deviceFor(Channel channel) {
+        return channel.device() == null ? device : channel.device();
+    }
+
     public record Device(
             String externalKey,
             String name,
@@ -58,7 +63,16 @@ public record CameraAccessCatalog(
             String serialNumber) {}
 
     public record Channel(
-            String externalKey, String name, List<Profile> profiles, boolean mappingRequired) {
+            String externalKey,
+            String name,
+            List<Profile> profiles,
+            boolean mappingRequired,
+            Device device) {
+        public Channel(
+                String externalKey, String name, List<Profile> profiles, boolean mappingRequired) {
+            this(externalKey, name, profiles, mappingRequired, null);
+        }
+
         public Channel {
             profiles = List.copyOf(profiles);
         }

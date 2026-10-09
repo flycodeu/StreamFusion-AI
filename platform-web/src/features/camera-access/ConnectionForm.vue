@@ -27,6 +27,30 @@ watch(editingSource, (value) => emit('editing', value))
 const descriptor = computed(() =>
   props.options.adapters?.find((item) => item.type === model.value.method),
 )
+const platformMode = computed(() =>
+  props.options.methods.some((method) =>
+    props.options.adapters?.some(
+      (adapter) => adapter.type === method && adapter.category === 'PLATFORM',
+    ),
+  ),
+)
+const platformPresets = computed(
+  () =>
+    props.options.platformPresets ??
+    props.options.adapters
+      .filter((adapter) => adapter.category === 'PLATFORM')
+      .map((adapter) => ({
+        type: adapter.type,
+        label: adapter.label,
+        apiFamily: '目录接口',
+        available: true,
+        status: '',
+      })),
+)
+const selectedPreset = computed(() =>
+  platformPresets.value.find((item) => item.type === model.value.method),
+)
+const unavailable = computed(() => platformMode.value && selectedPreset.value?.available === false)
 const isRtsp = computed(
   () => descriptor.value?.inputKind === 'RTSP_URL' || model.value.method === 'RTSP',
 )
@@ -78,6 +102,7 @@ function changeMethod(method: AccessMethod) {
   if (!retained && model.value.reuse) void searchSources()
 }
 async function searchSources(name = '') {
+  if (unavailable.value) return
   const current = ++searchSequence,
     active = captureScope()
   searching.value = true
@@ -159,7 +184,11 @@ watch(
 <template>
   <div class="connection-form">
     <template v-if="!editingSource">
-      <div v-if="options.methods.length > 1" class="method-grid" aria-label="接入方式">
+      <div
+        v-if="!platformMode && options.methods.length > 1"
+        class="method-grid"
+        aria-label="接入方式"
+      >
         <button
           v-for="method in options.methods"
           :key="method"
@@ -173,7 +202,26 @@ watch(
           {{ label(method) }}
         </button>
       </div>
-      <ElForm label-width="110px" :disabled="disabled" @submit.prevent>
+      <div v-if="platformMode" class="platform-selector">
+        <label for="camera-platform-product">平台产品</label>
+        <ElSelect
+          id="camera-platform-product"
+          :model-value="model.method"
+          :disabled="disabled || loading"
+          @change="changeMethod"
+        >
+          <ElOption
+            v-for="preset in platformPresets"
+            :key="preset.type"
+            :value="preset.type"
+            :label="preset.label"
+          />
+        </ElSelect>
+        <p v-if="selectedPreset" class="platform-description">
+          {{ selectedPreset.apiFamily }} · {{ selectedPreset.status }}
+        </p>
+      </div>
+      <ElForm v-if="!unavailable" label-width="110px" :disabled="disabled" @submit.prevent>
         <ElFormItem label="连接配置"
           ><ElCheckbox v-model="model.reuse">使用已保存连接</ElCheckbox></ElFormItem
         >
@@ -316,6 +364,23 @@ watch(
 </template>
 
 <style scoped>
+.platform-selector {
+  display: grid;
+  grid-template-columns: 98px minmax(0, 1fr);
+  gap: 10px 12px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.platform-selector > label {
+  text-align: right;
+}
+.platform-description {
+  grid-column: 2;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
 .method-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

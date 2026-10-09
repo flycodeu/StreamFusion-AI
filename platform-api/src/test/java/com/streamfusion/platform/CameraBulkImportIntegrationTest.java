@@ -25,6 +25,123 @@ class CameraBulkImportIntegrationTest extends CameraTestSupport {
     @Autowired CameraBulkImportService bulk;
 
     @Test
+    void retainsMultipleDeviceParentsAcrossPagesAndReimport() throws Exception {
+        var auth = admin();
+        var deviceA =
+                new CameraAccessCatalog.Device("device-a", "双通道设备", "Vendor", null, null, null);
+        var deviceB =
+                new CameraAccessCatalog.Device("device-b", "另一设备", "Vendor", null, null, null);
+        var streams =
+                List.of(
+                        platformProfile("sub", "subStream", 1),
+                        platformProfile("main", "mainStream", 0));
+        var first =
+                new CameraAccessCatalog(
+                        "HIK_PLATFORM",
+                        null,
+                        List.of(
+                                new CameraAccessCatalog.Channel(
+                                        "a-1", "通道1", streams, false, deviceA),
+                                new CameraAccessCatalog.Channel(
+                                        "b-1", "通道1", List.of(), false, deviceB)),
+                        true,
+                        List.of(),
+                        new CameraAccessCatalog.Page(1, 100, 3L, true));
+        var second =
+                new CameraAccessCatalog(
+                        "HIK_PLATFORM",
+                        null,
+                        List.of(
+                                new CameraAccessCatalog.Channel(
+                                        "a-2", "通道2", List.of(), false, deviceA)),
+                        true,
+                        List.of(),
+                        new CameraAccessCatalog.Page(2, 100, 3L, false));
+        var started = start(auth, first, null);
+        var work = process(jobs.claim(started.path("jobId").asLong()), first);
+        assertThat(process(work, second)).isNull();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM camera_device", Integer.class))
+                .isEqualTo(2);
+        assertThat(
+                        jdbc.queryForList(
+                                "SELECT COUNT(*) FROM camera_channel GROUP BY device_id ORDER BY COUNT(*)",
+                                Integer.class))
+                .containsExactly(1, 2);
+        assertThat(read("/cameras/devices/page", auth).path("total").asInt()).isEqualTo(2);
+        String cameraId =
+                jdbc.queryForObject(
+                        "SELECT id FROM camera_channel WHERE external_channel_key='a-1'",
+                        String.class);
+        var channel = read("/cameras/" + cameraId, auth);
+        assertThat(channel.path("profiles")).hasSize(2);
+        String mainId =
+                jdbc.queryForObject(
+                        "SELECT id FROM camera_stream_profile WHERE external_profile_key='main'",
+                        String.class);
+        String subId =
+                jdbc.queryForObject(
+                        "SELECT id FROM camera_stream_profile WHERE external_profile_key='sub'",
+                        String.class);
+        assertThat(channel.path("defaultPreviewProfileId").asText()).isEqualTo(mainId);
+        write(
+                put("/cameras/" + cameraId),
+                auth,
+                Map.of(
+                        "version",
+                        channel.path("version").asText(),
+                        "name",
+                        "人工名称",
+                        "defaultPreviewProfileId",
+                        subId),
+                200);
+        var saved = read(url(started), auth);
+        var repeated =
+                new CameraAccessCatalog(
+                        "HIK_PLATFORM",
+                        null,
+                        first.channels(),
+                        true,
+                        List.of(),
+                        new CameraAccessCatalog.Page(1, 100, 2L, false));
+        var discovered =
+                discover(
+                        auth,
+                        repeated,
+                        saved.path("sourceId").asText(),
+                        saved.path("sourceVersion").asText());
+        var retry =
+                write(
+                        post(url(discovered) + "/bulk-import"),
+                        auth,
+                        command(auth, discovered, null),
+                        202);
+        process(jobs.claim(retry.path("jobId").asLong()), repeated);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM camera_device", Integer.class))
+                .isEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM camera_channel", Integer.class))
+                .isEqualTo(3);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM camera_stream_profile", Integer.class))
+                .isEqualTo(2);
+        var retained = read("/cameras/" + cameraId, auth);
+        assertThat(retained.path("name").asText()).isEqualTo("人工名称");
+        assertThat(retained.path("defaultPreviewProfileId").asText()).isEqualTo(subId);
+    }
+
+    private static CameraAccessCatalog.Profile platformProfile(
+            String key, String name, int streamType) {
+        return new CameraAccessCatalog.Profile(
+                key,
+                name,
+                "UNKNOWN",
+                "H264",
+                1920,
+                1080,
+                25.0,
+                2048,
+                new CameraAccessCatalog.Locator("HIK_PLATFORM", null, key, streamType));
+    }
+
+    @Test
     void imports101AcrossPagesAndReplaysStartWithoutNewSourceOrHugeResult() throws Exception {
         var auth = admin();
         var first = page(1, 0, 100, 101, true);

@@ -9,6 +9,7 @@ import CameraManage from '../../src/views/camera/Manage.vue'
 import ScopeManage from '../../src/views/camera-scope/Manage.vue'
 import CreateDialog from '../../src/features/camera/CreateDialog.vue'
 import DetailDialog from '../../src/features/camera/DetailDialog.vue'
+import DeviceDetailPanel from '../../src/features/camera/DeviceDetailPanel.vue'
 import ProfileEditor from '../../src/features/camera/ProfileEditor.vue'
 import PlacementDialog from '../../src/features/camera/PlacementDialog.vue'
 import ManualCreateDialog from '../../src/features/camera/ManualCreateDialog.vue'
@@ -32,6 +33,8 @@ const api = vi.hoisted(() => ({
   startBulkImport: vi.fn(),
   getImportItems: vi.fn(),
   getCameras: vi.fn(),
+  getCameraDevices: vi.fn(),
+  getDeviceChannels: vi.fn(),
   getCamera: vi.fn(),
   createCamera: vi.fn(),
   updateCamera: vi.fn(),
@@ -99,7 +102,10 @@ vi.mock('element-plus', async () => {
     ElDrawer: defineComponent({
       inheritAttrs: false,
       setup(_, { attrs, slots }) {
-        return () => h('ElDrawer', attrs, [slots.default?.(), slots.footer?.()])
+        return () =>
+          (attrs.modelValue ?? attrs['model-value'])
+            ? h('ElDrawer', attrs, [slots.default?.(), slots.footer?.()])
+            : null
       },
     }),
     ElAlert: defineComponent({
@@ -165,6 +171,20 @@ const camera = {
   createdAt: '2026-10-06T00:00:00Z',
   updatedAt: '2026-10-06T00:00:00Z',
   profiles: [profile],
+}
+const device = {
+  groupKey: 'd100',
+  name: '设备一',
+  identified: true,
+  manufacturer: 'Dahua',
+  model: '双通道',
+  sourceDisplayName: '来源',
+  sourceType: 'ONVIF',
+  connectionCategory: 'DEVICE',
+  channelCount: 2,
+  enabledCount: 2,
+  disabledCount: 0,
+  pendingCount: 0,
 }
 const source = {
   sourceId: '1',
@@ -353,6 +373,8 @@ beforeEach(() => {
     existingCount: 0,
   })
   api.getCameras.mockResolvedValue({ items: [camera], total: 1, page: 1, size: 20 })
+  api.getCameraDevices.mockResolvedValue({ items: [device], total: 1, page: 1, size: 20 })
+  api.getDeviceChannels.mockResolvedValue({ items: [camera], total: 1, page: 1, size: 20 })
   api.getCamera.mockResolvedValue(camera)
   api.updateCamera.mockResolvedValue(camera)
   api.getSourceOptions.mockResolvedValue({
@@ -801,31 +823,29 @@ describe('camera management interaction boundaries', () => {
     const root = await mount(DetailDialog, { cameraId: '10', canManage: true })
     await click(root, '连接设置')
     await settle()
-    expect(nodes(root).filter((item) => item.type === 'ElDrawer')).toHaveLength(1)
-    expect(nodes(root).filter((item) => item.type === 'ElDialog')).toHaveLength(0)
+    expect(nodes(root).filter((item) => item.type === 'ElDialog')).toHaveLength(1)
     expect(field(root, '连接名称')).toBeDefined()
     expect(button(root, '保存本地资料')).toBeUndefined()
     await click(root, '关闭')
     await click(root, '编辑')
     await settle()
-    expect(nodes(root).filter((item) => item.type === 'ElDrawer')).toHaveLength(1)
-    expect(nodes(root).filter((item) => item.type === 'ElDialog')).toHaveLength(0)
+    expect(nodes(root).filter((item) => item.type === 'ElDialog')).toHaveLength(1)
     expect(field(root, '码流标签')).toBeDefined()
     expect(button(root, '保存本地资料')).toBeUndefined()
   })
   it('protects an unsaved camera draft from reload and shared settings until saved or reverted', async () => {
     api.getCamera.mockResolvedValue({ ...camera, sourceId: '1', sourceVersion: '4' })
     const root = await mount(DetailDialog, { cameraId: '10', canManage: true })
-    await setField(root, '相机名称', '未保存的名称')
+    await setField(root, '通道名称', '未保存的名称')
     expect(button(root, '刷新资料').props.disabled).toBe(true)
     expect(button(root, '连接设置').props.disabled).toBe(true)
     expect(button(root, '编辑').props.disabled).toBe(true)
     expect(button(root, '删除').props.disabled).toBe(true)
     await click(root, '刷新资料')
     expect(api.getCamera).toHaveBeenCalledOnce()
-    expect(field(root, '相机名称').props.modelValue).toBe('未保存的名称')
+    expect(field(root, '通道名称').props.modelValue).toBe('未保存的名称')
     await click(root, '撤销修改')
-    expect(field(root, '相机名称').props.modelValue).toBe(camera.name)
+    expect(field(root, '通道名称').props.modelValue).toBe(camera.name)
     expect(button(root, '连接设置').props.disabled).toBe(false)
     await click(root, '编辑')
     await settle()
@@ -833,14 +853,14 @@ describe('camera management interaction boundaries', () => {
   })
   it('keeps local changes after a rejected save and resets the draft only after a successful save', async () => {
     const root = await mount(DetailDialog, { cameraId: '10', canManage: true })
-    await setField(root, '相机名称', ' 新名称 ')
+    await setField(root, '通道名称', ' 新名称 ')
     api.updateCamera.mockRejectedValueOnce(new ApiRequestError('VERSION_CONFLICT', '资料已更新'))
     await click(root, '保存本地资料')
-    expect(field(root, '相机名称').props.modelValue).toBe(' 新名称 ')
+    expect(field(root, '通道名称').props.modelValue).toBe(' 新名称 ')
     expect(button(root, '编辑').props.disabled).toBe(true)
     api.updateCamera.mockResolvedValueOnce({ ...camera, name: '新名称', version: '4' })
     await click(root, '保存本地资料')
-    expect(field(root, '相机名称').props.modelValue).toBe('新名称')
+    expect(field(root, '通道名称').props.modelValue).toBe('新名称')
     expect(button(root, '撤销修改')).toBeUndefined()
     expect(button(root, '编辑').props.disabled).toBe(false)
   })
@@ -852,8 +872,8 @@ describe('camera management interaction boundaries', () => {
     await click(root, '关闭')
     expect(closed).not.toHaveBeenCalled()
     expect(field(root, '备注').props.modelValue).toBe('保留这段草稿')
-    const drawer = nodes(root).find((item) => item.type === 'ElDrawer')!
-    await (drawer.props['before-close'] as () => Promise<void>)()
+    const dialog = nodes(root).find((item) => item.type === 'ElDialog')!
+    await (dialog.props['before-close'] as () => Promise<void>)()
     expect(api.confirm).toHaveBeenCalledTimes(2)
     expect(closed).toHaveBeenCalledOnce()
     expect(api.updateCamera).not.toHaveBeenCalled()
@@ -1083,44 +1103,213 @@ describe('camera management interaction boundaries', () => {
     expect(text(root)).toContain('已选 0 个')
     expect(api.createAccessJob.mock.calls[1]![0]).not.toHaveProperty('password')
   })
+  it('loads device details only from the row action and switches channels without nesting tables', async () => {
+    api.getDeviceChannels.mockResolvedValue({
+      items: [camera, { ...camera, cameraId: '11', name: '通道二' }],
+      total: 2,
+      page: 1,
+      size: 20,
+    })
+    const root = await mount(CameraManage)
+    expect(api.getCameraDevices).toHaveBeenCalledOnce()
+    expect(api.getCameras).not.toHaveBeenCalled()
+    expect(api.getDeviceChannels).not.toHaveBeenCalled()
+    expect(nodes(root).filter((item) => item.type === 'ElTable')).toHaveLength(1)
+    await click(root, '详情')
+    await settle()
+    expect(api.getDeviceChannels).toHaveBeenCalledWith(
+      'd100',
+      expect.objectContaining({ page: 1, size: 20 }),
+    )
+    expect(
+      nodes(root).filter(
+        (item) => item.type === 'ElTable' && item.props['row-key'] === 'groupKey',
+      )[0]?.props.data,
+    ).toHaveLength(1)
+    expect(text(root)).toContain('通道二')
+    expect(nodes(root).filter((item) => item.type === 'ElTable')).toHaveLength(1)
+    api.getCamera.mockResolvedValueOnce({
+      ...camera,
+      cameraId: '11',
+      profiles: [{ ...profile, label: '通道二码流' }],
+    })
+    await click(root, '通道二')
+    await settle()
+    expect(api.getCamera).toHaveBeenLastCalledWith('11')
+    expect(text(root)).toContain('通道二码流')
+    await click(root, '编辑通道')
+    await settle()
+    expect(nodes(root).filter((item) => item.type === 'ElDrawer')).toHaveLength(0)
+    expect(nodes(root).filter((item) => item.type === 'ElDialog')).toHaveLength(1)
+    await click(root, '关闭')
+    await settle()
+    expect(nodes(root).filter((item) => item.type === 'ElDrawer')).toHaveLength(1)
+  })
+  it('keeps the latest channel selection when an earlier detail response arrives late', async () => {
+    api.getDeviceChannels.mockResolvedValue({
+      items: [camera, { ...camera, cameraId: '11', name: '通道二' }],
+      total: 2,
+      page: 1,
+      size: 20,
+    })
+    const root = await mount(DeviceDetailPanel, { device, canManage: true })
+    let finish!: (value: unknown) => void
+    api.getCamera.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    const selecting = (button(root, '通道二').props.onClick as () => Promise<void>)()
+    await nextTick()
+    api.getCamera.mockResolvedValueOnce({
+      ...camera,
+      profiles: [{ ...profile, label: '当前通道码流' }],
+    })
+    await click(root, camera.name)
+    finish({ ...camera, cameraId: '11', profiles: [{ ...profile, label: '迟到的另一个通道' }] })
+    await selecting
+    await settle()
+    expect(text(root)).toContain('当前通道码流')
+    expect(text(root)).not.toContain('迟到的另一个通道')
+  })
+  it('returns to the remaining channel page after deleting the last item on page two', async () => {
+    api.getDeviceChannels.mockResolvedValue({ items: [camera], total: 21, page: 1, size: 20 })
+    const root = await mount(DeviceDetailPanel, { device, canManage: true })
+    const pager = nodes(root).find((item) => item.type === 'ElPagination')!
+    ;(pager.props['onUpdate:currentPage'] as (value: number) => void)(2)
+    await (pager.props.onCurrentChange as () => Promise<void>)()
+    api.getDeviceChannels
+      .mockResolvedValueOnce({ items: [], total: 20, page: 2, size: 20 })
+      .mockResolvedValueOnce({
+        items: [{ ...camera, name: '剩余通道' }],
+        total: 20,
+        page: 1,
+        size: 20,
+      })
+    await click(root, '删除通道')
+    expect(api.getDeviceChannels).toHaveBeenLastCalledWith(
+      'd100',
+      expect.objectContaining({ page: 1 }),
+    )
+    expect(text(root)).toContain('剩余通道')
+  })
+  it('uses one platform selector and blocks unimplemented DSS and ICC presets', async () => {
+    api.getAccessOptions.mockResolvedValue({
+      ready: true,
+      methods: ['HIK_PLATFORM'],
+      adapters: [
+        {
+          type: 'HIK_PLATFORM',
+          label: '海康 ISC / Artemis',
+          category: 'PLATFORM',
+          inputKind: 'PLATFORM_APPKEY',
+          autoDetect: false,
+          paged: true,
+        },
+      ],
+      platformPresets: [
+        {
+          type: 'HIK_PLATFORM',
+          label: '海康 ISC / Artemis',
+          apiFamily: '资源 API v2',
+          available: true,
+          status: '可读取目录',
+        },
+        {
+          type: 'DAHUA_DSS',
+          label: '大华 DSS',
+          apiFamily: '版本待确定',
+          available: false,
+          status: '预设，尚未适配',
+        },
+        {
+          type: 'DAHUA_ICC',
+          label: '大华 ICC',
+          apiFamily: '版本待确定',
+          available: false,
+          status: '预设，尚未适配',
+        },
+      ],
+      networkPolicies: [],
+      diagnostics: [],
+    })
+    const root = await mount(CreateDialog, { mode: 'platform' })
+    const selector = nodes(root).find(
+      (item) => item.type === 'ElSelect' && item.props.id === 'camera-platform-product',
+    )!
+    await (selector.props.onChange as (value: string) => void)('DAHUA_ICC')
+    await settle()
+    expect(text(root)).toContain('尚未适配')
+    expect(button(root, '查询平台目录').props.disabled).toBe(true)
+    expect(
+      nodes(root).some(
+        (item) => item.type === 'ElInput' && item.props.autocomplete === 'new-password',
+      ),
+    ).toBe(false)
+    await click(root, '查询平台目录')
+    expect(api.createAccessJob).not.toHaveBeenCalled()
+  })
+  it('shows inferred roles without turning a label edit into a manual role override', async () => {
+    api.getCamera.mockResolvedValue({
+      ...camera,
+      profiles: [
+        {
+          ...profile,
+          usageHint: 'UNKNOWN',
+          classification: { usageHint: 'MAIN', origin: 'NAME_RULE', rule: 'ONVIF_STREAM_NAME_V1' },
+        },
+      ],
+    })
+    const root = await mount(ProfileEditor, { cameraId: '10', profileId: '20' })
+    expect(text(root)).toContain('自动识别为主码流')
+    await setField(root, '码流标签', '业务名称')
+    await click(root, '保存')
+    expect(api.updateProfile.mock.calls[0]![2]).not.toHaveProperty('usageHint')
+  })
   it('shows only local edits to ordinary camera managers and no unavailable operations', async () => {
     api.getCameraOptions.mockResolvedValue({ canManageShared: false })
     const root = await mount(CameraManage)
-    expect(button(root, '详情 / 编辑')).toBeDefined()
+    expect(button(root, '详情')).toBeDefined()
+    await click(root, '详情')
+    await settle()
+    expect(button(root, '编辑通道')).toBeDefined()
     expect(button(root, '新增相机')).toBeUndefined()
-    expect(button(root, '删除')).toBeUndefined()
+    expect(button(root, '删除通道')).toBeUndefined()
     expect(text(root)).not.toMatch(/播放|在线|网段搜索|海康接入/)
   })
   it('discards a stale list response when a newer filter completes first', async () => {
     let finish!: (value: unknown) => void
-    api.getCameras.mockReturnValueOnce(
+    api.getCameraDevices.mockReturnValueOnce(
       new Promise((resolve) => {
         finish = resolve
       }),
     )
     const root = await mount(CameraManage)
-    api.getCameras.mockResolvedValue({ items: [{ ...camera, name: '新筛选' }], total: 1 })
+    api.getCameraDevices.mockResolvedValue({ items: [{ ...device, name: '新筛选' }], total: 1 })
     await click(root, '刷新')
-    finish({ items: [{ ...camera, name: '迟到旧筛选' }], total: 1 })
+    finish({ items: [{ ...device, name: '迟到旧筛选' }], total: 1 })
     await settle()
     expect(text(root)).toContain('新筛选')
     expect(text(root)).not.toContain('迟到旧筛选')
   })
   it('does not delete after the confirmation was cancelled or the identity changed', async () => {
     const root = await mount(CameraManage)
+    await click(root, '详情')
+    await settle()
     api.confirm.mockRejectedValueOnce('cancel')
-    await click(root, '删除')
+    await click(root, '删除通道')
     expect(api.deleteCamera).not.toHaveBeenCalled()
     api.confirm.mockImplementationOnce(async () => {
       clearIdentity()
       return 'confirm'
     })
-    await click(root, '删除')
+    await click(root, '删除通道')
     expect(api.deleteCamera).not.toHaveBeenCalled()
   })
   it('submits only name, remark and default Profile for ordinary local editing', async () => {
     const root = await mount(DetailDialog, { cameraId: '10', canManage: false })
-    await setField(root, '相机名称', '新名称')
+    await setField(root, '通道名称', '新名称')
     await click(root, '保存本地资料')
     expect(api.updateCamera).toHaveBeenCalledWith('10', {
       version: '3',

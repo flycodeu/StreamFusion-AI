@@ -17,6 +17,38 @@ public class CameraAccessAdapterRegistry {
         return descriptors;
     }
 
+    public record PlatformPreset(
+            String type, String label, String apiFamily, boolean available, String status) {}
+
+    public List<PlatformPreset> platformPresets() {
+        var presets = new ArrayList<PlatformPreset>();
+        for (var descriptor : descriptors) {
+            if ("PLATFORM".equals(descriptor.category()))
+                presets.add(
+                        new PlatformPreset(
+                                descriptor.type(),
+                                descriptor.label(),
+                                "HIK_PLATFORM".equals(descriptor.type())
+                                        ? "Artemis 资源 API v2"
+                                        : "注册驱动",
+                                true,
+                                "可读取目录；部署版本需核对"));
+        }
+        if (!adapters.containsKey("DAHUA_DSS"))
+            presets.add(
+                    new PlatformPreset(
+                            "DAHUA_DSS", "大华 DSS", "版本待确定", false, "预设，尚未适配；需要对应版本的 API 与认证资料"));
+        if (!adapters.containsKey("DAHUA_ICC"))
+            presets.add(
+                    new PlatformPreset(
+                            "DAHUA_ICC",
+                            "大华 ICC / iConnection Center",
+                            "版本待确定",
+                            false,
+                            "预设，尚未适配；需要对应版本的 API 与认证资料"));
+        return List.copyOf(presets);
+    }
+
     public List<String> methods() {
         return methods;
     }

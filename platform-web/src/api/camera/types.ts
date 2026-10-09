@@ -26,7 +26,55 @@ export interface LocatorSummary {
   port: number | null
   transport: string | null
 }
+export interface StreamClassification {
+  usageHint: string
+  origin: string
+  rule: string | null
+}
+export function parseClassification(value: unknown): StreamClassification | undefined {
+  if (value == null) return undefined
+  const row = object(value)
+  return {
+    usageHint: string(row.usageHint),
+    origin: string(row.origin),
+    rule: optionalString(row.rule),
+  }
+}
+export interface CameraDeviceGroup {
+  groupKey: string
+  name: string
+  identified: boolean
+  manufacturer: string | null
+  model: string | null
+  sourceDisplayName: string
+  sourceType: string | null
+  connectionCategory: string
+  channelCount: number
+  enabledCount: number
+  disabledCount: number
+  pendingCount: number
+}
+export function parseDeviceGroup(value: unknown): CameraDeviceGroup {
+  const row = object(value),
+    groupKey = string(row.groupKey)
+  if (!/^[dc][1-9][0-9]{0,18}$/.test(groupKey)) throw new Error('groupKey')
+  return {
+    groupKey,
+    name: string(row.name),
+    identified: boolean(row.identified),
+    manufacturer: optionalString(row.manufacturer),
+    model: optionalString(row.model),
+    sourceDisplayName: string(row.sourceDisplayName),
+    sourceType: optionalString(row.sourceType),
+    connectionCategory: string(row.connectionCategory),
+    channelCount: integer(row.channelCount),
+    enabledCount: integer(row.enabledCount),
+    disabledCount: integer(row.disabledCount),
+    pendingCount: integer(row.pendingCount),
+  }
+}
 export interface CameraProfile {
+  classification?: StreamClassification
   streamProfileId: string
   label: string
   usageHint: string
@@ -124,6 +172,9 @@ export function parseProfile(value: unknown): CameraProfile {
     label: string(row.label),
     usageHint: string(row.usageHint),
     usageOrigin: string(row.usageOrigin),
+    ...(row.classification == null
+      ? {}
+      : { classification: parseClassification(row.classification) }),
     enabled: boolean(row.enabled),
     version: id(row.version),
     videoCodec: optionalString(row.videoCodec),

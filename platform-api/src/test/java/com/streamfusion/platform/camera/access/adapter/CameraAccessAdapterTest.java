@@ -368,7 +368,7 @@ class CameraAccessAdapterTest {
                     reply(
                             exchange,
                             200,
-                            "{\"code\":\"0\",\"data\":{\"total\":2,\"list\":[{\"cameraIndexCode\":\"opaque-A\",\"cameraName\":\"A\"},{\"indexCode\":\"opaque-B\",\"name\":\"B\"}]}}");
+                            "{\"code\":\"0\",\"data\":{\"total\":2,\"list\":[{\"cameraIndexCode\":\"opaque-A\",\"cameraName\":\"A\",\"encodeDevIndexCode\":\"device-A\",\"encodeDevName\":\"Device A\"},{\"indexCode\":\"opaque-B\",\"name\":\"B\"}]}}");
                 });
         var result = new HikPlatformCameraAccessAdapter(transport, json).discover(context);
         assertThat(result.device()).isNull();
@@ -377,6 +377,9 @@ class CameraAccessAdapterTest {
                 .extracting(CameraAccessCatalog.Channel::externalKey)
                 .containsExactly("opaque-A", "opaque-B");
         assertThat(result.channels()).allMatch(channel -> channel.profiles().isEmpty());
+        assertThat(result.deviceFor(result.channels().getFirst()).externalKey())
+                .isEqualTo("device-A");
+        assertThat(result.deviceFor(result.channels().getLast())).isNull();
         assertThat(result.warnings()).isEmpty();
         assertThat(result.page().hasMore()).isFalse();
         assertThat(calls.get()).isEqualTo(1);

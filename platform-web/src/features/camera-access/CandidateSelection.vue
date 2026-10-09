@@ -15,7 +15,7 @@ import type {
   CandidateProfile,
 } from '../../api/camera-access/types'
 import { initialSelections } from './form'
-import { usageLabel } from '../camera/form'
+import { usageLabel, effectiveUsage } from '../camera/form'
 
 const props = defineProps<{ candidates: AccessCandidate[]; disabled: boolean; single?: boolean }>()
 const model = defineModel<CandidateSelection[]>({ required: true })
@@ -69,10 +69,10 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
             :model-value="selected(candidate.candidateId)!.profileIds.includes(profile.profileId)"
             :disabled="disabled"
             @update:model-value="toggleProfile(candidate, profile, !!$event)"
-            >{{ profile.name || usageLabel(profile.usageHint) }}</ElCheckbox
+            >{{ profile.name || usageLabel(effectiveUsage(profile)) }}</ElCheckbox
           >
           <span class="profile-parameters"
-            >{{ usageLabel(profile.usageHint) }} · {{ profile.videoCodec || '编码未获取' }} ·
+            >{{ usageLabel(effectiveUsage(profile)) }} · {{ profile.videoCodec || '编码未获取' }} ·
             {{
               profile.width && profile.height
                 ? `${profile.width} × ${profile.height}`
@@ -97,7 +97,7 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
               )"
               :key="profile.profileId"
               :value="profile.profileId"
-              :label="profile.name || usageLabel(profile.usageHint)" /></ElSelect
+              :label="profile.name || usageLabel(effectiveUsage(profile))" /></ElSelect
         ></ElFormItem>
       </template>
     </section>

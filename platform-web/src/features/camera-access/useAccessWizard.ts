@@ -149,6 +149,10 @@ export function useAccessWizard(
   async function start(page = 1) {
     if (busy.value || !options.value?.ready) return
     error.value = null
+    if (!options.value?.methods.includes(connection.value.method)) {
+      error.value = formError('此平台预设尚未适配，暂不能读取目录。')
+      return
+    }
     const adapter = options.value.adapters?.find((item) => item.type === connection.value.method)
     const message =
       createFrozen.value || savedConnection ? '' : connectionError(connection.value, adapter)

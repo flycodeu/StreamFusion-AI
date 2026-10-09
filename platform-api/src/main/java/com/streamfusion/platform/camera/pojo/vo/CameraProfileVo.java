@@ -23,4 +23,7 @@ public record CameraProfileVo(
         @Schema(description = "参数来源：CATALOG设备声明或MEDIA实际媒体观测", nullable = true)
                 String parametersOrigin,
         @Schema(description = "标签、用途、启停及定位配置共享编辑版本") String version,
-        @Schema(description = "非秘密定位摘要，不含路径、查询参数或凭据") Map<String, Object> locatorSummary) {}
+        @Schema(description = "非秘密定位摘要，不含路径、查询参数或凭据") Map<String, Object> locatorSummary,
+        @Schema(description = "有效用途及依据；NAME_RULE为名称推断，原始用途和人工设置不变")
+                com.streamfusion.platform.camera.service.CameraStreamClassification.Result
+                        classification) {}

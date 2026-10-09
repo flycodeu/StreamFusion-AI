@@ -20,6 +20,17 @@ public interface CameraChannelMapper extends BaseMapper<CameraChannelEntity> {
             @Param("filter") Filter filter,
             @Param("visibility") Visibility visibility);
 
+    IPage<CameraDeviceGroupRow> pageDeviceGroups(
+            Page<CameraDeviceGroupRow> page,
+            @Param("filter") Filter filter,
+            @Param("visibility") Visibility visibility);
+
+    IPage<CameraAssetRow> pageDeviceChannels(
+            Page<CameraAssetRow> page,
+            @Param("groupKey") String groupKey,
+            @Param("filter") Filter filter,
+            @Param("visibility") Visibility visibility);
+
     CameraAssetRow visible(@Param("id") long id, @Param("visibility") Visibility visibility);
 
     @Select("SELECT COUNT(*) FROM camera_user_channel_grant WHERE channel_id=#{id}")

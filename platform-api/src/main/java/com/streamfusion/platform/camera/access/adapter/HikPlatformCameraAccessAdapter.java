@@ -36,7 +36,7 @@ public class HikPlatformCameraAccessAdapter implements CameraAccessAdapter {
     public CameraAdapterDescriptor descriptor() {
         return new CameraAdapterDescriptor(
                 type(),
-                "海康平台",
+                "海康 ISC / Artemis",
                 "PLATFORM",
                 "PLATFORM_APPKEY",
                 false,
@@ -94,7 +94,21 @@ public class HikPlatformCameraAccessAdapter implements CameraAccessAdapter {
             String name = text(entry, "cameraName");
             if (name == null) name = text(entry, "name");
             // A directory entry proves a channel identity, not an available stream Profile.
-            channels.add(new CameraAccessCatalog.Channel(id, name, List.of(), false));
+            String deviceKey = text(entry, "encodeDevIndexCode");
+            if (deviceKey == null) deviceKey = text(entry, "encodeDeviceIndexCode");
+            if (deviceKey != null && deviceKey.length() > 512)
+                throw new CameraAdapterException("INVALID_DEVICE_IDENTITY");
+            var device =
+                    deviceKey == null
+                            ? null
+                            : new CameraAccessCatalog.Device(
+                                    deviceKey,
+                                    text(entry, "encodeDevName"),
+                                    null,
+                                    null,
+                                    null,
+                                    null);
+            channels.add(new CameraAccessCatalog.Channel(id, name, List.of(), false, device));
         }
         boolean hasMore = (long) page * size < total;
         if (hasMore && entries.isEmpty()) warnings.add("DIRECTORY_INCOMPLETE");

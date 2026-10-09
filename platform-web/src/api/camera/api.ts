@@ -1,6 +1,6 @@
 import { request } from '../client'
 import { boolean, empty, id, object, page } from '../parse'
-import { parseCamera, parseProfile } from './types'
+import { parseCamera, parseProfile, parseDeviceGroup } from './types'
 import type {
   Camera,
   ManualCameraCreate,
@@ -123,4 +123,29 @@ export async function deleteProfile(cameraId: string, streamProfileId: string, v
     successStatus: 200,
     decode: empty,
   })
+}
+
+export type CameraSearch = Parameters<typeof getCameras>[0]
+export async function getCameraDevices(query: CameraSearch) {
+  return (
+    await request({
+      path: '/cameras/devices/page',
+      method: 'GET',
+      params: query,
+      successStatus: 200,
+      decode: (v) => page(v, parseDeviceGroup),
+    })
+  ).data
+}
+export async function getDeviceChannels(groupKey: string, query: CameraSearch) {
+  if (!/^[dc][1-9][0-9]{0,18}$/.test(groupKey)) throw new Error('groupKey')
+  return (
+    await request({
+      path: `/cameras/devices/${groupKey}/channels`,
+      method: 'GET',
+      params: query,
+      successStatus: 200,
+      decode: (v) => page(v, parseCamera),
+    })
+  ).data
 }

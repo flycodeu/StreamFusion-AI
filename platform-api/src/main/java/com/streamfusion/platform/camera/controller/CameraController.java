@@ -6,6 +6,7 @@ import com.streamfusion.platform.camera.pojo.dto.CameraProfileCreateDto;
 import com.streamfusion.platform.camera.pojo.dto.CameraProfileUpdateDto;
 import com.streamfusion.platform.camera.pojo.dto.CameraQueryDto;
 import com.streamfusion.platform.camera.pojo.dto.CameraUpdateDto;
+import com.streamfusion.platform.camera.pojo.vo.CameraDeviceGroupVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraImpactVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraProfileVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraVo;
@@ -47,6 +48,20 @@ public class CameraController {
     @Operation(summary = "分页查询当前范围内的相机")
     public R<PageResultVo<CameraVo>> page(@ParameterObject @ModelAttribute CameraQueryDto query) {
         return R.success(service.page(query));
+    }
+
+    @GetMapping("/devices/page")
+    @Operation(summary = "按设备分页展示当前授权范围内的通道集合")
+    public R<PageResultVo<CameraDeviceGroupVo>> devices(
+            @ParameterObject @ModelAttribute CameraQueryDto query) {
+        return R.success(service.deviceGroups(query));
+    }
+
+    @GetMapping("/devices/{groupKey}/channels")
+    @Operation(summary = "分页查询设备内当前授权范围的通道")
+    public R<PageResultVo<CameraVo>> deviceChannels(
+            @PathVariable String groupKey, @ParameterObject @ModelAttribute CameraQueryDto query) {
+        return R.success(service.deviceChannels(groupKey, query));
     }
 
     @GetMapping("/{cameraId}")

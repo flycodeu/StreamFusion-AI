@@ -1,3 +1,5 @@
+import { parseClassification } from '../camera/types'
+import type { StreamClassification } from '../camera/types'
 import { boolean, id, integer, list, object, optionalString, string } from '../parse'
 
 export type AccessMethod = string
@@ -11,7 +13,15 @@ export interface AccessAdapter {
 }
 export type JobStatus =
   'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'PARTIAL' | 'FAILED' | 'CANCELLED' | 'EXPIRED'
+export interface PlatformPreset {
+  type: string
+  label: string
+  apiFamily: string
+  available: boolean
+  status: string
+}
 export interface AccessOptions {
+  platformPresets?: PlatformPreset[]
   ready: boolean
   methods: AccessMethod[]
   adapters: AccessAdapter[]
@@ -35,6 +45,7 @@ export interface AccessConnection {
   pageSize?: number
 }
 export interface CandidateProfile {
+  classification?: StreamClassification
   profileId: string
   name: string
   usageHint: string
@@ -172,6 +183,20 @@ export function parseAccessOptions(value: unknown): AccessOptions {
   const row = object(value)
   return {
     ready: boolean(row.ready),
+    ...(row.platformPresets == null
+      ? {}
+      : {
+          platformPresets: list(row.platformPresets, (value) => {
+            const item = object(value)
+            return {
+              type: string(item.type),
+              label: string(item.label),
+              apiFamily: string(item.apiFamily),
+              available: boolean(item.available),
+              status: string(item.status),
+            }
+          }),
+        }),
     methods: list(row.methods, method),
     adapters: list(row.adapters, (value) => {
       const adapter = object(value)
@@ -240,6 +265,9 @@ export function parseAccessJob(value: unknown): AccessJob {
         profileId: string(profile.profileId),
         name: string(profile.name),
         usageHint: string(profile.usageHint),
+        ...(profile.classification == null
+          ? {}
+          : { classification: parseClassification(profile.classification) }),
         videoCodec: optionalString(profile.videoCodec),
         width: numberOrNull(profile.width),
         height: numberOrNull(profile.height),

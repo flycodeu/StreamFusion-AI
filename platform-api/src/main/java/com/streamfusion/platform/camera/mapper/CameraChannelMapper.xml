@@ -30,6 +30,50 @@
         </if>
         ORDER BY c.created_at DESC,c.id DESC
     </select>
+    <sql id="deviceGroupKey">CASE WHEN c.device_id IS NULL THEN CONCAT('c',c.id) ELSE CONCAT('d',c.device_id) END</sql>
+    <sql id="deviceGroupName">CASE WHEN c.device_id IS NULL THEN c.name WHEN s.connection_category='DEVICE' THEN s.name ELSE COALESCE(NULLIF(d.source_name,''),CONCAT('设备 ',d.id)) END</sql>
+    <sql id="deviceFilters">
+        <if test="filter.name != null">
+            AND (LOWER(c.name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!' OR LOWER(s.name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!' OR LOWER(d.source_name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!')
+        </if>
+        <if test="filter.sourceId != null">AND c.source_id=#{filter.sourceId}</if>
+        <if test="filter.adapterType != null">AND s.adapter_type=#{filter.adapterType}</if>
+        <if test="filter.lifecycle != null">AND c.lifecycle=#{filter.lifecycle}</if>
+        <if test="filter.groups != null">
+            <choose>
+                <when test="!filter.groups.isEmpty()">
+                    AND c.group_id IN
+                    <foreach collection="filter.groups" item="group" open="(" separator="," close=")">#{group}</foreach>
+                </when>
+                <otherwise>AND 1=0</otherwise>
+            </choose>
+        </if>
+    </sql>
+    <select id="pageDeviceGroups" resultType="com.streamfusion.platform.camera.mapper.CameraDeviceGroupRow">
+        SELECT <include refid="deviceGroupKey"/> AS group_key,
+            <include refid="deviceGroupName"/> AS name,
+            CASE WHEN c.device_id IS NULL THEN FALSE ELSE TRUE END AS identified,
+            d.manufacturer,d.model,s.name AS source_display_name,
+            s.adapter_type AS source_type,s.connection_category,
+            COUNT(*) AS channel_count,
+            SUM(CASE WHEN c.lifecycle='ENABLED' THEN 1 ELSE 0 END) AS enabled_count,
+            SUM(CASE WHEN c.lifecycle='DISABLED' THEN 1 ELSE 0 END) AS disabled_count,
+            SUM(CASE WHEN c.lifecycle='PENDING_ASSIGNMENT' THEN 1 ELSE 0 END) AS pending_count
+        FROM <include refid="joinedAssets"/>
+        WHERE <include refid="com.streamfusion.platform.camera.mapper.CameraScopeMapper.visibleCamera"/>
+        <include refid="deviceFilters"/>
+        GROUP BY <include refid="deviceGroupKey"/>,<include refid="deviceGroupName"/>,
+            CASE WHEN c.device_id IS NULL THEN FALSE ELSE TRUE END,
+            d.manufacturer,d.model,s.name,s.adapter_type,s.connection_category
+        ORDER BY MAX(c.created_at) DESC,MAX(c.id) DESC
+    </select>
+    <select id="pageDeviceChannels" resultType="com.streamfusion.platform.camera.mapper.CameraAssetRow">
+        SELECT <include refid="projection"/> FROM <include refid="joinedAssets"/>
+        WHERE <include refid="com.streamfusion.platform.camera.mapper.CameraScopeMapper.visibleCamera"/>
+        AND <include refid="deviceGroupKey"/>=#{groupKey}
+        <include refid="deviceFilters"/>
+        ORDER BY c.id ASC
+    </select>
     <select id="visible" resultType="com.streamfusion.platform.camera.mapper.CameraAssetRow">
         SELECT <include refid="projection"/> FROM <include refid="joinedAssets"/>
         WHERE c.id=#{id} AND <include refid="com.streamfusion.platform.camera.mapper.CameraScopeMapper.visibleCamera"/>

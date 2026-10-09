@@ -124,13 +124,29 @@ public class CameraAccessImportService {
             Long groupId,
             Actor actor,
             AuditContextDto context) {
-        var selection =
-                new ImportSelection(
-                        List.of(new ImportSelection.Selection("c0", List.of(), null)),
-                        groupId == null ? null : groupId.toString(),
-                        null);
         if (catalog.channels().size() != 1
                 || !adapters.supportsCategory(catalog.adapterType(), "PLATFORM")) throw invalid();
+        var found = catalog.channels().getFirst().profiles();
+        List<String> profileIds =
+                java.util.stream.IntStream.range(0, found.size()).mapToObj(i -> "p" + i).toList();
+        String defaultProfile = null;
+        for (int i = 0; i < found.size(); i++) {
+            var profile = found.get(i);
+            if ("MAIN"
+                    .equals(
+                            com.streamfusion.platform.camera.service.CameraStreamClassification
+                                    .classify(profile.usageHint(), "UNKNOWN", profile.name())
+                                    .usageHint())) {
+                defaultProfile = "p" + i;
+                break;
+            }
+        }
+        if (defaultProfile == null && found.size() == 1) defaultProfile = "p0";
+        var selection =
+                new ImportSelection(
+                        List.of(new ImportSelection.Selection("c0", profileIds, defaultProfile)),
+                        groupId == null ? null : groupId.toString(),
+                        null);
         return persist(
                 connection,
                 catalog,
@@ -153,10 +169,22 @@ public class CameraAccessImportService {
                         ? null
                         : LocalDateTime.ofInstant(catalog.observedAt(), ZoneId.of("Asia/Shanghai"))
                                 .truncatedTo(java.time.temporal.ChronoUnit.MICROS);
-        Long deviceId = ensureDevice(source.getId(), catalog.device(), actor, observedAt);
+        Map<String, Long> deviceIds = new LinkedHashMap<>();
         List<CameraImportResult.ImportedCamera> results = new ArrayList<>();
         int created = 0;
         for (var selected : prepared.selected()) {
+            var observedDevice = catalog.deviceFor(selected.channel());
+            Long deviceId =
+                    observedDevice == null
+                            ? null
+                            : deviceIds.computeIfAbsent(
+                                    observedDevice.externalKey(),
+                                    ignored ->
+                                            ensureDevice(
+                                                    source.getId(),
+                                                    observedDevice,
+                                                    actor,
+                                                    observedAt));
             var camera = prepared.existing().get(selected.channel().externalKey());
             boolean fresh = camera == null;
             if (fresh) {
@@ -238,7 +266,11 @@ public class CameraAccessImportService {
                                                 selected.channel().name(),
                                                 128,
                                                 camera.getSourceName()))
-                                .set(CameraChannelEntity::getCatalogObservedAt, observedAt);
+                                .set(CameraChannelEntity::getCatalogObservedAt, observedAt)
+                                .set(
+                                        camera.getDeviceId() == null && deviceId != null,
+                                        CameraChannelEntity::getDeviceId,
+                                        deviceId);
                 if (channels.update(null, update) != 1)
                     throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
             }
@@ -423,7 +455,11 @@ public class CameraAccessImportService {
                                                 p.getChannelId(), ignored -> new ArrayList<>())
                                         .add(p));
             }
-            validateDeviceIdentity(catalog.device(), existing.values());
+            for (var item : selected) {
+                var previous = existing.get(item.channel().externalKey());
+                if (previous != null)
+                    validateDeviceIdentity(catalog.deviceFor(item.channel()), List.of(previous));
+            }
         }
         var normalized =
                 selected.stream()

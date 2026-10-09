@@ -3,7 +3,7 @@ import { formError as validationError } from './form'
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
   ElButton,
-  ElDrawer,
+  ElDialog,
   ElForm,
   ElFormItem,
   ElInput,
@@ -24,11 +24,11 @@ import TableActions from '../../components/table/TableActions.vue'
 import ProfileEditor from './ProfileEditor.vue'
 import SourceEditor from '../camera-sources/SourceEditor.vue'
 import CreateDialog from './CreateDialog.vue'
-import { connectionLabel, lifecycleLabels, usageLabel } from './form'
+import { connectionLabel, lifecycleLabels, usageLabel, effectiveUsage, streamLabel } from './form'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
 
-const props = defineProps<{ cameraId: string; canManage: boolean }>()
+const props = defineProps<{ cameraId: string; canManage: boolean; deviceName?: string }>()
 const emit = defineEmits<{ close: []; changed: [] }>()
 const captureScope = usePageScope(),
   camera = ref<Camera | null>(null),
@@ -166,8 +166,9 @@ async function identified() {
 onMounted(load)
 </script>
 <template>
-  <ElDrawer
+  <ElDialog
     :model-value="true"
+    append-to-body
     :title="
       connectionEditor
         ? '连接设置'
@@ -175,10 +176,10 @@ onMounted(load)
           ? '读取设备资料'
           : profileEditor
             ? '码流设置'
-            : '相机详情'
+            : '通道详情'
     "
-    size="min(1120px, 100vw)"
-    class="camera-detail-drawer"
+    width="900px"
+    class="management-dialog camera-detail-dialog"
     :before-close="close"
     :close-on-click-modal="!saving && !childOpen"
     :close-on-press-escape="!saving && !childOpen"
@@ -189,7 +190,9 @@ onMounted(load)
       <header class="camera-summary">
         <div>
           <h2>{{ camera.name }}</h2>
-          <p>{{ camera.sourceDisplayName }}</p>
+          <p v-if="(deviceName || camera.sourceDisplayName) !== camera.name">
+            {{ deviceName || camera.sourceDisplayName }}
+          </p>
         </div>
         <ElTag :type="camera.lifecycle === 'ENABLED' ? 'success' : 'info'">
           {{ lifecycleLabels[camera.lifecycle] }}
@@ -203,11 +206,11 @@ onMounted(load)
             :disabled="saving || loading"
             @submit.prevent="save"
           >
-            <ElFormItem label="相机名称" required
+            <ElFormItem label="通道名称" required
               ><ElInput v-model="form.name" maxlength="128"
             /></ElFormItem>
             <ElFormItem label="备注"
-              ><ElInput v-model="form.remark" type="textarea" :rows="3" maxlength="500"
+              ><ElInput v-model="form.remark" type="textarea" :rows="2" maxlength="500"
             /></ElFormItem>
           </ElForm>
           <dl class="detail-facts">
@@ -259,7 +262,7 @@ onMounted(load)
                   )"
                   :key="profile.streamProfileId"
                   :value="profile.streamProfileId"
-                  :label="profile.label"
+                  :label="streamLabel(profile)"
                 />
               </ElSelect>
             </ElFormItem>
@@ -270,10 +273,19 @@ onMounted(load)
             border
             empty-text="暂无码流档案"
           >
-            <ElTableColumn prop="label" label="码流标签" min-width="240" show-overflow-tooltip />
+            <ElTableColumn label="码流" min-width="200"
+              ><template #default="{ row }"
+                ><div>{{ streamLabel(asProfile(row)) }}</div>
+                <span
+                  v-if="streamLabel(asProfile(row)) !== row.label"
+                  class="table-secondary stream-source-label"
+                  >{{ row.label }}</span
+                ></template
+              ></ElTableColumn
+            >
             <ElTableColumn label="用途" width="90"
               ><template #default="{ row }">{{
-                usageLabel(row.usageHint)
+                usageLabel(effectiveUsage(asProfile(row)))
               }}</template></ElTableColumn
             >
             <ElTableColumn label="配置状态" width="120"
@@ -423,9 +435,14 @@ onMounted(load)
       @close="identifying = false"
       @saved="identified"
     />
-  </ElDrawer>
+  </ElDialog>
 </template>
 <style scoped>
+.stream-source-label {
+  display: block;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
 .camera-detail-workspace {
   display: flex;
   flex-direction: column;
@@ -437,14 +454,14 @@ onMounted(load)
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding-bottom: 20px;
+  padding-bottom: 12px;
 }
 .camera-summary > div {
   min-width: 0;
 }
 .camera-summary h2 {
   margin: 0 0 8px;
-  font-size: 20px;
+  font-size: 18px;
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
@@ -470,17 +487,17 @@ onMounted(load)
 .camera-detail-tabs :deep(.el-tabs__content) {
   overflow: auto;
   min-height: 0;
-  padding-top: 24px;
+  padding-top: 16px;
 }
 .camera-details-form {
-  max-width: 720px;
+  max-width: none;
 }
 .detail-facts {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 24px 32px;
+  gap: 14px 24px;
   margin: 0;
-  padding: 20px 0;
+  padding: 12px 0;
 }
 .detail-facts dt {
   margin-bottom: 8px;
@@ -493,7 +510,7 @@ onMounted(load)
   overflow-wrap: anywhere;
 }
 .camera-record-meta {
-  margin-top: 24px;
+  margin-top: 12px;
   border-top: 1px solid var(--border-subtle);
   padding-top: 16px;
 }
@@ -514,7 +531,7 @@ onMounted(load)
   margin-bottom: 16px;
 }
 .connection-actions {
-  margin-top: 24px;
+  margin-top: 12px;
   padding-top: 8px;
   border-top: 1px solid var(--border-subtle);
 }
