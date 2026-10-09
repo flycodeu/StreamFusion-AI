@@ -22,6 +22,7 @@ import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import javax.crypto.Cipher;
 import javax.crypto.KeyAgreement;
@@ -103,8 +104,13 @@ public abstract class SecureLoginSupport {
             String username,
             String password)
             throws Exception {
-        var challengeRequest = get("/auth/login/challenge");
-        if (session != null) challengeRequest.session(session);
+        // MockHttpSession's default ID counter is not safe for concurrent login tests.
+        if (session == null)
+            session =
+                    new MockHttpSession(
+                            mvc.getDispatcherServlet().getServletContext(),
+                            UUID.randomUUID().toString());
+        var challengeRequest = get("/auth/login/challenge").session(session);
         var result = mvc.perform(challengeRequest).andExpect(status().isOk()).andReturn();
         var challenge = json.readTree(result.getResponse().getContentAsByteArray()).path("data");
         var anonymous = (MockHttpSession) result.getRequest().getSession(false);

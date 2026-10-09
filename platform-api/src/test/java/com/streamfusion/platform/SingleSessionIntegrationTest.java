@@ -19,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -122,7 +123,7 @@ class SingleSessionIntegrationTest extends SecureLoginSupport {
                 .isEqualTo(1);
     }
 
-    @Test
+    @RepeatedTest(20)
     void concurrentSuccessfulLoginsLeaveExactlyOneUsableSession() throws Exception {
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             var start = new CountDownLatch(1);
