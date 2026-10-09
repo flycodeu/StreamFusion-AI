@@ -37,9 +37,7 @@ public class CameraConnectionRules {
                 || size < 1
                 || size > 100
                 || (!paged && (page != 1 || size != 100))) throw CameraSourceRules.invalid();
-        String policy = input.networkPolicyKey();
-        if (policy == null && properties.getNetworkPolicies().size() == 1)
-            policy = properties.getNetworkPolicies().keySet().iterator().next();
+        String policy = properties.defaultNetworkPolicyKey(input.networkPolicyKey());
         rules.policy(policy);
         String username = secret(input.username(), 128), password = secret(input.password(), 512);
         String name = CameraSourceRules.text(input.name(), 100, false);

@@ -18,6 +18,28 @@ public class CameraProperties {
     private Map<String, String> keys = new LinkedHashMap<>();
     private Map<String, NetworkPolicy> networkPolicies = new LinkedHashMap<>();
 
+    /** Public option labels only; destination rules remain server-side. */
+    public List<Map<String, String>> networkPolicyOptions() {
+        return networkPolicies.entrySet().stream()
+                .map(
+                        entry ->
+                                Map.of(
+                                        "key",
+                                        entry.getKey(),
+                                        "name",
+                                        entry.getValue().getName() == null
+                                                ? entry.getKey()
+                                                : entry.getValue().getName()))
+                .toList();
+    }
+
+    /** Selects the sole configured policy when omitted; callers still validate access. */
+    public String defaultNetworkPolicyKey(String key) {
+        return key == null && networkPolicies.size() == 1
+                ? networkPolicies.keySet().iterator().next()
+                : key;
+    }
+
     @Getter
     @Setter
     public static class NetworkPolicy {

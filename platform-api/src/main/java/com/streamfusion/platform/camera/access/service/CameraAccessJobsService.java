@@ -95,17 +95,7 @@ public class CameraAccessJobsService {
                 "adapters",
                 adapters.descriptors(),
                 "networkPolicies",
-                properties.getNetworkPolicies().entrySet().stream()
-                        .map(
-                                e ->
-                                        Map.of(
-                                                "key",
-                                                e.getKey(),
-                                                "name",
-                                                e.getValue().getName() == null
-                                                        ? e.getKey()
-                                                        : e.getValue().getName()))
-                        .toList(),
+                properties.networkPolicyOptions(),
                 "diagnostics",
                 ready ? List.of() : List.of("ACCESS_SERVICE_NOT_CONFIGURED"));
     }

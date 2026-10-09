@@ -50,17 +50,7 @@ public class CameraSourceService {
                 "credentialPurposes",
                 List.of("RTSP", "DEVICE_HTTP", "ONVIF", "VENDOR_HTTP", "PLATFORM_HTTP"),
                 "networkPolicies",
-                properties.getNetworkPolicies().entrySet().stream()
-                        .map(
-                                e ->
-                                        Map.of(
-                                                "key",
-                                                e.getKey(),
-                                                "name",
-                                                e.getValue().getName() == null
-                                                        ? e.getKey()
-                                                        : e.getValue().getName()))
-                        .toList(),
+                properties.networkPolicyOptions(),
                 "ready",
                 crypto.ready() && !properties.getNetworkPolicies().isEmpty());
     }
@@ -506,8 +496,7 @@ public class CameraSourceService {
         String policy = source.getNetworkPolicyKey();
         if (policy == null) policy = input.networkPolicyKey();
         else sameOptional(input.networkPolicyKey(), policy);
-        if (policy == null && properties.getNetworkPolicies().size() == 1)
-            policy = properties.getNetworkPolicies().keySet().iterator().next();
+        policy = properties.defaultNetworkPolicyKey(policy);
         int mediaPort =
                 "RTSP".equals(source.getAdapterType())
                         ? endpoint.getPort()
