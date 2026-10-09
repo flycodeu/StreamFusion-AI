@@ -98,7 +98,6 @@ public class CameraAccessAdapterRegistry {
         for (String candidate :
                 descriptors().stream()
                         .filter(CameraAdapterDescriptor::autoDetect)
-                        .sorted(Comparator.comparingInt(CameraAdapterDescriptor::autoOrder))
                         .map(CameraAdapterDescriptor::type)
                         .toList()) {
             // A recognized vendor may use credentials independent of ONVIF. Try ONVIF once,

@@ -587,12 +587,7 @@ public class CameraAccessImportService {
         row.setWidth(positive(item.width()));
         row.setHeight(positive(item.height()));
         row.setBitrateKbps(item.bitrateKbps() == null ? null : (long) positive(item.bitrateKbps()));
-        if (item.frameRate() != null) {
-            if (!Double.isFinite(item.frameRate())
-                    || item.frameRate() <= 0
-                    || item.frameRate() > 99999.999) throw invalid();
-            row.setFrameRate(BigDecimal.valueOf(item.frameRate()));
-        }
+        row.setFrameRate(frameRate(item.frameRate()));
         if (!"RTSP".equals(adapterType)) {
             row.setParametersOrigin("CATALOG");
             row.setParametersObservedAt(observedAt);
@@ -656,10 +651,7 @@ public class CameraAccessImportService {
                         .set(CameraProfileEntity::getParametersOrigin, "CATALOG")
                         .set(CameraProfileEntity::getParametersObservedAt, observedAt);
         if (item.frameRate() != null) {
-            if (!Double.isFinite(item.frameRate())
-                    || item.frameRate() <= 0
-                    || item.frameRate() > 99999.999) throw invalid();
-            update.set(CameraProfileEntity::getFrameRate, BigDecimal.valueOf(item.frameRate()));
+            update.set(CameraProfileEntity::getFrameRate, frameRate(item.frameRate()));
         }
         if (profiles.update(null, update) != 1)
             throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
@@ -678,6 +670,12 @@ public class CameraAccessImportService {
     private static Integer positive(Integer value) {
         if (value != null && value <= 0) throw invalid();
         return value;
+    }
+
+    private static BigDecimal frameRate(Double value) {
+        if (value == null) return null;
+        if (!Double.isFinite(value) || value <= 0 || value > 99999.999) throw invalid();
+        return BigDecimal.valueOf(value);
     }
 
     private static int localIndex(String value, char prefix, int max) {
