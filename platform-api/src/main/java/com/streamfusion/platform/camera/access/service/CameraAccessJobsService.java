@@ -336,7 +336,12 @@ public class CameraAccessJobsService {
         coordination.lockSuperAdminRole();
         checkWork(work);
         var job = jobs.selectById(work.id());
-        encrypt(job, new Payload(work.payload().sessionId(), work.payload().connection(), catalog));
+        encrypt(
+                job,
+                new Payload(
+                        work.payload().sessionId(),
+                        work.payload().connection(),
+                        catalog.observedAt(clock.instant())));
         job.setStatus(catalog.complete() ? "SUCCEEDED" : "PARTIAL");
         job.setMethod(catalog.adapterType());
         advance(job);

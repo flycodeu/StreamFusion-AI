@@ -148,7 +148,12 @@ public class CameraAccessImportService {
             AuditContextDto context,
             Prepared prepared) {
         var source = sources.createImported(connection, catalog.adapterType(), actor, context);
-        Long deviceId = ensureDevice(source.getId(), catalog.device(), actor);
+        LocalDateTime observedAt =
+                catalog.observedAt() == null
+                        ? null
+                        : LocalDateTime.ofInstant(catalog.observedAt(), ZoneId.of("Asia/Shanghai"))
+                                .truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        Long deviceId = ensureDevice(source.getId(), catalog.device(), actor, observedAt);
         List<CameraImportResult.ImportedCamera> results = new ArrayList<>();
         int created = 0;
         for (var selected : prepared.selected()) {
@@ -170,7 +175,8 @@ public class CameraAccessImportService {
                 camera.setLifecycle(prepared.groupId() == null ? "PENDING_ASSIGNMENT" : "ENABLED");
                 camera.setMappingOrigin(
                         "RTSP".equals(catalog.adapterType()) ? "MANUAL" : "ADAPTER");
-                camera.setCatalogObservedAt("RTSP".equals(catalog.adapterType()) ? null : now());
+                camera.setCatalogObservedAt(
+                        "RTSP".equals(catalog.adapterType()) ? null : observedAt);
                 camera.setVersion(0L);
                 camera.setCreatedAt(now());
                 camera.setUpdatedAt(camera.getCreatedAt());
@@ -211,6 +217,30 @@ public class CameraAccessImportService {
                                 Long.toString(previous),
                                 "afterVersion",
                                 camera.getVersion().toString()));
+            } else if (!fresh
+                    && !"RTSP".equals(catalog.adapterType())
+                    && newer(observedAt, camera.getCatalogObservedAt())) {
+                var update =
+                        new LambdaUpdateWrapper<CameraChannelEntity>()
+                                .eq(CameraChannelEntity::getId, camera.getId())
+                                .eq(CameraChannelEntity::getVersion, camera.getVersion())
+                                .and(
+                                        q ->
+                                                q.isNull(CameraChannelEntity::getCatalogObservedAt)
+                                                        .or()
+                                                        .lt(
+                                                                CameraChannelEntity
+                                                                        ::getCatalogObservedAt,
+                                                                observedAt))
+                                .set(
+                                        CameraChannelEntity::getSourceName,
+                                        observedText(
+                                                selected.channel().name(),
+                                                128,
+                                                camera.getSourceName()))
+                                .set(CameraChannelEntity::getCatalogObservedAt, observedAt);
+                if (channels.update(null, update) != 1)
+                    throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
             }
             Map<String, CameraProfileEntity> known = new HashMap<>();
             for (var profile : prepared.profiles().getOrDefault(camera.getId(), List.of()))
@@ -226,7 +256,8 @@ public class CameraAccessImportService {
                                     camera.getId(),
                                     item,
                                     catalog.adapterType(),
-                                    actor);
+                                    actor,
+                                    observedAt);
                     locators.createImported(
                             source.getId(),
                             profile.getId(),
@@ -243,6 +274,8 @@ public class CameraAccessImportService {
                             null,
                             context,
                             Map.of("label", profile.getLabel()));
+                } else if (!"RTSP".equals(catalog.adapterType())) {
+                    refreshProfile(profile, item, observedAt);
                 }
                 if (Objects.equals(selected.defaultIndex(), index)) defaultId = profile.getId();
             }
@@ -461,7 +494,8 @@ public class CameraAccessImportService {
                 throw BusinessException.error(ErrorCode.CONFLICT);
     }
 
-    private Long ensureDevice(long sourceId, CameraAccessCatalog.Device item, Actor actor) {
+    private Long ensureDevice(
+            long sourceId, CameraAccessCatalog.Device item, Actor actor, LocalDateTime observedAt) {
         if (item == null) return null;
         opaque(item.externalKey(), 512);
         var current =
@@ -469,7 +503,48 @@ public class CameraAccessImportService {
                         new LambdaQueryWrapper<CameraDeviceEntity>()
                                 .eq(CameraDeviceEntity::getSourceId, sourceId)
                                 .eq(CameraDeviceEntity::getExternalDeviceKey, item.externalKey()));
-        if (current != null) return current.getId();
+        if (current != null) {
+            if (newer(observedAt, current.getInfoObservedAt())) {
+                var update =
+                        new LambdaUpdateWrapper<CameraDeviceEntity>()
+                                .eq(CameraDeviceEntity::getId, current.getId())
+                                .eq(CameraDeviceEntity::getVersion, current.getVersion())
+                                .and(
+                                        q ->
+                                                q.isNull(CameraDeviceEntity::getInfoObservedAt)
+                                                        .or()
+                                                        .lt(
+                                                                CameraDeviceEntity
+                                                                        ::getInfoObservedAt,
+                                                                observedAt))
+                                .set(
+                                        CameraDeviceEntity::getSourceName,
+                                        observedText(item.name(), 128, current.getSourceName()))
+                                .set(
+                                        CameraDeviceEntity::getManufacturer,
+                                        observedText(
+                                                item.manufacturer(),
+                                                128,
+                                                current.getManufacturer()))
+                                .set(
+                                        CameraDeviceEntity::getModel,
+                                        observedText(item.model(), 128, current.getModel()))
+                                .set(
+                                        CameraDeviceEntity::getFirmwareVersion,
+                                        observedText(
+                                                item.firmware(), 128, current.getFirmwareVersion()))
+                                .set(
+                                        CameraDeviceEntity::getSerialNumber,
+                                        observedText(
+                                                item.serialNumber(),
+                                                128,
+                                                current.getSerialNumber()))
+                                .set(CameraDeviceEntity::getInfoObservedAt, observedAt);
+                if (devices.update(null, update) != 1)
+                    throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
+            }
+            return current.getId();
+        }
         var row = new CameraDeviceEntity();
         row.setSourceId(sourceId);
         row.setExternalDeviceKey(item.externalKey());
@@ -480,7 +555,7 @@ public class CameraAccessImportService {
         row.setModel(optionalText(item.model(), 128));
         row.setFirmwareVersion(optionalText(item.firmware(), 128));
         row.setSerialNumber(optionalText(item.serialNumber(), 128));
-        row.setInfoObservedAt(now());
+        row.setInfoObservedAt(observedAt);
         row.setVersion(0L);
         row.setCreatedAt(now());
         row.setUpdatedAt(row.getCreatedAt());
@@ -495,7 +570,8 @@ public class CameraAccessImportService {
             long cameraId,
             CameraAccessCatalog.Profile item,
             String adapterType,
-            Actor actor) {
+            Actor actor,
+            LocalDateTime observedAt) {
         var row = new CameraProfileEntity();
         row.setSourceId(sourceId);
         row.setChannelId(cameraId);
@@ -519,7 +595,7 @@ public class CameraAccessImportService {
         }
         if (!"RTSP".equals(adapterType)) {
             row.setParametersOrigin("CATALOG");
-            row.setParametersObservedAt(now());
+            row.setParametersObservedAt(observedAt);
         }
         row.setVersion(0L);
         row.setCreatedAt(now());
@@ -528,6 +604,75 @@ public class CameraAccessImportService {
         row.setUpdatedBy(actor.userId());
         profiles.insert(row);
         return row;
+    }
+
+    /** Catalog metadata cannot overwrite manual settings, media measurements or newer reads. */
+    private void refreshProfile(
+            CameraProfileEntity current,
+            CameraAccessCatalog.Profile item,
+            LocalDateTime observedAt) {
+        if (!newer(observedAt, current.getParametersObservedAt())
+                || current.getParametersOrigin() != null
+                        && !Set.of("CATALOG", "UNKNOWN").contains(current.getParametersOrigin()))
+            return;
+        var update =
+                new LambdaUpdateWrapper<CameraProfileEntity>()
+                        .eq(CameraProfileEntity::getId, current.getId())
+                        .eq(CameraProfileEntity::getVersion, current.getVersion())
+                        .and(
+                                q ->
+                                        q.isNull(CameraProfileEntity::getParametersObservedAt)
+                                                .or()
+                                                .lt(
+                                                        CameraProfileEntity
+                                                                ::getParametersObservedAt,
+                                                        observedAt))
+                        .and(
+                                q ->
+                                        q.isNull(CameraProfileEntity::getParametersOrigin)
+                                                .or()
+                                                .in(
+                                                        CameraProfileEntity::getParametersOrigin,
+                                                        "CATALOG",
+                                                        "UNKNOWN"))
+                        .set(
+                                CameraProfileEntity::getSourceLabel,
+                                observedText(item.name(), 128, current.getSourceLabel()))
+                        .set(
+                                CameraProfileEntity::getVideoCodec,
+                                observedText(item.codec(), 32, current.getVideoCodec()))
+                        .set(
+                                item.width() != null,
+                                CameraProfileEntity::getWidth,
+                                positive(item.width()))
+                        .set(
+                                item.height() != null,
+                                CameraProfileEntity::getHeight,
+                                positive(item.height()))
+                        .set(
+                                item.bitrateKbps() != null,
+                                CameraProfileEntity::getBitrateKbps,
+                                positive(item.bitrateKbps()))
+                        .set(CameraProfileEntity::getParametersOrigin, "CATALOG")
+                        .set(CameraProfileEntity::getParametersObservedAt, observedAt);
+        if (item.frameRate() != null) {
+            if (!Double.isFinite(item.frameRate())
+                    || item.frameRate() <= 0
+                    || item.frameRate() > 99999.999) throw invalid();
+            update.set(CameraProfileEntity::getFrameRate, BigDecimal.valueOf(item.frameRate()));
+        }
+        if (profiles.update(null, update) != 1)
+            throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
+    }
+
+    private static boolean newer(LocalDateTime observedAt, LocalDateTime previous) {
+        // Legacy pending jobs have no reading timestamp and must not refresh existing observations.
+        return observedAt != null && (previous == null || observedAt.isAfter(previous));
+    }
+
+    private static String observedText(String value, int max, String previous) {
+        String next = optionalText(value, max);
+        return next == null ? previous : next;
     }
 
     private static Integer positive(Integer value) {

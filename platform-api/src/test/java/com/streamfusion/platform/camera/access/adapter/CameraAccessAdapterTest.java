@@ -333,16 +333,22 @@ class CameraAccessAdapterTest {
                                 dahuaProfile(0, "MainFormat", 0, true)
                                         + dahuaProfile(0, "MainFormat", 1, true)
                                         + dahuaProfile(0, "ExtraFormat", 0, true)
-                                        + dahuaProfile(0, "ExtraFormat", 1, true)
+                                        + dahuaProfile(0, "ExtraFormat", 1, false)
                                         + dahuaProfile(1, "MainFormat", 0, true)
-                                        + dahuaProfile(1, "ExtraFormat", 0, false)));
+                                        + dahuaProfile(1, "ExtraFormat", 0, false)
+                                        + "table.Encode[0].ExtraFormat[2].Video.Width=1920\r\n"));
         var result = new DahuaCameraAccessAdapter(transport).discover(context);
         assertThat(result.device().firmware()).isEqualTo("V3");
         assertThat(result.channels()).hasSize(2);
         assertThat(result.channels().getFirst().profiles())
                 .extracting(CameraAccessCatalog.Profile::usageHint)
                 .containsExactly("MAIN", "SUB", "THIRD");
-        assertThat(result.channels().get(1).profiles()).hasSize(1);
+        assertThat(result.channels().get(1).profiles()).hasSize(2);
+        assertThat(result.complete()).isFalse();
+        assertThat(result.warnings())
+                .containsExactly("PROFILE_ENABLE_UNVERIFIED", "PROFILE_CONFIGURATION_INCOMPLETE");
+        assertThat(result.channels().getFirst().profiles().get(2).locator().uri().getQuery())
+                .isEqualTo("channel=1&subtype=2");
         assertThat(result.channels().get(1).profiles().getFirst().locator().uri().getQuery())
                 .isEqualTo("channel=2&subtype=0");
     }
@@ -589,7 +595,7 @@ class CameraAccessAdapterTest {
     }
 
     @Test
-    void autoOnlyFallsBackForUnsupportedProtocolAndStopsOnCredentialFailure() {
+    void autoPreservesAuthenticationFailureWhenOnvifIsUnsupported() {
         CameraAccessAdapter hik = mock(CameraAccessAdapter.class);
         CameraAccessAdapter dahua = mock(CameraAccessAdapter.class);
         CameraAccessAdapter onvif = mock(CameraAccessAdapter.class);
@@ -611,10 +617,12 @@ class CameraAccessAdapterTest {
         when(hik.discover(context)).thenThrow(new CameraAdapterException("PROTOCOL_NOT_SUPPORTED"));
         when(dahua.discover(context))
                 .thenThrow(new CameraAdapterException("AUTHENTICATION_FAILED"));
+        when(onvif.discover(context))
+                .thenThrow(new CameraAdapterException("PROTOCOL_NOT_SUPPORTED"));
         var registry = new CameraAccessAdapterRegistry(List.of(hik, dahua, onvif));
         assertThatThrownBy(() -> registry.discover("AUTO", context))
                 .hasMessage("AUTHENTICATION_FAILED");
-        verify(onvif, never()).discover(any());
+        verify(onvif).discover(context);
     }
 
     @Test
@@ -684,7 +692,7 @@ class CameraAccessAdapterTest {
     }
 
     @Test
-    void autoStopsAfterActualHttpAuthenticationRejection() {
+    void autoDoesNotTryOtherVendorsAfterActualAuthenticationRejection() {
         AtomicInteger hikCalls = new AtomicInteger();
         AtomicInteger dahuaCalls = new AtomicInteger();
         server.createContext(
@@ -888,7 +896,11 @@ class CameraAccessAdapterTest {
                 + prefix
                 + "Video.Compression=H.264\r\n"
                 + prefix
-                + "Video.FPS=25\r\n";
+                + "Video.FPS=25\r\n"
+                + prefix
+                + "Video.Width=1920\r\n"
+                + prefix
+                + "Video.Height=1080\r\n";
     }
 
     private static void reply(HttpExchange exchange, int status, String body) throws IOException {

@@ -85,7 +85,7 @@ public class HikvisionCameraAccessAdapter implements CameraAccessAdapter {
             Double rate = decimal(text(video, "maxFrameRate"));
             Integer bitrate = integer(text(video, "constantBitRate"));
             if (bitrate == null) bitrate = integer(text(video, "vbrUpperCap"));
-            URI uri = rtsp(context, "/Streaming/Channels/" + id, null);
+            URI uri = CameraCatalogSupport.rtsp(context, "/Streaming/Channels/" + id, null);
             var profile =
                     new CameraAccessCatalog.Profile(
                             id,
@@ -109,22 +109,5 @@ public class HikvisionCameraAccessAdapter implements CameraAccessAdapter {
                                         key, value.getFirst().name(), value, mapping.get(key))));
         return new CameraAccessCatalog(
                 type(), device, channels, warnings.isEmpty(), List.copyOf(warnings));
-    }
-
-    static URI rtsp(CameraAccessContext context, String path, String query) {
-        try {
-            if (context.rtspPort() < 1 || context.rtspPort() > 65535)
-                throw new CameraAdapterException("INVALID_RTSP_PORT");
-            return new URI(
-                    "rtsp",
-                    null,
-                    context.endpoint().getHost(),
-                    context.rtspPort(),
-                    path,
-                    query,
-                    null);
-        } catch (java.net.URISyntaxException ex) {
-            throw new CameraAdapterException("INVALID_STREAM_URI");
-        }
     }
 }

@@ -19,6 +19,11 @@ const warningLabels: Record<string, string> = {
   DEVICE_IDENTITY_UNVERIFIED: '未确认设备唯一标识，请核对设备信息后再导入。',
   FIRMWARE_UNAVAILABLE: '未获取到固件版本，其他已读取的信息仍可查看。',
   PROFILE_ENABLE_UNKNOWN: '部分码流未返回启用状态，请在设备端核对。',
+  PROFILE_ENABLE_UNVERIFIED:
+    '部分码流配置完整，但设备未声明启用，已保留为候选；是否可播放需另行验证。',
+  AUTO_NATIVE_AUTH_REJECTED:
+    '厂商接口拒绝了本次凭据，已通过 ONVIF 读取目录；两种接口的账号权限可能不同。',
+  AUTO_NATIVE_CATALOG_PARTIAL: '厂商目录不完整，已通过 ONVIF 读取目录，请核对通道后导入。',
   PROFILE_CONFIGURATION_INCOMPLETE: '部分码流配置不完整，仅可导入已明确识别的码流。',
   PLATFORM_STREAM_CAPABILITY_UNVERIFIED: '已读取平台目录，视频地址与播放能力尚未验证。',
   DIRECTORY_CHANGED_DURING_READ: '读取过程中设备目录发生变化，请重新读取后核对通道。',

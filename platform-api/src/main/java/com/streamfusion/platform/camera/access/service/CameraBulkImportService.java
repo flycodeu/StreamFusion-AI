@@ -245,11 +245,12 @@ public class CameraBulkImportService {
             var control = work.payload().bulk();
             var single =
                     new CameraAccessCatalog(
-                            page.adapterType(),
-                            page.device(),
-                            List.of(channel),
-                            page.complete(),
-                            page.warnings());
+                                    page.adapterType(),
+                                    page.device(),
+                                    List.of(channel),
+                                    page.complete(),
+                                    page.warnings())
+                            .observedAt(clock.instant());
             var result =
                     imports.executeBackground(
                             work.payload().connection(),

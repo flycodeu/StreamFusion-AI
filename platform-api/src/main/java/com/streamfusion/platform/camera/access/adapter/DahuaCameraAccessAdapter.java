@@ -102,13 +102,16 @@ public class DahuaCameraAccessAdapter implements CameraAccessAdapter {
         for (var stream : streams.entrySet()) {
             var key = stream.getKey();
             var fields = stream.getValue();
-            if ("false".equalsIgnoreCase(fields.get("VideoEnable"))) continue;
-            if (!fields.containsKey("VideoEnable")) warnings.add("PROFILE_ENABLE_UNKNOWN");
             String codec = fields.get("Video.Compression");
-            if (codec == null) {
+            boolean enabled = "true".equalsIgnoreCase(fields.get("VideoEnable"));
+            // Some firmware reports VideoEnable=false for a usable third stream. Retain a
+            // fully configured candidate, but never infer media health from this flag. Empty
+            // Encode slots and recording modes must not become synthetic stream profiles.
+            if (codec == null || codec.isBlank() || !enabled && !configured(fields)) {
                 warnings.add("PROFILE_CONFIGURATION_INCOMPLETE");
                 continue;
             }
+            if (!enabled) warnings.add("PROFILE_ENABLE_UNVERIFIED");
             // This CGI family defines zero-based Encode indices and one-based RTSP channel numbers.
             int subtype = key.main ? 0 : key.stream + 1;
             String external = key.main ? "MainFormat[0]" : "ExtraFormat[" + key.stream + "]";
@@ -117,7 +120,7 @@ public class DahuaCameraAccessAdapter implements CameraAccessAdapter {
                             ? "MAIN"
                             : key.stream == 0 ? "SUB" : key.stream == 1 ? "THIRD" : "CUSTOM";
             var uri =
-                    HikvisionCameraAccessAdapter.rtsp(
+                    CameraCatalogSupport.rtsp(
                             context,
                             "/cam/realmonitor",
                             "channel=" + (key.channel + 1) + "&subtype=" + subtype);
@@ -145,8 +148,22 @@ public class DahuaCameraAccessAdapter implements CameraAccessAdapter {
                 type(),
                 device,
                 channels,
-                !warnings.contains("PROFILE_CONFIGURATION_INCOMPLETE"),
+                !warnings.contains("PROFILE_CONFIGURATION_INCOMPLETE")
+                        && !warnings.contains("PROFILE_ENABLE_UNVERIFIED"),
                 List.copyOf(warnings));
+    }
+
+    private static boolean configured(Map<String, String> fields) {
+        Integer width = integer(fields.get("Video.Width"));
+        Integer height = integer(fields.get("Video.Height"));
+        Double fps = decimal(fields.get("Video.FPS"));
+        return width != null
+                && width > 0
+                && height != null
+                && height > 0
+                && fps != null
+                && Double.isFinite(fps)
+                && fps > 0;
     }
 
     private Map<String, String> values(byte[] bytes) {

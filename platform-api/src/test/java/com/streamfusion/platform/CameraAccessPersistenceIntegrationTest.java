@@ -24,6 +24,130 @@ class CameraAccessPersistenceIntegrationTest extends CameraTestSupport {
     @Autowired CameraCryptoService crypto;
 
     @Test
+    void reimportRefreshesObservationsButPreservesLocalSettingsAndRejectsStaleResults()
+            throws Exception {
+        var auth = admin();
+        var first = discover(auth, null, observedCatalog("v1", "H264", 1920, 2048));
+        var command = selection(first, null, List.of("p0"));
+        confirm(auth, first, command);
+        var imported = write(post(route(first) + "/import"), auth, command, 200);
+        String source = imported.path("sourceId").asText();
+        String camera = imported.path("cameras").get(0).path("cameraId").asText();
+        var asset = read("/cameras/" + camera, auth);
+        String profile = asset.path("profiles").get(0).path("streamProfileId").asText();
+        var local = new LinkedHashMap<String, Object>();
+        local.put("version", "0");
+        local.put("defaultPreviewProfileId", null);
+        local.put("name", "本地业务名称");
+        write(put("/cameras/" + camera), auth, local, 200);
+        write(
+                put("/cameras/" + camera + "/profiles/" + profile),
+                auth,
+                Map.of("version", "0", "label", "手工标签", "usageHint", "THIRD", "enabled", false),
+                200);
+        // Both jobs are read before either is confirmed; confirming the old one last must not
+        // revert the newer device and profile observations.
+        var older = discover(auth, source, observedCatalog("old", "H264", 640, 256));
+        var latest = discover(auth, source, observedCatalog("v2", "H265", 1280, 1024));
+        var next = selection(latest, null, List.of("p0"));
+        confirm(auth, latest, next);
+        assertThat(
+                        write(post(route(latest) + "/import"), auth, next, 200)
+                                .path("existingCount")
+                                .asInt())
+                .isOne();
+        var stale = selection(older, null, List.of("p0"));
+        confirm(auth, older, stale);
+        write(post(route(older) + "/import"), auth, stale, 200);
+        var device = jdbc.queryForMap("SELECT * FROM camera_device");
+        var row = jdbc.queryForMap("SELECT * FROM camera_stream_profile");
+        assertThat(device.get("FIRMWARE_VERSION")).isEqualTo("v2");
+        assertThat(row.get("VIDEO_CODEC")).isEqualTo("H265");
+        assertThat(((Number) row.get("WIDTH")).intValue()).isEqualTo(1280);
+        assertThat(((Number) row.get("BITRATE_KBPS")).intValue()).isEqualTo(1024);
+        assertThat(row.get("LABEL")).isEqualTo("手工标签");
+        assertThat(row.get("USAGE_HINT")).isEqualTo("THIRD");
+        assertThat(row.get("USAGE_ORIGIN")).isEqualTo("MANUAL");
+        assertThat(((Number) row.get("ENABLED")).intValue()).isZero();
+        assertThat(row.get("PARAMETERS_OBSERVED_AT")).isNotNull();
+        assertThat(row.get("ID").toString()).isEqualTo(profile);
+        assertThat(((Number) row.get("VERSION")).longValue()).isEqualTo(1L);
+        assertThat(((Number) device.get("VERSION")).longValue()).isZero();
+        assertThat(jdbc.queryForObject("SELECT version FROM camera_channel", Long.class))
+                .isEqualTo(1L);
+        assertThat(jdbc.queryForObject("SELECT name FROM camera_channel", String.class))
+                .isEqualTo("本地业务名称");
+
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM camera_profile_locator", Integer.class))
+                .isOne();
+        // Actual media observations are stronger than a later catalog reading.
+        jdbc.update(
+                "UPDATE camera_stream_profile SET parameters_origin='MEDIA',video_codec='H266'");
+        var media = discover(auth, source, observedCatalog("v3", "H264", 1920, 2048));
+        var mediaCommand = selection(media, null, List.of("p0"));
+        confirm(auth, media, mediaCommand);
+        write(post(route(media) + "/import"), auth, mediaCommand, 200);
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT video_codec FROM camera_stream_profile", String.class))
+                .isEqualTo("H266");
+        assertThat(jdbc.queryForObject("SELECT firmware_version FROM camera_device", String.class))
+                .isEqualTo("v3");
+    }
+
+    @Test
+    void missingCatalogFieldsDoNotEraseKnownDeviceOrProfileObservations() throws Exception {
+        var auth = admin();
+        var first = discover(auth, null, observedCatalog("v1", "H264", 1920, 2048));
+        var command = selection(first, null, List.of("p0"));
+        confirm(auth, first, command);
+        var imported = write(post(route(first) + "/import"), auth, command, 200);
+        var partial =
+                discover(
+                        auth,
+                        imported.path("sourceId").asText(),
+                        observedCatalog(null, null, null, null));
+        var repeat = selection(partial, null, List.of("p0"));
+        confirm(auth, partial, repeat);
+        write(post(route(partial) + "/import"), auth, repeat, 200);
+        assertThat(jdbc.queryForObject("SELECT firmware_version FROM camera_device", String.class))
+                .isEqualTo("v1");
+        var row =
+                jdbc.queryForMap(
+                        "SELECT video_codec,width,bitrate_kbps FROM camera_stream_profile");
+        assertThat(row.get("VIDEO_CODEC")).isEqualTo("H264");
+        assertThat(((Number) row.get("WIDTH")).intValue()).isEqualTo(1920);
+        assertThat(((Number) row.get("BITRATE_KBPS")).intValue()).isEqualTo(2048);
+    }
+
+    private CameraAccessCatalog observedCatalog(
+            String firmware, String codec, Integer width, Integer bitrate) {
+        var template = catalog(false, false);
+        var profile =
+                new CameraAccessCatalog.Profile(
+                        "main",
+                        "来源标签",
+                        "MAIN",
+                        codec,
+                        width,
+                        null,
+                        null,
+                        bitrate,
+                        template.channels().getFirst().profiles().getFirst().locator());
+        return new CameraAccessCatalog(
+                "ONVIF",
+                new CameraAccessCatalog.Device(
+                        "serial:unit", "来源设备", "Acme", "X", firmware, "unit"),
+                List.of(
+                        new CameraAccessCatalog.Channel(
+                                "sensor-main", "来源相机", List.of(profile), false)),
+                true,
+                List.of());
+    }
+
+    @Test
     void importConfirmationTracksGroupChangesAndPreservesLocalDefaultsOnRepeat() throws Exception {
         var auth = admin();
         var group = write(post("/camera-groups"), auth, Map.of("name", "北区"), 201);

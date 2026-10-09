@@ -92,20 +92,54 @@ public class CameraAccessAdapterRegistry {
 
     public CameraAccessCatalog discover(String type, CameraAccessContext context) {
         if (!"AUTO".equals(type)) return required(type).discover(context);
+        CameraAccessCatalog partial = null;
+        CameraAdapterException authenticationFailure = null;
+        String fallbackWarning = null;
         for (String candidate :
                 descriptors().stream()
                         .filter(CameraAdapterDescriptor::autoDetect)
                         .sorted(Comparator.comparingInt(CameraAdapterDescriptor::autoOrder))
                         .map(CameraAdapterDescriptor::type)
                         .toList()) {
+            // A recognized vendor may use credentials independent of ONVIF. Try ONVIF once,
+            // without retrying that vendor or sending credentials to other vendor protocols.
+            if (fallbackWarning != null && !"ONVIF".equals(candidate)) continue;
             try {
-                return required(candidate).discover(context);
+                var catalog = required(candidate).discover(context);
+                if (catalog.complete() || "ONVIF".equals(candidate)) {
+                    if (partial != null && !catalog.complete()) return partial;
+                    return fallbackWarning == null
+                            ? catalog
+                            : withWarning(catalog, fallbackWarning);
+                }
+                partial = catalog;
+                fallbackWarning = "AUTO_NATIVE_CATALOG_PARTIAL";
             } catch (CameraAdapterException ex) {
+                if ("AUTHENTICATION_FAILED".equals(ex.reasonCode())) {
+                    authenticationFailure = ex;
+                    fallbackWarning = "AUTO_NATIVE_AUTH_REJECTED";
+                    continue;
+                }
                 if (!List.of("PROTOCOL_NOT_SUPPORTED", "ONVIF_MEDIA_NOT_SUPPORTED")
                         .contains(ex.reasonCode())) throw ex;
             }
         }
+        if (partial != null) return partial;
+        if (authenticationFailure != null) throw authenticationFailure;
         throw new CameraAdapterException("PROTOCOL_NOT_SUPPORTED");
+    }
+
+    private static CameraAccessCatalog withWarning(CameraAccessCatalog catalog, String warning) {
+        var warnings = new ArrayList<>(catalog.warnings());
+        warnings.add(warning);
+        return new CameraAccessCatalog(
+                catalog.adapterType(),
+                catalog.device(),
+                catalog.channels(),
+                catalog.complete(),
+                warnings,
+                catalog.page(),
+                catalog.observedAt());
     }
 
     private CameraAccessAdapter required(String type) {

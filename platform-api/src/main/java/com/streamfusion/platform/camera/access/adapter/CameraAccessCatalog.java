@@ -1,6 +1,7 @@
 package com.streamfusion.platform.camera.access.adapter;
 
 import java.net.URI;
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -12,7 +13,23 @@ public record CameraAccessCatalog(
         List<Channel> channels,
         boolean complete,
         List<String> warnings,
-        Page page) {
+        Page page,
+        Instant observedAt) {
+    public CameraAccessCatalog(
+            String adapterType,
+            Device device,
+            List<Channel> channels,
+            boolean complete,
+            List<String> warnings,
+            Page page) {
+        this(adapterType, device, channels, complete, warnings, page, null);
+    }
+
+    public CameraAccessCatalog observedAt(Instant time) {
+        return new CameraAccessCatalog(
+                adapterType, device, channels, complete, warnings, page, time);
+    }
+
     public CameraAccessCatalog(
             String adapterType,
             Device device,
