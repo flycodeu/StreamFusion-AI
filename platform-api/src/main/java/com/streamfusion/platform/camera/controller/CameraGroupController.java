@@ -43,6 +43,12 @@ public class CameraGroupController {
         return R.success(groups.page(parentId, name, page, size));
     }
 
+    @Operation(summary = "查询可见分组及必要祖先，最多1000组")
+    @GetMapping("/camera-groups/tree")
+    public R<java.util.List<CameraGroupVo>> tree() {
+        return R.success(groups.visibleTree());
+    }
+
     @Operation(summary = "查询视频分组详情")
     @GetMapping("/camera-groups/{id}")
     public R<CameraGroupVo> get(@PathVariable String id, HttpServletResponse response) {

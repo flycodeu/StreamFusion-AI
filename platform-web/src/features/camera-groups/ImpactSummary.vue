@@ -12,7 +12,7 @@ defineProps<{ impact: Impact }>()
     <p>
       获权账户 {{ impact.gainedUserCount }}，失权账户 {{ impact.lostUserCount
       }}<span v-if="impact.affectedCameraCount !== null"
-        >，涉及相机 {{ impact.affectedCameraCount }}</span
+        >，涉及通道 {{ impact.affectedCameraCount }} 个</span
       >。
     </p>
     <p>确认有效至 {{ formatDateTime(impact.expiresAt) }}。分组或授权变化后需重新确认。</p>

@@ -1,5 +1,5 @@
 import { request } from '../client'
-import { empty, id, page } from '../parse'
+import { empty, id, page, list, object, integer, string } from '../parse'
 import { parseGroup, parseImpact } from './types'
 import type { CameraGroup } from './types'
 export interface GroupQuery {
@@ -13,6 +13,51 @@ export interface GroupInput {
   parentId: string | null
   sortOrder: number
   remark: string | null
+}
+export async function getGroupTree() {
+  return (
+    await request({
+      path: '/camera-groups/tree',
+      method: 'GET',
+      successStatus: 200,
+      decode: (v) => list(v, parseGroup),
+    })
+  ).data
+}
+export async function previewDeviceMove(groupKey: string, targetGroupId: string) {
+  if (!/^[dc][1-9][0-9]{0,18}$/.test(groupKey)) throw new Error('groupKey')
+  return (
+    await request({
+      path: `/cameras/devices/${groupKey}/move-preview`,
+      method: 'POST',
+      body: { targetGroupId: id(targetGroupId) },
+      successStatus: 200,
+      decode: (v) => {
+        const row = object(v)
+        return {
+          groupKey: string(row.groupKey),
+          impact: parseImpact(row.impact),
+          placements: list(row.placements, (p) => {
+            const item = object(p)
+            return {
+              groupPath: string(item.groupPath),
+              channelCount: integer(item.channelCount),
+            }
+          }),
+        }
+      },
+    })
+  ).data
+}
+export async function moveDevice(groupKey: string, targetGroupId: string, confirmation: string) {
+  if (!/^[dc][1-9][0-9]{0,18}$/.test(groupKey)) throw new Error('groupKey')
+  await request({
+    path: `/cameras/devices/${groupKey}/move`,
+    method: 'POST',
+    body: { targetGroupId: id(targetGroupId), confirmation },
+    successStatus: 200,
+    decode: empty,
+  })
 }
 export async function getGroups(query: GroupQuery) {
   return (

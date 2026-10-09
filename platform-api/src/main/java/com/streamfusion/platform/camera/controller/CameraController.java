@@ -7,6 +7,7 @@ import com.streamfusion.platform.camera.pojo.dto.CameraProfileUpdateDto;
 import com.streamfusion.platform.camera.pojo.dto.CameraQueryDto;
 import com.streamfusion.platform.camera.pojo.dto.CameraUpdateDto;
 import com.streamfusion.platform.camera.pojo.vo.CameraDeviceGroupVo;
+import com.streamfusion.platform.camera.pojo.vo.CameraDeviceMovePreviewVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraImpactVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraProfileVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraVo;
@@ -62,6 +63,32 @@ public class CameraController {
     public R<PageResultVo<CameraVo>> deviceChannels(
             @PathVariable String groupKey, @ParameterObject @ModelAttribute CameraQueryDto query) {
         return R.success(service.deviceChannels(groupKey, query));
+    }
+
+    @Schema(description = "整台设备全部通道的移组请求")
+    public record DeviceMoveDto(
+            @Schema(description = "目标视频分组ID") String targetGroupId,
+            @Schema(description = "预览返回的确认凭据；提交时必填") String confirmation) {}
+
+    @PostMapping("/devices/{groupKey}/move-preview")
+    @Operation(summary = "预览设备全部通道移组的授权影响")
+    public R<CameraDeviceMovePreviewVo> deviceMovePreview(
+            @PathVariable String groupKey, @RequestBody DeviceMoveDto input) {
+        return R.success(groups.deviceMovePreview(groupKey, input.targetGroupId()));
+    }
+
+    @PostMapping("/devices/{groupKey}/move")
+    @Operation(summary = "在一个事务中移动设备全部通道")
+    public R<Void> deviceMove(
+            @PathVariable String groupKey,
+            @RequestBody DeviceMoveDto input,
+            HttpServletRequest request) {
+        groups.moveDevice(
+                groupKey,
+                input.targetGroupId(),
+                input.confirmation(),
+                AuditContextDto.from(request));
+        return R.success();
     }
 
     @GetMapping("/{cameraId}")

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { formError as validationError } from '../camera/form'
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElTreeSelect } from 'element-plus'
-import { getGroups } from '../../api/camera-groups/api'
+import { getGroupTree } from '../../api/camera-groups/api'
+import type { CameraGroup } from '../../api/camera-groups/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
+import { groupTree } from './tree'
 
 const props = defineProps<{
   selectedLabel?: string
@@ -13,71 +14,44 @@ const props = defineProps<{
   disabled?: boolean
 }>()
 const model = defineModel<string | null>({ required: true, set: (value) => value || null })
-const initialId = model.value
-const error = ref<unknown>(null),
-  captureScope = usePageScope()
-const cached = computed(() =>
-  model.value && model.value === initialId
-    ? [{ value: model.value, label: props.selectedLabel || model.value }]
-    : [],
-)
-interface TreeNode {
-  level: number
-  data: { value?: string }
-}
-interface TreeOption {
-  value: string
-  label: string
-  leaf: boolean
-}
-async function load(node: TreeNode, resolve: (items: TreeOption[]) => void) {
+const groups = ref<CameraGroup[]>([]),
+  loading = ref(false),
+  error = ref<unknown>(null)
+const captureScope = usePageScope()
+const nodes = computed(() => groupTree(groups.value, props.excludeId))
+onMounted(async () => {
   const active = captureScope()
-  error.value = null
+  loading.value = true
   try {
-    const items: TreeOption[] = []
-    for (let page = 1; page <= 10; page++) {
-      const result = await getGroups({
-        parentId: node.level ? node.data.value : undefined,
-        page,
-        size: 100,
-      })
-      if (!active()) return resolve([])
-      items.push(
-        ...result.items
-          .filter((row) => row.groupId !== props.excludeId)
-          .map((row) => ({ value: row.groupId, label: row.name, leaf: !row.hasChildren })),
-      )
-      if (page * result.size >= result.total) return resolve(items)
-    }
-    throw validationError('分组选项超出单层加载范围，请收窄分组层级。')
+    const result = await getGroupTree()
+    if (active()) groups.value = result
   } catch (cause) {
     if (active()) error.value = cause
-    resolve([])
+  } finally {
+    if (active()) loading.value = false
   }
-}
+})
 </script>
-
 <template>
   <div class="group-select">
     <ElTreeSelect
       v-model="model"
-      lazy
-      :load="load"
-      node-key="value"
+      :data="nodes"
+      node-key="groupId"
       check-strictly
-      :props="{ label: 'label', children: 'children', isLeaf: 'leaf' }"
-      :cache-data="cached"
+      filterable
+      :props="{ label: 'name', children: 'children' }"
+      :render-after-expand="false"
       :clearable="clearable"
-      :disabled="disabled"
+      :disabled="disabled || loading"
       placeholder="选择视频分组"
     />
     <RequestError :error="error" />
   </div>
 </template>
-
 <style scoped>
 .group-select {
   width: 100%;
-  min-width: 200px;
+  min-width: 0;
 }
 </style>

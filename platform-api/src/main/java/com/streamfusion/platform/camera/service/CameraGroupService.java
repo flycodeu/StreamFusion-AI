@@ -6,6 +6,7 @@ import com.streamfusion.platform.audit.pojo.dto.AuditContextDto;
 import com.streamfusion.platform.audit.service.AuditService;
 import com.streamfusion.platform.camera.mapper.*;
 import com.streamfusion.platform.camera.pojo.dto.CameraGroupWriteDto;
+import com.streamfusion.platform.camera.pojo.entity.CameraChannelEntity;
 import com.streamfusion.platform.camera.pojo.entity.CameraGroupEntity;
 import com.streamfusion.platform.camera.pojo.vo.*;
 import com.streamfusion.platform.common.exception.*;
@@ -24,6 +25,7 @@ public class CameraGroupService {
     public record CameraPlacement(long cameraId, long version, Long groupId, String lifecycle) {}
 
     private final CameraGroupMapper groups;
+    private final CameraChannelMapper channels;
     private final CameraScopeMapper scopes;
     private final CameraAccessService access;
     private final CameraCryptoService crypto;
@@ -156,6 +158,22 @@ public class CameraGroupService {
                 page,
                 size,
                 rows.size());
+    }
+
+    @Transactional(readOnly = true)
+    public List<CameraGroupVo> visibleTree() {
+        var actor = access.readActor();
+        var tree = tree();
+        var visibility = access.visibility(actor);
+        Set<Long> visible = new HashSet<>();
+        if (actor.superAdmin()) tree.all().forEach(g -> visible.add(g.getId()));
+        else for (Long gid : scopes.visibleGroups(visibility)) visible.addAll(tree.ancestors(gid));
+        var counts = visibleCounts(tree, visibility);
+        var observedAt = clock.instant();
+        return tree.all().stream()
+                .filter(g -> visible.contains(g.getId()))
+                .map(g -> vo(g, tree, visible, counts, observedAt))
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -317,6 +335,194 @@ public class CameraGroupService {
                 count,
                 groupImpact(tree, gid, target),
                 confirmation("GROUP_MOVE", actor, gid, ver, target, "", tree));
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public CameraDeviceMovePreviewVo deviceMovePreview(String groupKey, String targetGroupId) {
+        var actor = access.lockActor();
+        access.requireSuper(actor);
+        var members = deviceMembers(groupKey);
+        long target = id(targetGroupId);
+        var tree = tree();
+        tree.require(target);
+        Map<Long, Long> placements = new LinkedHashMap<>();
+        for (var row : members) {
+            validateTransition(row.getGroupId(), row.getLifecycle(), target, movedLifecycle(row));
+            placements.merge(row.getGroupId() == null ? 0L : row.getGroupId(), 1L, Long::sum);
+        }
+        var origins =
+                placements.entrySet().stream()
+                        .map(
+                                e ->
+                                        new CameraDeviceMovePreviewVo.Placement(
+                                                e.getKey() == 0 ? null : str(e.getKey()),
+                                                e.getKey() == 0 ? "待归档" : tree.path(e.getKey()),
+                                                e.getValue()))
+                        .toList();
+        String token =
+                confirmation(
+                        "DEVICE_MOVE",
+                        actor,
+                        id(groupKey.substring(1)),
+                        0,
+                        target,
+                        membershipProof(groupKey, members),
+                        tree);
+        return new CameraDeviceMovePreviewVo(
+                groupKey,
+                origins,
+                impact(
+                        null,
+                        null,
+                        target,
+                        "",
+                        origins.size() == 1 ? origins.getFirst().groupPath() : "多个分组",
+                        tree.path(target),
+                        members.size(),
+                        deviceImpact(members, tree, target),
+                        token));
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void moveDevice(
+            String groupKey, String targetGroupId, String token, AuditContextDto context) {
+        var actor = access.lockActor();
+        access.requireSuper(actor);
+        var members = deviceMembers(groupKey);
+        long target = id(targetGroupId);
+        var tree = tree();
+        tree.require(target);
+        verify(
+                "DEVICE_MOVE",
+                actor,
+                id(groupKey.substring(1)),
+                0,
+                target,
+                membershipProof(groupKey, members),
+                token,
+                tree);
+        for (var row : members) {
+            String state = movedLifecycle(row);
+            validateTransition(row.getGroupId(), row.getLifecycle(), target, state);
+            if (Objects.equals(row.getGroupId(), target) && row.getLifecycle().equals(state))
+                continue;
+            VersionCounter.requireIncrementable(row.getVersion());
+            int changed =
+                    channels.update(
+                            null,
+                            new LambdaUpdateWrapper<CameraChannelEntity>()
+                                    .eq(CameraChannelEntity::getId, row.getId())
+                                    .eq(CameraChannelEntity::getVersion, row.getVersion())
+                                    .set(CameraChannelEntity::getGroupId, target)
+                                    .set(CameraChannelEntity::getLifecycle, state)
+                                    .set(CameraChannelEntity::getVersion, row.getVersion() + 1)
+                                    .set(CameraChannelEntity::getUpdatedAt, now())
+                                    .set(CameraChannelEntity::getUpdatedBy, actor.userId()));
+            if (changed != 1) throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
+        }
+        audit.record(
+                actor.userId(),
+                groupKey.startsWith("d") ? "CAMERA_DEVICE" : "CAMERA",
+                id(groupKey.substring(1)),
+                "CAMERA_DEVICE_MOVE",
+                "SUCCESS",
+                null,
+                context,
+                Map.of(
+                        "code",
+                        groupKey,
+                        "afterGroupId",
+                        str(target),
+                        "cameraIdsSummary",
+                        members.size() + " 个通道"));
+    }
+
+    private List<CameraChannelEntity> deviceMembers(String groupKey) {
+        if (groupKey == null || !groupKey.matches("[dc][1-9][0-9]{0,18}")) throw invalid();
+        long key = id(groupKey.substring(1));
+        var query = new LambdaQueryWrapper<CameraChannelEntity>();
+        if (groupKey.charAt(0) == 'd') query.eq(CameraChannelEntity::getDeviceId, key);
+        else query.eq(CameraChannelEntity::getId, key).isNull(CameraChannelEntity::getDeviceId);
+        var rows =
+                channels.selectList(
+                        query.orderByAsc(CameraChannelEntity::getId).last("LIMIT 10001"));
+        bounded(rows.size());
+        if (rows.isEmpty()) throw BusinessException.error(ErrorCode.NOT_FOUND);
+        return rows;
+    }
+
+    private String membershipProof(String groupKey, List<CameraChannelEntity> rows) {
+        return crypto.sign(
+                "device-placement",
+                List.of(
+                        groupKey,
+                        rows.stream()
+                                .map(
+                                        c ->
+                                                List.of(
+                                                        c.getId(),
+                                                        c.getVersion(),
+                                                        str(c.getGroupId()),
+                                                        c.getLifecycle()))
+                                .toList()));
+    }
+
+    private static String movedLifecycle(CameraChannelEntity row) {
+        return "PENDING_ASSIGNMENT".equals(row.getLifecycle()) ? "ENABLED" : row.getLifecycle();
+    }
+
+    private Map<String, Object> deviceImpact(
+            List<CameraChannelEntity> members, CameraGroupTree tree, long target) {
+        Map<Long, Set<Long>> groupUsers = new HashMap<>(), directUsers = new HashMap<>();
+        var inherited =
+                scopes.groupGrantsForImpact(
+                        tree.all().stream().map(CameraGroupEntity::getId).toList());
+        bounded(inherited.size());
+        for (var grant : inherited)
+            groupUsers
+                    .computeIfAbsent(grant.getTargetId(), x -> new HashSet<>())
+                    .add(grant.getUserId());
+        var direct =
+                scopes.directGrantsForImpact(
+                        members.stream().map(CameraChannelEntity::getId).toList());
+        bounded(direct.size());
+        for (var grant : direct)
+            directUsers
+                    .computeIfAbsent(grant.getTargetId(), x -> new HashSet<>())
+                    .add(grant.getUserId());
+        Set<Long> gained = new HashSet<>(), lost = new HashSet<>();
+        for (var member : members) {
+            var row = new CameraChannelScopeRow();
+            row.setId(member.getId());
+            row.setGroupId(member.getGroupId());
+            Set<Long> before =
+                    "ENABLED".equals(member.getLifecycle())
+                            ? usersFromMaps(tree, row, groupUsers, directUsers)
+                            : new HashSet<>();
+            row.setGroupId(target);
+            Set<Long> after =
+                    "ENABLED".equals(movedLifecycle(member))
+                            ? usersFromMaps(tree, row, groupUsers, directUsers)
+                            : new HashSet<>();
+            var plus = new HashSet<>(after);
+            plus.removeAll(before);
+            gained.addAll(plus);
+            var minus = new HashSet<>(before);
+            minus.removeAll(after);
+            lost.addAll(minus);
+        }
+        var affected = new HashSet<>(gained);
+        affected.addAll(lost);
+        var admins = access.superAdminIds(affected);
+        gained.removeAll(admins);
+        lost.removeAll(admins);
+        return Map.of(
+                "gainedUserCount",
+                gained.size(),
+                "lostUserCount",
+                lost.size(),
+                "computedAt",
+                clock.instant());
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)

@@ -117,6 +117,13 @@ public class CameraAssetService {
         Actor actor = access.readActor();
         var filter = queryFilter(query);
         var page = channels.pageDeviceGroups(query.toPage(), filter, access.visibility(actor));
+        var paths =
+                groups.paths(
+                        page.getRecords().stream()
+                                .map(row -> row.getGroupId())
+                                .filter(Objects::nonNull)
+                                .distinct()
+                                .toList());
         return PageResultVo.from(
                 page,
                 page.getRecords().stream()
@@ -134,7 +141,11 @@ public class CameraAssetService {
                                                 row.getChannelCount(),
                                                 row.getEnabledCount(),
                                                 row.getDisabledCount(),
-                                                row.getPendingCount()))
+                                                row.getPendingCount(),
+                                                row.getGroupCount(),
+                                                row.getGroupCount() == 1
+                                                        ? paths.get(row.getGroupId())
+                                                        : null))
                         .toList());
     }
 

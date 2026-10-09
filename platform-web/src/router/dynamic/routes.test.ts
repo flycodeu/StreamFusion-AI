@@ -37,6 +37,32 @@ function directory(children: MenuRoute[], values: Partial<MenuRoute> = {}): Menu
 }
 
 describe('backend menu route assembly', () => {
+  it('merges legacy camera group navigation while preserving old links and PAGE grants', () => {
+    const camera = page({ componentKey: '/camera/Manage' })
+    const groups = page({
+      id: '1103',
+      name: '视频分组',
+      path: '/camera/groups',
+      routeName: 'CameraGroups',
+      componentKey: '/camera-group/Manage',
+    })
+    const both = buildMenuRoutes([directory([camera, groups])], ['camera'], () => cameraPage)
+    expect(both.navigation[0]?.children).toHaveLength(1)
+    expect(both.records).toHaveLength(2)
+    expect(both.records[1]?.redirect).toEqual({ name: 'page:camera:manage' })
+    const onlyGroup = buildMenuRoutes([directory([groups])], ['camera'], () => cameraPage)
+    expect(onlyGroup.navigation[0]?.children[0]).toMatchObject({
+      title: '相机管理',
+      path: '/camera/groups',
+    })
+    expect(onlyGroup.records[0]?.redirect).toBeUndefined()
+    const hiddenCamera = buildMenuRoutes(
+      [directory([{ ...camera, visible: false }, groups])],
+      ['camera'],
+      () => cameraPage,
+    )
+    expect(hiddenCamera.navigation[0]?.children[0]?.path).toBe('/camera/groups')
+  })
   it('preserves server navigation order without classifying translated directory titles', () => {
     const menus = [
       directory([page()], { id: '1100', name: '视频管理' }),

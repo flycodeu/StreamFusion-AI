@@ -78,5 +78,34 @@ export function buildMenuRoutes(
         ? [{ id: node.id, title: node.name, icon: node.icon, path: node.path, children: [] }]
         : []
     })
-  return { records, navigation: visit(menus) }
+  const navigation = visit(menus)
+  // Old installations may still grant the separate group PAGE. Keep its route,
+  // but show only one workspace entry when the camera PAGE is also visible.
+  const camera = records.find(
+    (r) => r.meta?.moduleKey === 'camera' && r.meta?.componentPath === '/camera/Manage',
+  )
+  const legacy = new Set(
+    records
+      .filter(
+        (r) => r.meta?.moduleKey === 'camera' && r.meta?.componentPath === '/camera-group/Manage',
+      )
+      .map((r) => String(r.meta?.menuId)),
+  )
+  const isVisible = (nodes: MenuNavigation[], id: unknown): boolean =>
+    nodes.some((n) => n.id === id || isVisible(n.children, id))
+  const hasCamera = camera && isVisible(navigation, camera.meta?.menuId)
+  const merge = (nodes: MenuNavigation[]): MenuNavigation[] =>
+    nodes.flatMap((node) => {
+      if (legacy.has(node.id)) return hasCamera ? [] : [{ ...node, title: '相机管理' }]
+      if (!node.path) {
+        const children = merge(node.children)
+        return children.length ? [{ ...node, children }] : []
+      }
+      return [node]
+    })
+  if (hasCamera)
+    for (const record of records) {
+      if (legacy.has(String(record.meta?.menuId))) record.redirect = { name: camera.name }
+    }
+  return { records, navigation: merge(navigation) }
 }

@@ -12,7 +12,7 @@ public record CameraImpactVo(
         @Schema(description = "相机提交后的生命周期，视频组移组时为空字符串") String targetLifecycle,
         @Schema(description = "原视频组路径") String fromPath,
         @Schema(description = "目标视频组路径") String toPath,
-        @Schema(description = "此次变更涉及的相机数量") long affectedCameraCount,
+        @Schema(description = "此次变更涉及的通道数量，字段名保留兼容") long affectedCameraCount,
         @Schema(description = "数据范围变化人数摘要：gainedUserCount、lostUserCount及computedAt，不代表观看人数")
                 Map<String, Object> authorizationImpact,
         @Schema(description = "绑定当前账户会话、对象版本和影响状态的确认凭据") String confirmation,

@@ -8,6 +8,7 @@ import { usePageScope } from '../../composables/usePageScope'
 import { connectionLabel, lifecycleLabels, streamLabel } from './form'
 import DetailDialog from './DetailDialog.vue'
 import PlacementDialog from './PlacementDialog.vue'
+import DeviceMoveDialog from './DeviceMoveDialog.vue'
 
 const props = defineProps<{ device: CameraDeviceGroup; canManage: boolean }>()
 const emit = defineEmits<{ close: []; changed: [] }>()
@@ -22,7 +23,8 @@ const channels = ref<Camera[]>([]),
   error = ref<unknown>(null),
   detailError = ref<unknown>(null)
 const editingId = ref<string | null>(null)
-const placement = ref<{ cameraId: string; action: 'move' | 'enable' | 'disable' } | null>(null)
+const placement = ref<{ cameraId: string; action: 'enable' | 'disable' } | null>(null)
+const moving = ref(false)
 const selected = computed(() => channels.value.find((item) => item.cameraId === selectedId.value))
 const busy = computed(() => loading.value || detailLoading.value || deleting.value)
 const captureScope = usePageScope()
@@ -84,10 +86,11 @@ async function changed() {
 }
 async function placed() {
   placement.value = null
+  moving.value = false
   await changed()
 }
 function close() {
-  if (!deleting.value && !editingId.value && !placement.value) emit('close')
+  if (!deleting.value && !editingId.value && !placement.value && !moving.value) emit('close')
 }
 async function remove() {
   if (busy.value || !camera.value || !props.canManage) return
@@ -114,7 +117,7 @@ onMounted(load)
 
 <template>
   <ElDrawer
-    :model-value="!editingId && !placement"
+    :model-value="!editingId && !placement && !moving"
     title="相机详情"
     size="var(--camera-card-width)"
     class="camera-device-card"
@@ -149,6 +152,7 @@ onMounted(load)
         <dd>{{ device.sourceDisplayName }}</dd>
       </div>
     </dl>
+    <ElButton v-if="canManage" :disabled="busy" @click="moving = true">移动整台相机</ElButton>
     <RequestError :error="error" />
     <section v-loading="loading" class="channel-section" aria-label="相机通道">
       <div class="section-heading">
@@ -231,11 +235,6 @@ onMounted(load)
             >
             <template v-if="canManage">
               <ElButton
-                :disabled="busy"
-                @click="placement = { cameraId: camera.cameraId, action: 'move' }"
-                >{{ camera.lifecycle === 'PENDING_ASSIGNMENT' ? '归档' : '移组' }}</ElButton
-              >
-              <ElButton
                 v-if="camera.lifecycle !== 'PENDING_ASSIGNMENT'"
                 :disabled="busy"
                 @click="
@@ -273,6 +272,7 @@ onMounted(load)
     @close="placement = null"
     @saved="placed"
   />
+  <DeviceMoveDialog v-if="moving" :device="device" @close="moving = false" @saved="placed" />
 </template>
 
 <style>

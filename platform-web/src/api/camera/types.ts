@@ -53,6 +53,8 @@ export interface CameraDeviceGroup {
   enabledCount: number
   disabledCount: number
   pendingCount: number
+  groupCount?: number | null
+  groupPath?: string | null
 }
 export function parseDeviceGroup(value: unknown): CameraDeviceGroup {
   const row = object(value),
@@ -71,6 +73,8 @@ export function parseDeviceGroup(value: unknown): CameraDeviceGroup {
     enabledCount: integer(row.enabledCount),
     disabledCount: integer(row.disabledCount),
     pendingCount: integer(row.pendingCount),
+    groupCount: row.groupCount == null ? null : integer(row.groupCount),
+    groupPath: optionalString(row.groupPath),
   }
 }
 export interface CameraProfile {

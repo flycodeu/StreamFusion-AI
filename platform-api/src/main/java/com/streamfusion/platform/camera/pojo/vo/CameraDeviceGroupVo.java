@@ -15,4 +15,6 @@ public record CameraDeviceGroupVo(
         @Schema(description = "当前筛选及授权范围内的通道总数") long channelCount,
         @Schema(description = "当前筛选及授权范围内已启用的通道数") long enabledCount,
         @Schema(description = "当前筛选及授权范围内已停用的通道数") long disabledCount,
-        @Schema(description = "当前筛选及授权范围内待归档的通道数") long pendingCount) {}
+        @Schema(description = "当前筛选及授权范围内待归档的通道数") long pendingCount,
+        @Schema(description = "当前可见通道的归属数量，待归档也计为一种归属") long groupCount,
+        @Schema(description = "仅有一个已归档分组时的完整路径，其余为空", nullable = true) String groupPath) {}

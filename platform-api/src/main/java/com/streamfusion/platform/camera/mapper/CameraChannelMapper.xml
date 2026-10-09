@@ -56,6 +56,7 @@
             d.manufacturer,d.model,s.name AS source_display_name,
             s.adapter_type AS source_type,s.connection_category,
             COUNT(*) AS channel_count,
+            MIN(c.group_id) AS group_id, COUNT(DISTINCT COALESCE(c.group_id,0)) AS group_count,
             SUM(CASE WHEN c.lifecycle='ENABLED' THEN 1 ELSE 0 END) AS enabled_count,
             SUM(CASE WHEN c.lifecycle='DISABLED' THEN 1 ELSE 0 END) AS disabled_count,
             SUM(CASE WHEN c.lifecycle='PENDING_ASSIGNMENT' THEN 1 ELSE 0 END) AS pending_count

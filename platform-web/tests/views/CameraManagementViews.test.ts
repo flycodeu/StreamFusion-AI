@@ -10,6 +10,7 @@ import ScopeManage from '../../src/views/camera-scope/Manage.vue'
 import CreateDialog from '../../src/features/camera/CreateDialog.vue'
 import DetailDialog from '../../src/features/camera/DetailDialog.vue'
 import DeviceDetailPanel from '../../src/features/camera/DeviceDetailPanel.vue'
+import DeviceMoveDialog from '../../src/features/camera/DeviceMoveDialog.vue'
 import ProfileEditor from '../../src/features/camera/ProfileEditor.vue'
 import PlacementDialog from '../../src/features/camera/PlacementDialog.vue'
 import ManualCreateDialog from '../../src/features/camera/ManualCreateDialog.vue'
@@ -52,6 +53,12 @@ const api = vi.hoisted(() => ({
   getScopeGroups: vi.fn(),
   getScopeCameras: vi.fn(),
   getGroups: vi.fn(),
+  getGroupTree: vi.fn(),
+  previewDeviceMove: vi.fn(),
+  moveDevice: vi.fn(),
+  createGroup: vi.fn(),
+  updateGroup: vi.fn(),
+  deleteGroup: vi.fn(),
   previewCameraMove: vi.fn(),
   previewCameraLifecycle: vi.fn(),
   confirm: vi.fn(),
@@ -96,6 +103,13 @@ vi.mock('element-plus', async () => {
   )
   return {
     ...simple,
+    ElTree: defineComponent({
+      inheritAttrs: false,
+      setup(_, { attrs, expose }) {
+        expose({ filter: () => {}, setCurrentKey: () => {} })
+        return () => h('ElTree', attrs)
+      },
+    }),
     vLoading: {},
     ElMessage: { success: api.success },
     ElMessageBox: { confirm: api.confirm },
@@ -328,6 +342,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   clearIdentity()
   api.getCameraOptions.mockResolvedValue({ canManageShared: true, manualStorageReady: true })
+  api.getGroupTree.mockResolvedValue([])
   api.getAccessOptions.mockResolvedValue({
     ready: true,
     methods: ['RTSP'],
@@ -416,6 +431,61 @@ afterEach(() => {
 })
 
 describe('camera management interaction boundaries', () => {
+  it('keeps the complete tree while selecting a group and can return from pending to all', async () => {
+    const rootGroup = {
+      groupId: '30',
+      parentId: null,
+      name: '厂区',
+      sortOrder: 0,
+      version: '0',
+      visibleCameraCount: 2,
+    }
+    const child = { ...rootGroup, groupId: '31', parentId: '30', name: '车间' }
+    api.getGroupTree.mockResolvedValue([rootGroup, child])
+    const root = await mount(CameraManage)
+    const tree = nodes(root).find((n) => n.type === 'ElTree')!
+    expect(tree.props.data).toMatchObject([{ groupId: '30', children: [{ groupId: '31' }] }])
+    ;(tree.props.onNodeClick as (v: unknown) => void)(child)
+    await settle()
+    expect(api.getCameraDevices).toHaveBeenLastCalledWith(
+      expect.objectContaining({ groupId: '31', includeDescendants: true, page: 1 }),
+    )
+    expect(text(root)).toContain('厂区 / 车间')
+    await click(root, '待归档')
+    expect(api.getCameraDevices).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lifecycle: 'PENDING_ASSIGNMENT', groupId: undefined }),
+    )
+    await click(root, '全部相机')
+    expect(api.getCameraDevices).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lifecycle: undefined, groupId: undefined }),
+    )
+    expect(nodes(root).some((n) => n.type === 'ElButton' && text(n) === '预览')).toBe(false)
+  })
+
+  it('moves a device once using the server total rather than a filtered channel count', async () => {
+    api.previewDeviceMove.mockResolvedValue({
+      groupKey: 'd100',
+      placements: [{ groupPath: '原区域', channelCount: 25 }],
+      impact: { ...impact, affectedCameraCount: 25 },
+    })
+    api.moveDevice.mockResolvedValue(undefined)
+    const saved = vi.fn()
+    const root = await mount(DeviceMoveDialog, {
+      device: { ...device, channelCount: 1 },
+      onSaved: saved,
+    })
+    const tree = nodes(root).find((n) => n.type === 'ElTree')!
+    ;(tree.props.onNodeClick as (v: unknown) => void)({ groupId: '30' })
+    await settle()
+    await click(root, '下一步：确认影响')
+    expect(api.previewDeviceMove).toHaveBeenCalledWith('d100', '30')
+    expect(text(root)).toContain('25 个通道')
+    await click(root, '确认移动全部通道')
+    expect(api.moveDevice).toHaveBeenCalledExactlyOnceWith('d100', '30', 'proof')
+    expect(api.updateCamera).not.toHaveBeenCalled()
+    expect(saved).toHaveBeenCalledOnce()
+  })
+
   it.each([false, true])(
     'protects pending connection details from search or reuse exit: %s',
     async (exitReuse) => {

@@ -18,4 +18,6 @@ public class CameraDeviceGroupRow {
     private long enabledCount;
     private long disabledCount;
     private long pendingCount;
+    private Long groupId;
+    private long groupCount;
 }
