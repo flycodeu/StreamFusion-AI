@@ -10,6 +10,8 @@ CREATE TABLE camera_device (
     external_device_ref VARCHAR(512) NULL COMMENT '上游原始设备标识，不含秘密',
     device_type VARCHAR(16) NOT NULL DEFAULT 'UNKNOWN' COMMENT 'IPC/NVR/DVR/ENCODER/UNKNOWN',
     source_name VARCHAR(128) NULL COMMENT '上游设备名称',
+    local_name VARCHAR(128) NULL COMMENT '本地显示名称，空时沿用来源名称',
+    remark VARCHAR(500) NULL COMMENT '本地设备备注',
     manufacturer VARCHAR(128) NULL COMMENT '观测制造商',
     model VARCHAR(128) NULL COMMENT '观测型号',
     serial_number VARCHAR(128) NULL COMMENT '设备序列号',

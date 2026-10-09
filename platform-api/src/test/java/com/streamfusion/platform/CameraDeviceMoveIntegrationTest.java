@@ -55,6 +55,12 @@ class CameraDeviceMoveIntegrationTest extends CameraTestSupport {
         var auth = admin();
         String key = device(auth, 25), old = group(auth, "原区域"), target = group(auth, "目标区域");
         jdbc.update("UPDATE camera_channel SET group_id=?,lifecycle='DISABLED' WHERE id=801", old);
+        var placements = read("/cameras/devices/" + key + "/placements", auth);
+        assertThat(placements).hasSize(2);
+        assertThat(placements.get(0).path("groupId").asText()).isEqualTo(old);
+        assertThat(placements.get(0).path("groupPath").asText()).isEqualTo("原区域");
+        assertThat(placements.get(1).path("groupId").isNull()).isTrue();
+        assertThat(placements.get(1).path("channelCount").asInt()).isEqualTo(24);
         var preview =
                 write(
                         post("/cameras/devices/" + key + "/move-preview"),
@@ -198,6 +204,15 @@ class CameraDeviceMoveIntegrationTest extends CameraTestSupport {
                 Map.of("version", "0", "groupIds", List.of(), "cameraIds", List.of("801")),
                 200);
         var worker = login("TreeViewer", "Initial1!");
+        mvc.perform(get("/cameras/devices/d701/placements").session(worker.session()))
+                .andExpect(
+                        org.springframework.test.web.servlet.result.MockMvcResultMatchers.status()
+                                .isForbidden());
+        mvc.perform(get("/camera-devices/701").session(worker.session()))
+                .andExpect(
+                        org.springframework.test.web.servlet.result.MockMvcResultMatchers.status()
+                                .isForbidden());
+        write(put("/camera-devices/701"), worker, Map.of("version", "0", "localName", "越权改名"), 403);
         var tree = read("/camera-groups/tree", worker);
         assertThat(tree).hasSize(2);
         for (var node : tree) {

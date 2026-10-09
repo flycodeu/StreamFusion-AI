@@ -56,6 +56,25 @@ export interface CameraDeviceGroup {
   groupCount?: number | null
   groupPath?: string | null
 }
+export interface CameraDeviceInfo {
+  deviceId: string
+  name: string
+  localName: string | null
+  sourceName: string | null
+  remark: string | null
+  version: string
+}
+export function parseDeviceInfo(value: unknown): CameraDeviceInfo {
+  const row = object(value)
+  return {
+    deviceId: id(row.deviceId),
+    name: string(row.name),
+    localName: optionalString(row.localName),
+    sourceName: optionalString(row.sourceName),
+    remark: optionalString(row.remark),
+    version: id(row.version),
+  }
+}
 export function parseDeviceGroup(value: unknown): CameraDeviceGroup {
   const row = object(value),
     groupKey = string(row.groupKey)

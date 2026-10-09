@@ -20,6 +20,8 @@ public class CameraDeviceEntity {
     private String externalDeviceRef;
     private String deviceType;
     private String sourceName;
+    private String localName;
+    private String remark;
     private String manufacturer;
     private String model;
     private String serialNumber;

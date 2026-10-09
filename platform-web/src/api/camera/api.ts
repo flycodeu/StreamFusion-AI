@@ -1,6 +1,6 @@
 import { request } from '../client'
 import { boolean, empty, id, object, page } from '../parse'
-import { parseCamera, parseProfile, parseDeviceGroup } from './types'
+import { parseCamera, parseProfile, parseDeviceGroup, parseDeviceInfo } from './types'
 import type {
   Camera,
   ManualCameraCreate,
@@ -146,6 +146,34 @@ export async function getDeviceChannels(groupKey: string, query: CameraSearch) {
       params: query,
       successStatus: 200,
       decode: (v) => page(v, parseCamera),
+    })
+  ).data
+}
+export async function getCameraDevice(deviceId: string) {
+  return (
+    await request({
+      path: `/camera-devices/${id(deviceId)}`,
+      method: 'GET',
+      successStatus: 200,
+      decode: parseDeviceInfo,
+    })
+  ).data
+}
+export async function updateCameraDevice(
+  deviceId: string,
+  input: {
+    version: string
+    localName?: string | null
+    remark?: string | null
+  },
+) {
+  return (
+    await request({
+      path: `/camera-devices/${id(deviceId)}`,
+      method: 'PUT',
+      body: input,
+      successStatus: 200,
+      decode: parseDeviceInfo,
     })
   ).data
 }

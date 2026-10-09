@@ -10,7 +10,7 @@
             <when test="type == 'IP_BLOCK'">SELECT id, source_ip AS name, NULL AS code FROM sys_ip_block</when>
             <when test="type == 'CAMERA'">SELECT id, name, NULL AS code FROM camera_channel</when>
             <when test="type == 'CAMERA_PROFILE'">SELECT id, label AS name, NULL AS code FROM camera_stream_profile</when>
-            <when test="type == 'CAMERA_DEVICE'">SELECT id, source_name AS name, NULL AS code FROM camera_device</when>
+            <when test="type == 'CAMERA_DEVICE'">SELECT id, COALESCE(local_name,source_name) AS name, NULL AS code FROM camera_device</when>
             <when test="type == 'CAMERA_SOURCE'">SELECT id, name, NULL AS code FROM camera_source</when>
             <when test="type == 'CAMERA_GROUP'">SELECT id, name, NULL AS code FROM camera_group</when>
             <when test="type == 'CAMERA_SCOPE'">SELECT id, COALESCE(NULLIF(nickname,''), username) AS name, username AS code FROM sys_user</when>

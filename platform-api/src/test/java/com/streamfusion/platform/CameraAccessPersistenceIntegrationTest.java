@@ -34,6 +34,11 @@ class CameraAccessPersistenceIntegrationTest extends CameraTestSupport {
         String source = imported.path("sourceId").asText();
         String camera = imported.path("cameras").get(0).path("cameraId").asText();
         var asset = read("/cameras/" + camera, auth);
+        write(
+                put("/camera-devices/" + asset.path("deviceId").asText()),
+                auth,
+                Map.of("version", "0", "localName", "本地设备名称", "remark", "本地设备备注"),
+                200);
         String profile = asset.path("profiles").get(0).path("streamProfileId").asText();
         var local = new LinkedHashMap<String, Object>();
         local.put("version", "0");
@@ -72,7 +77,9 @@ class CameraAccessPersistenceIntegrationTest extends CameraTestSupport {
         assertThat(row.get("PARAMETERS_OBSERVED_AT")).isNotNull();
         assertThat(row.get("ID").toString()).isEqualTo(profile);
         assertThat(((Number) row.get("VERSION")).longValue()).isEqualTo(1L);
-        assertThat(((Number) device.get("VERSION")).longValue()).isZero();
+        assertThat(((Number) device.get("VERSION")).longValue()).isEqualTo(1L);
+        assertThat(device.get("LOCAL_NAME")).isEqualTo("本地设备名称");
+        assertThat(device.get("REMARK")).isEqualTo("本地设备备注");
         assertThat(jdbc.queryForObject("SELECT version FROM camera_channel", Long.class))
                 .isEqualTo(1L);
         assertThat(jdbc.queryForObject("SELECT name FROM camera_channel", String.class))

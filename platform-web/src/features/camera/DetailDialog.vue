@@ -101,7 +101,7 @@ async function load() {
 async function save() {
   if (saving.value || !camera.value) return
   if (!form.name.trim()) {
-    error.value = validationError('请填写相机名称。')
+    error.value = validationError('请填写通道名称。')
     return
   }
   const active = captureScope()
@@ -119,7 +119,7 @@ async function save() {
     if (!active()) return
     camera.value = result
     resetDraft()
-    ElMessage.success('相机资料已保存')
+    ElMessage.success('通道资料已保存')
     emit('changed')
   } catch (cause) {
     if (active()) error.value = cause

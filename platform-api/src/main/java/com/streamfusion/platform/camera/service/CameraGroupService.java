@@ -337,6 +337,27 @@ public class CameraGroupService {
                 confirmation("GROUP_MOVE", actor, gid, ver, target, "", tree));
     }
 
+    @Transactional(readOnly = true)
+    public List<CameraDeviceMovePreviewVo.Placement> devicePlacements(String groupKey) {
+        access.requireSuper(access.readActor());
+        return devicePlacements(deviceMembers(groupKey), tree());
+    }
+
+    private List<CameraDeviceMovePreviewVo.Placement> devicePlacements(
+            List<CameraChannelEntity> members, CameraGroupTree tree) {
+        Map<Long, Long> placements = new LinkedHashMap<>();
+        for (var row : members)
+            placements.merge(row.getGroupId() == null ? 0L : row.getGroupId(), 1L, Long::sum);
+        return placements.entrySet().stream()
+                .map(
+                        e ->
+                                new CameraDeviceMovePreviewVo.Placement(
+                                        e.getKey() == 0 ? null : str(e.getKey()),
+                                        e.getKey() == 0 ? "待归档" : tree.path(e.getKey()),
+                                        e.getValue()))
+                .toList();
+    }
+
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public CameraDeviceMovePreviewVo deviceMovePreview(String groupKey, String targetGroupId) {
         var actor = access.lockActor();
@@ -345,20 +366,10 @@ public class CameraGroupService {
         long target = id(targetGroupId);
         var tree = tree();
         tree.require(target);
-        Map<Long, Long> placements = new LinkedHashMap<>();
         for (var row : members) {
             validateTransition(row.getGroupId(), row.getLifecycle(), target, movedLifecycle(row));
-            placements.merge(row.getGroupId() == null ? 0L : row.getGroupId(), 1L, Long::sum);
         }
-        var origins =
-                placements.entrySet().stream()
-                        .map(
-                                e ->
-                                        new CameraDeviceMovePreviewVo.Placement(
-                                                e.getKey() == 0 ? null : str(e.getKey()),
-                                                e.getKey() == 0 ? "待归档" : tree.path(e.getKey()),
-                                                e.getValue()))
-                        .toList();
+        var origins = devicePlacements(members, tree);
         String token =
                 confirmation(
                         "DEVICE_MOVE",

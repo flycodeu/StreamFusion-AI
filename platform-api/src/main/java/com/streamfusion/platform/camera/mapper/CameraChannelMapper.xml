@@ -31,10 +31,10 @@
         ORDER BY c.created_at DESC,c.id DESC
     </select>
     <sql id="deviceGroupKey">CASE WHEN c.device_id IS NULL THEN CONCAT('c',c.id) ELSE CONCAT('d',c.device_id) END</sql>
-    <sql id="deviceGroupName">CASE WHEN c.device_id IS NULL THEN c.name WHEN s.connection_category='DEVICE' THEN s.name ELSE COALESCE(NULLIF(d.source_name,''),CONCAT('设备 ',d.id)) END</sql>
+    <sql id="deviceGroupName">CASE WHEN c.device_id IS NULL THEN c.name ELSE COALESCE(NULLIF(d.local_name,''),CASE WHEN s.connection_category='DEVICE' THEN s.name ELSE COALESCE(NULLIF(d.source_name,''),CONCAT('设备 ',d.id)) END) END</sql>
     <sql id="deviceFilters">
         <if test="filter.name != null">
-            AND (LOWER(c.name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!' OR LOWER(s.name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!' OR LOWER(d.source_name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!')
+            AND (LOWER(c.name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!' OR LOWER(s.name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!' OR LOWER(d.source_name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!' OR LOWER(d.local_name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!')
         </if>
         <if test="filter.sourceId != null">AND c.source_id=#{filter.sourceId}</if>
         <if test="filter.adapterType != null">AND s.adapter_type=#{filter.adapterType}</if>

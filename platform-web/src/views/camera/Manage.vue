@@ -32,6 +32,7 @@ import DeviceDetailPanel from '../../features/camera/DeviceDetailPanel.vue'
 import GroupTree from '../../features/camera-groups/GroupTree.vue'
 import GroupEditor from '../../features/camera-groups/GroupEditor.vue'
 import DeviceMoveDialog from '../../features/camera/DeviceMoveDialog.vue'
+import DeviceEditor from '../../features/camera/DeviceEditor.vue'
 import { getGroupTree, deleteGroup } from '../../api/camera-groups/api'
 import type { CameraGroup } from '../../api/camera-groups/types'
 
@@ -70,6 +71,13 @@ const creating = ref<'manual' | 'scan' | 'platform' | 'rtsp' | null>(null),
   importTasksOpen = ref(false),
   storageReady = ref(true)
 const selectedDevice = ref<CameraDeviceGroup | null>(null)
+const editingDevice = ref<CameraDeviceGroup | null>(null)
+async function deviceSaved(name: string) {
+  if (selectedDevice.value?.groupKey === editingDevice.value?.groupKey && selectedDevice.value)
+    selectedDevice.value = { ...selectedDevice.value, name }
+  editingDevice.value = null
+  await refresh()
+}
 const columns = useColumns('camera-device-workspace', [
   'name',
   'group',
@@ -185,8 +193,16 @@ async function moved() {
   selectedDevice.value = null
   await refresh()
 }
-async function removeGroup() {
-  const group = selectedGroup.value
+function groupAction(action: 'create' | 'edit' | 'delete', group: CameraGroup) {
+  if (!canManage.value || groupDeleting.value) return
+  if (action === 'delete') void removeGroup(group)
+  else
+    groupEditor.value =
+      action === 'create'
+        ? { group: null, parentId: group.groupId }
+        : { group, parentId: group.parentId }
+}
+async function removeGroup(group: CameraGroup) {
   if (!group || groupDeleting.value || !canManage.value) return
   const active = captureScope()
   groupDeleting.value = true
@@ -235,28 +251,13 @@ onMounted(refresh)
         :groups="groups"
         show-pending
         :pending="pendingOnly"
+        :manageable="canManage"
+        :disabled="groupDeleting"
+        @action="groupAction"
         @update:model-value="selectGroup"
         @pending="selectPending"
         @all="selectGroup(null)"
       />
-      <div v-if="canManage && selectedGroup" class="group-maintenance">
-        <span class="selected-group-label">{{ selectedGroup.name }}</span>
-        <ElButton
-          link
-          type="primary"
-          :disabled="groupDeleting"
-          @click="groupEditor = { group: null, parentId: groupId }"
-          >新建子组</ElButton
-        >
-        <ElButton
-          link
-          type="primary"
-          :disabled="groupDeleting"
-          @click="groupEditor = { group: selectedGroup, parentId: selectedGroup.parentId }"
-          >编辑</ElButton
-        >
-        <ElButton link type="danger" :disabled="groupDeleting" @click="removeGroup">删除</ElButton>
-      </div>
     </aside>
     <section class="camera-list-pane" aria-label="相机管理">
       <header class="camera-list-heading">
@@ -379,7 +380,7 @@ onMounted(refresh)
           >
           <ElTableColumn
             label="操作"
-            :width="canManage ? 170 : 100"
+            :width="canManage ? 220 : 100"
             fixed="right"
             class-name="table-actions-column"
             :resizable="false"
@@ -391,6 +392,13 @@ onMounted(refresh)
                 >
                 <ElButton v-if="canManage" link type="primary" @click="movingDevice = asDevice(row)"
                   >移动分组</ElButton
+                >
+                <ElButton
+                  v-if="canManage"
+                  link
+                  type="primary"
+                  @click="editingDevice = asDevice(row)"
+                  >编辑</ElButton
                 >
               </TableActions>
             </template>
@@ -427,6 +435,9 @@ onMounted(refresh)
               <ElButton v-if="canManage" link type="primary" @click="movingDevice = row"
                 >移动分组</ElButton
               >
+              <ElButton v-if="canManage" link type="primary" @click="editingDevice = row"
+                >编辑</ElButton
+              >
             </TableActions>
           </article>
           <p v-if="!loading && !rows.length" class="mobile-empty">暂无可访问设备</p>
@@ -447,6 +458,12 @@ onMounted(refresh)
       :parent-id="groupEditor.parentId"
       @close="groupEditor = null"
       @saved="groupsChanged"
+    />
+    <DeviceEditor
+      v-if="editingDevice"
+      :device="editingDevice"
+      @close="editingDevice = null"
+      @saved="deviceSaved"
     />
     <DeviceMoveDialog
       v-if="movingDevice"
@@ -529,22 +546,6 @@ onMounted(refresh)
   flex-shrink: 0;
   color: var(--text-secondary);
   font-size: 13px;
-}
-.group-maintenance {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding-top: 16px;
-  margin-top: 16px;
-  border-top: 1px solid var(--border-subtle);
-}
-.selected-group-label {
-  flex-basis: 100%;
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-.group-maintenance :deep(.el-button + .el-button) {
-  margin-left: 0;
 }
 .mobile-group-toggle {
   display: none;

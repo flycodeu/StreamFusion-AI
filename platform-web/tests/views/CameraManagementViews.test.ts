@@ -11,6 +11,7 @@ import CreateDialog from '../../src/features/camera/CreateDialog.vue'
 import DetailDialog from '../../src/features/camera/DetailDialog.vue'
 import DeviceDetailPanel from '../../src/features/camera/DeviceDetailPanel.vue'
 import DeviceMoveDialog from '../../src/features/camera/DeviceMoveDialog.vue'
+import DeviceEditor from '../../src/features/camera/DeviceEditor.vue'
 import ProfileEditor from '../../src/features/camera/ProfileEditor.vue'
 import PlacementDialog from '../../src/features/camera/PlacementDialog.vue'
 import ManualCreateDialog from '../../src/features/camera/ManualCreateDialog.vue'
@@ -36,6 +37,8 @@ const api = vi.hoisted(() => ({
   getCameras: vi.fn(),
   getCameraDevices: vi.fn(),
   getDeviceChannels: vi.fn(),
+  getCameraDevice: vi.fn(),
+  updateCameraDevice: vi.fn(),
   getCamera: vi.fn(),
   createCamera: vi.fn(),
   updateCamera: vi.fn(),
@@ -54,6 +57,7 @@ const api = vi.hoisted(() => ({
   getScopeCameras: vi.fn(),
   getGroups: vi.fn(),
   getGroupTree: vi.fn(),
+  getDevicePlacements: vi.fn(),
   previewDeviceMove: vi.fn(),
   moveDevice: vi.fn(),
   createGroup: vi.fn(),
@@ -83,12 +87,14 @@ vi.mock('element-plus', async () => {
     'ElSelect',
     'ElSwitch',
     'ElTag',
-    'ElTreeSelect',
     'ElCheckbox',
     'ElDescriptions',
     'ElDescriptionsItem',
     'ElTabs',
     'ElTabPane',
+    'ElDropdown',
+    'ElDropdownMenu',
+    'ElDropdownItem',
   ]
   const simple = Object.fromEntries(
     controls.map((name) => [
@@ -103,6 +109,19 @@ vi.mock('element-plus', async () => {
   )
   return {
     ...simple,
+    ElTreeSelect: defineComponent({
+      inheritAttrs: false,
+      setup(_, { attrs, slots }) {
+        return () =>
+          h(
+            'ElTreeSelect',
+            attrs,
+            ((attrs.data as Record<string, unknown>[]) ?? []).map((data) =>
+              slots.default?.({ data }),
+            ),
+          )
+      },
+    }),
     ElTree: defineComponent({
       inheritAttrs: false,
       setup(_, { attrs, expose }) {
@@ -343,6 +362,23 @@ beforeEach(() => {
   clearIdentity()
   api.getCameraOptions.mockResolvedValue({ canManageShared: true, manualStorageReady: true })
   api.getGroupTree.mockResolvedValue([])
+  api.getDevicePlacements.mockResolvedValue([
+    { groupId: null, groupPath: '待归档', channelCount: 2 },
+  ])
+  api.getCameraDevice.mockResolvedValue({
+    deviceId: '100',
+    name: '设备一',
+    localName: null,
+    remark: '北门',
+    version: '4',
+  })
+  api.updateCameraDevice.mockResolvedValue({
+    deviceId: '100',
+    name: '入口相机',
+    localName: '入口相机',
+    remark: '北门',
+    version: '5',
+  })
   api.getAccessOptions.mockResolvedValue({
     ready: true,
     methods: ['RTSP'],
@@ -463,9 +499,12 @@ describe('camera management interaction boundaries', () => {
   })
 
   it('moves a device once using the server total rather than a filtered channel count', async () => {
+    api.getDevicePlacements.mockResolvedValue([
+      { groupId: '31', groupPath: '原区域', channelCount: 25 },
+    ])
     api.previewDeviceMove.mockResolvedValue({
       groupKey: 'd100',
-      placements: [{ groupPath: '原区域', channelCount: 25 }],
+      placements: [{ groupId: '31', groupPath: '原区域', channelCount: 25 }],
       impact: { ...impact, affectedCameraCount: 25 },
     })
     api.moveDevice.mockResolvedValue(undefined)
@@ -475,6 +514,11 @@ describe('camera management interaction boundaries', () => {
       onSaved: saved,
     })
     const tree = nodes(root).find((n) => n.type === 'ElTree')!
+    expect(api.getDevicePlacements).toHaveBeenCalledExactlyOnceWith('d100')
+    expect(text(root)).toContain('原区域')
+    expect(text(root)).toContain('25 个通道')
+    expect(tree.props['current-node-key']).toBe('31')
+    expect(button(root, '下一步：确认影响').props.disabled).toBe(true)
     ;(tree.props.onNodeClick as (v: unknown) => void)({ groupId: '30' })
     await settle()
     await click(root, '下一步：确认影响')
@@ -1333,9 +1377,62 @@ describe('camera management interaction boundaries', () => {
     })
     const root = await mount(ProfileEditor, { cameraId: '10', profileId: '20' })
     expect(text(root)).toContain('自动识别为主码流')
+    expect(field(root, '用途', 'ElSelect').props.modelValue).toBe('MAIN')
     await setField(root, '码流标签', '业务名称')
     await click(root, '保存')
     expect(api.updateProfile.mock.calls[0]![2]).not.toHaveProperty('usageHint')
+  })
+  it('saves an explicit usage correction after prefilling an inferred role', async () => {
+    api.getCamera.mockResolvedValue({
+      ...camera,
+      profiles: [
+        {
+          ...profile,
+          usageHint: 'UNKNOWN',
+          classification: { usageHint: 'MAIN', origin: 'NAME_RULE' },
+        },
+      ],
+    })
+    const root = await mount(ProfileEditor, { cameraId: '10', profileId: '20' })
+    await setField(root, '用途', 'SUB', 'ElSelect')
+    await click(root, '保存')
+    expect(api.updateProfile).toHaveBeenCalledWith('10', '20', { version: '2', usageHint: 'SUB' })
+  })
+  it('edits the device name with its own version while preserving channels and the shared source', async () => {
+    const saved = vi.fn()
+    const root = await mount(DeviceEditor, { device, onSaved: saved })
+    expect(field(root, '相机名称').props.modelValue).toBe('设备一')
+    expect(field(root, '备注').props.modelValue).toBe('北门')
+    await setField(root, '相机名称', '入口相机')
+    await click(root, '保存')
+    expect(api.updateCameraDevice).toHaveBeenCalledExactlyOnceWith('100', {
+      version: '4',
+      localName: '入口相机',
+    })
+    expect(api.updateCamera).not.toHaveBeenCalled()
+    expect(api.updateSource).not.toHaveBeenCalled()
+    expect(saved).toHaveBeenCalledWith('入口相机')
+  })
+  it('keeps unidentified camera edits on their single record and protects unsaved changes', async () => {
+    const closed = vi.fn()
+    const root = await mount(DeviceEditor, {
+      device: { ...device, groupKey: 'c10', identified: false },
+      onClose: closed,
+    })
+    await setField(root, '相机名称', '独立相机')
+    api.confirm.mockRejectedValueOnce('cancel')
+    await click(root, '取消')
+    expect(closed).not.toHaveBeenCalled()
+    await click(root, '保存')
+    expect(api.updateCamera).toHaveBeenCalledWith('10', { version: '3', name: '独立相机' })
+    expect(api.updateCameraDevice).not.toHaveBeenCalled()
+  })
+  it('blocks moving when current device placements cannot be read', async () => {
+    api.getDevicePlacements.mockRejectedValue(new ApiRequestError('NETWORK_ERROR', '读取归属失败'))
+    const root = await mount(DeviceMoveDialog, { device })
+    expect(button(root, '下一步：确认影响').props.disabled).toBe(true)
+    expect(nodes(root).some((n) => n.type === 'ElTree')).toBe(false)
+    expect(api.previewDeviceMove).not.toHaveBeenCalled()
   })
   it('shows only local edits to ordinary camera managers and no unavailable operations', async () => {
     api.getCameraOptions.mockResolvedValue({ canManageShared: false })

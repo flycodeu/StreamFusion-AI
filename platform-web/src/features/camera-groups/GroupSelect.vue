@@ -19,6 +19,15 @@ const groups = ref<CameraGroup[]>([]),
   error = ref<unknown>(null)
 const captureScope = usePageScope()
 const nodes = computed(() => groupTree(groups.value, props.excludeId))
+const expanded = computed(() => {
+  const keys = nodes.value.map((g) => g.groupId)
+  let current = groups.value.find((g) => g.groupId === model.value)
+  for (let depth = 0; current && depth < 16; depth++) {
+    keys.push(current.groupId)
+    current = groups.value.find((g) => g.groupId === current?.parentId)
+  }
+  return keys
+})
 onMounted(async () => {
   const active = captureScope()
   loading.value = true
@@ -39,13 +48,21 @@ onMounted(async () => {
       :data="nodes"
       node-key="groupId"
       check-strictly
+      show-checkbox
+      check-on-click-node
+      :expand-on-click-node="false"
       filterable
-      :props="{ label: 'name', children: 'children' }"
+      :props="{ label: 'path', children: 'children' }"
       :render-after-expand="false"
+      :default-expanded-keys="expanded"
       :clearable="clearable"
       :disabled="disabled || loading"
       placeholder="选择视频分组"
-    />
+    >
+      <template #default="{ data }">
+        <span :title="data.path">{{ data.name }}</span>
+      </template>
+    </ElTreeSelect>
     <RequestError :error="error" />
   </div>
 </template>

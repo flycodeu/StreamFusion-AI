@@ -14,6 +14,25 @@ export interface GroupInput {
   sortOrder: number
   remark: string | null
 }
+function parsePlacement(value: unknown) {
+  const row = object(value)
+  return {
+    groupId: row.groupId == null ? null : id(row.groupId),
+    groupPath: string(row.groupPath),
+    channelCount: integer(row.channelCount),
+  }
+}
+export async function getDevicePlacements(groupKey: string) {
+  if (!/^[dc][1-9][0-9]{0,18}$/.test(groupKey)) throw new Error('groupKey')
+  return (
+    await request({
+      path: `/cameras/devices/${groupKey}/placements`,
+      method: 'GET',
+      successStatus: 200,
+      decode: (v) => list(v, parsePlacement),
+    })
+  ).data
+}
 export async function getGroupTree() {
   return (
     await request({
@@ -37,13 +56,7 @@ export async function previewDeviceMove(groupKey: string, targetGroupId: string)
         return {
           groupKey: string(row.groupKey),
           impact: parseImpact(row.impact),
-          placements: list(row.placements, (p) => {
-            const item = object(p)
-            return {
-              groupPath: string(item.groupPath),
-              channelCount: integer(item.channelCount),
-            }
-          }),
+          placements: list(row.placements, parsePlacement),
         }
       },
     })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElButton, ElDrawer, ElMessageBox, ElPagination, ElTag, vLoading } from 'element-plus'
 import * as api from '../../api/camera/api'
 import type { Camera, CameraDeviceGroup } from '../../api/camera/types'
@@ -9,6 +9,7 @@ import { connectionLabel, lifecycleLabels, streamLabel } from './form'
 import DetailDialog from './DetailDialog.vue'
 import PlacementDialog from './PlacementDialog.vue'
 import DeviceMoveDialog from './DeviceMoveDialog.vue'
+import DeviceEditor from './DeviceEditor.vue'
 
 const props = defineProps<{ device: CameraDeviceGroup; canManage: boolean }>()
 const emit = defineEmits<{ close: []; changed: [] }>()
@@ -25,6 +26,20 @@ const channels = ref<Camera[]>([]),
 const editingId = ref<string | null>(null)
 const placement = ref<{ cameraId: string; action: 'enable' | 'disable' } | null>(null)
 const moving = ref(false)
+const editingDevice = ref(false),
+  editedName = ref<string | null>(null)
+const deviceName = computed(() => editedName.value ?? props.device.name)
+watch(
+  () => props.device.name,
+  () => {
+    editedName.value = null
+  },
+)
+async function deviceSaved(name: string) {
+  editedName.value = name
+  editingDevice.value = false
+  await changed()
+}
 const selected = computed(() => channels.value.find((item) => item.cameraId === selectedId.value))
 const busy = computed(() => loading.value || detailLoading.value || deleting.value)
 const captureScope = usePageScope()
@@ -90,7 +105,14 @@ async function placed() {
   await changed()
 }
 function close() {
-  if (!deleting.value && !editingId.value && !placement.value && !moving.value) emit('close')
+  if (
+    !deleting.value &&
+    !editingId.value &&
+    !placement.value &&
+    !moving.value &&
+    !editingDevice.value
+  )
+    emit('close')
 }
 async function remove() {
   if (busy.value || !camera.value || !props.canManage) return
@@ -117,7 +139,7 @@ onMounted(load)
 
 <template>
   <ElDrawer
-    :model-value="!editingId && !placement && !moving"
+    :model-value="!editingId && !placement && !moving && !editingDevice"
     title="相机详情"
     size="var(--camera-card-width)"
     class="camera-device-card"
@@ -135,7 +157,7 @@ onMounted(load)
         </svg>
       </div>
       <div>
-        <h2>{{ device.name }}</h2>
+        <h2>{{ deviceName }}</h2>
         <p>
           {{ [device.manufacturer, device.model].filter(Boolean).join(' · ') || '设备资料未获取' }}
         </p>
@@ -152,7 +174,10 @@ onMounted(load)
         <dd>{{ device.sourceDisplayName }}</dd>
       </div>
     </dl>
-    <ElButton v-if="canManage" :disabled="busy" @click="moving = true">移动整台相机</ElButton>
+    <div v-if="canManage" class="device-actions">
+      <ElButton :disabled="busy" @click="editingDevice = true">编辑相机</ElButton>
+      <ElButton :disabled="busy" @click="moving = true">移动分组</ElButton>
+    </div>
     <RequestError :error="error" />
     <section v-loading="loading" class="channel-section" aria-label="相机通道">
       <div class="section-heading">
@@ -260,7 +285,7 @@ onMounted(load)
     v-if="editingId"
     :key="editingId"
     :camera-id="editingId"
-    :device-name="device.name"
+    :device-name="deviceName"
     :can-manage="canManage"
     @close="editingId = null"
     @changed="changed"
@@ -272,7 +297,18 @@ onMounted(load)
     @close="placement = null"
     @saved="placed"
   />
-  <DeviceMoveDialog v-if="moving" :device="device" @close="moving = false" @saved="placed" />
+  <DeviceEditor
+    v-if="editingDevice"
+    :device="device"
+    @close="editingDevice = false"
+    @saved="deviceSaved"
+  />
+  <DeviceMoveDialog
+    v-if="moving"
+    :device="{ ...device, name: deviceName }"
+    @close="moving = false"
+    @saved="placed"
+  />
 </template>
 
 <style>
@@ -405,6 +441,15 @@ onMounted(load)
   border-top: 1px solid var(--el-border-color-lighter);
   padding-top: var(--camera-card-section-gap);
   min-height: 110px;
+}
+.device-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: var(--camera-card-section-gap);
+}
+.device-actions .el-button {
+  margin-left: 0;
 }
 .section-heading {
   display: flex;

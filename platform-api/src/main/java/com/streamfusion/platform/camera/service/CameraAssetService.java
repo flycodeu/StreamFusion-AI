@@ -11,6 +11,7 @@ import com.streamfusion.platform.camera.mapper.CameraChannelMapper;
 import com.streamfusion.platform.camera.mapper.CameraDeviceMapper;
 import com.streamfusion.platform.camera.mapper.CameraProfileMapper;
 import com.streamfusion.platform.camera.pojo.dto.CameraCreateDto;
+import com.streamfusion.platform.camera.pojo.dto.CameraDeviceUpdateDto;
 import com.streamfusion.platform.camera.pojo.dto.CameraInitialProfileDto;
 import com.streamfusion.platform.camera.pojo.dto.CameraLocatorDto;
 import com.streamfusion.platform.camera.pojo.dto.CameraProfileCreateDto;
@@ -582,6 +583,43 @@ public class CameraAssetService {
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
+    public CameraDeviceVo updateDevice(
+            String deviceId, CameraDeviceUpdateDto input, AuditContextDto context) {
+        if (input == null) throw invalid("device");
+        Actor actor = access.lockActor();
+        access.requireSuper(actor);
+        long id = DecimalInput.id(deviceId, "deviceId");
+        var device = requireDevice(id, true);
+        long version = DecimalInput.version(input.getVersion(), "version");
+        requireVersion(device.getVersion(), version, false);
+        String name =
+                input.isLocalNameProvided()
+                        ? CameraAssetRules.text(input.getLocalName(), 128, "localName", true)
+                        : device.getLocalName();
+        String remark =
+                input.isRemarkProvided()
+                        ? CameraAssetRules.text(input.getRemark(), 500, "remark", true)
+                        : device.getRemark();
+        if (Objects.equals(name, device.getLocalName())
+                && Objects.equals(remark, device.getRemark())) return deviceView(device);
+        VersionCounter.requireIncrementable(version);
+        requireVersionWrite(
+                devices.update(
+                        null,
+                        new LambdaUpdateWrapper<CameraDeviceEntity>()
+                                .eq(CameraDeviceEntity::getId, id)
+                                .eq(CameraDeviceEntity::getVersion, version)
+                                .set(CameraDeviceEntity::getLocalName, name)
+                                .set(CameraDeviceEntity::getRemark, remark)
+                                .set(CameraDeviceEntity::getVersion, version + 1)
+                                .set(CameraDeviceEntity::getUpdatedAt, now())
+                                .set(CameraDeviceEntity::getUpdatedBy, actor.userId())));
+        var result = deviceView(requireDevice(id, false));
+        record(actor, "CAMERA_DEVICE", id, "CAMERA_DEVICE_UPDATE", result.name(), context);
+        return result;
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public void deleteDevice(String deviceId, String requestedVersion, AuditContextDto context) {
         Actor actor = access.lockActor();
         access.requireSuper(actor);
@@ -765,7 +803,16 @@ public class CameraAssetService {
                         value.getUsageHint(), value.getUsageOrigin(), value.getSourceLabel()));
     }
 
-    private static CameraDeviceVo deviceView(CameraDeviceEntity value) {
+    private CameraDeviceVo deviceView(CameraDeviceEntity value) {
+        var source = sources.requireSource(value.getSourceId());
+        String name = value.getLocalName();
+        if (name == null || name.isBlank()) {
+            name =
+                    "DEVICE".equals(source.getConnectionCategory())
+                            ? source.getName()
+                            : value.getSourceName();
+            if (name == null || name.isBlank()) name = "设备 " + value.getId();
+        }
         return new CameraDeviceVo(
                 value.getId().toString(),
                 value.getSourceId().toString(),
@@ -773,6 +820,9 @@ public class CameraAssetService {
                 value.getExternalDeviceRef(),
                 value.getDeviceType(),
                 value.getSourceName(),
+                name,
+                value.getLocalName(),
+                value.getRemark(),
                 value.getManufacturer(),
                 value.getModel(),
                 value.getSerialNumber(),

@@ -1,6 +1,7 @@
 package com.streamfusion.platform.camera.controller;
 
 import com.streamfusion.platform.audit.pojo.dto.AuditContextDto;
+import com.streamfusion.platform.camera.pojo.dto.CameraDeviceUpdateDto;
 import com.streamfusion.platform.camera.pojo.vo.CameraDeviceVo;
 import com.streamfusion.platform.camera.service.CameraAssetService;
 import com.streamfusion.platform.common.response.R;
@@ -26,6 +27,18 @@ public class CameraDeviceController {
     @Operation(summary = "查看本地设备观测档案")
     public R<CameraDeviceVo> detail(@PathVariable String deviceId, HttpServletResponse response) {
         CameraDeviceVo value = service.device(deviceId);
+        response.setHeader(HttpHeaders.ETAG, VersionHeader.quote(value.version()));
+        return R.success(value);
+    }
+
+    @PutMapping("/{deviceId}")
+    @Operation(summary = "编辑设备本地名称和备注")
+    public R<CameraDeviceVo> update(
+            @PathVariable String deviceId,
+            @RequestBody CameraDeviceUpdateDto input,
+            HttpServletRequest request,
+            HttpServletResponse response) {
+        CameraDeviceVo value = service.updateDevice(deviceId, input, AuditContextDto.from(request));
         response.setHeader(HttpHeaders.ETAG, VersionHeader.quote(value.version()));
         return R.success(value);
     }

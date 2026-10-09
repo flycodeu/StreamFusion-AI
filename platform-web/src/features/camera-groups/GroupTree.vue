@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { ElButton, ElInput, ElTree } from 'element-plus'
 import type { CameraGroup } from '../../api/camera-groups/types'
 import { groupTree, type GroupNode } from './tree'
+import GroupNodeActions from './GroupNodeActions.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -12,20 +13,29 @@ const props = withDefaults(
     pending?: boolean
     disabled?: boolean
     counts?: boolean
+    manageable?: boolean
+    selection?: boolean
+    placements?: { groupId: string | null; channelCount: number }[]
   }>(),
   { showAll: true, counts: true },
 )
 const model = defineModel<string | null>({ required: true })
-const emit = defineEmits<{ pending: []; all: [] }>()
+const emit = defineEmits<{
+  pending: []
+  all: []
+  action: [action: 'create' | 'edit' | 'delete', group: CameraGroup]
+}>()
 const term = ref(''),
   tree = ref<InstanceType<typeof ElTree>>()
 const nodes = computed(() => groupTree(props.groups))
 const expanded = computed(() => {
   const keys = nodes.value.flatMap((n) => [n.groupId, ...n.children.map((c) => c.groupId)])
-  let group = props.groups.find((g) => g.groupId === model.value)
-  for (let depth = 0; group && depth < 16; depth++) {
-    keys.push(group.groupId)
-    group = props.groups.find((g) => g.groupId === group?.parentId)
+  for (const id of [model.value, ...(props.placements ?? []).map((p) => p.groupId)]) {
+    let group = props.groups.find((g) => g.groupId === id)
+    for (let depth = 0; group && depth < 16; depth++) {
+      keys.push(group.groupId)
+      group = props.groups.find((g) => g.groupId === group?.parentId)
+    }
   }
   return keys
 })
@@ -84,9 +94,32 @@ function select(node: GroupNode) {
       @node-click="select"
     >
       <template #default="{ data }">
-        <span class="group-node" :title="data.path"
+        <GroupNodeActions
+          v-if="manageable"
+          :group="data"
+          :disabled="disabled"
+          @action="(action) => emit('action', action, data)"
+        >
+          <span class="group-node" :title="data.path"
+            ><span class="group-node-name">{{ data.name }}</span>
+            <small v-if="counts">{{ data.visibleCameraCount }} 通道</small></span
+          >
+        </GroupNodeActions>
+        <span v-else class="group-node" :title="data.path"
+          ><span
+            v-if="selection"
+            class="group-choice"
+            :class="{ 'is-selected': model === data.groupId }"
+            aria-hidden="true"
+            >{{ model === data.groupId ? '✓' : '' }}</span
           ><span class="group-node-name">{{ data.name }}</span
-          ><small v-if="counts">{{ data.visibleCameraCount }} 通道</small></span
+          ><small
+            v-if="placements?.some((p) => p.groupId === data.groupId)"
+            class="current-placement"
+            >当前 ·
+            {{ placements.find((p) => p.groupId === data.groupId)?.channelCount }} 通道</small
+          >
+          <small v-if="counts">{{ data.visibleCameraCount }} 通道</small></span
         >
       </template>
     </ElTree>
@@ -122,6 +155,24 @@ function select(node: GroupNode) {
   color: var(--text-secondary);
   white-space: nowrap;
   font-size: 12px;
+}
+.group-choice {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 3px;
+  font-size: 12px;
+}
+.group-choice.is-selected {
+  color: white;
+  background: var(--el-color-primary);
+  border-color: var(--el-color-primary);
+}
+.group-node .current-placement {
+  color: var(--el-color-primary);
 }
 .group-shortcuts {
   display: flex;

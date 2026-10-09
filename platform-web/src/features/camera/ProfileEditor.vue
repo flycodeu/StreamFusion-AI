@@ -68,7 +68,7 @@ onMounted(async () => {
       profile.value = selected
       Object.assign(form, {
         label: selected.label,
-        usageHint: selected.usageHint,
+        usageHint: effectiveUsage(selected),
         enabled: selected.enabled,
       })
     }
@@ -98,7 +98,7 @@ async function save() {
       const input: ProfileUpdate = {
         version: profile.value.version,
         ...(form.label.trim() !== profile.value.label ? { label: form.label.trim() } : {}),
-        ...(form.usageHint !== profile.value.usageHint ? { usageHint: form.usageHint } : {}),
+        ...(form.usageHint !== effectiveUsage(profile.value) ? { usageHint: form.usageHint } : {}),
         ...(form.enabled !== profile.value.enabled ? { enabled: form.enabled } : {}),
         ...(manual.value && replaceUrl.value
           ? { locator: { fullUrl: fullUrl.value.trim(), transport: 'TCP' as const } }
@@ -174,7 +174,7 @@ onBeforeUnmount(() => {
           :placeholder="profileId ? '' : '留空则自动命名'"
       /></ElFormItem>
       <p v-if="profile?.classification?.origin === 'NAME_RULE'" class="classification-note">
-        已自动识别为{{ usageLabel(effectiveUsage(profile)) }}；用途保持“未指定”时沿用自动识别。
+        已自动识别为{{ usageLabel(effectiveUsage(profile)) }}；修改用途后将以你的选择为准。
       </p>
       <ElFormItem label="用途"
         ><ElSelect v-model="form.usageHint"

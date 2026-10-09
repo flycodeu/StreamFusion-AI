@@ -70,6 +70,13 @@ public class CameraController {
             @Schema(description = "目标视频分组ID") String targetGroupId,
             @Schema(description = "预览返回的确认凭据；提交时必填") String confirmation) {}
 
+    @GetMapping("/devices/{groupKey}/placements")
+    @Operation(summary = "读取设备全部通道当前分组，供整机移组使用；仅超管")
+    public R<List<CameraDeviceMovePreviewVo.Placement>> devicePlacements(
+            @PathVariable String groupKey) {
+        return R.success(groups.devicePlacements(groupKey));
+    }
+
     @PostMapping("/devices/{groupKey}/move-preview")
     @Operation(summary = "预览设备全部通道移组的授权影响")
     public R<CameraDeviceMovePreviewVo> deviceMovePreview(
