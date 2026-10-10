@@ -29,7 +29,7 @@ public final class IdentitySchema {
                     "IdentitySchema only rebuilds isolated H2 databases");
         }
         String sql =
-                new ClassPathResource("sql/汇总/streamfusion-mysql.sql")
+                new ClassPathResource("sql/streamfusion-mysql.sql")
                         .getContentAsString(StandardCharsets.UTF_8);
         // Adapt the username collation to H2's case-insensitive type. Keep its UNIQUE constraint.
         // CLOB preserves JSON text; H2's JSON JDBC writes otherwise encode it as a JSON string.

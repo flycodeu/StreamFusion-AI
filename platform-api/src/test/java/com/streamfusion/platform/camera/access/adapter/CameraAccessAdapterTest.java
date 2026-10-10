@@ -698,6 +698,7 @@ class CameraAccessAdapterTest {
     void autoDoesNotTryOtherVendorsAfterActualAuthenticationRejection() {
         AtomicInteger hikCalls = new AtomicInteger();
         AtomicInteger dahuaCalls = new AtomicInteger();
+        AtomicInteger onvifCalls = new AtomicInteger();
         server.createContext(
                 "/ISAPI/System/deviceInfo",
                 exchange -> {
@@ -711,6 +712,14 @@ class CameraAccessAdapterTest {
                     dahuaCalls.incrementAndGet();
                     reply(exchange, 200, "must not call");
                 });
+        server.createContext(
+                "/onvif/device_service",
+                exchange -> {
+                    onvifCalls.incrementAndGet();
+                    // Drain the POST body before closing so the fixture reliably sends its 404.
+                    exchange.getRequestBody().readAllBytes();
+                    reply(exchange, 404, "ONVIF unavailable");
+                });
         var registry =
                 new CameraAccessAdapterRegistry(
                         List.of(
@@ -721,6 +730,7 @@ class CameraAccessAdapterTest {
                 .hasMessage("AUTHENTICATION_FAILED");
         assertThat(hikCalls.get()).isEqualTo(2);
         assertThat(dahuaCalls.get()).isZero();
+        assertThat(onvifCalls.get()).isEqualTo(1);
     }
 
     @Test

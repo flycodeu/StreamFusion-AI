@@ -1,10 +1,12 @@
 # 数据库 SQL
 
-24 份 `业务/` 逐表 SQL 是唯一维护源；`汇总/streamfusion-mysql.sql` 由 `scripts/export-sql.ps1` 生成，不手工修改。应用不自动执行 SQL，无 Flyway；初始化 SQL 不打包进应用 JAR，使用源码仓库中的汇总文件初始化数据库。
+新安装只执行本目录的 [`streamfusion-mysql.sql`](streamfusion-mysql.sql)：它包含全部24张应用表、索引、外键、约束和初始化种子，无需拼接逐表文件或执行历史升级脚本。应用不自动执行 SQL，无 Flyway；初始化 SQL 随源码交付，不打包进应用 JAR。
+
+`业务/` 的24份逐表文件仅供开发维护，是唯一结构定义来源；`scripts/export-sql.ps1` 生成完整安装文件，禁止手工修改生成结果。
 
 ## 当前结构
 
-2026-10-09 相机本地资料补充：已有库须备份并停止写入后，执行一次 `升级/20261009-camera-device-local-info.sql`，为 `camera_device` 增加可空的 `local_name`、`remark`。旧行无需回填，设备、通道和码流关系不变；初始化汇总不能作为升级脚本重放。应用启动只检查结构，不会自动升级。回退应用版本时可保留这两个可空字段，避免丢失已编辑的本地资料。
+完整安装文件已包含相机本地名称 `camera_device.local_name` 和备注 `remark`，均可空；名称为空时沿用来源名称。设备、通道和码流保持独立层级。已有数据库的处理见[已有库与菜单配置](#已有库与菜单配置)。
 
 | 数据 | 表 | 实现 |
 |---|---|---|
@@ -55,11 +57,9 @@
 | 视频管理（1100） | 相机管理（1101）、视频分组（1103） | camera |
 | 视频管理（1100） | 相机授权（1104） | camera_scope |
 
-Windows MySQL 客户端的 `SOURCE` 对中文文件路径存在兼容问题。先在仓库根目录将汇总文件复制为仅含 ASCII 的临时相对路径，再从同一目录启动客户端。该副本只是导入文件，不作为维护源；每次导入前重新复制最新汇总。替换 `YOUR_DB_USER` 为可创建专用开发数据库的账号；`-p` 会交互询问密码，密码不要写入命令：
+从仓库根目录启动 MySQL 客户端；完整 SQL 的相对路径仅含 ASCII，可直接导入。替换 `YOUR_DB_USER` 为有建库及建表权限的安装账号；`-p` 会交互询问密码，密码不要写入命令：
 
 ```powershell
-New-Item -ItemType Directory -Path .run -Force | Out-Null
-Copy-Item -LiteralPath 'platform-api/sql/汇总/streamfusion-mysql.sql' -Destination '.run/streamfusion-mysql.sql'
 mysql --default-character-set=utf8mb4 -h 127.0.0.1 -P 3306 -u YOUR_DB_USER -p
 ```
 
@@ -68,7 +68,7 @@ mysql --default-character-set=utf8mb4 -h 127.0.0.1 -P 3306 -u YOUR_DB_USER -p
 ```sql
 CREATE DATABASE streamfusion CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_as_ci;
 USE streamfusion;
-SOURCE .run/streamfusion-mysql.sql;
+SOURCE platform-api/sql/streamfusion-mysql.sql;
 ```
 
 `SOURCE` 路径相对于启动 MySQL 客户端时的目录。若该库已存在，先检查是否为空并确认用途；有任何业务表时停止，不继续导入。数据库名自定义时，同步修改后端 JDBC URL；应用账号至少需要该库的查询、新增、更新和删除权限。
@@ -97,9 +97,11 @@ SQL不创建用户，也不包含管理员密码或固定哈希。按[快速开�
 
 **逐表与汇总文件含 DROP TABLE，会删除数据，不能用于已有库升级。** 已有库应备份、核对真实结构和数据，再使用定向增量SQL。MySQL DDL 不能依靠事务回滚，代码与数据库须匹配切换。添加示例组织只执行对应INSERT和明确的用户部门关联，不能重放初始化文件。
 
-## 运行库与菜单配置
+## 已有库与菜单配置
 
-当前维护24表初始化和 `升级/20261006-cf01-ux.sql`，后者只适用于已有来源分类、尚无导航分区/整批进度字段的MANAGEMENT-07版23表库。旧camera/access/management增量已移出当前SQL目录，归档为本地历史执行材料，不作为当前安装路径。其他旧结构须单独核对；不要叠加试跑。停写、备份并恢复预演后执行当前增量，保留业务数据，移除旧接入来源PAGE及其冗余关系；详见 [CF01-MIGRATION](CF01-MIGRATION.md)。
+已有库先停止写入，备份数据库与相机密钥，再比较真实表、列、约束和数据与当前维护源。在隔离库恢复并预演经过核对的定向变更，确认旧数据和授权关系保留后才执行实际升级。MySQL DDL 隐式提交，失败后须按实际执行结果处理。交付目录不提供可叠加试跑的历史增量脚本，禁止用完整初始化文件覆盖已有数据。
+
+如果当前库仅缺少 `camera_device.local_name` 与 `remark`，所需变化是添加两列，不回填旧行、不改外键；回退应用版本可保留这两列。其他旧版本必须单独评估差异。相机密钥与网络配置见[外部配置说明](../config/README.md)。
 
 `component_key` 直接采用 `views` 下的页面路径，不再接受 `SYSTEM_*` 等旧组件别名。操作记录和服务信息的组件与默认 URL 统一为 `/monitor/Audit`、`/monitor/Server`。以下页面已包含在完整初始化中；运行期新增菜单通过管理页面完成：
 

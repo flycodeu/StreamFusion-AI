@@ -8,7 +8,6 @@ import { usePageScope } from '../../composables/usePageScope'
 import { groupTree } from './tree'
 
 const props = defineProps<{
-  selectedLabel?: string
   excludeId?: string
   clearable?: boolean
   disabled?: boolean

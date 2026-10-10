@@ -99,7 +99,7 @@
 
 管理表格使用 Element Plus 的带边框表格，拖动表头边缘可调整列宽，列显隐由公共 ColumnPicker 管理；列宽在当前页面生效。业务界面的正文不再重复显示侧栏和顶部已有的标题。
 
-操作记录和服务信息位于监控面板，页面分别为 `src/views/monitor/Audit.vue`、`src/views/monitor/Server.vue`，浏览器地址与组件路径统一为 `/monitor/Audit`、`/monitor/Server`。接口集中在 `src/api/audit/`、`src/api/server/`，使用 `/audit/page`、`/audit/{id}` 和 `/server/status`，分别需要 `audit`、`server` 模块授权。完整初始化源为 `platform-api/sql/业务/` 逐表文件，汇总由脚本生成，包含监控目录及 PAGE。现有数据库须先备份，再按实际结构和菜单差异执行定向更新；执行 SQL 与结果仅在本地 `.run` 归档，不能重跑初始化建表脚本。
+操作记录和服务信息位于监控面板，页面分别为 `src/views/monitor/Audit.vue`、`src/views/monitor/Server.vue`，浏览器地址与组件路径统一为 `/monitor/Audit`、`/monitor/Server`。接口集中在 `src/api/audit/`、`src/api/server/`，使用 `/audit/page`、`/audit/{id}` 和 `/server/status`，分别需要 `audit`、`server` 模块授权。新安装只执行 `platform-api/sql/streamfusion-mysql.sql` 完整文件，包含监控目录及 PAGE；`platform-api/sql/业务/` 逐表文件只供开发维护，完整 SQL 由脚本生成。现有数据库须先备份，再按实际结构和菜单差异执行定向更新；执行 SQL 与结果仅在本地 `.run` 归档，不能重跑初始化建表脚本。
 
 接口文档页面为 `src/views/monitor/ApiDocs.vue`，嵌入同源固定的 `public/api-docs.html`，可刷新和导出 OpenAPI JSON。文档入口检查 `api-docs` 模块授权；嵌入页只从当前站点读取 `/v3/api-docs`，不接受外部 URL。导出接口位于 `src/api/api-docs/`。页面错误统一使用 `PageState` 与 `RequestError`，先展示原因和恢复操作，再按需展开错误码、时间及请求标识。
 

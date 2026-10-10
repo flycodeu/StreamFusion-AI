@@ -96,8 +96,8 @@
         <testResources>
             <testResource><directory>src/test/resources</directory></testResource>
             <testResource>
-                <directory>sql/汇总</directory>
-                <targetPath>sql/汇总</targetPath>
+                <directory>sql</directory>
+                <targetPath>sql</targetPath>
                 <includes><include>streamfusion-mysql.sql</include></includes>
             </testResource>
         </testResources>

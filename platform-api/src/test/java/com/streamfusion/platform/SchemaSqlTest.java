@@ -214,7 +214,7 @@ class SchemaSqlTest {
 
     private void repeatDefaultSeeds() throws Exception {
         String sql =
-                new ClassPathResource("sql/汇总/streamfusion-mysql.sql")
+                new ClassPathResource("sql/streamfusion-mysql.sql")
                         .getContentAsString(StandardCharsets.UTF_8);
         for (String table : new String[] {"sys_dept", "sys_role_menu"}) {
             int start = sql.indexOf("INSERT INTO " + table + " (");

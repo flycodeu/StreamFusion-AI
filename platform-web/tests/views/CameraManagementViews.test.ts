@@ -55,7 +55,6 @@ const api = vi.hoisted(() => ({
   updateCameraScope: vi.fn(),
   getScopeGroups: vi.fn(),
   getScopeCameras: vi.fn(),
-  getGroups: vi.fn(),
   getGroupTree: vi.fn(),
   getDevicePlacements: vi.fn(),
   previewDeviceMove: vi.fn(),
@@ -453,7 +452,6 @@ beforeEach(() => {
     size: 20,
   })
   api.getScopeCameras.mockResolvedValue({ items: [], total: 0, page: 1, size: 20 })
-  api.getGroups.mockResolvedValue({ items: [], total: 0, page: 1, size: 100 })
   api.previewCameraMove.mockResolvedValue(impact)
   api.previewCameraLifecycle.mockResolvedValue(impact)
   api.confirm.mockResolvedValue('confirm')

@@ -28,6 +28,7 @@ __pycache__/
 # Local backend configuration (keep shareable examples)
 /platform-api/config/*
 !/platform-api/config/*.example
+!/platform-api/config/README.md
 
 # Generated caches, reports and local data
 .mypy_cache/

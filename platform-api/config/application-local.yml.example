@@ -4,7 +4,7 @@ platform:
   auth:
     initial-password: ${SF_AUTH_INITIAL_PASSWORD:StreamFusion@123}
   # Optional until camera writes are needed. Configure a persistent 32-byte AES key
-  # and approved outbound targets as described in sql/CF01-MIGRATION.md.
+  # and approved outbound targets as described in config/README.md.
   camera:
     active-key-id: ""
     keys: {}

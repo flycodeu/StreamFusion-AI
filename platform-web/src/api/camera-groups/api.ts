@@ -1,13 +1,7 @@
 import { request } from '../client'
-import { empty, id, page, list, object, integer, string } from '../parse'
+import { empty, id, list, object, integer, string } from '../parse'
 import { parseGroup, parseImpact } from './types'
 import type { CameraGroup } from './types'
-export interface GroupQuery {
-  parentId?: string
-  name?: string
-  page: number
-  size: number
-}
 export interface GroupInput {
   name: string
   parentId: string | null
@@ -71,27 +65,6 @@ export async function moveDevice(groupKey: string, targetGroupId: string, confir
     successStatus: 200,
     decode: empty,
   })
-}
-export async function getGroups(query: GroupQuery) {
-  return (
-    await request({
-      path: '/camera-groups',
-      method: 'GET',
-      params: { ...query },
-      successStatus: 200,
-      decode: (v) => page(v, parseGroup),
-    })
-  ).data
-}
-export async function getGroup(groupId: string) {
-  return (
-    await request({
-      path: `/camera-groups/${id(groupId)}`,
-      method: 'GET',
-      successStatus: 200,
-      decode: parseGroup,
-    })
-  ).data
 }
 export async function createGroup(input: GroupInput) {
   return (

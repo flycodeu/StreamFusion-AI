@@ -80,10 +80,7 @@ async function save() {
     <RequestError :error="error" />
     <p v-if="camera">{{ camera.name }} · 当前分组：{{ camera.groupPath || '待归档' }}</p>
     <ElForm v-if="action === 'move'" :disabled="saving || !!impact" label-width="100px"
-      ><ElFormItem label="目标分组" required
-        ><GroupSelect
-          v-model="targetGroupId"
-          :selected-label="camera?.groupPath || undefined" /></ElFormItem
+      ><ElFormItem label="目标分组" required><GroupSelect v-model="targetGroupId" /></ElFormItem
     ></ElForm>
     <ImpactSummary v-if="impact" :impact="impact" />
     <div class="placement-actions">
