@@ -13,6 +13,8 @@
 /.password-*
 *.secret
 *.enc
+*.sqlite-wal
+*.sqlite-shm
 **/controller.lock
 **/logs/
 *.key
