@@ -23,7 +23,9 @@ func pluginExecutorFixture(t *testing.T) *executor {
 	if _, e := os.Stat("/usr/bin/python3"); e != nil {
 		t.Skip("python3 required")
 	}
-	root, e := os.MkdirTemp("/opt", "sfops-plugin-test-")
+	// Hosted runners make /opt writable by ordinary users. The command fixture
+	// must live below protected ancestors, just like a real executor binary.
+	root, e := os.MkdirTemp("/var/lib", "sfops-plugin-test-")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -68,7 +70,23 @@ save()
 	if e = os.WriteFile(bin, []byte(code), 0700); e != nil {
 		t.Fatal(e)
 	}
+	if e = secureAncestors(bin); e != nil {
+		t.Fatalf("command fixture is not protected: %v", e)
+	}
 	return &executor{root: root, owner: Owner{ProtocolVersion: 1, ExecutorVersion: Version, ControllerID: uuid.NewString(), TargetID: uuid.NewString(), DockerBinary: bin, DockerSocket: "/var/run/fixture.sock"}}
+}
+
+func TestPluginExecutorRejectsWritableFixtureAncestor(t *testing.T) {
+	x := pluginExecutorFixture(t)
+	if e := os.Chmod(x.root, 0777); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := x.docker("image", "inspect", "unused"); e == nil || e.Error() != "EXECUTOR_PATH_NOT_PROTECTED" {
+		t.Fatalf("writable command ancestor was not rejected: %v", e)
+	}
+	if _, e := os.Stat(filepath.Join(x.root, "docker-state.json")); !os.IsNotExist(e) {
+		t.Fatalf("unprotected command fixture ran: %v", e)
+	}
 }
 
 func pluginTestRequest(x *executor, version, action string) Request {
