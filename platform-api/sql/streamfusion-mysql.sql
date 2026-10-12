@@ -180,7 +180,8 @@ INSERT INTO sys_menu (id, parent_id, name, type, icon, sort_order, visible, enab
 VALUES (1100, NULL, '视频管理', 'DIRECTORY', 'monitor', 0, TRUE, TRUE);
 INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, icon, sort_order, visible, enabled)
 VALUES
-    (1101, 1100, '相机管理', 'PAGE', 'CameraManage', '/camera/manage', '/camera/Manage', 'camera', 'monitor', 0, TRUE, TRUE),
+    (1105, 1100, '预览中心', 'PAGE', 'PreviewCenter', '/preview/center', '/preview/Center', 'camera', 'monitor', 0, TRUE, TRUE),
+    (1101, 1100, '相机管理', 'PAGE', 'CameraManage', '/camera/manage', '/camera/Manage', 'camera', 'monitor', 1, TRUE, TRUE),
     (1103, 1100, '视频分组', 'PAGE', 'CameraGroups', '/camera/groups', '/camera-group/Manage', 'camera', 'department', 2, TRUE, TRUE),
     (1104, 1100, '相机授权', 'PAGE', 'CameraScopes', '/camera/scopes', '/camera-scope/Manage', 'camera_scope', 'role', 3, TRUE, TRUE);
 

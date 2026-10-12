@@ -18,6 +18,7 @@ __pycache__/
 /docs/
 /platform/
 /AGENTS.md
+/AGENTS*.md
 # Local toolchains and editor metadata
 .tools/
 *.iml
@@ -47,6 +48,20 @@ test-results/
 *.db-wal
 *.sqlite
 *.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3-shm
+*.sqlite3-wal
+# Local credentials, certificates and built executables
+*.secret
+*.enc
+*.key
+*.pem
+*.p12
+*.pfx
+*.exe
+*.jar
+*.tar.gz
 *.jfr
 *.hprof
 hs_err_pid*

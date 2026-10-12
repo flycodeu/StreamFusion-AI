@@ -14,6 +14,7 @@ describe('file-based business page resolution', () => {
       '/monitor/ApiDocs',
       '/monitor/Audit',
       '/monitor/Server',
+      '/preview/Center',
       '/system/Department',
       '/system/Menu',
       '/system/Role',

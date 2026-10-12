@@ -176,6 +176,9 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, 401, "AUTH_REQUIRED", "请先登录")
 		return
 	}
+	if h.operationsRoute(w, r, auth, path) {
+		return
+	}
 	switch r.Method + " " + path {
 	case "GET /auth/me":
 		h.success(w, r, map[string]string{"id": auth.AdminID, "username": auth.Username})

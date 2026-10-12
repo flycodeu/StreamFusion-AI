@@ -15,6 +15,7 @@ import type { ServerSnapshot } from '../../api/server/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import TablePanel from '../../components/table/TablePanel.vue'
 import { formatDateTime } from '../../utils/dateTime'
+import RuntimePanel from '../../features/media-runtime/RuntimePanel.vue'
 
 defineOptions({ name: 'SystemServer' })
 const snapshot = ref<ServerSnapshot | null>(null)
@@ -117,6 +118,7 @@ onMounted(load)
         </ElDescriptions>
       </section>
     </div>
+    <RuntimePanel />
     <TablePanel>
       <template #actions><h2 class="table-section-title">项目服务</h2></template>
       <ElTable :data="snapshot?.services || []" border row-key="key" empty-text="暂无采集结果">

@@ -154,7 +154,7 @@ class MenuIntegrationTest extends SecureLoginSupport {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data").isEmpty());
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_role_menu", Integer.class))
-                .isEqualTo(10);
+                .isEqualTo(11);
         mvc.perform(get("/auth/me").session(auth.session()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.routes.length()").value(3));
@@ -190,7 +190,7 @@ class MenuIntegrationTest extends SecureLoginSupport {
                                         """))
                 .andExpect(status().isBadRequest());
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_menu", Integer.class))
-                .isEqualTo(13);
+                .isEqualTo(14);
 
         jdbc.update("DELETE FROM sys_role_menu WHERE role_id=1 AND menu_id=1004");
         mvc.perform(get("/menus").session(auth.session()))
@@ -337,7 +337,7 @@ class MenuIntegrationTest extends SecureLoginSupport {
                                 Integer.class))
                 .isZero();
         // Leave only the camera PAGE granting camera, while SUPER_ADMIN still needs that PAGE.
-        jdbc.update("DELETE FROM sys_role_menu WHERE menu_id=1103");
+        jdbc.update("DELETE FROM sys_role_menu WHERE menu_id IN (1103,1105)");
         mvc.perform(get("/camera-sources/options").session(auth.session()))
                 .andExpect(status().isOk());
         jdbc.update("DELETE FROM sys_role_menu WHERE menu_id=1101");

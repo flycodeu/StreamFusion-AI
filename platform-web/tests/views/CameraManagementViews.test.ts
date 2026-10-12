@@ -53,7 +53,7 @@ const api = vi.hoisted(() => ({
   getScopeUsers: vi.fn(),
   getCameraScope: vi.fn(),
   updateCameraScope: vi.fn(),
-  getScopeGroups: vi.fn(),
+  getScopeGroupTree: vi.fn(),
   getScopeCameras: vi.fn(),
   getGroupTree: vi.fn(),
   getDevicePlacements: vi.fn(),
@@ -124,7 +124,7 @@ vi.mock('element-plus', async () => {
     ElTree: defineComponent({
       inheritAttrs: false,
       setup(_, { attrs, expose }) {
-        expose({ filter: () => {}, setCurrentKey: () => {} })
+        expose({ filter: () => {}, setCurrentKey: () => {}, setCheckedKeys: () => {} })
         return () => h('ElTree', attrs)
       },
     }),
@@ -437,7 +437,17 @@ beforeEach(() => {
   api.getSource.mockResolvedValue(source)
   api.getScopeUsers.mockResolvedValue({
     items: [
-      { userId: '5', username: 'safety', nickname: '安全处', enabled: true, isSuperAdmin: false },
+      {
+        userId: '5',
+        username: 'safety',
+        nickname: '安全处',
+        enabled: true,
+        isSuperAdmin: false,
+        departments: [
+          { id: '2002', name: '研发部门' },
+          { id: '2003', name: '运维部门' },
+        ],
+      },
     ],
     total: 1,
     page: 1,
@@ -445,12 +455,24 @@ beforeEach(() => {
   })
   api.getCameraScope.mockResolvedValue(scope)
   api.updateCameraScope.mockResolvedValue(scope)
-  api.getScopeGroups.mockResolvedValue({
-    items: [{ groupId: '30', name: '厂区', parentId: null, hasChildren: false }],
-    total: 1,
-    page: 1,
-    size: 20,
-  })
+  api.getScopeGroupTree.mockResolvedValue([
+    {
+      groupId: '30',
+      name: '厂区',
+      parentId: null,
+      sortOrder: 0,
+      version: '0',
+      visibleCameraCount: 2,
+    },
+    {
+      groupId: '31',
+      name: '深层',
+      parentId: '30',
+      sortOrder: 0,
+      version: '0',
+      visibleCameraCount: 1,
+    },
+  ])
   api.getScopeCameras.mockResolvedValue({ items: [], total: 0, page: 1, size: 20 })
   api.previewCameraMove.mockResolvedValue(impact)
   api.previewCameraLifecycle.mockResolvedValue(impact)
@@ -1485,16 +1507,83 @@ describe('camera management interaction boundaries', () => {
     expect(api.getSources).not.toHaveBeenCalled()
   })
   it('retains full grant selections when the options only show one page', async () => {
+    api.getScopeCameras.mockResolvedValue({
+      items: [{ cameraId: '12', name: '新通道', path: '厂区 / 深层', lifecycle: 'ENABLED' }],
+      total: 100,
+      page: 1,
+      size: 20,
+    })
     const root = await mount(ScopeManage)
     await click(root, '配置范围')
     await settle()
+    const tabs = nodes(root).find((item) => item.type === 'ElTabs')!
+    ;(tabs.props['onUpdate:modelValue'] as (value: string) => void)('camera')
+    await settle()
+    const checkbox = nodes(root).find((item) => item.type === 'ElCheckbox')!
+    ;(checkbox.props['onUpdate:modelValue'] as (value: boolean) => void)(true)
+    await nextTick()
     await click(root, '保存相机范围')
     expect(api.updateCameraScope).toHaveBeenCalledWith('5', {
       version: '6',
       groupIds: ['30', '31'],
-      cameraIds: ['10', '11'],
+      cameraIds: ['10', '11', '12'],
     })
     expect(text(root)).toContain('已停用，保留授权')
+  })
+  it('shows departments and checks a parent without adding child group grants', async () => {
+    api.getCameraScope.mockResolvedValue({ ...scope, groupIds: [], groupGrants: [] })
+    const root = await mount(ScopeManage)
+    expect(text(root)).toContain('研发部门')
+    expect(text(root)).toContain('运维部门')
+    expect(text(root)).not.toContain('直接授权与分组授权取并集')
+    await click(root, '配置范围')
+    await settle()
+    const tree = nodes(root).find((item) => item.type === 'ElTree')!
+    expect(tree.props['check-strictly']).toBe('')
+    const groups = tree.props.data as { groupId: string; children: { groupId: string }[] }[]
+    expect(groups[0]!.children[0]!.groupId).toBe('31')
+    ;(tree.props.onCheck as (data: unknown, state: unknown) => void)(groups[0], {
+      checkedKeys: ['30'],
+    })
+    await nextTick()
+    await click(root, '保存相机范围')
+    expect(api.updateCameraScope).toHaveBeenCalledWith('5', {
+      version: '6',
+      groupIds: ['30'],
+      cameraIds: ['10', '11'],
+    })
+  })
+  it('keeps changes when closing is cancelled and discards only after confirmation', async () => {
+    const root = await mount(ScopeManage)
+    await click(root, '配置范围')
+    await settle()
+    const tag = nodes(root).find((item) => item.type === 'ElTag' && text(item) === '厂区 / 深层')!
+    ;(tag.props.onClose as () => void)()
+    await nextTick()
+    api.confirm.mockRejectedValueOnce('cancel')
+    await click(root, '关闭')
+    expect(nodes(root).some((item) => item.type === 'ElDialog')).toBe(true)
+    expect(text(root)).not.toContain('厂区 / 深层')
+    await click(root, '关闭')
+    expect(nodes(root).some((item) => item.type === 'ElDialog')).toBe(false)
+    expect(api.updateCameraScope).not.toHaveBeenCalled()
+  })
+  it('ignores a scope response that arrives after its dialog is closed', async () => {
+    let resolve!: (value: typeof scope) => void
+    api.getCameraScope.mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done
+      }),
+    )
+    const root = await mount(ScopeManage)
+    const opening = (button(root, '配置范围').props.onClick as () => Promise<void>)()
+    await settle()
+    await click(root, '关闭')
+    resolve(scope)
+    await opening
+    await settle()
+    expect(nodes(root).some((item) => item.type === 'ElDialog')).toBe(false)
+    expect(api.updateCameraScope).not.toHaveBeenCalled()
   })
   it('requires impact preview and explicit confirmation before assigning a camera', async () => {
     api.getCamera.mockResolvedValue({

@@ -32,8 +32,23 @@ export function send(path: string, method: string, data?: unknown) {
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
     body: data === undefined ? undefined : JSON.stringify(data),
-    signal: AbortSignal.timeout(60000),
+    signal: AbortSignal.timeout(path.endsWith("/recover") ? 300000 : 60000),
   });
+}
+export async function upload(path: string, file: File) {
+  const response = await fetch("/ops/api/v1" + path, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "X-CSRF-Token": csrf,
+    },
+    body: file,
+    signal: AbortSignal.timeout(180000),
+  });
+  const body = await response.json();
+  if (!response.ok)
+    throw new ApiError(body.msg, body.code, body.traceId, body.timestamp);
 }
 export function setCSRF(token: string) {
   csrf = token;

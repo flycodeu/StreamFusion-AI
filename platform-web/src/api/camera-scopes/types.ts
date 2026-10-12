@@ -5,13 +5,7 @@ export interface ScopeUser {
   nickname: string | null
   enabled: boolean
   isSuperAdmin: boolean
-}
-export interface ScopeGroup {
-  groupId: string
-  parentId: string | null
-  name: string
-  hasChildren: boolean
-  path: string | null
+  departments: { id: string; name: string }[]
 }
 export interface ScopeCamera {
   cameraId: string
@@ -39,16 +33,10 @@ export function parseScopeUser(value: unknown): ScopeUser {
     nickname: optionalString(row.nickname),
     enabled: boolean(row.enabled),
     isSuperAdmin: boolean(row.isSuperAdmin),
-  }
-}
-export function parseScopeGroup(value: unknown): ScopeGroup {
-  const row = object(value)
-  return {
-    groupId: id(row.groupId),
-    parentId: row.parentId == null ? null : id(row.parentId),
-    name: string(row.name),
-    hasChildren: boolean(row.hasChildren),
-    path: optionalString(row.path),
+    departments: list(row.departments ?? [], (value) => {
+      const department = object(value)
+      return { id: id(department.id), name: string(department.name) }
+    }),
   }
 }
 export function parseScopeCamera(value: unknown): ScopeCamera {

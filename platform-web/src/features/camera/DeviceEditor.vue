@@ -110,7 +110,6 @@ onMounted(load)
       <ElFormItem label="备注"
         ><ElInput v-model="form.remark" type="textarea" :rows="3" maxlength="500" show-word-limit
       /></ElFormItem>
-      <p class="device-edit-note">名称与备注保存在本平台，后续同步会保留。</p>
     </ElForm>
     <template #footer
       ><ElButton :disabled="saving" @click="close">取消</ElButton>
@@ -124,10 +123,3 @@ onMounted(load)
     >
   </ElDialog>
 </template>
-<style scoped>
-.device-edit-note {
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
-}
-</style>

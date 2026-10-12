@@ -1,6 +1,7 @@
 import { request } from '../client'
-import { id, page } from '../parse'
-import { parseCameraScope, parseScopeCamera, parseScopeGroup, parseScopeUser } from './types'
+import { id, page, list } from '../parse'
+import { parseGroup } from '../camera-groups/types'
+import { parseCameraScope, parseScopeCamera, parseScopeUser } from './types'
 export async function getScopeUsers(query: { page: number; size: number; name?: string }) {
   return (
     await request({
@@ -12,19 +13,13 @@ export async function getScopeUsers(query: { page: number; size: number; name?: 
     })
   ).data
 }
-export async function getScopeGroups(query: {
-  page: number
-  size: number
-  name?: string
-  parentId?: string
-}) {
+export async function getScopeGroupTree() {
   return (
     await request({
-      path: '/camera-scopes/group-options',
+      path: '/camera-scopes/group-options/tree',
       method: 'GET',
-      params: query,
       successStatus: 200,
-      decode: (v) => page(v, parseScopeGroup),
+      decode: (v) => list(v, parseGroup),
     })
   ).data
 }

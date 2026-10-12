@@ -31,7 +31,7 @@ done
 [[ -f $binary && ! -L $binary && -x $binary ]] || fail '二进制不存在、不可执行或为符号链接'
 binary=$(realpath "$binary")
 [[ $(sha256sum "$binary" | cut -d' ' -f1) == "$sha256" ]] || fail '二进制摘要不匹配'
-[[ $("$binary" version) == 0.1.0 ]] || fail '本安装脚本只接受0.1.0'
+[[ $("$binary" version) == 0.2.0 ]] || fail '本安装脚本只接受0.2.0'
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 && -d /run/systemd/system ]] || fail '需要Linux amd64及systemd'
 . /etc/os-release
 [[ $ID == ubuntu && $VERSION_ID == 24.04 ]] || fail '首期支持Ubuntu24.04'
@@ -43,7 +43,7 @@ done
 [[ $prefix != "$state" && $state != "$prefix/"* && $prefix != "$state/"* ]] || fail '程序和状态目录不能相互包含'
 unit="/etc/systemd/system/$name.service"
 marker="$prefix/.ops-install"
-expected=$(printf 'schema=1\nversion=0.1.0\nname=%s\nprefix=%s\nstate=%s\nport=%s\nsha256=%s' "$name" "$prefix" "$state" "$port" "$sha256")
+expected=$(printf 'schema=2\nversion=0.2.0\nname=%s\nprefix=%s\nstate=%s\nport=%s\nsha256=%s' "$name" "$prefix" "$state" "$port" "$sha256")
 if [[ -e $marker ]]; then
   [[ ! -L $marker && $(cat "$marker") == "$expected" ]] || fail '已有安装的路径、版本或归属不一致'
 elif [[ -e $prefix && -n $(find "$prefix" -mindepth 1 -maxdepth 1 -print -quit) ]] ||
@@ -86,7 +86,7 @@ if [[ -e $unit ]]; then [[ ! -L $unit && $(cat "$unit") == "$unit_text" ]] || fa
 if [[ -e $prefix/streamfusion-ops ]]; then
   [[ ! -L $prefix/streamfusion-ops && $(sha256sum "$prefix/streamfusion-ops" | cut -d' ' -f1) == "$sha256" ]] || fail '已有二进制内容发生变化'
 fi
-printf '安装计划\n版本: 0.1.0\n程序: %s\n状态: %s\n单元及账号: %s\n地址: http://127.0.0.1:%s\n摘要: %s\n' "$prefix" "$state" "$name" "$port" "$sha256"
+printf '安装计划\n版本: 0.2.0\n程序: %s\n状态: %s\n单元及账号: %s\n地址: http://127.0.0.1:%s\n摘要: %s\n' "$prefix" "$state" "$name" "$port" "$sha256"
 $apply || exit 0
 [[ $EUID == 0 ]] || fail '--apply 需要root'
 pending_binary= pending_unit= pending_password=

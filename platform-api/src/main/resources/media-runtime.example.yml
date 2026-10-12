@@ -1,0 +1,26 @@
+# Import this example through spring.config.import after adapting paths to the server.
+# The platform reads these locations; it never installs or controls external processes.
+# SF_MEDIA_RUNTIME_ROOTS is also supported: ';' separated on Windows, ':' on Linux.
+platform:
+  media-runtime:
+    cache-ttl: 15s
+    probe-timeout: 2s
+    collection-timeout: 12s
+    search-depth: 3
+    max-entries: 2000
+    max-candidates: 16
+    windows:
+      search-roots:
+        - 'D:/Media/ZLMediaKit'
+        - 'D:/Media/FFmpeg'
+      executables: []
+      zlm-configs: []
+    linux:
+      search-roots:
+        - '/opt/zlmediakit'
+        - '/opt/ffmpeg'
+      executables:
+        - '/usr/local/bin/MediaServer'
+        - '/usr/local/bin/ffmpeg'
+      zlm-configs:
+        - '/etc/zlmediakit/config.ini'

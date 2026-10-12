@@ -11,6 +11,7 @@ import com.streamfusion.platform.common.web.VersionHeader;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.*;
+import java.util.List;
 import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -27,7 +28,7 @@ public class CameraScopeController {
 
     @Operation(summary = "分页查询相机授权目标账户")
     @GetMapping("/user-options")
-    public R<PageResultVo<Map<String, Object>>> users(
+    public R<PageResultVo<CameraScopeUserVo>> users(
             @RequestParam(required = false) String name,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "100") int size) {
@@ -43,6 +44,13 @@ public class CameraScopeController {
             @RequestParam(defaultValue = "100") int size) {
         access.requireSuper(access.readActor());
         return R.success(groups.page(parentId, name, page, size));
+    }
+
+    @Operation(summary = "查询可授权视频分组树，最多1000组")
+    @GetMapping("/group-options/tree")
+    public R<List<CameraGroupVo>> groupTree() {
+        access.requireSuper(access.readActor());
+        return R.success(groups.visibleTree());
     }
 
     @Operation(summary = "分页查询可新增授权的启用相机")

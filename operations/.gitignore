@@ -16,6 +16,9 @@
 *.sqlite-wal
 *.sqlite-shm
 **/controller.lock
+**/controller.runtime.json
+**/controller.stop.json
+**/.control-*
 **/logs/
 *.key
 *.pem

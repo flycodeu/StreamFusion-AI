@@ -63,6 +63,9 @@ func (s *Store) Backup() (string, func(), error) {
 		return "", nil, err
 	}
 	m := Manifest{SchemaVersion: SchemaVersion, CreatedAt: Now(), KeyFingerprint: hashToken(string(s.Key)), Files: map[string]string{}}
+	if err = s.DB.QueryRow("PRAGMA user_version").Scan(&m.SchemaVersion); err != nil {
+		return "", nil, err
+	}
 	if err = s.DB.QueryRow("SELECT controller_id FROM controller_state WHERE id=1").Scan(&m.ControllerID); err != nil {
 		return "", nil, err
 	}
@@ -300,7 +303,7 @@ func Restore(archive, keyPath, destination string) error {
 	if err = json.Unmarshal(manifestBytes, &m); err != nil {
 		return err
 	}
-	if m.SchemaVersion != SchemaVersion || m.KeyFingerprint != hashToken(string(key)) || len(m.Files)+1 != len(files) || m.Files["controller.sqlite"] == "" {
+	if m.SchemaVersion < 1 || m.SchemaVersion > SchemaVersion || m.KeyFingerprint != hashToken(string(key)) || len(m.Files)+1 != len(files) || m.Files["controller.sqlite"] == "" {
 		return errors.New("BACKUP_MANIFEST_OR_KEY_MISMATCH")
 	}
 	for name, digest := range m.Files {
@@ -336,7 +339,7 @@ func Restore(archive, keyPath, destination string) error {
 	if err != nil {
 		return err
 	}
-	if integrity != "ok" || schemaVersion != SchemaVersion || id != m.ControllerID {
+	if integrity != "ok" || schemaVersion != m.SchemaVersion || id != m.ControllerID {
 		return errors.New("BACKUP_DATABASE_MISMATCH")
 	}
 	if err = writeExclusive(filepath.Join(stage, "master.key"), key); err != nil {

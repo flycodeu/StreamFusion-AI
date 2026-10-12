@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { sessionState } from '../../session/state'
+import { findPreviewPath } from '../../features/preview/model'
 import {
   ElButton,
   ElCheckbox,
@@ -37,6 +40,8 @@ import { getGroupTree, deleteGroup } from '../../api/camera-groups/api'
 import type { CameraGroup } from '../../api/camera-groups/types'
 
 defineOptions({ name: 'CameraManage' })
+const router = useRouter()
+const previewPath = computed(() => findPreviewPath(sessionState.me?.routes || []))
 const captureScope = usePageScope(),
   rows = ref<CameraDeviceGroup[]>([]),
   page = ref(1),
@@ -183,6 +188,13 @@ function selectPending() {
   pendingOnly.value = true
   treeOpen.value = false
   search()
+}
+function openPreview(device: CameraDeviceGroup) {
+  if (previewPath.value)
+    void router.push({
+      path: previewPath.value,
+      query: { mode: 'device', device: device.groupKey },
+    })
 }
 async function groupsChanged() {
   groupEditor.value = null
@@ -380,13 +392,16 @@ onMounted(refresh)
           >
           <ElTableColumn
             label="操作"
-            :width="canManage ? 220 : 100"
+            :width="canManage ? 274 : 150"
             fixed="right"
             class-name="table-actions-column"
             :resizable="false"
           >
             <template #default="{ row }">
               <TableActions compact>
+                <ElButton v-if="previewPath" link type="primary" @click="openPreview(asDevice(row))"
+                  >预览</ElButton
+                >
                 <ElButton link type="primary" @click="selectedDevice = asDevice(row)"
                   >详情</ElButton
                 >
@@ -431,6 +446,9 @@ onMounted(refresh)
               </div>
             </dl>
             <TableActions compact>
+              <ElButton v-if="previewPath" link type="primary" @click="openPreview(row)"
+                >预览</ElButton
+              >
               <ElButton link type="primary" @click="selectedDevice = row">详情</ElButton>
               <ElButton v-if="canManage" link type="primary" @click="movingDevice = row"
                 >移动分组</ElButton

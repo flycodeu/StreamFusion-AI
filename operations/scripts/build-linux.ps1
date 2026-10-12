@@ -24,19 +24,19 @@ try {
   $env:GOOS = 'linux'
   $env:GOARCH = 'amd64'
   $env:CGO_ENABLED = '0'
-  $output = Join-Path $projectRoot 'release/0.1.0'
+  $output = Join-Path $projectRoot 'release/0.2.0'
   New-Item -ItemType Directory -Path $output -Force | Out-Null
   go build -trimpath -ldflags '-s -w' -o "$output/streamfusion-ops" ./cmd/streamfusion-ops
   Check-Command 'Linux交叉构建'
-  Copy-Item scripts/install-linux.sh, scripts/uninstall-linux.sh, README.md -Destination $output -Force
-  $files = @('streamfusion-ops', 'install-linux.sh', 'uninstall-linux.sh', 'README.md')
+  Copy-Item scripts/install-linux.sh, scripts/uninstall-linux.sh, scripts/install-target.sh, README.md -Destination $output -Force
+  $files = @('streamfusion-ops', 'install-linux.sh', 'uninstall-linux.sh', 'install-target.sh', 'README.md')
   $checksums = foreach ($file in $files) {
     $hash = (Get-FileHash -LiteralPath (Join-Path $output $file) -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $file"
   }
   [IO.File]::WriteAllText((Join-Path $output 'SHA256SUMS'), ($checksums -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
-  $archive = Join-Path $projectRoot 'release/streamfusion-ops-0.1.0-linux-amd64.tar.gz'
-  tar -czf $archive -C $output streamfusion-ops SHA256SUMS install-linux.sh uninstall-linux.sh README.md
+  $archive = Join-Path $projectRoot 'release/streamfusion-ops-0.2.0-linux-amd64.tar.gz'
+  tar -czf $archive -C $output streamfusion-ops SHA256SUMS install-linux.sh uninstall-linux.sh install-target.sh README.md
   Check-Command '发行包'
   Write-Output "Linux发行包: $archive"
 } finally {

@@ -7,10 +7,12 @@ import com.streamfusion.platform.audit.service.AuditService;
 import com.streamfusion.platform.camera.mapper.*;
 import com.streamfusion.platform.camera.pojo.dto.CameraScopeUpdateDto;
 import com.streamfusion.platform.camera.pojo.entity.*;
+import com.streamfusion.platform.camera.pojo.vo.CameraScopeUserVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraScopeVo;
 import com.streamfusion.platform.common.exception.*;
 import com.streamfusion.platform.common.pojo.vo.PageResultVo;
 import com.streamfusion.platform.common.validation.*;
+import com.streamfusion.platform.department.service.DepartmentService;
 import com.streamfusion.platform.user.service.UserService;
 import java.time.*;
 import java.util.*;
@@ -26,6 +28,7 @@ public class CameraScopeService {
     private final CameraAccessService access;
     private final AccessService identities;
     private final UserService users;
+    private final DepartmentService departments;
     private final AuditService audit;
     private final Clock clock;
 
@@ -161,25 +164,26 @@ public class CameraScopeService {
         return read(uid);
     }
 
-    @Transactional(readOnly = true)
-    public PageResultVo<Map<String, Object>> userOptions(String name, int page, int size) {
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public PageResultVo<CameraScopeUserVo> userOptions(String name, int page, int size) {
         access.requireSuper(access.readActor());
         CameraGroupService.pageBounds(page, size);
         String term = like(name);
         var rows = scopes.userOptions(term, (long) (page - 1) * size, size);
-        var adminIds = access.superAdminIds(rows.stream().map(u -> u.getId()).toList());
+        var userIds = rows.stream().map(u -> u.getId()).toList();
+        var adminIds = access.superAdminIds(userIds);
+        var memberships = departments.forUsers(userIds);
         var items =
                 rows.stream()
                         .map(
-                                u -> {
-                                    Map<String, Object> item = new LinkedHashMap<>();
-                                    item.put("userId", u.getId().toString());
-                                    item.put("username", u.getUsername());
-                                    item.put("nickname", u.getNickname());
-                                    item.put("enabled", u.getStatus() != 2);
-                                    item.put("isSuperAdmin", adminIds.contains(u.getId()));
-                                    return item;
-                                })
+                                u ->
+                                        new CameraScopeUserVo(
+                                                u.getId().toString(),
+                                                u.getUsername(),
+                                                u.getNickname(),
+                                                u.getStatus() != 2,
+                                                adminIds.contains(u.getId()),
+                                                memberships.getOrDefault(u.getId(), List.of())))
                         .toList();
         return new PageResultVo<>(items, page, size, scopes.userOptionCount(term));
     }

@@ -16,9 +16,16 @@
  <select id="visibleGroupCounts" resultType="com.streamfusion.platform.camera.mapper.CameraGroupCountRow">SELECT c.group_id,COUNT(*) AS camera_count FROM camera_channel c WHERE c.group_id IS NOT NULL AND c.lifecycle != 'PENDING_ASSIGNMENT' AND (<include refid="visibleCamera"/>) GROUP BY c.group_id</select>
  <select id="visibleCount" resultType="java.lang.Long">SELECT COUNT(*) FROM camera_channel c WHERE c.lifecycle != 'PENDING_ASSIGNMENT' AND (<include refid="visibleCamera"/>)<if test="groupIds != null"><choose><when test="!groupIds.isEmpty()"> AND c.group_id IN <foreach collection="groupIds" item="gid" open="(" separator="," close=")">#{gid}</foreach></when><otherwise> AND 1=0</otherwise></choose></if></select>
  <select id="channels" resultType="com.streamfusion.platform.camera.mapper.CameraChannelScopeRow">SELECT id,group_id,version,lifecycle,name FROM camera_channel WHERE <choose><when test="!ids.isEmpty()">id IN <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach></when><otherwise>1=0</otherwise></choose> ORDER BY id</select>
- <sql id="userFilter"><if test="name != null"> WHERE (username LIKE CONCAT('%',#{name},'%') ESCAPE '!' OR nickname LIKE CONCAT('%',#{name},'%') ESCAPE '!')</if></sql>
- <select id="userOptions" resultType="com.streamfusion.platform.user.pojo.entity.UserEntity">SELECT id,username,nickname,status FROM sys_user <include refid="userFilter"/> ORDER BY id LIMIT #{size} OFFSET #{offset}</select>
- <select id="userOptionCount" resultType="java.lang.Long">SELECT COUNT(*) FROM sys_user <include refid="userFilter"/></select>
+ <sql id="userFilter">
+  <if test="name != null">
+   WHERE (u.username LIKE CONCAT('%',#{name},'%') ESCAPE '!'
+    OR u.nickname LIKE CONCAT('%',#{name},'%') ESCAPE '!'
+    OR EXISTS(SELECT 1 FROM sys_user_dept ud JOIN sys_dept d ON d.id=ud.dept_id
+      WHERE ud.user_id=u.id AND d.name LIKE CONCAT('%',#{name},'%') ESCAPE '!'))
+  </if>
+ </sql>
+ <select id="userOptions" resultType="com.streamfusion.platform.user.pojo.entity.UserEntity">SELECT u.id,u.username,u.nickname,u.status FROM sys_user u <include refid="userFilter"/> ORDER BY u.id LIMIT #{size} OFFSET #{offset}</select>
+ <select id="userOptionCount" resultType="java.lang.Long">SELECT COUNT(*) FROM sys_user u <include refid="userFilter"/></select>
  <sql id="cameraFilter">WHERE lifecycle='ENABLED'<if test="name != null"> AND name LIKE CONCAT('%',#{name},'%') ESCAPE '!'</if><if test="groupIds != null"><choose><when test="!groupIds.isEmpty()"> AND group_id IN <foreach collection="groupIds" item="gid" open="(" separator="," close=")">#{gid}</foreach></when><otherwise> AND 1=0</otherwise></choose></if></sql>
  <select id="cameraOptions" resultType="com.streamfusion.platform.camera.mapper.CameraChannelScopeRow">SELECT id,group_id,version,lifecycle,name FROM camera_channel <include refid="cameraFilter"/> ORDER BY id LIMIT #{size} OFFSET #{offset}</select>
  <select id="cameraOptionCount" resultType="java.lang.Long">SELECT COUNT(*) FROM camera_channel <include refid="cameraFilter"/></select>

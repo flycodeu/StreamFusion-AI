@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/streamfusion-ai/operations/internal/controller"
+	"github.com/streamfusion-ai/operations/internal/deploy"
 	"github.com/streamfusion-ai/operations/internal/webui"
 	"golang.org/x/term"
 )
@@ -29,7 +30,28 @@ func main() {
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("用法: streamfusion-ops <serve|init-admin|backup|restore|export-key|version> --help")
+		return errors.New("用法: streamfusion-ops <serve|stop|init-admin|backup|restore|export-key|version> --help")
+	}
+	if args[0] == "target-exec" {
+		if len(args) != 1 {
+			return errors.New("NO_EXECUTOR_ARGUMENTS")
+		}
+		return deploy.Execute(os.Stdin, os.Stdout)
+	}
+	if args[0] == "target-init" {
+		f := flag.NewFlagSet("target-init", flag.ContinueOnError)
+		root := f.String("root", "", "新的受管目标目录")
+		cid := f.String("controller-id", "", "控制器ID")
+		tid := f.String("target-id", "", "目标ID")
+		socket := f.String("docker-socket", "/var/run/docker.sock", "已存在的Docker socket")
+		dockerBinary := f.String("docker-binary", "/usr/bin/docker", "受保护的Docker入口")
+		if e := f.Parse(args[1:]); e != nil {
+			return e
+		}
+		if f.NArg() != 0 {
+			return errors.New("NO_POSITIONAL_ARGUMENTS")
+		}
+		return deploy.InitTarget(*root, *cid, *tid, *socket, *dockerBinary)
 	}
 	if args[0] == "version" {
 		fmt.Println(controller.Version)
@@ -45,11 +67,18 @@ func run(args []string) error {
 	key := flags.String("key", "", "恢复密钥文件")
 	cert := flags.String("tls-cert", "", "HTTPS证书路径")
 	tlsKey := flags.String("tls-key", "", "HTTPS私钥路径")
+	stopTimeout := flags.Duration("timeout", 15*time.Second, "关闭等待时间，1s至2m")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("不支持位置参数")
+	}
+	if args[0] == "stop" {
+		if *stopTimeout < time.Second || *stopTimeout > 2*time.Minute {
+			return errors.New("STOP_TIMEOUT_INVALID: 等待时间须为1s至2m")
+		}
+		return controller.Stop(*state, *stopTimeout)
 	}
 	if args[0] == "restore" {
 		if *archive == "" || *key == "" {
@@ -83,6 +112,9 @@ func run(args []string) error {
 	}
 	s, err := controller.Open(*state)
 	if err != nil {
+		if args[0] == "serve" && strings.Contains(err.Error(), "STATE_LOCKED") {
+			return fmt.Errorf("%w\n请先执行 streamfusion-ops stop --state %q；前台实例也可在原终端按 Ctrl+C。不要删除锁文件", err, *state)
+		}
 		return err
 	}
 	defer s.Close()
@@ -201,11 +233,21 @@ func run(args []string) error {
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, ErrorLog: logger}
 	stop, done := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer done()
+	cleanupControl, err := s.LocalControl(stop, *listen, done)
+	if err != nil {
+		return err
+	}
+	workerDone := make(chan struct{})
+	go func() { defer close(workerDone); handler.RunOperations(stop) }()
+	shutdownDone := make(chan struct{})
+	defer func() { done(); <-workerDone; <-shutdownDone; cleanupControl() }()
 	go func() {
+		defer close(shutdownDone)
 		<-stop.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
+		logger.Printf("traceId=local event=STOPPING")
 	}()
 	logger.Printf("traceId=local event=STARTED release=%s listen=%s", controller.Version, *listen)
 	if *cert != "" {

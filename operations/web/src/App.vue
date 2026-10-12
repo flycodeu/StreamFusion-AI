@@ -2,6 +2,8 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, prepare, request, send, setCSRF } from "./api";
+import OpsWorkspace from "./OpsWorkspace.vue";
+import PluginCenter from "./PluginCenter.vue";
 
 interface Status {
   status: string;
@@ -43,6 +45,16 @@ const nav = [
     label: "总览",
     icon: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
   },
+  {
+    id: "targets",
+    label: "主机与依赖",
+    icon: "M4 5h16v14H4z M8 9h2 M14 9h2 M8 14h8",
+  },
+  { id: "plugins", label: "插件中心", icon: "M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z" },
+  { id: "instances", label: "应用实例", icon: "M5 5h14v14H5z M9 9h6v6H9z" },
+  { id: "artifacts", label: "制品", icon: "M4 7h16v13H4z M8 4h8v3H8z" },
+  { id: "jobs", label: "发布作业", icon: "M6 3h12v4H6z M6 11h12 M6 16h8" },
+
   {
     id: "credentials",
     label: "凭据",
@@ -393,7 +405,13 @@ onUnmounted(() => {
           </div>
           <code>traceId: {{ diagnostic.traceId }}</code>
         </details>
-        <section v-if="active === 'overview'" class="content">
+        <PluginCenter v-if="active === 'plugins'" @error="report" />
+        <OpsWorkspace
+          v-else-if="['targets', 'instances', 'artifacts', 'jobs'].includes(active)"
+          :page="active"
+          @error="report"
+        />
+        <section v-else-if="active === 'overview'" class="content">
           <div class="status-line" :class="{ disconnected: !connected }">
             <span class="pulse" :class="{ offline: !connected }"></span
             ><strong>{{ connected ? "控制器运行中" : "连接中断" }}</strong

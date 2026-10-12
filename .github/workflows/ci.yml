@@ -102,3 +102,40 @@ jobs:
         if: matrix.project == 'node-agent'
         working-directory: .
         run: uv run --project algorithm-node/node-agent --locked python -m pytest contracts/tests -q
+
+  ops:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: operations
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: operations/go.mod
+          cache-dependency-path: operations/go.sum
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: platform-web/.nvmrc
+      - run: npm install --global pnpm@10.28.0
+      - run: pnpm --dir web install --frozen-lockfile
+      - run: pnpm --dir web build
+      - run: node scripts/embed-web.mjs
+      - name: Check Go formatting
+        run: test -z "$(gofmt -l cmd internal)"
+      - run: go test ./...
+      - name: Check protected Linux executor fixtures
+        if: runner.os == 'Linux'
+        run: |
+          go test -c -o "$RUNNER_TEMP/streamfusion-deploy.test" ./internal/deploy
+          sudo "$RUNNER_TEMP/streamfusion-deploy.test" -test.v
+      - run: go vet ./...
+      - run: go build -trimpath ./cmd/streamfusion-ops

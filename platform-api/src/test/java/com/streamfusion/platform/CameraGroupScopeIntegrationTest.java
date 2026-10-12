@@ -252,10 +252,101 @@ class CameraGroupScopeIntegrationTest extends CameraTestSupport {
         assertThat(users.path("items").get(0).path("isSuperAdmin").asBoolean()).isTrue();
     }
 
+    @Test
+    void scopeAccountsIncludeDepartmentsAndDepartmentSearchKeepsUniqueUsers() throws Exception {
+        Csrf auth = admin();
+        String user =
+                write(
+                                post("/user"),
+                                auth,
+                                Map.of(
+                                        "username",
+                                        "DepartmentScopeUser",
+                                        "departmentIds",
+                                        List.of("2002", "2003")),
+                                201)
+                        .path("id")
+                        .asText();
+        write(post("/user"), auth, Map.of("username", "WithoutDepartment"), 201);
+        JsonNode matches = scopeUsers(auth, "部门", 1);
+        assertThat(matches.path("total").asInt()).isOne();
+        assertThat(matches.path("items")).hasSize(1);
+        JsonNode item = matches.path("items").get(0);
+        assertThat(item.path("userId").asText()).isEqualTo(user);
+        assertThat(item.path("departments")).hasSize(2);
+        assertThat(item.path("departments").get(0).path("name").asText()).isEqualTo("研发部门");
+        assertThat(item.path("departments").get(1).path("name").asText()).isEqualTo("运维部门");
+        assertThat(item.has("password")).isFalse();
+        assertThat(
+                        read("/camera-scopes/user-options?name=WithoutDepartment", auth)
+                                .path("items")
+                                .get(0)
+                                .path("departments"))
+                .isEmpty();
+        assertThat(scopeUsers(auth, "%", 20).path("total").asInt()).isZero();
+        assertThat(
+                        read("/camera-scopes/user-options?name=DepartmentScopeUser", auth)
+                                .path("total")
+                                .asInt())
+                .isOne();
+    }
+
+    @Test
+    void scopeGroupTreeWorksWithOnlyTheScopePageAndPreservesParentIds() throws Exception {
+        Csrf auth = admin();
+        String root = group(auth, "授权根组", null);
+        String child = group(auth, "同名 / 下级", root);
+        jdbc.update("DELETE FROM sys_role_menu WHERE menu_id IN (1101,1103,1105)");
+        JsonNode tree = read("/camera-scopes/group-options/tree", auth);
+        assertThat(tree).hasSize(2);
+        JsonNode descendant =
+                java.util.stream.StreamSupport.stream(tree.spliterator(), false)
+                        .filter(row -> child.equals(row.path("groupId").asText()))
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(descendant.path("parentId").asText()).isEqualTo(root);
+        assertThat(read("/camera-scopes/user-options", auth).path("items")).hasSize(1);
+        mvc.perform(get("/camera-groups/tree").session(auth.session()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void scopePageDoesNotAllowOrdinaryAccountsToReadDepartmentsOrGrantGroups() throws Exception {
+        Csrf auth = admin();
+        String user =
+                write(post("/user"), auth, Map.of("username", "ScopeReader"), 201)
+                        .path("id")
+                        .asText();
+        jdbc.update(
+                "UPDATE sys_user SET must_change_password=FALSE WHERE id=?", Long.valueOf(user));
+        jdbc.update("INSERT INTO sys_role(id,code,name) VALUES(9001,'SCOPE_READER','相机授权页面')");
+        jdbc.update("INSERT INTO sys_role_menu(role_id,menu_id) VALUES(9001,1104)");
+        jdbc.update(
+                "INSERT INTO sys_user_role(user_id,role_id) VALUES(?,9001)", Long.valueOf(user));
+        Csrf ordinary = login("ScopeReader", "Initial1!");
+        mvc.perform(get("/camera-scopes/group-options/tree").session(ordinary.session()))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/camera-scopes/user-options").session(ordinary.session()))
+                .andExpect(status().isForbidden());
+    }
+
     private String group(Csrf auth, String name, String parent) throws Exception {
         Object body =
                 parent == null ? Map.of("name", name) : Map.of("name", name, "parentId", parent);
         return write(post("/camera-groups"), auth, body, 201).path("groupId").asText();
+    }
+
+    private JsonNode scopeUsers(Csrf auth, String name, int size) throws Exception {
+        var response =
+                mvc.perform(
+                                get("/camera-scopes/user-options")
+                                        .param("name", name)
+                                        .param("size", Integer.toString(size))
+                                        .session(auth.session()))
+                        .andExpect(status().isOk())
+                        .andReturn()
+                        .getResponse();
+        return json.readTree(response.getContentAsByteArray()).path("data");
     }
 
     private void archive(Csrf auth, String camera, String group) throws Exception {

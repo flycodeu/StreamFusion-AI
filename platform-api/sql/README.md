@@ -37,7 +37,7 @@
 
 生成器按外键依赖倒序 DROP、正序 CREATE 与插入种子，保持外键检查开启。默认码流的循环复合外键通过 DEFERRED CONSTRAINT 在两表存在后添加，重建前先解除此边。新增表必须在生成器登记依赖顺序。
 
-要求 MySQL 8.0.17+、InnoDB、utf8mb4；本轮实际验证版本为 8.0.36。相机外部身份键使用区分大小写和尾空格的 `utf8mb4_0900_bin`，该规则从 [MySQL 8.0.17](https://dev.mysql.com/doc/relnotes/mysql/8.0/en/news-8-0-17.html) 开始提供，因此不能沿用旧版 8.0.16 的最低要求。只在专用空库执行汇总文件。初始化内容为 SUPER_ADMIN、三个目录、十个 PAGE 及角色页面关联，还有以下可编辑的示例组织：
+要求 MySQL 8.0.17+、InnoDB、utf8mb4；已有独立验证使用 8.0.36。相机外部身份键采用 `utf8mb4_0900_bin`（自 [MySQL 8.0.17](https://dev.mysql.com/doc/relnotes/mysql/8.0/en/news-8-0-17.html) 提供）。只在专用空库执行汇总文件。初始化为 SUPER_ADMIN、三个目录、十一个 PAGE 及角色页面关联，预览中心排在相机管理前；视频分组旧入口复用相机管理。示例组织如下：
 
 | ID | 名称 | 上级 |
 |---|---|---|
@@ -54,6 +54,7 @@
 | 监控面板（1008） | 操作记录（1006） | audit |
 | 监控面板（1008） | 服务信息（1007） | server |
 | 监控面板（1008） | 接口文档（1009） | api-docs |
+| 视频管理（1100） | 预览中心（1105） | camera |
 | 视频管理（1100） | 相机管理（1101）、视频分组（1103） | camera |
 | 视频管理（1100） | 相机授权（1104） | camera_scope |
 
@@ -73,7 +74,7 @@ SOURCE platform-api/sql/streamfusion-mysql.sql;
 
 `SOURCE` 路径相对于启动 MySQL 客户端时的目录。若该库已存在，先检查是否为空并确认用途；有任何业务表时停止，不继续导入。数据库名自定义时，同步修改后端 JDBC URL；应用账号至少需要该库的查询、新增、更新和删除权限。
 
-首次导入后、管理员引导前，执行以下只读核对。应分别得到24个表名，以及 `users=0`、`roles=1`、`directories=3`、`pages=10`、`super_admin_pages=10`、`departments=3`：
+首次导入后、管理员引导前，执行以下只读核对。应分别得到24个表名，以及 `users=0`、`roles=1`、`directories=3`、`pages=11`、`super_admin_pages=11`、`departments=3`：
 
 ```sql
 SHOW TABLES;

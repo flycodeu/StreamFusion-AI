@@ -135,6 +135,24 @@ func (h *HTTP) revokeCredential(w http.ResponseWriter, r *http.Request, s *sessi
 		return
 	}
 	defer tx.Rollback()
+	var referenced int
+	err = tx.QueryRow(`SELECT count(*) FROM (
+ SELECT credential_id,credential_revision FROM targets
+ UNION ALL
+ SELECT rc.credential_id,rc.credential_revision FROM release_credentials rc
+ WHERE rc.release_id IN (SELECT current_release_id FROM instances UNION SELECT previous_release_id FROM instances UNION SELECT release_id FROM jobs WHERE status IN ('QUEUED','RUNNING','UNKNOWN') OR target_ack_pending=1)
+ UNION ALL
+ SELECT b.credential_id,b.credential_revision FROM release_bindings rb JOIN component_bindings b ON b.id=rb.binding_id
+ WHERE rb.release_id IN (SELECT current_release_id FROM instances UNION SELECT previous_release_id FROM instances UNION SELECT release_id FROM jobs WHERE status IN ('QUEUED','RUNNING','UNKNOWN') OR target_ack_pending=1)
+) WHERE credential_id=? AND credential_revision=?`, id, revision).Scan(&referenced)
+	if err != nil {
+		h.internal(w, r, err)
+		return
+	}
+	if referenced != 0 {
+		h.fail(w, r, 409, "CREDENTIAL_IN_USE", "目标、成功版本或未决作业仍引用此修订，请先调整引用")
+		return
+	}
 	result, err := tx.Exec("UPDATE credential_refs SET revoked_at=? WHERE id=? AND revision=? AND revoked_at IS NULL", Now(), id, revision)
 	if err != nil {
 		h.internal(w, r, err)

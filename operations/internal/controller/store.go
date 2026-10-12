@@ -20,8 +20,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const Version = "0.1.0"
-const SchemaVersion = 1
+const Version = "0.2.0"
+const SchemaVersion = 3
 
 //go:embed schema.sql
 var schema string
@@ -188,6 +188,78 @@ func Open(dir string) (*Store, error) {
 	}
 	if err = s.verifySecrets(); err != nil {
 		return nil, err
+	}
+	if version == 1 {
+		backupPath := filepath.Join(abs, "before-schema-2-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 1 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV2); e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if _, e = tx.Exec("INSERT INTO schema_migrations VALUES(2,?,?,?)", hashToken(schemaV2), Version, Now()); e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if _, e = tx.Exec("PRAGMA user_version=2"); e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=2").Scan(&checksum); err != nil || checksum != hashToken(schemaV2) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移2摘要不匹配")
+	}
+	if version > 0 && version <= 2 {
+		backupPath := filepath.Join(abs, "before-schema-3-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 2 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV3); e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if _, e = tx.Exec("INSERT INTO schema_migrations VALUES(3,?,?,?)", hashToken(schemaV3), Version, Now()); e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if _, e = tx.Exec("PRAGMA user_version=3"); e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		foreignKeys, e := tx.Query("PRAGMA foreign_key_check")
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		broken := foreignKeys.Next()
+		e = foreignKeys.Err()
+		foreignKeys.Close()
+		if broken || e != nil {
+			tx.Rollback()
+			return nil, errors.New("SCHEMA_FOREIGN_KEY_INVALID")
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=3").Scan(&checksum); err != nil || checksum != hashToken(schemaV3) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移3摘要不匹配")
 	}
 	if _, err = s.DB.Exec("DELETE FROM sessions WHERE expires_at<=? OR last_seen<?", time.Now().Unix(), time.Now().Add(-30*time.Minute).Unix()); err != nil {
 		return nil, err

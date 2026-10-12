@@ -1,0 +1,100 @@
+import type { PreviewChannel, PreviewProfile } from '../../api/preview/types'
+import type { MenuRoute } from '../../api/auth/types'
+
+export type StreamUsage = 'MAIN' | 'SUB'
+export interface PreviewDevice {
+  key: string
+  name: string
+  channels: PreviewChannel[]
+}
+export interface PreviewGroup {
+  path: string
+  devices: PreviewDevice[]
+}
+export const usageLabels: Record<string, string> = {
+  MAIN: '主码流',
+  SUB: '辅码流',
+  THIRD: '第三码流',
+  CUSTOM: '自定义',
+  UNKNOWN: '未指定',
+}
+export function selectProfile(channel: PreviewChannel, usage: StreamUsage): PreviewProfile | null {
+  return (
+    channel.profiles.find(
+      (profile) => profile.enabled && profile.configured && profile.usage === usage,
+    ) ?? null
+  )
+}
+export function groupCatalog(channels: PreviewChannel[]): PreviewGroup[] {
+  const devices = new Map<string, PreviewDevice>()
+  for (const channel of channels) {
+    let device = devices.get(channel.deviceGroupKey)
+    if (!device) {
+      device = {
+        key: channel.deviceGroupKey,
+        name: channel.deviceName || channel.name,
+        channels: [],
+      }
+      devices.set(channel.deviceGroupKey, device)
+    }
+    device.channels.push(channel)
+  }
+  const groups = new Map<string, PreviewGroup>()
+  for (const device of devices.values()) {
+    const paths = new Set(device.channels.map((channel) => channel.groupPath || '未分组'))
+    const path = paths.size === 1 ? [...paths][0]! : '多个分组'
+    let group = groups.get(path)
+    if (!group) {
+      group = { path, devices: [] }
+      groups.set(path, group)
+    }
+    group.devices.push(device)
+  }
+  return [...groups.values()]
+}
+export function findPreviewPath(routes: MenuRoute[]): string | null {
+  for (const route of routes) {
+    if (
+      route.type === 'PAGE' &&
+      route.moduleKey === 'camera' &&
+      route.componentKey === '/preview/Center'
+    )
+      return route.path
+    const found = findPreviewPath(route.children)
+    if (found) return found
+  }
+  return null
+}
+export function previewReason(code: string | null): string {
+  const reasons: Record<string, string> = {
+    NO_PROFILE: '没有可用码流，请检查通道配置',
+    PROFILE_UNAVAILABLE: '所选码流不可用',
+    NO_MAIN_PROFILE: '没有可用主码流',
+    NO_SUB_PROFILE: '没有可用辅码流',
+    CAMERA_DISABLED: '通道已停用',
+    ZLM_UNAVAILABLE: '媒体服务不可用',
+    ZLM_NOT_READY: '媒体服务尚未就绪，请检测运行环境',
+    RUNTIME_UNAVAILABLE: '媒体环境不可用',
+    CODEC_UNSUPPORTED: '浏览器不支持此视频编码',
+    UNSUPPORTED_CODEC: '浏览器不支持此视频编码',
+    FFMPEG_UNAVAILABLE: '转码环境不可用',
+    SOURCE_UNAVAILABLE: '暂时无法获取相机视频',
+    MEDIA_NOT_READY: '媒体暂未就绪',
+    LOCATOR_NOT_CONFIGURED: '视频地址未配置，请检查通道连接',
+    LOCATOR_INVALID: '视频地址无效，请检查通道连接',
+    SOURCE_PROTOCOL_NOT_SUPPORTED: '该接入方式暂不支持预览',
+    TRANSCODE_NOT_CONFIGURED: '浏览器需要转码，请检查媒体转码配置',
+    TRANSCODE_VERSION_MISMATCH: '转码版本与选择的运行环境不一致',
+    SIGNAL_REJECTED: '媒体连接被拒绝，请检查媒体服务',
+    PROFILE_NOT_FOUND: '码流已不存在，请刷新相机列表',
+    PROFILE_DISABLED: '码流已停用，请切换其他码流',
+    DESTINATION_REJECTED: '视频地址不在允许访问的范围',
+    DNS_UNAVAILABLE: '无法解析相机地址，请检查网络',
+    UPSTREAM_REJECTED: '相机拒绝视频请求，请检查连接资料',
+    BROWSER_UNSUPPORTED: '当前浏览器不支持视频预览',
+    CONNECT_TIMEOUT: '连接超时，请重连',
+    LEASE_EXPIRED: '预览已过期，请重连',
+    CONNECTION_FAILED: '视频连接中断，请重连',
+  }
+  return reasons[code || ''] || '暂时无法预览，请检查相机和媒体服务'
+}

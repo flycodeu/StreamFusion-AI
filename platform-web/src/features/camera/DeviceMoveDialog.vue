@@ -105,7 +105,6 @@ onMounted(load)
     @close="emit('close')"
   >
     <div class="move-device-name">{{ device.name }}</div>
-    <p class="move-note">整台相机的全部通道一起移动。</p>
     <RequestError :error="error" />
     <section v-if="ready" class="move-current">
       <h3>当前分组</h3>
@@ -128,9 +127,7 @@ onMounted(load)
         :placements="placements"
         :disabled="saving || loading"
       />
-      <p class="move-target-path">
-        目标：{{ targetPath || '尚未选择' }}<span v-if="unchanged">（与当前分组相同）</span>
-      </p>
+      <p class="move-target-path">目标：{{ targetPath || '尚未选择' }}</p>
     </div>
     <ImpactSummary v-else :impact="preview.impact" />
     <ElButton v-if="error" link :disabled="saving || loading" @click="load"
@@ -154,9 +151,6 @@ onMounted(load)
   font-size: 16px;
   font-weight: 600;
   overflow-wrap: anywhere;
-}
-.move-note {
-  color: var(--text-secondary);
 }
 .move-current {
   padding: 14px 16px;
@@ -194,5 +188,11 @@ onMounted(load)
 .move-origins dd {
   flex-shrink: 0;
   margin: 0;
+}
+@media (max-width: 480px) {
+  .move-origins > div {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
 }
 </style>
