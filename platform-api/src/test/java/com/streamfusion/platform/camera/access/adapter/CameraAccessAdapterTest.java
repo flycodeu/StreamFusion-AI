@@ -406,20 +406,15 @@ class CameraAccessAdapterTest {
         String header =
                 "Digest realm=\"testrealm@host.com\", qop=\"auth,auth-int\", nonce=\"dcd98b7102dd2f0e8b11d0f600bfb0c093\", opaque=\"5ccc069c403ebaf9f0171e9517f40e41\"";
         String value =
-                CameraHttpAuthentication.challenge(
-                        header,
-                        "GET",
-                        URI.create("http://host/dir/index.html"),
-                        "Mufasa",
-                        "Circle Of Life",
-                        "0a4f113b");
+                CameraRequestAuthentication.challenge(
+                        header, "GET", "/dir/index.html", "Mufasa", "Circle Of Life", "0a4f113b");
         assertThat(value).contains("response=\"6629fae49393a05397450978507c4ef1\"");
         assertThatThrownBy(
                         () ->
-                                CameraHttpAuthentication.challenge(
+                                CameraRequestAuthentication.challenge(
                                         header.replace("auth,auth-int", "auth-int"),
                                         "GET",
-                                        URI.create("http://host/dir/index.html"),
+                                        "/dir/index.html",
                                         "Mufasa",
                                         "Circle Of Life"))
                 .hasMessage("UNSUPPORTED_AUTHENTICATION");
@@ -499,14 +494,16 @@ class CameraAccessAdapterTest {
                         authChecks::incrementAndGet);
         assertThat(
                         new String(
-                                transport.open(request).get(context.endpoint().resolve("/digest")),
+                                transport
+                                        .open(request)
+                                        .get(context.endpoint().resolve("/digest?token=a%2Bb&x=1")),
                                 StandardCharsets.UTF_8))
                 .isEqualTo("ok");
         assertThat(calls.get()).isEqualTo(2);
         assertThat(authChecks.get()).isEqualTo(2);
         assertThat(authorization.get())
                 .startsWith("Digest ")
-                .contains("algorithm=SHA-256", "qop=auth", "uri=\"/digest\"")
+                .contains("algorithm=SHA-256", "qop=auth", "uri=\"/digest?token=a%2Bb&x=1\"")
                 .doesNotContain(context.password());
         verify(rules, atLeast(3)).host("127.0.0.1", "fixture");
     }

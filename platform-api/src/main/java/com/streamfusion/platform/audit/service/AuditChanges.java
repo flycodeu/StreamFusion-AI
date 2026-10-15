@@ -42,7 +42,19 @@ public class AuditChanges {
                     "afterDefaultProfileId",
                     "label",
                     "usageHint",
-                    "enabled");
+                    "targetCount",
+                    "intervalMinutes",
+                    "durationHours",
+                    "beforeState",
+                    "afterState",
+                    "enabled",
+                    "mode",
+                    "keepMonths",
+                    "maxRecords",
+                    "removedLogCount",
+                    "format",
+                    "rowCount",
+                    "fileBytes");
     private static final Map<String, String> RELATIONS =
             Map.of(
                     "roleIds",

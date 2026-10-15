@@ -93,6 +93,27 @@ export function parseEnvelope(raw: RawHttpResponse): ApiResult<unknown> {
   }
 }
 
+export function parseFileResponse(raw: RawHttpResponse): ApiResult<unknown> {
+  if (!raw.file || raw.status !== 200 || raw.file.size > 100 * 1024 * 1024)
+    throw invalidResponse(responseContext(raw))
+  const type = raw.headers.contentType?.split(';')[0]?.trim().toLowerCase()
+  const name = /^attachment; filename="(audit-[1-9][0-9]*\.(?:csv|jsonl))"$/.exec(
+    raw.headers.contentDisposition ?? '',
+  )?.[1]
+  if (!name || !['text/csv', 'application/x-ndjson'].includes(type ?? ''))
+    throw invalidResponse(responseContext(raw))
+  return {
+    data: { blob: raw.file, name },
+    meta: {
+      status: raw.status,
+      traceId: responseContext(raw).traceId!,
+      timestamp: raw.receivedAt,
+      etag: null,
+      location: null,
+    },
+  }
+}
+
 /** Only for existing raw consumers, such as Actuator, never a business API option. */
 export function parseRawJson(raw: RawHttpResponse): unknown {
   const context = responseContext(raw)

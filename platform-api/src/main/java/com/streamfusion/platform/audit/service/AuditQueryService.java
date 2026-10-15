@@ -36,6 +36,12 @@ public class AuditQueryService {
     public PageResultVo<AuditEntryVo> page(AuditQueryDto query) {
         if (query == null) query = new AuditQueryDto();
         var pagination = query.<AuditRow>toPage();
+        var resultPage = mapper.page(pagination, criteria(query));
+        return PageResultVo.from(resultPage, entries(resultPage.getRecords()));
+    }
+
+    public AuditCriteria criteria(AuditQueryDto query) {
+        if (query == null) query = new AuditQueryDto();
         String user = text(query.getUser(), 64, "user");
         Long actor = null;
         if (user != null && user.matches("[1-9][0-9]{0,18}")) {
@@ -59,26 +65,24 @@ public class AuditQueryService {
                 user == null
                         ? null
                         : "%" + user.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
-        var resultPage =
-                mapper.page(
-                        pagination,
-                        new AuditCriteria(
-                                pattern,
-                                actor,
-                                code(query.getAction(), "action"),
-                                code(query.getModule(), "module"),
-                                result,
-                                traceId,
-                                start,
-                                end));
+        return new AuditCriteria(
+                pattern,
+                actor,
+                code(query.getAction(), "action"),
+                code(query.getModule(), "module"),
+                result,
+                traceId,
+                start,
+                end);
+    }
+
+    public List<AuditEntryVo> entries(List<AuditRow> rows) {
         List<AuditReferences.Request> wanted = new ArrayList<>();
-        resultPage.getRecords().forEach(row -> addSubjects(wanted, row));
+        rows.forEach(row -> addSubjects(wanted, row));
         var current = references.current(wanted);
-        return PageResultVo.from(
-                resultPage,
-                resultPage.getRecords().stream()
-                        .map(row -> entry(row, changes.read(row.getChanges()), current))
-                        .toList());
+        return rows.stream()
+                .map(row -> entry(row, changes.read(row.getChanges()), current))
+                .toList();
     }
 
     public AuditDetailVo detail(String id) {

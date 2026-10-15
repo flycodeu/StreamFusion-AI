@@ -1,10 +1,11 @@
 <script setup lang="ts">
+import DiagnosticLink from '../../features/diagnostics/DiagnosticLink.vue'
 import { computed } from 'vue'
 import { WarningFilled } from '@element-plus/icons-vue'
 import { ApiRequestError } from '../../lib/http/error'
 import { formatDateTime } from '../../utils/dateTime'
 
-const props = defineProps<{ error: unknown }>()
+const props = defineProps<{ error: unknown; advice?: string }>()
 const detail = computed(() => (props.error instanceof ApiRequestError ? props.error : null))
 const fieldNames: Record<string, string> = {
   name: '名称',
@@ -83,6 +84,7 @@ const fieldErrors = computed(() => {
   })
 })
 const advice = computed(() => {
+  if (props.advice) return props.advice
   const error = detail.value
   if (!error) return '请检查输入后重试。'
   if (error.code === 'INITIAL_PASSWORD_UNAVAILABLE')
@@ -139,6 +141,7 @@ const time = computed(() => {
             <dd class="trace-id">{{ detail.traceId }}</dd>
           </div>
         </dl>
+        <DiagnosticLink :trace-id="detail.traceId" :time="detail.timestamp || detail.receivedAt" />
       </details>
     </div>
   </div>

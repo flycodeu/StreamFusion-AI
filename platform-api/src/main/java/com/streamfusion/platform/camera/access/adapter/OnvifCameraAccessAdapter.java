@@ -126,7 +126,7 @@ public class OnvifCameraAccessAdapter implements CameraAccessAdapter {
                                     + text(source, "Degree");
             String channelKey =
                     "onvif-view:"
-                            + CameraHttpAuthentication.hash(
+                            + CameraRequestAuthentication.hash(
                                     "SHA-256", view, StandardCharsets.UTF_8);
             boolean unresolved = sourceToken == null;
             if (unresolved) warnings.add("CHANNEL_MAPPING_REQUIRED");

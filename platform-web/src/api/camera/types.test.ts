@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseCamera, parseProfile } from './types'
+import { parseCamera, parseProfile, parseCameraAddress } from './types'
 import { parseCameraScope } from '../camera-scopes/types'
 import { parseImpact } from '../camera-groups/types'
 
@@ -14,6 +14,21 @@ const camera = {
   updatedAt: '2026-10-06T00:00:00Z',
 }
 describe('camera API response boundaries', () => {
+  it('reads address summaries separately from connection configuration and accepts old responses', () => {
+    const accessAddress = { kind: 'DEVICE', host: '10.0.1.5', port: 80 }
+    expect(parseCamera({ ...camera, accessAddress }).accessAddress).toEqual(accessAddress)
+    expect(parseCamera(camera).accessAddress).toBeNull()
+    expect(
+      parseCameraAddress({ kind: 'PLATFORM', host: 'platform.example', port: 443 })?.kind,
+    ).toBe('PLATFORM')
+    for (const value of [
+      { ...accessAddress, host: 'user:password@host' },
+      { ...accessAddress, host: 'rtsp://host/path' },
+      { ...accessAddress, port: 65536 },
+      { ...accessAddress, kind: 'ONLINE' },
+    ])
+      expect(() => parseCameraAddress(value)).toThrow()
+  })
   it('keeps manual vendor hints separate from unobserved manufacturer and permits missing source type', () => {
     const result = parseCamera({
       ...camera,

@@ -3,6 +3,8 @@
 # SF_MEDIA_RUNTIME_ROOTS is also supported: ';' separated on Windows, ':' on Linux.
 platform:
   media-runtime:
+    # Match unambiguous available versions once on startup; never changes ZLM configuration.
+    auto-select-on-startup: true
     cache-ttl: 15s
     probe-timeout: 2s
     collection-timeout: 12s

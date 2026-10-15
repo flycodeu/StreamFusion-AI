@@ -9,6 +9,7 @@ import CameraManage from '../../src/views/camera/Manage.vue'
 import ScopeManage from '../../src/views/camera-scope/Manage.vue'
 import CreateDialog from '../../src/features/camera/CreateDialog.vue'
 import DetailDialog from '../../src/features/camera/DetailDialog.vue'
+import PlanDialog from '../../src/features/camera-status/PlanDialog.vue'
 import DeviceDetailPanel from '../../src/features/camera/DeviceDetailPanel.vue'
 import DeviceMoveDialog from '../../src/features/camera/DeviceMoveDialog.vue'
 import DeviceEditor from '../../src/features/camera/DeviceEditor.vue'
@@ -66,8 +67,14 @@ const api = vi.hoisted(() => ({
   previewCameraLifecycle: vi.fn(),
   confirm: vi.fn(),
   success: vi.fn(),
+  getStatusPlans: vi.fn(),
+  createStatusPlan: vi.fn(),
+  stopStatusPlan: vi.fn(),
+  inspectPlanTargets: vi.fn(),
 }))
 vi.mock('../../src/api/camera/api', () => api)
+vi.mock('../../src/api/camera-status/plans', () => api)
+vi.mock('../../src/api/camera-status/planTargets', () => api)
 vi.mock('../../src/api/camera-access/api', () => api)
 vi.mock('../../src/api/camera-sources/api', () => api)
 vi.mock('../../src/api/camera-scopes/api', () => api)
@@ -358,6 +365,7 @@ async function settle() {
 }
 beforeEach(() => {
   vi.clearAllMocks()
+  api.inspectPlanTargets.mockResolvedValue({ targets: [], limitExceeded: false })
   clearIdentity()
   api.getCameraOptions.mockResolvedValue({ canManageShared: true, manualStorageReady: true })
   api.getGroupTree.mockResolvedValue([])
@@ -483,6 +491,7 @@ beforeEach(() => {
 afterEach(() => {
   app?.unmount()
   app = null
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -1454,6 +1463,305 @@ describe('camera management interaction boundaries', () => {
     expect(nodes(root).some((n) => n.type === 'ElTree')).toBe(false)
     expect(api.previewDeviceMove).not.toHaveBeenCalled()
   })
+  it('hides channel counts by default and shows only the source brand', async () => {
+    api.getCameraDevices.mockResolvedValue({
+      items: [{ ...device, sourceType: 'HIKVISION', sourceDisplayName: '不应展示的来源名称' }],
+      total: 1,
+    })
+    const root = await mount(CameraManage)
+    const labels = nodes(root)
+      .filter((node) => node.type === 'ElTableColumn')
+      .map((node) => node.props.label)
+    expect(labels).toContain('品牌')
+    expect(labels).not.toContain('可见通道')
+    expect(labels).toContain('连接状态')
+    expect(labels).toContain('IP / 主机')
+    expect(labels).toContain('端口')
+    expect(labels).not.toContain('配置状态')
+    expect(labels).not.toContain('通道状态')
+    expect(text(root)).toContain('未检测')
+    expect(text(root)).not.toContain('2 启用')
+    expect(text(root)).toContain('海康')
+    expect(text(root)).not.toContain('不应展示的来源名称')
+    expect(text(root)).not.toContain('海康设备')
+  })
+  it('shows addresses on management cards and detail without reading each row separately', async () => {
+    const accessAddress = { kind: 'DEVICE', host: '10.0.2.8', port: 80 }
+    api.getCameraDevices.mockResolvedValue({ items: [{ ...device, accessAddress }], total: 1 })
+    api.getCamera.mockResolvedValue({ ...camera, accessAddress })
+    const root = await mount(CameraManage)
+    expect(text(root)).toContain('10.0.2.8:80')
+    expect(api.getCamera).not.toHaveBeenCalled()
+    await click(root, '详情')
+    await settle()
+    expect(text(root)).toContain('IP / 主机')
+    expect(text(root)).toContain('10.0.2.8:80')
+  })
+  it('identifies a platform address instead of claiming a physical camera IP', async () => {
+    api.getCameraDevices.mockResolvedValue({
+      items: [{ ...device, accessAddress: { kind: 'PLATFORM', host: 'isc.example', port: 443 } }],
+      total: 1,
+    })
+    const root = await mount(CameraManage)
+    expect(text(root)).toContain('平台地址')
+    expect(text(root)).toContain('isc.example:443')
+  })
+  it('opens state in the same device drawer rather than navigating away', async () => {
+    api.getCameraDevices.mockResolvedValue({
+      items: [
+        {
+          ...device,
+          statusSummary: {
+            state: 'FAILED',
+            checkedAt: new Date().toISOString(),
+            validUntil: new Date(Date.now() + 60000).toISOString(),
+            reachableCount: 0,
+            failedCount: 1,
+            unknownCount: 0,
+          },
+        },
+      ],
+      total: 1,
+    })
+    const root = await mount(CameraManage)
+    await click(root, '连接异常')
+    await settle()
+    expect(text(root)).toContain('IP / 主机')
+    expect(api.getDeviceChannels).toHaveBeenCalledWith(device.groupKey, { page: 1, size: 20 })
+    expect(text(root)).not.toContain('查看状态')
+    expect(api.createStatusPlan).not.toHaveBeenCalled()
+  })
+  it('creates patrol only on explicit action and retries an uncertain request with the same key', async () => {
+    api.inspectPlanTargets.mockResolvedValue({
+      targets: [{ groupKey: 'd100', name: '入口', reasonCode: null }],
+      limitExceeded: false,
+    })
+    api.getStatusPlans.mockResolvedValue([])
+    api.createStatusPlan.mockRejectedValueOnce(new Error('lost')).mockResolvedValue({ planId: '1' })
+    const root = await mount(PlanDialog, { groupKeys: ['d100'] })
+    expect(api.createStatusPlan).not.toHaveBeenCalled()
+    await click(root, '启动巡检')
+    expect(text(root)).toContain('响应未确认')
+    await click(root, '重试原计划')
+    expect(api.createStatusPlan.mock.calls[1]).toEqual(api.createStatusPlan.mock.calls[0])
+    expect(api.createStatusPlan.mock.calls[0]![0]).toMatchObject({
+      groupKeys: ['d100'],
+      intervalMinutes: 60,
+      durationHours: 24,
+    })
+  })
+  it('keeps the wider patrol dialog free of redundant notes without enabling an empty task', async () => {
+    api.getStatusPlans.mockResolvedValue([])
+    const root = await mount(PlanDialog, { groupKeys: [] })
+    expect(nodes(root).find((item) => item.type === 'ElDialog')?.props.width).toBe('1080px')
+    expect(text(root)).not.toContain('每台检查一路代表通道')
+    expect(text(root)).not.toContain('当前范围没有可检测目标')
+    expect(text(root)).not.toContain('当前检查 RTSP 连接')
+    expect(button(root, '启动巡检').props.disabled).toBe(true)
+    expect(button(root, '关闭')).toBeDefined()
+  })
+  it('passes the plan version when stopping and permits correcting a rejected new plan', async () => {
+    api.inspectPlanTargets.mockResolvedValue({
+      targets: [{ groupKey: 'd100', name: '入口', reasonCode: null }],
+      limitExceeded: false,
+    })
+    const plan = {
+      planId: '1',
+      state: 'ACTIVE',
+      targetCount: 2,
+      intervalMinutes: 60,
+      startAt: new Date().toISOString(),
+      endAt: new Date(Date.now() + 3600000).toISOString(),
+      version: '3',
+    }
+    api.getStatusPlans.mockResolvedValue([plan])
+    api.stopStatusPlan.mockResolvedValue({ ...plan, state: 'STOPPED' })
+    api.createStatusPlan.mockRejectedValueOnce(
+      new ApiRequestError('RATE_LIMITED', '繁忙', { status: 429 }),
+    )
+    const root = await mount(PlanDialog, { groupKeys: ['d100'] })
+    await click(root, '停止')
+    expect(api.stopStatusPlan).toHaveBeenCalledWith(plan)
+    await click(root, '启动巡检')
+    expect(text(root)).not.toContain('响应未确认')
+    expect(button(root, '启动巡检')).toBeDefined()
+    expect(text(root)).toContain('增大检测间隔')
+  })
+  it('expires patrol controls using server time and releases the refresh timer on close', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-14T00:00:00Z'))
+    const plan = {
+      planId: '1',
+      state: 'ACTIVE',
+      targetCount: 1,
+      intervalMinutes: 60,
+      startAt: '2026-10-14T08:00:00Z',
+      endAt: '2026-10-14T08:00:05Z',
+      serverNow: '2026-10-14T08:00:00Z',
+      version: '1',
+      progress: { success: 0, failed: 0, pending: 0, skipped: 1, unknown: 0 },
+    }
+    api.getStatusPlans.mockResolvedValue([plan])
+    const root = await mount(PlanDialog, { groupKeys: [] })
+    expect(button(root, '停止')).toBeDefined()
+    expect(text(root)).toContain('未执行 1')
+    await vi.advanceTimersByTimeAsync(6000)
+    await settle()
+    expect(text(root)).toContain('已到期')
+    expect(button(root, '停止')).toBeUndefined()
+    app?.unmount()
+    app = null
+    expect(vi.getTimerCount()).toBe(0)
+  })
+  it('reloads a stop conflict and does not mislabel it as an unsupported RTSP target', async () => {
+    const plan = {
+      planId: '1',
+      state: 'ACTIVE',
+      targetCount: 1,
+      intervalMinutes: 60,
+      startAt: new Date().toISOString(),
+      endAt: new Date(Date.now() + 3600000).toISOString(),
+      version: '1',
+    }
+    api.getStatusPlans
+      .mockResolvedValueOnce([plan])
+      .mockResolvedValue([{ ...plan, state: 'EXPIRED', version: '2' }])
+    api.stopStatusPlan.mockRejectedValue(new ApiRequestError('CONFLICT', '冲突', { status: 409 }))
+    const root = await mount(PlanDialog, { groupKeys: [] })
+    await click(root, '停止')
+    expect(api.getStatusPlans).toHaveBeenCalledTimes(2)
+    expect(text(root)).toContain('任务状态已变化')
+    expect(text(root)).not.toContain('RTSP 地址')
+    expect(button(root, '停止')).toBeUndefined()
+  })
+  it('pauses patrol reads after three failures without submitting checks', async () => {
+    vi.useFakeTimers()
+    const plan = {
+      planId: '1',
+      state: 'ACTIVE',
+      targetCount: 1,
+      intervalMinutes: 60,
+      startAt: new Date().toISOString(),
+      endAt: new Date(Date.now() + 3600000).toISOString(),
+      version: '1',
+    }
+    api.getStatusPlans.mockResolvedValueOnce([plan]).mockRejectedValue(new Error('unavailable'))
+    const root = await mount(PlanDialog, { groupKeys: [] })
+    await vi.advanceTimersByTimeAsync(120000)
+    await settle()
+    expect(api.getStatusPlans).toHaveBeenCalledTimes(4)
+    expect(text(root)).toContain('已暂停自动刷新')
+    expect(api.createStatusPlan).not.toHaveBeenCalled()
+  })
+  it('excludes unsupported representatives and prevents an empty patrol request', async () => {
+    api.getStatusPlans.mockResolvedValue([])
+    api.inspectPlanTargets.mockResolvedValue({
+      targets: [
+        {
+          groupKey: 'd100',
+          name: 'ONVIF相机',
+          reasonCode: 'SOURCE_PROTOCOL_NOT_SUPPORTED',
+        },
+      ],
+      limitExceeded: false,
+    })
+    const root = await mount(PlanDialog, { groupKeys: ['d100', 'd100'] })
+    expect(api.inspectPlanTargets).toHaveBeenCalledTimes(1)
+    expect(text(root).replace(/\s+/g, ' ')).toContain('0 台可检测 / 1 台 · 1 台跳过')
+    expect(text(root)).toContain('此接入方式的连接检测尚未适配')
+    expect(button(root, '启动巡检').props.disabled).toBe(true)
+    await click(root, '启动巡检')
+    expect(api.createStatusPlan).not.toHaveBeenCalled()
+  })
+  it('shows excluded targets before creating a supported subset', async () => {
+    api.getStatusPlans.mockResolvedValue([])
+    api.inspectPlanTargets.mockResolvedValue({
+      targets: ['d100', 'd200'].map((groupKey) => ({
+        groupKey,
+        name: groupKey,
+        reasonCode: groupKey === 'd200' ? 'LOCATOR_NOT_CONFIGURED' : null,
+      })),
+      limitExceeded: false,
+    })
+    api.createStatusPlan.mockResolvedValue({ planId: '1' })
+    const root = await mount(PlanDialog, { groupKeys: ['d100', 'd200'] })
+    expect(text(root).replace(/\s+/g, ' ')).toContain('1 台可检测 / 2 台 · 1 台跳过')
+    expect(text(root)).toContain('d200：未配置 RTSP 地址')
+    await click(root, '启动巡检')
+    expect(api.createStatusPlan.mock.calls[0]![0].groupKeys).toEqual(['d100'])
+  })
+  it('blocks submission when target inspection fails without claiming offline', async () => {
+    api.getStatusPlans.mockResolvedValue([])
+    api.inspectPlanTargets.mockRejectedValue(new ApiRequestError('REQUEST_TIMEOUT', '核对超时'))
+    const root = await mount(PlanDialog, { groupKeys: ['d100'] })
+    expect(button(root, '启动巡检').props.disabled).toBe(true)
+    expect(text(root)).not.toContain('离线')
+    expect(button(root, '重新核对目标')).toBeDefined()
+  })
+  it('previews the full scope without submitting and refuses an oversized scope', async () => {
+    api.getStatusPlans.mockResolvedValue([])
+    const root = await mount(PlanDialog, { groupKeys: ['d100'] })
+    api.inspectPlanTargets.mockResolvedValue({ targets: [], limitExceeded: true })
+    await setField(root, '1. 检测范围', 'ALL', 'ElSelect')
+    await (field(root, '1. 检测范围', 'ElSelect').props.onChange as () => Promise<void>)()
+    await settle()
+    expect(api.inspectPlanTargets).toHaveBeenLastCalledWith({ scope: 'ALL' })
+    expect(text(root)).toContain('超过 2000 台')
+    expect(button(root, '启动巡检').props.disabled).toBe(true)
+    expect(api.createStatusPlan).not.toHaveBeenCalled()
+  })
+  it('rechecks a stopped task range and requires confirmation to start a fresh finite task', async () => {
+    const plan = {
+      planId: '9',
+      state: 'STOPPED',
+      targetCount: 1,
+      intervalMinutes: 30,
+      startAt: '2026-10-14T08:00:00Z',
+      endAt: '2026-10-14T14:00:00Z',
+      version: '1',
+    }
+    api.getStatusPlans.mockResolvedValue([plan])
+    api.createStatusPlan.mockResolvedValue({ planId: '10' })
+    const root = await mount(PlanDialog, { groupKeys: [] })
+    api.inspectPlanTargets.mockResolvedValue({
+      targets: [{ groupKey: 'd900', name: '模拟设备', reasonCode: null }],
+      limitExceeded: false,
+    })
+    await click(root, '重新启动')
+    await settle()
+    expect(api.inspectPlanTargets).toHaveBeenLastCalledWith({ scope: 'PLAN', planId: '9' })
+    expect(text(root)).toContain('确认后启动新任务')
+    expect(api.createStatusPlan).not.toHaveBeenCalled()
+    await click(root, '启动巡检')
+    expect(api.createStatusPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ groupKeys: ['d900'], intervalMinutes: 30, durationHours: 6 }),
+    )
+  })
+  it('ignores an older scope preview that arrives after a newer selection', async () => {
+    let resolve: (value: unknown) => void = () => {}
+    api.inspectPlanTargets.mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done
+      }),
+    )
+    api.getStatusPlans.mockResolvedValue([])
+    const root = await mount(PlanDialog, { groupKeys: ['d100'] })
+    api.inspectPlanTargets.mockResolvedValue({
+      targets: [{ groupKey: 'd200', name: '全量目标', reasonCode: null }],
+      limitExceeded: false,
+    })
+    await setField(root, '1. 检测范围', 'ALL', 'ElSelect')
+    await (field(root, '1. 检测范围', 'ElSelect').props.onChange as () => Promise<void>)()
+    resolve({
+      targets: [{ groupKey: 'd100', name: '旧目标', reasonCode: null }],
+      limitExceeded: false,
+    })
+    await settle()
+    await click(root, '启动巡检')
+    expect(api.createStatusPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ groupKeys: ['d200'] }),
+    )
+  })
   it('shows only local edits to ordinary camera managers and no unavailable operations', async () => {
     api.getCameraOptions.mockResolvedValue({ canManageShared: false })
     const root = await mount(CameraManage)
@@ -1463,7 +1771,7 @@ describe('camera management interaction boundaries', () => {
     expect(button(root, '编辑通道')).toBeDefined()
     expect(button(root, '新增相机')).toBeUndefined()
     expect(button(root, '删除通道')).toBeUndefined()
-    expect(text(root)).not.toMatch(/播放|在线|网段搜索|海康接入/)
+    expect(text(root)).not.toMatch(/播放|>在线<|网段搜索|海康接入/)
   })
   it('discards a stale list response when a newer filter completes first', async () => {
     let finish!: (value: unknown) => void

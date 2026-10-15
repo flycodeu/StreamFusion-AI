@@ -37,6 +37,38 @@ function directory(children: MenuRoute[], values: Partial<MenuRoute> = {}): Menu
 }
 
 describe('backend menu route assembly', () => {
+  it('keeps the status PAGE independent from camera management under the same module grant', () => {
+    const statusPage: PageLoader = async () => ({ default: { name: 'CameraStatus' } })
+    const resolver = createPageResolver({
+      '../../views/camera/Manage.vue': cameraPage,
+      '../../views/camera/Status.vue': statusPage,
+    })
+    const result = buildMenuRoutes(
+      [
+        directory([
+          page({ componentKey: '/camera/Manage' }),
+          page({
+            id: '1106',
+            name: '相机状态',
+            routeName: 'CameraStatus',
+            path: '/camera/status',
+            componentKey: '/camera/Status',
+          }),
+        ]),
+      ],
+      ['camera'],
+      resolver,
+    )
+    expect(result.records).toHaveLength(2)
+    expect(result.records[1]).toMatchObject({
+      path: '/camera/status',
+      name: 'page:CameraStatus',
+      component: statusPage,
+      meta: { moduleKey: 'camera', componentPath: '/camera/Status', configurationError: false },
+    })
+    expect(result.navigation[0]?.children).toHaveLength(2)
+    expect(result.records[1]?.redirect).toBeUndefined()
+  })
   it('merges legacy camera group navigation while preserving old links and PAGE grants', () => {
     const camera = page({ componentKey: '/camera/Manage' })
     const groups = page({

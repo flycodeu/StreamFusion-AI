@@ -27,6 +27,7 @@ import CreateDialog from './CreateDialog.vue'
 import { connectionLabel, lifecycleLabels, usageLabel, effectiveUsage, streamLabel } from './form'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
+import { addressLabel, addressText, streamAddress } from './address'
 
 const props = defineProps<{ cameraId: string; canManage: boolean; deviceName?: string }>()
 const emit = defineEmits<{ close: []; changed: [] }>()
@@ -215,6 +216,10 @@ onMounted(load)
           </ElForm>
           <dl class="detail-facts">
             <div>
+              <dt>{{ addressLabel(camera.accessAddress) }}</dt>
+              <dd>{{ addressText(camera.accessAddress) }}</dd>
+            </div>
+            <div>
               <dt>视频分组</dt>
               <dd>{{ camera.groupPath || '待归档' }}</dd>
             </div>
@@ -280,6 +285,9 @@ onMounted(load)
                   v-if="streamLabel(asProfile(row)) !== row.label"
                   class="table-secondary stream-source-label"
                   >{{ row.label }}</span
+                >
+                <span class="table-secondary stream-address"
+                  >码流地址 · {{ streamAddress(asProfile(row), camera.accessAddress) }}</span
                 ></template
               ></ElTableColumn
             >
@@ -347,6 +355,10 @@ onMounted(load)
         </ElTabPane>
         <ElTabPane label="设备连接" name="connection">
           <dl class="detail-facts">
+            <div>
+              <dt>{{ addressLabel(camera.accessAddress) }}</dt>
+              <dd>{{ addressText(camera.accessAddress) }}</dd>
+            </div>
             <div>
               <dt>接入来源</dt>
               <dd>{{ camera.sourceDisplayName }}</dd>
@@ -438,7 +450,8 @@ onMounted(load)
   </ElDialog>
 </template>
 <style scoped>
-.stream-source-label {
+.stream-source-label,
+.stream-address {
   display: block;
   overflow-wrap: anywhere;
   line-height: 1.4;

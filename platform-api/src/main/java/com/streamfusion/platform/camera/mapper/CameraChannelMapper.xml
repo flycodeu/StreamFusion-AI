@@ -4,11 +4,30 @@
     <sql id="projection">
         c.*, s.adapter_type AS source_type, s.connection_category, s.vendor_hint,
         s.name AS source_display_name, s.version AS source_version,
-        d.device_type, d.manufacturer, d.model
+        d.device_type, d.manufacturer, d.model,
+        e.host AS address_host, e.port AS address_port
+    </sql>
+    <sql id="joinedAddress">
+        LEFT JOIN camera_source_endpoint e ON e.id=(
+            SELECT ep.id FROM camera_source_endpoint ep WHERE ep.source_id=s.id
+                AND ((s.connection_category='PLATFORM' AND ep.purpose='PLATFORM_HTTP')
+                    OR (s.connection_category='RTSP' AND ep.purpose='RTSP')
+                    OR (s.connection_category='DEVICE' AND ep.purpose IN ('DEVICE_HTTP','VENDOR_HTTP','ONVIF','RTSP')))
+            ORDER BY CASE
+                WHEN s.connection_category='PLATFORM' AND ep.purpose='PLATFORM_HTTP' THEN 0
+                WHEN s.connection_category='RTSP' AND ep.purpose='RTSP' THEN 0
+                WHEN s.connection_category='DEVICE' AND ep.purpose='DEVICE_HTTP' THEN 0
+                WHEN s.adapter_type='ONVIF' AND ep.purpose='ONVIF' THEN 1
+                WHEN ep.purpose='VENDOR_HTTP' THEN 2
+                WHEN ep.purpose='ONVIF' THEN 3
+                WHEN ep.purpose='RTSP' THEN 4
+                ELSE 5 END, ep.id
+            LIMIT 1)
     </sql>
     <sql id="joinedAssets">
         camera_channel c JOIN camera_source s ON s.id=c.source_id
         LEFT JOIN camera_device d ON d.id=c.device_id AND d.source_id=c.source_id
+        <include refid="joinedAddress"/>
     </sql>
     <select id="pageVisible" resultType="com.streamfusion.platform.camera.mapper.CameraAssetRow">
         SELECT <include refid="projection"/> FROM <include refid="joinedAssets"/>
@@ -55,6 +74,7 @@
             CASE WHEN c.device_id IS NULL THEN FALSE ELSE TRUE END AS identified,
             d.manufacturer,d.model,s.name AS source_display_name,
             s.adapter_type AS source_type,s.connection_category,
+            e.host AS address_host,e.port AS address_port,
             COUNT(*) AS channel_count,
             MIN(c.group_id) AS group_id, COUNT(DISTINCT COALESCE(c.group_id,0)) AS group_count,
             SUM(CASE WHEN c.lifecycle='ENABLED' THEN 1 ELSE 0 END) AS enabled_count,
@@ -65,7 +85,7 @@
         <include refid="deviceFilters"/>
         GROUP BY <include refid="deviceGroupKey"/>,<include refid="deviceGroupName"/>,
             CASE WHEN c.device_id IS NULL THEN FALSE ELSE TRUE END,
-            d.manufacturer,d.model,s.name,s.adapter_type,s.connection_category
+            d.manufacturer,d.model,s.name,s.adapter_type,s.connection_category,e.host,e.port
         ORDER BY MAX(c.created_at) DESC,MAX(c.id) DESC
     </select>
     <select id="pageDeviceChannels" resultType="com.streamfusion.platform.camera.mapper.CameraAssetRow">
@@ -75,8 +95,49 @@
         <include refid="deviceFilters"/>
         ORDER BY c.id ASC
     </select>
+    <select id="statusDeviceRepresentatives" resultType="com.streamfusion.platform.camera.status.CameraStatusPageRow">
+        SELECT representative.* FROM (
+            SELECT c.*,ROW_NUMBER() OVER (
+                PARTITION BY <include refid="deviceGroupKey"/> ORDER BY c.id
+            ) AS representative_order
+            FROM camera_channel c JOIN camera_source s ON s.id=c.source_id
+            LEFT JOIN camera_device d ON d.id=c.device_id AND d.source_id=c.source_id
+            WHERE (<include refid="com.streamfusion.platform.camera.mapper.CameraScopeMapper.visibleCamera"/>)
+            AND c.lifecycle='ENABLED'
+            <if test="keys != null">
+                AND <include refid="deviceGroupKey"/> IN
+                <foreach collection="keys" item="key" open="(" separator="," close=")">#{key}</foreach>
+            </if>
+        ) representative
+        WHERE representative.representative_order=1
+        ORDER BY representative.id LIMIT #{limit}
+    </select>
     <select id="visible" resultType="com.streamfusion.platform.camera.mapper.CameraAssetRow">
         SELECT <include refid="projection"/> FROM <include refid="joinedAssets"/>
         WHERE c.id=#{id} AND <include refid="com.streamfusion.platform.camera.mapper.CameraScopeMapper.visibleCamera"/>
+    </select>
+    <select id="pageStatus" resultType="com.streamfusion.platform.camera.status.CameraStatusPageRow">
+        SELECT c.*,s.connection_category,e.host AS address_host,e.port AS address_port,
+            CASE WHEN c.device_id IS NULL THEN NULL ELSE
+                COALESCE(NULLIF(d.local_name,''),NULLIF(d.source_name,'')) END AS device_name
+        FROM <include refid="joinedAssets"/>
+        WHERE (<include refid="com.streamfusion.platform.camera.mapper.CameraScopeMapper.visibleCamera"/>)
+        <if test="name != null">
+            AND (LOWER(c.name) LIKE CONCAT('%',LOWER(#{name}),'%') ESCAPE '!'
+                OR LOWER(d.local_name) LIKE CONCAT('%',LOWER(#{name}),'%') ESCAPE '!'
+                OR LOWER(d.source_name) LIKE CONCAT('%',LOWER(#{name}),'%') ESCAPE '!')
+        </if>
+        <if test="observation != null">
+            AND <choose><when test="observation == 'NEVER'">NOT</when></choose> EXISTS(
+                SELECT 1 FROM camera_status_snapshot f
+                WHERE f.profile_id=(
+                    SELECT p.id FROM camera_stream_profile p
+                    WHERE p.channel_id=c.id AND p.enabled=1
+                    ORDER BY CASE WHEN p.id=c.default_preview_profile_id THEN 0
+                        WHEN p.usage_hint='MAIN' THEN 1 ELSE 2 END,p.id LIMIT 1)
+                AND f.layer='CONTROL'
+                <if test="observation != 'NEVER'">AND f.observation_value=#{observation}</if>)
+        </if>
+        ORDER BY c.created_at DESC,c.id DESC
     </select>
 </mapper>

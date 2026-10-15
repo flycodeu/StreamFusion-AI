@@ -3,6 +3,10 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { sessionState } from '../../session/state'
 import { findPreviewPath } from '../../features/preview/model'
+import { deviceStatus } from '../../features/camera-status/deviceStatus'
+import { useDeviceRefresh } from '../../features/camera-status/useDeviceRefresh'
+import PlanDialog from '../../features/camera-status/PlanDialog.vue'
+import { formatDateTime } from '../../utils/dateTime'
 import {
   ElButton,
   ElCheckbox,
@@ -26,7 +30,8 @@ import TableActions from '../../components/table/TableActions.vue'
 import ColumnPicker from '../../components/table/ColumnPicker.vue'
 import { useColumns } from '../../composables/table/useColumns'
 import { usePageScope } from '../../composables/usePageScope'
-import { connectionLabel, lifecycleLabels } from '../../features/camera/form'
+import { lifecycleLabels, sourceBrandLabel } from '../../features/camera/form'
+import { addressLabel, addressText } from '../../features/camera/address'
 import CreateDialog from '../../features/camera/CreateDialog.vue'
 import ManualCreateDialog from '../../features/camera/ManualCreateDialog.vue'
 import ScanDialog from '../../features/camera-access/ScanDialog.vue'
@@ -76,6 +81,10 @@ const creating = ref<'manual' | 'scan' | 'platform' | 'rtsp' | null>(null),
   importTasksOpen = ref(false),
   storageReady = ref(true)
 const selectedDevice = ref<CameraDeviceGroup | null>(null)
+const plansOpen = ref(false)
+const planGroups = computed(() =>
+  rows.value.filter((row) => row.enabledCount > 0).map((row) => row.groupKey),
+)
 const editingDevice = ref<CameraDeviceGroup | null>(null)
 async function deviceSaved(name: string) {
   if (selectedDevice.value?.groupKey === editingDevice.value?.groupKey && selectedDevice.value)
@@ -83,13 +92,11 @@ async function deviceSaved(name: string) {
   editingDevice.value = null
   await refresh()
 }
-const columns = useColumns('camera-device-workspace', [
-  'name',
-  'group',
-  'channels',
-  'source',
-  'lifecycle',
-])
+const columns = useColumns(
+  'camera-device-workspace-v3',
+  ['name', 'group', 'source', 'connection'],
+  ['name', 'group', 'channels', 'source', 'connection', 'lifecycle'],
+)
 let sequence = 0,
   treeSequence = 0
 const asDevice = (value: unknown) => value as CameraDeviceGroup
@@ -173,6 +180,7 @@ async function loadTree() {
   }
 }
 async function refresh() {
+  resetAutoRefresh()
   const active = captureScope()
   await loadTree()
   if (active()) await load()
@@ -196,6 +204,12 @@ function openPreview(device: CameraDeviceGroup) {
       query: { mode: 'device', device: device.groupKey },
     })
 }
+const resetAutoRefresh = useDeviceRefresh(async () => {
+  if (!loading.value && !plansOpen.value) {
+    await load()
+    if (error.value) throw error.value
+  }
+})
 async function groupsChanged() {
   groupEditor.value = null
   await refresh()
@@ -321,6 +335,7 @@ onMounted(refresh)
           ></template
         >
         <template #tools
+          ><ElButton @click="plansOpen = true">巡检计划</ElButton
           ><ElButton :loading="loading || treeLoading" @click="refresh">刷新</ElButton
           ><span class="desktop-column-picker"
             ><ColumnPicker
@@ -329,7 +344,8 @@ onMounted(refresh)
                 { key: 'name', label: '相机设备' },
                 { key: 'group', label: '所属分组' },
                 { key: 'channels', label: '通道数量' },
-                { key: 'source', label: '接入来源' },
+                { key: 'source', label: '品牌' },
+                { key: 'connection', label: '连接状态' },
                 { key: 'lifecycle', label: '配置状态' },
               ]" /></span
         ></template>
@@ -341,21 +357,56 @@ onMounted(refresh)
           border
           empty-text="暂无可访问设备"
         >
-          <ElTableColumn v-if="columns.includes('name')" label="相机设备" min-width="240"
+          <ElTableColumn v-if="columns.includes('name')" label="相机设备" min-width="185"
             ><template #default="{ row }">
-              <div class="device-name">
+              <div class="device-name" :title="row.name">
                 {{ row.name
                 }}<ElTag v-if="!row.identified" size="small" type="info">待关联设备</ElTag>
               </div>
-              <span v-if="row.manufacturer || row.model" class="table-secondary">{{
-                [row.manufacturer, row.model].filter(Boolean).join(' · ')
+              <span v-if="row.model" class="table-secondary" :title="row.model">{{
+                row.model
               }}</span>
             </template></ElTableColumn
           >
+          <ElTableColumn label="IP / 主机" min-width="130">
+            <template #default="{ row }"
+              ><span class="address-host">{{ row.accessAddress?.host || '未获取' }}</span>
+              <span v-if="row.accessAddress?.kind === 'PLATFORM'" class="table-secondary"
+                >平台地址</span
+              >
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="端口" width="80"
+            ><template #default="{ row }">{{
+              row.accessAddress?.port ?? '—'
+            }}</template></ElTableColumn
+          >
+          <ElTableColumn
+            v-if="columns.includes('source')"
+            label="品牌"
+            min-width="75"
+            show-overflow-tooltip
+          >
+            <template #default="{ row }">{{ sourceBrandLabel(asDevice(row)) }}</template>
+          </ElTableColumn>
+          <ElTableColumn v-if="columns.includes('connection')" label="连接状态" min-width="150">
+            <template #default="{ row }">
+              <div class="device-statuses">
+                <ElButton link @click="selectedDevice = asDevice(row)">
+                  <ElTag :type="deviceStatus(asDevice(row)).tone">{{
+                    deviceStatus(asDevice(row)).label
+                  }}</ElTag>
+                </ElButton>
+              </div>
+              <span v-if="row.statusSummary?.checkedAt" class="table-secondary">{{
+                formatDateTime(row.statusSummary.checkedAt)
+              }}</span>
+            </template>
+          </ElTableColumn>
           <ElTableColumn
             v-if="columns.includes('group')"
             label="所属分组"
-            min-width="170"
+            min-width="110"
             show-overflow-tooltip
           >
             <template #default="{ row }">{{
@@ -366,25 +417,13 @@ onMounted(refresh)
                   : row.groupPath || '待归档'
             }}</template>
           </ElTableColumn>
-          <ElTableColumn v-if="columns.includes('channels')" label="可见通道" width="110"
-            ><template #default="{ row }">{{ row.channelCount }} 个</template></ElTableColumn
-          >
-          <ElTableColumn
-            v-if="columns.includes('source')"
-            label="接入来源"
-            min-width="200"
-            show-overflow-tooltip
-            ><template #default="{ row }"
-              ><div>{{ row.sourceDisplayName }}</div>
-              <span class="table-secondary">{{
-                connectionLabel(row.sourceType, row.connectionCategory)
-              }}</span></template
-            ></ElTableColumn
-          >
-          <ElTableColumn v-if="columns.includes('lifecycle')" label="通道状态" min-width="180"
+          <ElTableColumn v-if="columns.includes('channels')" label="可见通道" width="110">
+            <template #default="{ row }">{{ row.channelCount }} 个</template>
+          </ElTableColumn>
+          <ElTableColumn v-if="columns.includes('lifecycle')" label="配置状态" min-width="180"
             ><template #default="{ row }"
               ><div class="device-statuses">
-                <ElTag v-if="row.enabledCount" type="success">{{ row.enabledCount }} 启用</ElTag>
+                <ElTag v-if="row.enabledCount" type="info">{{ row.enabledCount }} 启用</ElTag>
                 <ElTag v-if="row.disabledCount" type="info">{{ row.disabledCount }} 停用</ElTag>
                 <ElTag v-if="row.pendingCount" type="info">{{ row.pendingCount }} 待归档</ElTag>
               </div></template
@@ -392,7 +431,7 @@ onMounted(refresh)
           >
           <ElTableColumn
             label="操作"
-            :width="canManage ? 274 : 150"
+            :width="canManage ? 230 : 150"
             fixed="right"
             class-name="table-actions-column"
             :resizable="false"
@@ -423,11 +462,26 @@ onMounted(refresh)
           <article v-for="row in rows" :key="row.groupKey" class="mobile-device">
             <h3>{{ row.name }}</h3>
             <p>
-              {{
-                [row.manufacturer, row.model].filter(Boolean).join(' · ') || row.sourceDisplayName
-              }}
+              {{ [sourceBrandLabel(row), row.model].filter(Boolean).join(' · ') }}
             </p>
             <dl>
+              <div>
+                <dt>{{ addressLabel(row.accessAddress) }}</dt>
+                <dd>{{ addressText(row.accessAddress) }}</dd>
+              </div>
+              <div>
+                <dt>连接状态</dt>
+                <dd class="device-statuses">
+                  <ElButton link @click="selectedDevice = row"
+                    ><ElTag :type="deviceStatus(row).tone">{{
+                      deviceStatus(row).label
+                    }}</ElTag></ElButton
+                  >
+                  <span v-if="row.statusSummary?.checkedAt" class="table-secondary">{{
+                    formatDateTime(row.statusSummary.checkedAt)
+                  }}</span>
+                </dd>
+              </div>
               <div>
                 <dt>分组</dt>
                 <dd>
@@ -439,10 +493,6 @@ onMounted(refresh)
                         : row.groupPath || '待归档'
                   }}
                 </dd>
-              </div>
-              <div>
-                <dt>通道</dt>
-                <dd>{{ row.channelCount }} 个可见通道</dd>
               </div>
             </dl>
             <TableActions compact>
@@ -495,6 +545,12 @@ onMounted(refresh)
       :device="selectedDevice"
       :can-manage="canManage"
       @close="selectedDevice = null"
+      @changed="refresh"
+    />
+    <PlanDialog
+      v-if="plansOpen"
+      :group-keys="planGroups"
+      @close="plansOpen = false"
       @changed="refresh"
     />
     <ImportTasksDialog v-if="importTasksOpen" @close="closeImportTasks" />
@@ -605,6 +661,16 @@ onMounted(refresh)
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+.device-table .table-secondary {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.address-host {
+  display: block;
+  overflow-wrap: anywhere;
 }
 .camera-search-form {
   display: flex;

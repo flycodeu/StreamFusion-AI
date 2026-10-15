@@ -70,9 +70,9 @@ public class CameraLocatorService {
         if (!"RTSP".equals(locator.getLocatorKind())) return summary;
         summary.put("hostMode", locator.getRtspHostMode());
         summary.put("transport", locator.getRtspTransport());
+        summary.put("host", locator.getRtspHost());
+        summary.put("port", locator.getRtspPort());
         if (admin) {
-            summary.put("host", locator.getRtspHost());
-            summary.put("port", locator.getRtspPort());
             summary.put("pathConfigured", true);
             // A secret stays write-only. No query-value or comparable hash is returned.
             var plain = crypto.decrypt(aad(locator), envelope(locator));

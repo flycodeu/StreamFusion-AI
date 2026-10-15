@@ -11,8 +11,10 @@ describe('file-based business page resolution', () => {
       '/camera-group/Manage',
       '/camera-scope/Manage',
       '/camera/Manage',
+      '/camera/Status',
       '/monitor/ApiDocs',
       '/monitor/Audit',
+      '/monitor/Diagnostics',
       '/monitor/Server',
       '/preview/Center',
       '/system/Department',
@@ -33,6 +35,10 @@ describe('file-based business page resolution', () => {
       expect(availablePagePaths).not.toContain(path)
       expect(resolvePage(path)).toBeUndefined()
     }
+  })
+  it('discovers the independent camera status page without a static route registration', () => {
+    expect(resolvePage('/camera/Status')).toBeTypeOf('function')
+    expect(resolvePage('/camera/status')).toBeUndefined()
   })
   it('loads a new camera page directly from its file path without a registry entry', async () => {
     const resolve = createPageResolver({

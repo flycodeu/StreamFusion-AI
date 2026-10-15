@@ -16,6 +16,10 @@ DROP TABLE IF EXISTS `camera_access_job`;
 DROP TABLE IF EXISTS `camera_user_channel_grant`;
 DROP TABLE IF EXISTS `camera_user_group_grant`;
 DROP TABLE IF EXISTS `camera_user_scope`;
+DROP TABLE IF EXISTS `camera_status_plan_target`;
+DROP TABLE IF EXISTS `camera_status_plan`;
+DROP TABLE IF EXISTS `camera_status_snapshot`;
+DROP TABLE IF EXISTS `camera_status_check`;
 DROP TABLE IF EXISTS `camera_create_request`;
 DROP TABLE IF EXISTS `camera_profile_locator`;
 DROP TABLE IF EXISTS `camera_stream_profile`;
@@ -27,6 +31,8 @@ DROP TABLE IF EXISTS `camera_source_credential`;
 DROP TABLE IF EXISTS `camera_source`;
 DROP TABLE IF EXISTS `sys_login_record`;
 DROP TABLE IF EXISTS `sys_ip_block`;
+DROP TABLE IF EXISTS sys_audit_export;
+DROP TABLE IF EXISTS sys_audit_retention_policy;
 DROP TABLE IF EXISTS `sys_operation_log`;
 DROP TABLE IF EXISTS `sys_role_menu`;
 DROP TABLE IF EXISTS `sys_user_dept`;
@@ -175,6 +181,11 @@ VALUES
 INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, icon, sort_order, visible, enabled)
 VALUES (1009, 1008, '接口文档', 'PAGE', 'MonitorApiDocs', '/monitor/ApiDocs', '/monitor/ApiDocs', 'api-docs', 'menu', 2, TRUE, TRUE);
 
+-- BEGIN DIAGNOSTICS MENU SEED
+INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, icon, sort_order, visible, enabled)
+VALUES (1010, 1008, '诊断日志', 'PAGE', 'MonitorDiagnostics', '/monitor/Diagnostics', '/monitor/Diagnostics', 'diagnostics', 'audit', 3, TRUE, TRUE);
+-- END DIAGNOSTICS MENU SEED
+
 -- BEGIN CAMERA MENU SEEDS
 INSERT INTO sys_menu (id, parent_id, name, type, icon, sort_order, visible, enabled)
 VALUES (1100, NULL, '视频管理', 'DIRECTORY', 'monitor', 0, TRUE, TRUE);
@@ -183,7 +194,8 @@ VALUES
     (1105, 1100, '预览中心', 'PAGE', 'PreviewCenter', '/preview/center', '/preview/Center', 'camera', 'monitor', 0, TRUE, TRUE),
     (1101, 1100, '相机管理', 'PAGE', 'CameraManage', '/camera/manage', '/camera/Manage', 'camera', 'monitor', 1, TRUE, TRUE),
     (1103, 1100, '视频分组', 'PAGE', 'CameraGroups', '/camera/groups', '/camera-group/Manage', 'camera', 'department', 2, TRUE, TRUE),
-    (1104, 1100, '相机授权', 'PAGE', 'CameraScopes', '/camera/scopes', '/camera-scope/Manage', 'camera_scope', 'role', 3, TRUE, TRUE);
+    (1104, 1100, '相机授权', 'PAGE', 'CameraScopes', '/camera/scopes', '/camera-scope/Manage', 'camera_scope', 'role', 3, TRUE, TRUE),
+    (1106, 1100, '相机状态', 'PAGE', 'CameraStatus', '/camera/status', '/camera/Status', 'camera', 'monitor', 4, TRUE, TRUE);
 
 -- 用户角色关联表.sql
 CREATE TABLE sys_user_role (
@@ -251,6 +263,57 @@ CREATE TABLE sys_operation_log (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='操作审计';
 CREATE INDEX ix_operation_created ON sys_operation_log(created_at, id);
 CREATE INDEX ix_operation_target ON sys_operation_log(target_type, target_id, created_at);
+
+-- 审计保留策略表.sql
+CREATE TABLE sys_audit_retention_policy (
+    id BIGINT NOT NULL COMMENT '单例ID',
+    enabled BOOLEAN NOT NULL DEFAULT FALSE COMMENT '是否开启清理',
+    mode VARCHAR(8) NOT NULL DEFAULT 'AGE' COMMENT 'AGE或COUNT',
+    keep_months INT NOT NULL DEFAULT 6 COMMENT '保留自然月数',
+    max_records INT NOT NULL DEFAULT 50000 COMMENT '保留条数',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT '并发版本',
+    updated_by BIGINT NULL COMMENT '配置修改人',
+    updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '修改时间',
+    next_at DATETIME(6) NULL COMMENT '下次执行时间',
+    last_started_at DATETIME(6) NULL COMMENT '最近开始时间',
+    last_finished_at DATETIME(6) NULL COMMENT '最近结束时间',
+    last_deleted INT NOT NULL DEFAULT 0 COMMENT '最近删除数量',
+    last_result VARCHAR(32) NULL COMMENT '最近执行结果',
+    PRIMARY KEY (id),
+    CONSTRAINT ck_audit_policy_singleton CHECK (id = 1),
+    CONSTRAINT ck_audit_policy_mode CHECK (mode IN ('AGE','COUNT')),
+    CONSTRAINT ck_audit_policy_bounds CHECK (keep_months BETWEEN 1 AND 120 AND max_records BETWEEN 1000 AND 1000000 AND version >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='操作审计按需保留策略';
+INSERT INTO sys_audit_retention_policy(id) VALUES (1);
+
+-- 审计导出任务表.sql
+CREATE TABLE sys_audit_export (
+    id BIGINT NOT NULL COMMENT '导出任务ID',
+    actor_id BIGINT NOT NULL COMMENT '创建人历史ID',
+    client_request_id VARCHAR(36) NOT NULL COMMENT '幂等请求编号',
+    filter_json TEXT NOT NULL COMMENT '已校验的筛选JSON',
+    format VARCHAR(8) NOT NULL COMMENT 'CSV或JSONL',
+    state VARCHAR(16) NOT NULL COMMENT '导出状态',
+    storage_key VARCHAR(32) NOT NULL COMMENT '本机存储标识',
+    upper_time DATETIME(6) NULL COMMENT '创建时排序上界时间',
+    upper_id BIGINT NULL COMMENT '创建时排序上界ID',
+    row_count INT NOT NULL DEFAULT 0 COMMENT '已写入记录数',
+    file_bytes BIGINT NOT NULL DEFAULT 0 COMMENT '文件字节数',
+    file_removed BOOLEAN NOT NULL DEFAULT FALSE COMMENT '文件已清理',
+    reason_code VARCHAR(64) NULL COMMENT '安全失败原因',
+    created_at DATETIME(6) NOT NULL COMMENT '创建时间',
+    started_at DATETIME(6) NULL COMMENT '开始时间',
+    finished_at DATETIME(6) NULL COMMENT '结束时间',
+    expires_at DATETIME(6) NOT NULL COMMENT '文件过期时间',
+    lease_until DATETIME(6) NULL COMMENT '执行租约',
+    worker_id VARCHAR(32) NULL COMMENT '执行实例令牌',
+    PRIMARY KEY (id),
+    CONSTRAINT uq_audit_export_request UNIQUE (actor_id,client_request_id),
+    CONSTRAINT ck_audit_export_format CHECK (format IN ('CSV','JSONL')),
+    CONSTRAINT ck_audit_export_state CHECK (state IN ('QUEUED','RUNNING','COMPLETED','FAILED','CANCELLED','EXPIRED'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='操作审计有界导出任务';
+CREATE INDEX ix_audit_export_queue ON sys_audit_export(storage_key,state,created_at,id);
+CREATE INDEX ix_audit_export_actor ON sys_audit_export(actor_id,created_at,id);
 
 -- IP封禁表.sql
 CREATE TABLE sys_ip_block (
@@ -511,6 +574,124 @@ CREATE TABLE camera_create_request (
     KEY ix_camera_create_actor (actor_user_id,client_request_id),
     CONSTRAINT ck_camera_create_operation CHECK (operation IN ('CREATE_SOURCE','CREATE_CAMERA','ADD_PROFILE'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='同步相机资产创建回执';
+
+-- 相机状态检查表.sql
+CREATE TABLE camera_status_check (
+    id BIGINT NOT NULL COMMENT '手动检查雪花ID',
+    actor_user_id BIGINT NOT NULL COMMENT '发起用户历史ID，不建立用户外键',
+    plan_id BIGINT NULL COMMENT '有限期计划ID；NULL为原会话约束手动检查',
+    camera_id BIGINT NOT NULL COMMENT '发起时的通道ID，不阻止资产硬删除',
+    source_id BIGINT NOT NULL COMMENT '发起时的来源ID',
+    profile_id BIGINT NOT NULL COMMENT '本次指定码流ID',
+    client_request_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '13位Unix毫秒-UUIDv4，用户内幂等',
+    request_key_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '规范化请求HMAC密钥ID',
+    session_key_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '会话HMAC密钥ID',
+    connection_key_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '实际连接语义HMAC密钥ID',
+    request_fingerprint BINARY(32) NOT NULL COMMENT '请求语义HMAC，不含原始请求或凭据',
+    session_digest BINARY(32) NOT NULL COMMENT '会话HMAC，不保存原始Session ID',
+    connection_digest BINARY(32) NOT NULL COMMENT '解密后连接配置HMAC，仅内部比较',
+    probe_kind VARCHAR(32) NOT NULL DEFAULT 'RTSP_DESCRIBE' COMMENT '本期固定RTSP_DESCRIBE',
+    execution_state VARCHAR(20) NOT NULL COMMENT 'QUEUED/RUNNING/COMPLETED/SKIPPED/CANCELLED/INTERRUPTED',
+    result_value VARCHAR(16) NULL COMMENT '观察事实ACCESSIBLE/FAILED/UNSUPPORTED，无事实为NULL',
+    reason_code VARCHAR(64) NULL COMMENT '受控原因码，不存异常原文',
+    claim_token VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '单次领取围栏UUID',
+    trace_id VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT 'HTTP发起链路ID',
+    requested_at DATETIME(3) NOT NULL COMMENT '服务器接受请求时间，Asia/Shanghai',
+    started_at DATETIME(3) NULL COMMENT '实际领取时间，Asia/Shanghai',
+    finished_at DATETIME(3) NULL COMMENT '执行终态时间，Asia/Shanghai',
+    deadline_at DATETIME(3) NOT NULL COMMENT '检查执行资格截止，独立于探针预算，Asia/Shanghai',
+    observed_at DATETIME(3) NULL COMMENT '事实观测时间，非GET时间',
+    read_at DATETIME(3) NULL COMMENT '采集器读取事实时间，非GET时间',
+    valid_until DATETIME(3) NULL COMMENT '本次事实有效截止，Asia/Shanghai',
+    updated_at DATETIME(3) NOT NULL COMMENT '检查回执更新时间，Asia/Shanghai',
+    retain_until DATETIME(3) NOT NULL COMMENT '终态回执有界保留截止，Asia/Shanghai',
+    duration_ms BIGINT NULL COMMENT '探测耗时毫秒，未执行为空',
+    snapshot_applied TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否在围栏校验后更新当前快照',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT '执行条件更新并发版本',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_camera_status_request (actor_user_id,client_request_id),
+    KEY ix_camera_status_profile (profile_id,requested_at,id),
+    KEY ix_camera_status_deadline (execution_state,deadline_at,id),
+    KEY ix_camera_status_retain (execution_state,retain_until,id),
+    CONSTRAINT ck_camera_status_probe CHECK (probe_kind='RTSP_DESCRIBE'),
+    CONSTRAINT ck_camera_status_execution CHECK (execution_state IN ('QUEUED','RUNNING','COMPLETED','SKIPPED','CANCELLED','INTERRUPTED')),
+    CONSTRAINT ck_camera_status_result CHECK (result_value IS NULL OR result_value IN ('ACCESSIBLE','FAILED','UNSUPPORTED')),
+    CONSTRAINT ck_camera_status_version CHECK (version>=0),
+    CONSTRAINT ck_camera_status_applied CHECK (snapshot_applied IN (0,1)),
+    CONSTRAINT ck_camera_status_duration CHECK (duration_ms IS NULL OR duration_ms>=0),
+    CONSTRAINT ck_camera_status_observation CHECK ((result_value IS NULL AND observed_at IS NULL AND read_at IS NULL AND valid_until IS NULL) OR (result_value IS NOT NULL AND observed_at IS NOT NULL AND read_at IS NOT NULL AND valid_until IS NOT NULL))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='有界相机手动检查回执，与观察事实分离';
+
+-- 相机状态快照表.sql
+CREATE TABLE camera_status_snapshot (
+    profile_id BIGINT NOT NULL COMMENT '码流ID，每码流仅一份CONTROL事实',
+    camera_id BIGINT NOT NULL COMMENT '快照所属通道ID，与码流关系受复合外键约束',
+    layer VARCHAR(16) NOT NULL DEFAULT 'CONTROL' COMMENT '本期固定CONTROL，不代表媒体收流',
+    probe_kind VARCHAR(32) NOT NULL DEFAULT 'RTSP_DESCRIBE' COMMENT '观察来源RTSP_DESCRIBE',
+    observation_value VARCHAR(16) NOT NULL COMMENT 'ACCESSIBLE/FAILED/UNSUPPORTED',
+    reason_code VARCHAR(64) NOT NULL COMMENT '受控事实原因码',
+    observed_at DATETIME(3) NOT NULL COMMENT '观测时间，Asia/Shanghai',
+    state_since DATETIME(3) NULL COMMENT '当前相同结果首次检出时间，不是实际上下线时间',
+    last_accessible_at DATETIME(3) NULL COMMENT '同一连接配置最近成功时间，未知为空',
+    last_failed_at DATETIME(3) NULL COMMENT '同一连接配置最近失败时间，未知为空',
+    read_at DATETIME(3) NOT NULL COMMENT '采集器读取事实时间，GET不更新',
+    valid_until DATETIME(3) NOT NULL COMMENT '事实有效截止，过期不改写成离线',
+    check_requested_at DATETIME(3) NOT NULL COMMENT '原检查接受时间，拒绝旧请求覆盖新事实',
+    updated_at DATETIME(3) NOT NULL COMMENT '实际快照写入时间，Asia/Shanghai',
+    check_id BIGINT NOT NULL COMMENT '原检查ID，无外键，回执清理不删除事实',
+    connection_key_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '实际连接语义HMAC密钥ID',
+    connection_digest BINARY(32) NOT NULL COMMENT '连接语义HMAC，不进入响应或日志',
+    PRIMARY KEY (profile_id),
+    KEY ix_camera_status_snapshot_camera (camera_id,profile_id),
+    CONSTRAINT fk_camera_status_snapshot_profile FOREIGN KEY (camera_id,profile_id) REFERENCES camera_stream_profile(channel_id,id) ON DELETE CASCADE,
+    CONSTRAINT ck_camera_status_layer CHECK (layer='CONTROL'),
+    CONSTRAINT ck_camera_status_snapshot_probe CHECK (probe_kind='RTSP_DESCRIBE'),
+    CONSTRAINT ck_camera_status_snapshot_value CHECK (observation_value IN ('ACCESSIBLE','FAILED','UNSUPPORTED'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='按码流保存的最新合法控制层事实';
+
+-- 相机巡检计划表.sql
+CREATE TABLE camera_status_plan (
+    id BIGINT NOT NULL,
+    actor_user_id BIGINT NOT NULL COMMENT '创建人历史ID，执行时复核账号和权限，不绑定Session',
+    client_request_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    request_key_id VARCHAR(64) NOT NULL,
+    request_fingerprint BINARY(32) NOT NULL,
+    state VARCHAR(16) NOT NULL COMMENT 'ACTIVE/STOPPED/EXPIRED',
+    interval_minutes INT NOT NULL,
+    target_count INT NOT NULL,
+    start_at DATETIME(3) NOT NULL,
+    end_at DATETIME(3) NOT NULL,
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    version BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_camera_plan_request (actor_user_id,client_request_id),
+    KEY ix_camera_plan_expiry (state,end_at,id),
+    CONSTRAINT ck_camera_plan_state CHECK (state IN ('ACTIVE','STOPPED','EXPIRED')),
+    CONSTRAINT ck_camera_plan_interval CHECK (interval_minutes BETWEEN 5 AND 1440),
+    CONSTRAINT ck_camera_plan_count CHECK (target_count BETWEEN 1 AND 2000),
+    CONSTRAINT ck_camera_plan_dates CHECK (end_at>start_at),
+    CONSTRAINT ck_camera_plan_version CHECK (version>=0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='按需有限期CONTROL巡检计划';
+
+-- 相机巡检目标表.sql
+CREATE TABLE camera_status_plan_target (
+    id BIGINT NOT NULL,
+    plan_id BIGINT NOT NULL,
+    camera_id BIGINT NOT NULL,
+    profile_id BIGINT NOT NULL,
+    connection_key_id VARCHAR(64) NOT NULL,
+    connection_digest BINARY(32) NOT NULL,
+    next_at DATETIME(3) NOT NULL,
+    reason_code VARCHAR(64) NULL,
+    blocked TINYINT(1) NOT NULL DEFAULT 0,
+    last_check_id BIGINT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_camera_plan_target (plan_id,camera_id),
+    KEY ix_camera_plan_due (blocked,next_at,id),
+    CONSTRAINT fk_camera_plan_target FOREIGN KEY (plan_id) REFERENCES camera_status_plan(id),
+    CONSTRAINT ck_camera_plan_target_blocked CHECK (blocked IN (0,1))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='固定通道代表流和错峰时间槽，不保存URL或凭据';
 
 -- 账户相机范围表.sql
 CREATE TABLE camera_user_scope (

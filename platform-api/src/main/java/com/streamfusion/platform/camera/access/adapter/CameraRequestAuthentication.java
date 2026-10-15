@@ -1,6 +1,5 @@
 package com.streamfusion.platform.camera.access.adapter;
 
-import java.net.URI;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -12,30 +11,43 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 
-final class CameraHttpAuthentication {
+/**
+ * Basic/Digest credentials for the exact request target supplied by the protocol caller. The target
+ * is not parsed or normalized here; HTTP supplies a raw path/query and RTSP an absolute URI without
+ * userinfo. The returned header is sensitive and must never be logged.
+ */
+public final class CameraRequestAuthentication {
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final Pattern PARAMETER =
             Pattern.compile(
                     "([A-Za-z][A-Za-z0-9_-]*)\\s*=\\s*(?:\"((?:\\\\.|[^\"\\\\])*)\"|([^,\\s]+))");
 
-    private CameraHttpAuthentication() {}
+    private CameraRequestAuthentication() {}
 
-    static String challenge(
-            String header, String method, URI uri, String username, String password) {
+    public static String challenge(
+            String header, String method, String requestTarget, String username, String password) {
         byte[] random = new byte[16];
         RANDOM.nextBytes(random);
-        return challenge(header, method, uri, username, password, HexFormat.of().formatHex(random));
+        return challenge(
+                header,
+                method,
+                requestTarget,
+                username,
+                password,
+                HexFormat.of().formatHex(random));
     }
 
     static String challenge(
             String header,
             String method,
-            URI uri,
+            String requestTarget,
             String username,
             String password,
             String cnonce) {
         if (header == null || username == null || password == null)
             throw new CameraAdapterException("AUTHENTICATION_FAILED");
+        if (method == null || requestTarget == null || cnonce == null)
+            throw new CameraAdapterException("UNSUPPORTED_AUTHENTICATION");
         String lower = header.toLowerCase(Locale.ROOT);
         if (lower.startsWith("basic ")) {
             if (username.contains(":"))
@@ -75,12 +87,10 @@ final class CameraHttpAuthentication {
                 "UTF-8".equalsIgnoreCase(parameters.get("charset"))
                         ? StandardCharsets.UTF_8
                         : StandardCharsets.ISO_8859_1;
-        String target =
-                uri.getRawPath() + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery());
         String a1 = hash(digest, username + ":" + realm + ":" + password, charset);
         if (algorithm.toUpperCase(Locale.ROOT).endsWith("-SESS"))
             a1 = hash(digest, a1 + ":" + nonce + ":" + cnonce, charset);
-        String a2 = hash(digest, method + ":" + target, charset);
+        String a2 = hash(digest, method + ":" + requestTarget, charset);
         String response =
                 hash(
                         digest,
@@ -99,7 +109,7 @@ final class CameraHttpAuthentication {
                         + ", nonce="
                         + quoted(nonce)
                         + ", uri="
-                        + quoted(target)
+                        + quoted(requestTarget)
                         + ", response="
                         + quoted(response)
                         + ", algorithm="

@@ -7,6 +7,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 
 @ConfigurationProperties(prefix = "platform.media-runtime", ignoreUnknownFields = false)
 public record MediaRuntimeProperties(
+        @DefaultValue("true") boolean autoSelectOnStartup,
         @DefaultValue("15s") Duration cacheTtl,
         @DefaultValue("2s") Duration probeTimeout,
         @DefaultValue("12s") Duration collectionTimeout,

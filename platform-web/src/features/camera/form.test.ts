@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { secret, useCreateRequest } from './form'
+import { secret, sourceBrandLabel, useCreateRequest } from './form'
 
 describe('camera configuration commands', () => {
   it('keeps the original request body and key after a lost create response', () => {
@@ -22,5 +22,34 @@ describe('camera configuration commands', () => {
       action: 'REPLACE',
       value: 'exact%20value',
     })
+  })
+  it('presents source brands without repeating protocol or source names', () => {
+    expect(
+      sourceBrandLabel({
+        sourceType: 'HIKVISION',
+        sourceDisplayName: '海康接入',
+        manufacturer: null,
+      }),
+    ).toBe('海康')
+    expect(
+      sourceBrandLabel({ sourceType: 'DAHUA', sourceDisplayName: '大华接入', manufacturer: null }),
+    ).toBe('大华')
+    expect(
+      sourceBrandLabel({ sourceType: 'RTSP', sourceDisplayName: '现场地址', manufacturer: null }),
+    ).toBe('未识别品牌')
+    expect(
+      sourceBrandLabel({
+        sourceType: 'ONVIF',
+        sourceDisplayName: '门口设备',
+        manufacturer: 'Hikvision Digital Technology',
+      }),
+    ).toBe('海康')
+    expect(
+      sourceBrandLabel({
+        sourceType: null,
+        sourceDisplayName: '未知来源',
+        manufacturer: '自定义品牌',
+      }),
+    ).toBe('自定义品牌')
   })
 })

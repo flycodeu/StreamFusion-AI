@@ -24,6 +24,8 @@ import {
 import { getAuditDetail, getAuditPage } from '../../api/audit/api'
 import type { AuditDetail, AuditEntry } from '../../api/audit/types'
 import RequestError from '../../components/feedback/RequestError.vue'
+import DiagnosticLink from '../../features/diagnostics/DiagnosticLink.vue'
+import { moduleNames, actionNames } from '../../features/audit/labels'
 import TablePanel from '../../components/table/TablePanel.vue'
 import TableActions from '../../components/table/TableActions.vue'
 import ColumnPicker from '../../components/table/ColumnPicker.vue'
@@ -33,6 +35,8 @@ import { formatDateTime } from '../../utils/dateTime'
 import IpBlockPanel from '../../features/security/IpBlockPanel.vue'
 import { sessionState } from '../../session/state'
 import AuditReferenceList from '../../features/audit/AuditReferenceList.vue'
+import RetentionDialog from '../../features/audit/RetentionDialog.vue'
+import ExportDialog from '../../features/audit/ExportDialog.vue'
 import {
   auditChanges,
   auditReason,
@@ -43,6 +47,13 @@ import {
 
 defineOptions({ name: 'SystemAudit' })
 const activeTab = ref('log')
+const retentionOpen = ref(false)
+const exportOpen = ref(false)
+const exportFilter = computed(() => ({
+  ...query,
+  startTime: utc(timeRange.value?.[0]),
+  endTime: utc(timeRange.value?.[1]),
+}))
 const query = reactive({
   page: 1,
   size: 20,
@@ -78,44 +89,7 @@ const columns = useColumns(
   ['user', 'module', 'action', 'target', 'result', 'time'],
   columnOptions.map((item) => item.key),
 )
-const moduleNames: Record<string, string> = {
-  USER: '用户',
-  ROLE: '角色',
-  MENU: '菜单',
-  DEPT: '部门',
-  IP_BLOCK: 'IP封禁',
-}
 const resultNames: Record<string, string> = { SUCCESS: '成功', FAILURE: '失败', DENIED: '拒绝' }
-const actionNames: Record<string, string> = {
-  BOOTSTRAP: '初始化管理员',
-  LOGIN: '登录',
-  LOGOUT: '退出登录',
-  PROFILE_UPDATE: '修改个人信息',
-  PASSWORD_CHANGE: '修改密码',
-  USER_CREATE: '新建用户',
-  USER_UPDATE: '修改用户',
-  USER_ENABLE: '启用用户',
-  USER_DISABLE: '停用用户',
-  USER_RESET_PASSWORD: '重置用户密码',
-  USER_DELETE: '删除用户',
-  USER_FORCE_LOGOUT: '强制登出用户',
-  USER_ROLE_UPDATE: '调整用户角色',
-  USER_DEPARTMENTS_UPDATE: '调整用户部门',
-  ROLE_CREATE: '新建角色',
-  ROLE_UPDATE: '修改角色',
-  ROLE_ENABLE: '启用角色',
-  ROLE_DISABLE: '停用角色',
-  ROLE_MENU_UPDATE: '调整角色菜单',
-  ROLE_DELETE: '删除角色',
-  MENU_CREATE: '新建菜单',
-  MENU_UPDATE: '修改菜单',
-  MENU_DELETE: '删除菜单',
-  DEPT_CREATE: '新建部门',
-  DEPT_UPDATE: '修改部门',
-  DEPT_DELETE: '删除部门',
-  IP_BLOCK_CREATE: '封禁IP',
-  IP_BLOCK_RELEASE: '解除IP封禁',
-}
 const changes = computed(() => auditChanges(detail.value))
 let sequence = 0
 let detailSequence = 0
@@ -255,6 +229,16 @@ watch(
     </ElTabs>
     <IpBlockPanel v-if="activeTab === 'ip' && sessionState.me?.isSuperAdmin" />
     <template v-else>
+      <div class="audit-maintenance-actions">
+        <ElButton v-if="sessionState.me?.isSuperAdmin" @click="retentionOpen = true"
+          >保留策略</ElButton
+        ><ElButton @click="exportOpen = true">导出与记录</ElButton>
+      </div>
+      <RetentionDialog
+        v-if="retentionOpen && sessionState.me?.isSuperAdmin"
+        @close="retentionOpen = false"
+      />
+      <ExportDialog v-if="exportOpen" :filter="exportFilter" @close="exportOpen = false" />
       <ElForm class="search-form" inline @submit.prevent="search">
         <ElFormItem label="操作人"
           ><ElInput
@@ -444,6 +428,15 @@ watch(
                 ><div class="trace-tools">
                   <code>{{ detail.record.traceId || '—' }}</code>
                   <div class="trace-buttons">
+                    <DiagnosticLink
+                      :trace-id="detail.record.traceId"
+                      :time="detail.record.createdAt"
+                      :plan-id="
+                        detail.record.module === 'CAMERA_STATUS_PLAN'
+                          ? detail.record.targetId
+                          : null
+                      "
+                    />
                     <ElButton plain @click="copyDiagnostics">复制排查信息</ElButton
                     ><ElButton
                       v-if="detail.record.traceId"
@@ -476,6 +469,12 @@ watch(
 </template>
 
 <style scoped>
+.audit-maintenance-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 12px;
+}
 .detail-section-title {
   margin: 24px 0 12px;
   font-size: 15px;

@@ -18,15 +18,23 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.boot.web.context.WebServerApplicationContext;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 /** Coordinates discovery, read-only probes and the platform's selected runtime versions. */
 @Service
 public class MediaRuntimeService {
+    private static final Logger LOG = LoggerFactory.getLogger(MediaRuntimeService.class);
     private final MediaRuntimeProperties properties;
     private final MediaHostAdapter adapter;
     private final RuntimeProbe probe;
@@ -58,6 +66,73 @@ public class MediaRuntimeService {
         this.adapter = MediaHostAdapter.forOs(osName);
         this.probe = new RuntimeProbe(properties, mapper, http);
         this.selections = new RuntimeSelectionStore(platform.workDir(), mapper);
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void onReady(ApplicationReadyEvent event) {
+        if (!properties.autoSelectOnStartup()
+                || !(event.getApplicationContext() instanceof WebServerApplicationContext)) return;
+        try (var ignored =
+                MDC.putCloseable("traceId", UUID.randomUUID().toString().replace("-", ""))) {
+            try {
+                initializeSelection();
+            } catch (RuntimeException ex) {
+                LOG.warn(
+                        "Media runtime startup matching unavailable errorType={}",
+                        ex.getClass().getSimpleName());
+            }
+        }
+    }
+
+    synchronized void initializeSelection() {
+        var detected = detect();
+        if (adapter.os().equals("UNSUPPORTED")) return;
+        var matched =
+                matchSelection(detected.selected(), detected.candidates(), inventory.zlmConfigs());
+        if (!matched.equals(detected.selected())) {
+            selections.update(adapter.os(), matched, detected.version());
+            LOG.info(
+                    "Media runtime startup selection matched zlmId={} ffmpegId={}",
+                    matched.zlmId(),
+                    matched.ffmpegId());
+        }
+    }
+
+    static Selection matchSelection(
+            Selection saved,
+            List<Candidate> candidates,
+            Map<String, RuntimeProbe.ZlmConfig> configs) {
+        String zlmId = matchCandidate(saved.zlmId(), "ZLM", candidates, null);
+        var config = zlmId == null ? null : configs.get(zlmId);
+        String ffmpegId =
+                matchCandidate(
+                        saved.ffmpegId(),
+                        "FFMPEG",
+                        candidates,
+                        config == null ? null : config.ffmpegBin());
+        return new Selection(zlmId, ffmpegId);
+    }
+
+    private static String matchCandidate(
+            String savedId, String kind, List<Candidate> candidates, String preferredPath) {
+        var sameKind =
+                candidates.stream().filter(candidate -> candidate.kind().equals(kind)).toList();
+        if (savedId != null
+                && sameKind.stream().anyMatch(candidate -> candidate.id().equals(savedId)))
+            return savedId;
+        var ready =
+                sameKind.stream().filter(candidate -> candidate.status().equals("READY")).toList();
+        if (preferredPath != null) {
+            var preferred =
+                    ready.stream()
+                            .filter(
+                                    candidate ->
+                                            matchesFfmpeg(
+                                                    preferredPath, candidate.executablePath()))
+                            .toList();
+            if (preferred.size() == 1) return preferred.getFirst().id();
+        }
+        return ready.size() == 1 ? ready.getFirst().id() : savedId;
     }
 
     public MediaRuntimeSnapshot current() {

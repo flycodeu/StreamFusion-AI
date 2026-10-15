@@ -6,6 +6,7 @@ import java.util.Objects;
 public final class BusinessException extends RuntimeException {
     private final ErrorCode code;
     private final Object safeDetails;
+    private String diagnosticReason;
 
     private BusinessException(ErrorCode code, Object safeDetails) {
         super(Objects.requireNonNull(code).message());
@@ -24,6 +25,17 @@ public final class BusinessException extends RuntimeException {
 
     public ErrorCode code() {
         return code;
+    }
+
+    public BusinessException diagnosed(String reason) {
+        if (reason == null || !reason.matches("[A-Z][A-Z0-9_]{0,79}"))
+            throw new IllegalArgumentException("Invalid diagnostic reason");
+        this.diagnosticReason = reason;
+        return this;
+    }
+
+    public String diagnosticReason() {
+        return diagnosticReason;
     }
 
     public Object safeDetails() {

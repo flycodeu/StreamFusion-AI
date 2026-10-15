@@ -55,7 +55,8 @@ vi.mock('../../src/api/audit/api', () => api)
 vi.mock('../../src/api/login-records/api', () => api)
 vi.mock('../../src/api/security/api', () => api)
 vi.mock('../../src/session/session', () => ({ refreshIdentity: vi.fn() }))
-vi.mock('vue-router', () => ({
+vi.mock('vue-router', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('vue-router')>()),
   useRoute: () => ({ path: '/system/Menu', query: {}, hash: '' }),
   useRouter: () => ({ replace: vi.fn() }),
 }))

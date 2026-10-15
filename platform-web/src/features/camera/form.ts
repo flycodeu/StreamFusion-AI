@@ -39,6 +39,26 @@ export function connectionLabel(type: string | null | undefined, category?: stri
       ? '平台连接'
       : '设备连接（未指定方式）'
 }
+const sourceBrandLabels: Record<string, string> = {
+  HIKVISION: '海康',
+  HIK_PLATFORM: '海康',
+  DAHUA: '大华',
+}
+export function sourceBrandLabel(camera: {
+  sourceType: string | null
+  sourceDisplayName: string
+  manufacturer?: string | null
+}): string {
+  const type = camera.sourceType?.toUpperCase()
+  const manufacturer = camera.manufacturer?.trim()
+  const brand = manufacturer?.toUpperCase()
+  return (
+    (type && sourceBrandLabels[type]) ||
+    (brand && sourceBrandLabels[brand]) ||
+    (brand?.includes('HIKVISION') ? '海康' : brand?.includes('DAHUA') ? '大华' : manufacturer) ||
+    '未识别品牌'
+  )
+}
 export function secret(action: SecretAction, value: string): SecretWrite {
   return action === 'REPLACE' ? { action, value } : { action }
 }

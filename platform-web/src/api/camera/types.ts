@@ -17,6 +17,22 @@ export interface FullRtspLocatorInput {
 }
 
 export type Lifecycle = 'PENDING_ASSIGNMENT' | 'ENABLED' | 'DISABLED'
+export interface CameraAddress {
+  kind: 'DEVICE' | 'PLATFORM' | 'RTSP'
+  host: string
+  port: number | null
+}
+export function parseCameraAddress(value: unknown): CameraAddress | null {
+  if (value == null) return null
+  const row = object(value)
+  const kind = string(row.kind)
+  if (!['DEVICE', 'PLATFORM', 'RTSP'].includes(kind)) throw new Error('address kind')
+  const host = string(row.host)
+  const port = row.port == null ? null : integer(row.port)
+  if (!host.trim() || /[\s/@?#]/.test(host) || (port !== null && (port < 1 || port > 65535)))
+    throw new Error('camera address')
+  return { kind: kind as CameraAddress['kind'], host, port }
+}
 export interface LocatorSummary {
   editable: boolean
   locatorKind: string | null
@@ -41,6 +57,7 @@ export function parseClassification(value: unknown): StreamClassification | unde
   }
 }
 export interface CameraDeviceGroup {
+  statusSummary?: DeviceStatusSummary | null
   groupKey: string
   name: string
   identified: boolean
@@ -49,12 +66,45 @@ export interface CameraDeviceGroup {
   sourceDisplayName: string
   sourceType: string | null
   connectionCategory: string
+  accessAddress?: CameraAddress | null
   channelCount: number
   enabledCount: number
   disabledCount: number
   pendingCount: number
   groupCount?: number | null
   groupPath?: string | null
+}
+export interface DeviceStatusSummary {
+  state: 'ACCESSIBLE' | 'FAILED' | 'PARTIAL' | 'CHECKING' | 'STALE' | 'NEVER'
+  checkedAt: string | null
+  validUntil: string | null
+  reachableCount: number
+  failedCount: number
+  unknownCount: number
+}
+export function parseDeviceStatus(value: unknown): DeviceStatusSummary | null {
+  if (value == null) return null
+  const row = object(value),
+    state = string(row.state)
+  if (!['ACCESSIBLE', 'FAILED', 'PARTIAL', 'CHECKING', 'STALE', 'NEVER'].includes(state))
+    throw new Error('device status')
+  const checkedAt = optionalString(row.checkedAt),
+    validUntil = optionalString(row.validUntil)
+  if (
+    (checkedAt !== null && !Number.isFinite(Date.parse(checkedAt))) ||
+    (validUntil !== null && !Number.isFinite(Date.parse(validUntil)))
+  )
+    throw new Error('status time')
+  const counts = [row.reachableCount, row.failedCount, row.unknownCount].map(integer)
+  if (counts.some((count) => count < 0)) throw new Error('status counts')
+  return {
+    state: state as DeviceStatusSummary['state'],
+    checkedAt,
+    validUntil,
+    reachableCount: counts[0]!,
+    failedCount: counts[1]!,
+    unknownCount: counts[2]!,
+  }
 }
 export interface CameraDeviceInfo {
   deviceId: string
@@ -88,6 +138,8 @@ export function parseDeviceGroup(value: unknown): CameraDeviceGroup {
     sourceDisplayName: string(row.sourceDisplayName),
     sourceType: optionalString(row.sourceType),
     connectionCategory: string(row.connectionCategory),
+    accessAddress: parseCameraAddress(row.accessAddress),
+    statusSummary: parseDeviceStatus(row.statusSummary),
     channelCount: integer(row.channelCount),
     enabledCount: integer(row.enabledCount),
     disabledCount: integer(row.disabledCount),
@@ -123,6 +175,7 @@ export interface Camera {
   sourceDisplayName: string
   sourceType: string | null
   connectionCategory: string | null
+  accessAddress?: CameraAddress | null
   vendorHint: string | null
   groupId: string | null
   groupPath: string | null
@@ -234,6 +287,7 @@ export function parseCamera(value: unknown): Camera {
     sourceDisplayName: string(row.sourceDisplayName),
     sourceType: optionalString(row.sourceType),
     connectionCategory: optionalString(row.connectionCategory),
+    accessAddress: parseCameraAddress(row.accessAddress),
     vendorHint: optionalString(row.vendorHint),
     groupId: nullableId(row.groupId),
     groupPath: optionalString(row.groupPath),

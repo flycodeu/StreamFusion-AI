@@ -21,6 +21,7 @@ export interface RequestOptions<T> {
   decode: Parser<T>
   signal?: AbortSignal
   timeoutMs?: number
+  responseType?: 'file'
 }
 
 export interface RawHttpResponse {
@@ -31,10 +32,12 @@ export interface RawHttpResponse {
     etag: string | null
     location: string | null
     retryAfter: string | null
+    contentDisposition?: string | null
   }
   bodyText: string
   requestTraceId: string
   receivedAt: string
+  file?: Blob
 }
 
 export interface CsrfToken {
@@ -43,6 +46,7 @@ export interface CsrfToken {
 }
 
 export interface TransportOptions {
+  responseType?: 'file'
   path: string
   method: RequestOptions<unknown>['method']
   params?: RequestOptions<unknown>['params']

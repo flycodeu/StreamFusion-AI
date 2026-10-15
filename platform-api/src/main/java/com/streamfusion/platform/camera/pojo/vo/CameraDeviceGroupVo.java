@@ -1,5 +1,6 @@
 package com.streamfusion.platform.camera.pojo.vo;
 
+import com.streamfusion.platform.camera.status.CameraDeviceStatusVo;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 @Schema(description = "设备列表的授权投影；计数仅含当前筛选和授权范围内的通道")
@@ -12,6 +13,9 @@ public record CameraDeviceGroupVo(
         @Schema(description = "接入来源的显示名称") String sourceDisplayName,
         @Schema(description = "已识别的接入适配器类型", nullable = true) String sourceType,
         @Schema(description = "连接类别：DEVICE设备、PLATFORM平台或RTSP地址") String connectionCategory,
+        @Schema(description = "授权设备的接入地址；平台接入时不是远端相机IP", nullable = true)
+                CameraAddressVo accessAddress,
+        @Schema(description = "授权通道代表流的CONTROL摘要，不表示媒体正常") CameraDeviceStatusVo statusSummary,
         @Schema(description = "当前筛选及授权范围内的通道总数") long channelCount,
         @Schema(description = "当前筛选及授权范围内已启用的通道数") long enabledCount,
         @Schema(description = "当前筛选及授权范围内已停用的通道数") long disabledCount,

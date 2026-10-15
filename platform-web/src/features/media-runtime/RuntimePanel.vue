@@ -33,6 +33,9 @@ const dirty = computed(
     (selection.value.zlmId !== snapshot.value.selected.zlmId ||
       selection.value.ffmpegId !== snapshot.value.selected.ffmpegId),
 )
+const missingSelections = computed(() =>
+  tools.filter((tool) => selection.value[tool.key] && !selected(tool.key)),
+)
 const statuses: Record<string, string> = {
   READY: '可用',
   API_AVAILABLE: 'API 可用',
@@ -48,6 +51,9 @@ function candidates(kind: string) {
 }
 function selected(key: keyof RuntimeSelection) {
   return snapshot.value?.candidates.find((row) => row.id === selection.value[key])
+}
+function normalizeSelection(value: RuntimeSelection): RuntimeSelection {
+  return { zlmId: value.zlmId || null, ffmpegId: value.ffmpegId || null }
 }
 function versionName(row: MediaRuntimeCandidate) {
   return row.softwareVersion || '版本未识别'
@@ -82,7 +88,11 @@ async function save() {
   saving.value = true
   error.value = null
   try {
-    const result = await selectMediaRuntime(snapshot.value.version, { ...selection.value })
+    if (missingSelections.value.length) return
+    const result = await selectMediaRuntime(
+      snapshot.value.version,
+      normalizeSelection(selection.value),
+    )
     if (active()) {
       snapshot.value = result
       selection.value = { ...result.selected }
@@ -119,13 +129,17 @@ onBeforeUnmount(() => {
         ><ElButton
           type="primary"
           :loading="saving"
-          :disabled="!dirty || detecting || loading"
+          :disabled="!dirty || detecting || loading || missingSelections.length > 0"
           @click="save"
           >保存选择</ElButton
         >
       </div>
     </header>
     <RequestError :error="error" />
+    <p v-if="missingSelections.length" class="runtime-diagnostic" role="status">
+      {{ missingSelections.map((tool) => tool.title).join('、') }}
+      的已选版本未被发现，请重新选择或清空后保存。
+    </p>
     <div v-loading="loading && !snapshot" class="runtime-tools">
       <section v-for="tool in tools" :key="tool.kind" class="runtime-tool">
         <header>
@@ -135,7 +149,9 @@ onBeforeUnmount(() => {
             :type="selected(tool.key)?.status === 'READY' ? 'success' : 'warning'"
             effect="plain"
             >{{ statuses[selected(tool.key)?.status || ''] || '未检测' }}</ElTag
-          ><ElTag v-else type="info" effect="plain">未选择</ElTag>
+          ><ElTag v-else type="info" effect="plain">{{
+            selection[tool.key] ? '选择已失效' : '未选择'
+          }}</ElTag>
         </header>
         <label :for="`${tool.kind}-version`">使用版本</label>
         <ElSelect
@@ -145,6 +161,8 @@ onBeforeUnmount(() => {
           :disabled="saving || detecting"
           :placeholder="candidates(tool.kind).length ? '选择运行环境' : '未检测到运行环境'"
           class="runtime-select"
+          popper-class="media-runtime-options"
+          :fit-input-width="true"
         >
           <ElOption
             v-for="row in candidates(tool.kind)"
@@ -153,7 +171,7 @@ onBeforeUnmount(() => {
             :label="versionName(row)"
             ><div class="version-option">
               <strong>{{ versionName(row) }}</strong
-              ><span>{{ row.executablePath }}</span>
+              ><span :title="row.executablePath">{{ row.executablePath }}</span>
             </div></ElOption
           >
         </ElSelect>
@@ -172,9 +190,16 @@ onBeforeUnmount(() => {
               <dd>{{ selected(tool.key)?.apiBase || '未配置' }}</dd>
             </div>
             <div>
-              <dt>进程状态</dt>
+              <dt>{{ tool.kind === 'FFMPEG' ? '调用状态' : '进程状态' }}</dt>
               <dd>
-                {{ selected(tool.key)?.processRunning ? '运行中' : '未运行'
+                {{
+                  selected(tool.key)?.processRunning
+                    ? '运行中'
+                    : tool.kind === 'FFMPEG'
+                      ? selected(tool.key)?.status === 'READY'
+                        ? '按需运行（当前空闲）'
+                        : '暂无进程'
+                      : '未运行'
                 }}<span v-if="selected(tool.key)?.pids.length" class="detail-secondary">{{
                   selected(tool.key)?.pids.join('、')
                 }}</span>
@@ -196,7 +221,13 @@ onBeforeUnmount(() => {
             {{ selected(tool.key)?.diagnostic?.message }}
           </p>
         </template>
-        <ElEmpty v-else :image-size="70" description="请选择检测到的运行环境" />
+        <ElEmpty
+          v-else
+          :image-size="70"
+          :description="
+            selection[tool.key] ? '已选版本未被发现，请重新选择或清空' : '请选择检测到的运行环境'
+          "
+        />
         <details v-if="candidates(tool.kind).length" class="detected-versions">
           <summary>已检测到 {{ candidates(tool.kind).length }} 个版本</summary>
           <ul>
@@ -249,7 +280,7 @@ onBeforeUnmount(() => {
 .runtime-tool {
   min-width: 0;
   padding: clamp(20px, 2vw, 30px);
-  background: #fff;
+  background: var(--el-bg-color);
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
 }
@@ -352,16 +383,18 @@ dd {
   gap: 3px;
   line-height: 1.5;
   padding: 3px 0;
+  min-width: 0;
+}
+.version-option strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .version-option span {
   color: var(--text-secondary);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-:deep(.el-select-dropdown__item) {
-  height: auto;
-  min-height: 34px;
+  white-space: nowrap;
 }
 .scan-diagnostics {
   color: var(--text-secondary);
@@ -384,5 +417,18 @@ dd {
     grid-template-columns: 72px 1fr;
     gap: 10px;
   }
+}
+</style>
+
+<style>
+.media-runtime-options {
+  max-width: calc(100vw - 24px);
+}
+.media-runtime-options .el-select-dropdown__item {
+  height: auto;
+  min-height: 60px;
+  padding: 8px 32px 8px 16px;
+  line-height: 1.5;
+  white-space: normal;
 }
 </style>

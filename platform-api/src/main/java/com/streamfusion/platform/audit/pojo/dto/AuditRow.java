@@ -10,4 +10,5 @@ import lombok.Setter;
 public class AuditRow extends OperationLogEntity {
     private String username;
     private String nickname;
+    private Boolean exportOversize;
 }

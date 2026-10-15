@@ -6,10 +6,12 @@ import type { Camera, CameraDeviceGroup } from '../../api/camera/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import { connectionLabel, lifecycleLabels, streamLabel } from './form'
+import { addressLabel, addressText, streamAddress } from './address'
 import DetailDialog from './DetailDialog.vue'
 import PlacementDialog from './PlacementDialog.vue'
 import DeviceMoveDialog from './DeviceMoveDialog.vue'
 import DeviceEditor from './DeviceEditor.vue'
+import StatusPanel from '../camera-status/StatusPanel.vue'
 
 const props = defineProps<{ device: CameraDeviceGroup; canManage: boolean }>()
 const emit = defineEmits<{ close: []; changed: [] }>()
@@ -29,6 +31,9 @@ const moving = ref(false)
 const editingDevice = ref(false),
   editedName = ref<string | null>(null)
 const deviceName = computed(() => editedName.value ?? props.device.name)
+const drawerActive = computed(
+  () => !editingId.value && !placement.value && !moving.value && !editingDevice.value,
+)
 watch(
   () => props.device.name,
   () => {
@@ -139,7 +144,7 @@ onMounted(load)
 
 <template>
   <ElDrawer
-    :model-value="!editingId && !placement && !moving && !editingDevice"
+    :model-value="drawerActive"
     title="相机详情"
     size="var(--camera-card-width)"
     class="camera-device-card"
@@ -165,6 +170,10 @@ onMounted(load)
     </header>
     <ElTag v-if="!device.identified" type="info" size="small">待关联设备</ElTag>
     <dl class="device-facts">
+      <div>
+        <dt>{{ addressLabel(device.accessAddress) }}</dt>
+        <dd>{{ addressText(device.accessAddress) }}</dd>
+      </div>
       <div>
         <dt>接入方式</dt>
         <dd>{{ connectionLabel(device.sourceType, device.connectionCategory) }}</dd>
@@ -247,6 +256,12 @@ onMounted(load)
                     · {{ profile.frameRate }} fps</template
                   >
                 </p>
+                <p
+                  v-if="streamAddress(profile, camera.accessAddress) !== '未获取'"
+                  class="stream-parameters"
+                >
+                  码流地址 · {{ streamAddress(profile, camera.accessAddress) }}
+                </p>
               </div>
               <span class="stream-bitrate">{{
                 profile.bitrateKbps == null ? '码率未获取' : `${profile.bitrateKbps} kbps`
@@ -275,6 +290,15 @@ onMounted(load)
           </div>
         </template>
       </div>
+      <StatusPanel
+        :camera="camera"
+        :active="drawerActive && !busy"
+        :initial-profile-id="
+          camera?.defaultPreviewProfileId ||
+          camera?.profiles.find((p) => p.enabled && p.usageHint === 'MAIN')?.streamProfileId ||
+          camera?.profiles.find((p) => p.enabled)?.streamProfileId
+        "
+      />
     </section>
     <template #footer
       ><ElButton link :loading="loading" :disabled="busy" @click="load">刷新资料</ElButton

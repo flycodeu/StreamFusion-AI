@@ -296,7 +296,7 @@ class CameraGroupScopeIntegrationTest extends CameraTestSupport {
         Csrf auth = admin();
         String root = group(auth, "授权根组", null);
         String child = group(auth, "同名 / 下级", root);
-        jdbc.update("DELETE FROM sys_role_menu WHERE menu_id IN (1101,1103,1105)");
+        jdbc.update("DELETE FROM sys_role_menu WHERE menu_id IN (1101,1103,1105,1106)");
         JsonNode tree = read("/camera-scopes/group-options/tree", auth);
         assertThat(tree).hasSize(2);
         JsonNode descendant =

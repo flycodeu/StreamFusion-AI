@@ -8,6 +8,7 @@ function invalid(): never {
 
 function prepare(options: TransportOptions): { url: string; headers: Headers; body?: string } {
   const { path, method, body, params, ifMatch, csrf } = options
+  if (options.responseType === 'file' && method !== 'GET') invalid()
   if (!['GET', 'POST', 'PUT', 'DELETE'].includes(method)) invalid()
   if (!isTransportApiPath(path)) invalid()
   if (method === 'GET' && (body !== undefined || ifMatch !== undefined)) invalid()
@@ -94,7 +95,10 @@ export async function send(options: TransportOptions): Promise<RawHttpResponse> 
     status = response.status
     const responseTrace = response.headers.get('X-Trace-Id')
     if (isTraceId(responseTrace)) traceId = responseTrace
-    const bodyText = response.status === 204 || response.status === 304 ? '' : await response.text()
+    const isFile = options.responseType === 'file' && response.ok
+    const file = isFile ? await response.blob() : undefined
+    const bodyText =
+      isFile || response.status === 204 || response.status === 304 ? '' : await response.text()
     controller.signal.throwIfAborted()
     return {
       status,
@@ -104,10 +108,12 @@ export async function send(options: TransportOptions): Promise<RawHttpResponse> 
         etag: response.headers.get('ETag'),
         location: response.headers.get('Location'),
         retryAfter: response.headers.get('Retry-After'),
+        ...(isFile ? { contentDisposition: response.headers.get('Content-Disposition') } : {}),
       },
       bodyText,
       requestTraceId,
       receivedAt: new Date().toISOString(),
+      ...(file ? { file } : {}),
     }
   } catch {
     const code = reason ?? 'NETWORK_ERROR'

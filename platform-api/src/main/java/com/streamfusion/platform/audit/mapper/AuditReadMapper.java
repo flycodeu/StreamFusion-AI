@@ -10,6 +10,13 @@ import org.apache.ibatis.annotations.Param;
 
 @Mapper
 public interface AuditReadMapper {
+    List<AuditRow> exportBatch(
+            @Param("q") AuditCriteria criteria,
+            @Param("upperTime") java.time.LocalDateTime upperTime,
+            @Param("upperId") Long upperId,
+            @Param("afterTime") java.time.LocalDateTime afterTime,
+            @Param("afterId") Long afterId);
+
     IPage<AuditRow> page(Page<AuditRow> page, @Param("q") AuditCriteria criteria);
 
     AuditRow detail(@Param("id") long id);

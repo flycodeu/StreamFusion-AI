@@ -54,20 +54,21 @@ class LocalSchemaInspectionTest {
                     assertThat(rows.getString(1)).isNotBlank();
                     datetimeColumns++;
                 }
-                assertThat(datetimeColumns).isEqualTo(19);
+                assertThat(datetimeColumns).isEqualTo(29);
             }
             try (var rows =
                     sql.executeQuery(
                             "SELECT table_name, extra FROM information_schema.columns "
                                     + "WHERE table_schema=DATABASE() AND column_name='id' "
                                     + "AND table_name IN ('sys_user','sys_role','sys_menu',"
-                                    + "'sys_dept','sys_operation_log','sys_ip_block','sys_login_record')")) {
+                                    + "'sys_dept','sys_operation_log','sys_ip_block','sys_login_record',"
+                                    + "'sys_audit_retention_policy','sys_audit_export')")) {
                 int ids = 0;
                 while (rows.next()) {
                     assertThat(rows.getString("extra")).doesNotContain("auto_increment");
                     ids++;
                 }
-                assertThat(ids).isEqualTo(7);
+                assertThat(ids).isEqualTo(9);
             }
             try (var rows =
                     sql.executeQuery(
@@ -85,7 +86,9 @@ class LocalSchemaInspectionTest {
                                 "sys_role_menu",
                                 "sys_operation_log",
                                 "sys_ip_block",
-                                "sys_login_record");
+                                "sys_login_record",
+                                "sys_audit_retention_policy",
+                                "sys_audit_export");
             }
             try (var rows =
                     sql.executeQuery(
@@ -99,7 +102,7 @@ class LocalSchemaInspectionTest {
                             .isNotBlank();
                     count++;
                 }
-                assertThat(count).isEqualTo(106);
+                assertThat(count).isEqualTo(138);
             }
             try (var rows =
                     sql.executeQuery(

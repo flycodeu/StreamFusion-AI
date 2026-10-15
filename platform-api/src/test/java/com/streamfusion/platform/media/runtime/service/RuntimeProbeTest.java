@@ -25,6 +25,7 @@ class RuntimeProbeTest {
     private RuntimeProbe probe() {
         var properties =
                 new MediaRuntimeProperties(
+                        true,
                         Duration.ofSeconds(15),
                         Duration.ofMillis(500),
                         Duration.ofSeconds(2),

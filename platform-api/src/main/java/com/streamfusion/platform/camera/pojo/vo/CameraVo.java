@@ -17,6 +17,7 @@ public record CameraVo(
         @Schema(description = "视频分组完整路径，待归档时省略", nullable = true) String groupPath,
         @Schema(description = "接入来源的适配方式，未知时省略", nullable = true) String sourceType,
         @Schema(description = "连接类别DEVICE、PLATFORM或RTSP") String connectionCategory,
+        @Schema(description = "授权通道的接入地址；不是完整视频URL", nullable = true) CameraAddressVo accessAddress,
         @Schema(description = "人工厂商提示，不作为观测制造商", nullable = true) String vendorHint,
         @Schema(description = "该通道关联设备的最小观测摘要", nullable = true) DeviceSummary deviceSummary,
         @Schema(description = "生命周期：PENDING_ASSIGNMENT/ENABLED/DISABLED") String lifecycle,

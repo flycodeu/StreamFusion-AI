@@ -5,9 +5,11 @@ $sqlDirectory = Join-Path $PSScriptRoot '../platform-api/sql'
 $businessDirectory = Join-Path $sqlDirectory '业务'
 # Dependency order only; table definitions and seed data live in these files.
 $names = @('部门表.sql', '用户表.sql', '角色表.sql', '菜单表.sql',
-    '用户角色关联表.sql', '用户部门关联表.sql', '角色菜单关联表.sql', '操作审计表.sql', 'IP封禁表.sql', '登录记录表.sql',
+    '用户角色关联表.sql', '用户部门关联表.sql', '角色菜单关联表.sql', '操作审计表.sql', '审计保留策略表.sql', '审计导出任务表.sql', 'IP封禁表.sql', '登录记录表.sql',
     '相机来源表.sql', '相机凭据表.sql', '相机端点表.sql', '视频分组表.sql',
     '相机设备表.sql', '相机通道表.sql', '相机码流表.sql', '相机码流定位表.sql', '相机创建回执表.sql',
+    '相机状态检查表.sql', '相机状态快照表.sql',
+    '相机巡检计划表.sql', '相机巡检目标表.sql',
     '账户相机范围表.sql', '账户视频组授权表.sql', '账户相机授权表.sql', '相机接入任务表.sql', '相机导入明细表.sql')
 $actual = @(Get-ChildItem -LiteralPath $businessDirectory -Filter '*.sql' |
     Select-Object -ExpandProperty Name)

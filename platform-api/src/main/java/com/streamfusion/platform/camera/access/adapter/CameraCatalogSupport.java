@@ -21,7 +21,7 @@ final class CameraCatalogSupport {
         } else {
             key =
                     "serial:"
-                            + CameraHttpAuthentication.hash(
+                            + CameraRequestAuthentication.hash(
                                     "SHA-256", serial, StandardCharsets.UTF_8);
         }
         return new CameraAccessCatalog.Device(key, name, manufacturer, model, firmware, serial);

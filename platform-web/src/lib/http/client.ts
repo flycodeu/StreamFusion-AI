@@ -1,6 +1,6 @@
 import { ApiRequestError, invalidResponse } from './error'
 import { isBusinessApiPath } from './path'
-import { parseEnvelope, responseContext } from './response'
+import { parseEnvelope, parseFileResponse, responseContext } from './response'
 import { send } from './transport'
 import type { ApiResult, CsrfToken, RequestOptions } from './types'
 
@@ -54,7 +54,8 @@ export function createApiClient(hooks: ClientHooks) {
         throw new ApiRequestError('CSRF_UNAVAILABLE', '请求凭证未准备好，请刷新后重试')
       const raw = await send({ ...options, csrf: csrf ?? undefined })
       if (!current()) throw cancelled()
-      const result = parseEnvelope(raw)
+      const result =
+        options.responseType === 'file' && raw.file ? parseFileResponse(raw) : parseEnvelope(raw)
       if (result.meta.status !== options.successStatus) throw invalidResponse(responseContext(raw))
       let data: T
       try {

@@ -100,12 +100,31 @@ class SchemaSqlTest {
                             "SELECT COUNT(*) FROM sys_role_menu rm"
                                     + " JOIN sys_role r ON r.id=rm.role_id WHERE r.code='SUPER_ADMIN'")) {
                 assertThat(rows.next()).isTrue();
-                assertThat(rows.getInt(1)).isEqualTo(11);
+                assertThat(rows.getInt(1)).isEqualTo(13);
             }
             assertThatThrownBy(() -> sql.executeQuery("SELECT * FROM sys_permission"))
                     .isInstanceOf(SQLException.class);
             assertThatThrownBy(() -> sql.executeQuery("SELECT * FROM sys_role_permission"))
                     .isInstanceOf(SQLException.class);
+        }
+    }
+
+    @Test
+    void cameraStatusPageUsesTheExistingCameraModuleAndIsGrantedToSuperAdmin() throws Exception {
+        try (var sql = connection.createStatement();
+                var rows =
+                        sql.executeQuery(
+                                "SELECT m.parent_id,m.name,m.path,m.component_key,m.module_key "
+                                        + "FROM sys_menu m JOIN sys_role_menu rm ON rm.menu_id=m.id "
+                                        + "JOIN sys_role r ON r.id=rm.role_id "
+                                        + "WHERE m.route_name='CameraStatus' AND r.code='SUPER_ADMIN'")) {
+            assertThat(rows.next()).isTrue();
+            assertThat(rows.getLong("parent_id")).isEqualTo(1100);
+            assertThat(rows.getString("name")).isEqualTo("相机状态");
+            assertThat(rows.getString("path")).isEqualTo("/camera/status");
+            assertThat(rows.getString("component_key")).isEqualTo("/camera/Status");
+            assertThat(rows.getString("module_key")).isEqualTo("camera");
+            assertThat(rows.next()).isFalse();
         }
     }
 
@@ -169,7 +188,7 @@ class SchemaSqlTest {
             }
             try (var rows = sql.executeQuery("SELECT COUNT(*) FROM sys_role_menu")) {
                 assertThat(rows.next()).isTrue();
-                assertThat(rows.getInt(1)).isEqualTo(11);
+                assertThat(rows.getInt(1)).isEqualTo(13);
             }
         }
     }

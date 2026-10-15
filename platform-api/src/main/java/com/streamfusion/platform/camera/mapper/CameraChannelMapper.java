@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.streamfusion.platform.camera.pojo.entity.CameraChannelEntity;
 import com.streamfusion.platform.camera.service.CameraAccessService.Visibility;
+import com.streamfusion.platform.camera.status.CameraStatusPageRow;
 import java.util.List;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -31,7 +32,18 @@ public interface CameraChannelMapper extends BaseMapper<CameraChannelEntity> {
             @Param("filter") Filter filter,
             @Param("visibility") Visibility visibility);
 
+    IPage<CameraStatusPageRow> pageStatus(
+            Page<CameraStatusPageRow> page,
+            @Param("name") String name,
+            @Param("observation") String observation,
+            @Param("visibility") Visibility visibility);
+
     CameraAssetRow visible(@Param("id") long id, @Param("visibility") Visibility visibility);
+
+    List<CameraStatusPageRow> statusDeviceRepresentatives(
+            @Param("keys") List<String> keys,
+            @Param("visibility") Visibility visibility,
+            @Param("limit") int limit);
 
     @Select("SELECT COUNT(*) FROM camera_user_channel_grant WHERE channel_id=#{id}")
     long directGrantCount(@Param("id") long id);

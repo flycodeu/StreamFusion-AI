@@ -21,6 +21,7 @@ import com.streamfusion.platform.camera.pojo.dto.CameraUpdateDto;
 import com.streamfusion.platform.camera.pojo.entity.CameraChannelEntity;
 import com.streamfusion.platform.camera.pojo.entity.CameraDeviceEntity;
 import com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity;
+import com.streamfusion.platform.camera.pojo.vo.CameraAddressVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraDeviceGroupVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraDeviceVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraProfileVo;
@@ -66,6 +67,7 @@ public class CameraAssetService {
     private final CameraGroupService groups;
     private final AuditService audit;
     private final Clock clock;
+    private final com.streamfusion.platform.camera.status.CameraStatusQueryService status;
 
     public Map<String, Boolean> options() {
         boolean admin = access.readActor().superAdmin();
@@ -118,6 +120,7 @@ public class CameraAssetService {
         Actor actor = access.readActor();
         var filter = queryFilter(query);
         var page = channels.pageDeviceGroups(query.toPage(), filter, access.visibility(actor));
+        var summaries = status.deviceSummaries(page.getRecords(), access.visibility(actor));
         var paths =
                 groups.paths(
                         page.getRecords().stream()
@@ -139,6 +142,11 @@ public class CameraAssetService {
                                                 row.getSourceDisplayName(),
                                                 row.getSourceType(),
                                                 row.getConnectionCategory(),
+                                                CameraAddressVo.of(
+                                                        row.getConnectionCategory(),
+                                                        row.getAddressHost(),
+                                                        row.getAddressPort()),
+                                                summaries.get(row.getGroupKey()),
                                                 row.getChannelCount(),
                                                 row.getEnabledCount(),
                                                 row.getDisabledCount(),
@@ -767,6 +775,8 @@ public class CameraAssetService {
                 path,
                 row.getSourceType(),
                 row.getConnectionCategory(),
+                CameraAddressVo.of(
+                        row.getConnectionCategory(), row.getAddressHost(), row.getAddressPort()),
                 row.getVendorHint(),
                 device,
                 row.getLifecycle(),

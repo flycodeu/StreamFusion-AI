@@ -27,6 +27,8 @@ logging:
     root: WARN
     com.streamfusion: WARN
 platform:
+  media-runtime:
+    auto-select-on-startup: false
   login-record:
     ipv4-database: ""
     ipv6-database: ""

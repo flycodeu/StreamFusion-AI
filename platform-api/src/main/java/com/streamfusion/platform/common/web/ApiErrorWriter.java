@@ -3,6 +3,7 @@ package com.streamfusion.platform.common.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.response.R;
+import com.streamfusion.platform.diagnostics.DiagnosticLog;
 import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -47,6 +48,7 @@ public final class ApiErrorWriter {
             ErrorCode code,
             Object details,
             HttpHeaders headers) {
+        request.setAttribute(DiagnosticLog.ERROR_CODE, code.name());
         HttpHeaders resultHeaders = new HttpHeaders();
         resultHeaders.putAll(headers);
         resultHeaders.setContentType(MediaType.APPLICATION_JSON);

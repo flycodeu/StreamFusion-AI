@@ -6,6 +6,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.streamfusion.platform.camera.mapper.CameraChannelMapper;
 import com.streamfusion.platform.camera.service.CameraAccessService.Visibility;
+import com.streamfusion.platform.camera.service.CameraCryptoService;
 import com.streamfusion.platform.support.CameraTestSupport;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +15,76 @@ import org.springframework.beans.factory.annotation.Autowired;
 
 class CameraDeviceBrowseIntegrationTest extends CameraTestSupport {
     @Autowired CameraChannelMapper channels;
+    @Autowired CameraCryptoService crypto;
+
+    @Test
+    void projectsAddressWithoutDuplicatingDevicesAndDistinguishesPlatformEndpoints()
+            throws Exception {
+        var auth = admin();
+        String sourceId = source(auth).path("sourceId").asText();
+        var camera = camera(auth, sourceId, "地址通道");
+        String id = camera.path("cameraId").asText();
+        var credential =
+                crypto.encrypt(
+                        "camera_source_credential/" + sourceId + "/PLATFORM_HTTP",
+                        Map.of("appKey", "fixture-key", "appSecret", "fixture-secret"),
+                        8192);
+        jdbc.update(
+                "INSERT INTO camera_source_credential(id,source_id,purpose,secret_ciphertext,secret_nonce,secret_tag,encryption_key_id,created_at,updated_at) VALUES(99000,?,'PLATFORM_HTTP',?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
+                Long.valueOf(sourceId),
+                credential.ciphertext(),
+                credential.nonce(),
+                credential.tag(),
+                credential.keyId());
+        jdbc.update(
+                "INSERT INTO camera_source_endpoint(id,source_id,purpose,scheme,host,port,base_path,auth_mode,credential_id,tls_policy,created_at,updated_at) VALUES(99001,?,'PLATFORM_HTTP','https','platform.example',443,'/artemis','DRIVER_NEGOTIATED',99000,'SYSTEM_CA',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
+                Long.valueOf(sourceId));
+        var device = read("/cameras/devices/page", auth);
+        assertThat(device.path("total").asInt()).isOne();
+        var address = device.path("items").get(0).path("accessAddress");
+        assertThat(address.path("kind").asText()).isEqualTo("RTSP");
+        assertThat(address.path("host").asText()).isEqualTo("10.0.1.5");
+        assertThat(address.path("port").asInt()).isEqualTo(554);
+        assertThat(read("/cameras/" + id, auth).path("accessAddress")).isEqualTo(address);
+        assertThat(
+                        read("/cameras/devices/c" + id + "/channels", auth)
+                                .path("items")
+                                .get(0)
+                                .path("accessAddress"))
+                .isEqualTo(address);
+        assertThat(read("/camera-status", auth).path("items").get(0).path("accessAddress"))
+                .isEqualTo(address);
+        jdbc.update(
+                "UPDATE camera_source SET connection_category='PLATFORM',adapter_type='HIK_PLATFORM' WHERE id=?",
+                Long.valueOf(sourceId));
+        var platform =
+                read("/cameras/devices/page", auth).path("items").get(0).path("accessAddress");
+        assertThat(platform.path("kind").asText()).isEqualTo("PLATFORM");
+        assertThat(platform.path("host").asText()).isEqualTo("platform.example");
+        assertThat(platform.path("port").asInt()).isEqualTo(443);
+        jdbc.update(
+                "UPDATE camera_source SET connection_category='DEVICE',adapter_type='ONVIF' WHERE id=?",
+                Long.valueOf(sourceId));
+        jdbc.update(
+                "INSERT INTO camera_source_endpoint(id,source_id,purpose,scheme,host,port,base_path,auth_mode,tls_policy,created_at,updated_at) VALUES(99002,?,'ONVIF','http','10.0.2.8',80,'/onvif/device_service','NONE','SYSTEM_CA',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)",
+                Long.valueOf(sourceId));
+        var deviceAddress =
+                read("/cameras/devices/page", auth).path("items").get(0).path("accessAddress");
+        assertThat(deviceAddress.path("host").asText()).isEqualTo("10.0.2.8");
+        jdbc.update(
+                "UPDATE camera_source SET connection_category='PLATFORM',adapter_type='HIK_PLATFORM' WHERE id=?",
+                Long.valueOf(sourceId));
+        jdbc.update(
+                "DELETE FROM camera_source_endpoint WHERE source_id=? AND purpose='PLATFORM_HTTP'",
+                Long.valueOf(sourceId));
+        assertThat(
+                        read("/cameras/devices/page", auth)
+                                .path("items")
+                                .get(0)
+                                .path("accessAddress")
+                                .isNull())
+                .isTrue();
+    }
 
     @Test
     void paginatesDevicesWithoutSplittingChannelsAndKeepsUnidentifiedRecordsSeparate()

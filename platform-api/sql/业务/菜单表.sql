@@ -56,6 +56,11 @@ VALUES
 INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, icon, sort_order, visible, enabled)
 VALUES (1009, 1008, '接口文档', 'PAGE', 'MonitorApiDocs', '/monitor/ApiDocs', '/monitor/ApiDocs', 'api-docs', 'menu', 2, TRUE, TRUE);
 
+-- BEGIN DIAGNOSTICS MENU SEED
+INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, icon, sort_order, visible, enabled)
+VALUES (1010, 1008, '诊断日志', 'PAGE', 'MonitorDiagnostics', '/monitor/Diagnostics', '/monitor/Diagnostics', 'diagnostics', 'audit', 3, TRUE, TRUE);
+-- END DIAGNOSTICS MENU SEED
+
 -- BEGIN CAMERA MENU SEEDS
 INSERT INTO sys_menu (id, parent_id, name, type, icon, sort_order, visible, enabled)
 VALUES (1100, NULL, '视频管理', 'DIRECTORY', 'monitor', 0, TRUE, TRUE);
@@ -64,4 +69,5 @@ VALUES
     (1105, 1100, '预览中心', 'PAGE', 'PreviewCenter', '/preview/center', '/preview/Center', 'camera', 'monitor', 0, TRUE, TRUE),
     (1101, 1100, '相机管理', 'PAGE', 'CameraManage', '/camera/manage', '/camera/Manage', 'camera', 'monitor', 1, TRUE, TRUE),
     (1103, 1100, '视频分组', 'PAGE', 'CameraGroups', '/camera/groups', '/camera-group/Manage', 'camera', 'department', 2, TRUE, TRUE),
-    (1104, 1100, '相机授权', 'PAGE', 'CameraScopes', '/camera/scopes', '/camera-scope/Manage', 'camera_scope', 'role', 3, TRUE, TRUE);
+    (1104, 1100, '相机授权', 'PAGE', 'CameraScopes', '/camera/scopes', '/camera-scope/Manage', 'camera_scope', 'role', 3, TRUE, TRUE),
+    (1106, 1100, '相机状态', 'PAGE', 'CameraStatus', '/camera/status', '/camera/Status', 'camera', 'monitor', 4, TRUE, TRUE);

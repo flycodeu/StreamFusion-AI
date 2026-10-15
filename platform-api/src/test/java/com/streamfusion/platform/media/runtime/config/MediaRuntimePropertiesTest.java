@@ -24,6 +24,7 @@ class MediaRuntimePropertiesTest {
                                 "platform.media-runtime",
                                 Bindable.of(MediaRuntimeProperties.class));
         assertThat(properties.cacheTtl().getSeconds()).isEqualTo(15);
+        assertThat(properties.autoSelectOnStartup()).isTrue();
         assertThat(MediaHostAdapter.forOs("Windows 11").paths(properties).searchRoots())
                 .containsExactly("D:/Media/ZLM");
         assertThat(MediaHostAdapter.forOs("Linux").paths(properties).searchRoots())

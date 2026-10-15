@@ -1,11 +1,41 @@
 import type { AuditDetail, AuditReference } from '../../api/audit/types'
 
 export const changeNames: Record<string, string> = {
+  mode: '保留方式',
+  keepMonths: '保留月数',
+  maxRecords: '保留条数',
+  removedLogCount: '清理条数',
+  format: '导出格式',
+  rowCount: '导出条数',
+  fileBytes: '文件字节数',
   name: '名称',
   code: '编码',
   username: '账号',
   nickname: '昵称',
   parentId: '上级',
+  version: '版本',
+  beforeVersion: '变更前版本',
+  afterVersion: '变更后版本',
+  addedGroupCount: '新增分组数量',
+  removedGroupCount: '移除分组数量',
+  addedCameraCount: '新增相机数量',
+  removedCameraCount: '移除相机数量',
+  groupIdsSummary: '分组编号摘要',
+  cameraIdsSummary: '相机编号摘要',
+  beforeGroupId: '变更前分组编号',
+  afterGroupId: '变更后分组编号',
+  beforeLifecycle: '变更前状态',
+  afterLifecycle: '变更后状态',
+  beforeDefaultProfileId: '变更前默认码流编号',
+  afterDefaultProfileId: '变更后默认码流编号',
+  label: '码流名称',
+  usageHint: '码流用途',
+  enabled: '是否启用',
+  targetCount: '巡检设备数',
+  intervalMinutes: '检测间隔（分钟）',
+  durationHours: '执行时长（小时）',
+  beforeState: '变更前状态',
+  afterState: '变更后状态',
   roleIds: '角色',
   menuIds: '菜单',
   departmentIds: '部门',
@@ -44,13 +74,29 @@ export function referenceSource(reference: AuditReference): string {
       : '无名称记录'
 }
 
-export function auditChanges(detail: AuditDetail | null) {
+export function auditChanges(detail: Pick<AuditDetail, 'changes' | 'relations'> | null) {
   return Object.entries(detail?.changes ?? {}).map(([key, value]) => ({
     key,
     name: changeNames[key] ?? key,
-    value: Array.isArray(value) ? value.join('、') || '无' : (value ?? '无'),
+    value: changeValue(key, value),
     references: detail?.relations[key] ?? [],
   }))
+}
+
+function changeValue(key: string, value: string | string[] | null) {
+  if (Array.isArray(value)) return value.join('、') || '无'
+  if (value == null) return '无'
+  const enums: Record<string, Record<string, string>> = {
+    mode: { AGE: '按时间', COUNT: '按数量' },
+    enabled: { true: '是', false: '否' },
+    lifecycle: { ENABLED: '已启用', DISABLED: '已停用', DRAFT: '待配置' },
+    state: { ACTIVE: '执行中', STOPPED: '已停止', EXPIRED: '已到期' },
+    usageHint: { MAIN: '主码流', SUB: '辅码流', THIRD: '第三码流', OTHER: '其他' },
+  }
+  const field = key.replace(/^(before|after)([A-Z])/, (_, _prefix, first: string) =>
+    first.toLowerCase(),
+  )
+  return enums[field]?.[value] ?? value
 }
 
 export function normalizedTraceId(value: string): string | null {

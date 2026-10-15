@@ -3,6 +3,7 @@ package com.streamfusion.platform.common.web;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.exception.details.ValidationDetails;
+import com.streamfusion.platform.diagnostics.DiagnosticLog;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import org.slf4j.Logger;
@@ -42,7 +43,10 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
             WebRequest request) {
         var servlet = (ServletWebRequest) request;
         if (servlet.getResponse() != null && servlet.getResponse().isCommitted()) return null;
-        if (statusCode.is5xxServerError()) LOG.error("Request failed", ex);
+        if (statusCode.is5xxServerError()) {
+            request.setAttribute(DiagnosticLog.EXCEPTION, ex, WebRequest.SCOPE_REQUEST);
+            LOG.error("Request failed", ex);
+        }
         Object details = null;
         if (ex instanceof BindException binding && statusCode.value() == 400) {
             List<ValidationDetails.FieldError> fields =
@@ -65,7 +69,11 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<Object> business(BusinessException ex, HttpServletRequest request) {
-        LOG.warn("Business request rejected code={}", ex.code());
+        request.setAttribute(DiagnosticLog.REASON, ex.diagnosticReason());
+        LOG.warn(
+                "Business request rejected code={} reasonCode={}",
+                ex.code(),
+                ex.diagnosticReason());
         return writer.entity(
                 request, ex.code().httpStatus(), ex.code(), ex.safeDetails(), new HttpHeaders());
     }
@@ -91,6 +99,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Object> unexpected(Exception ex, HttpServletRequest request) {
+        request.setAttribute(DiagnosticLog.EXCEPTION, ex);
         LOG.error("Unhandled request exception", ex);
         return writer.entity(request, 500, ErrorCode.INTERNAL_ERROR, null, new HttpHeaders());
     }
@@ -101,6 +110,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         CannotCreateTransactionException.class
     })
     public ResponseEntity<Object> dependencyUnavailable(Exception ex, HttpServletRequest request) {
+        request.setAttribute(DiagnosticLog.EXCEPTION, ex);
         LOG.warn("Request dependency unavailable");
         return writer.entity(
                 request, 503, ErrorCode.DEPENDENCY_UNAVAILABLE, null, new HttpHeaders());

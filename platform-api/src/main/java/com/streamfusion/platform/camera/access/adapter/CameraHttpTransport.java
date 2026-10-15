@@ -192,10 +192,13 @@ public class CameraHttpTransport {
             if (response.status == 401 && deviceAuth) {
                 actualHeaders.put(
                         "Authorization",
-                        CameraHttpAuthentication.challenge(
+                        CameraRequestAuthentication.challenge(
                                 response.headers.get("www-authenticate"),
                                 method,
-                                uri,
+                                uri.getRawPath()
+                                        + (uri.getRawQuery() == null
+                                                ? ""
+                                                : "?" + uri.getRawQuery()),
                                 context.username(),
                                 context.password()));
                 response = exchange(method, uri, body, contentType, actualHeaders);

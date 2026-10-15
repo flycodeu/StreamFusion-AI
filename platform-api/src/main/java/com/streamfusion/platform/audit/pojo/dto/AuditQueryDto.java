@@ -12,11 +12,13 @@ public class AuditQueryDto extends PageQueryDto {
     @Schema(description = "操作者ID、当前账号或昵称")
     private String user;
 
+    @Schema(description = "操作动作编码")
     private String action;
 
     @Schema(description = "目标模块，例如USER、ROLE、MENU、DEPT")
     private String module;
 
+    @Schema(description = "操作结果：SUCCESS、FAILURE或DENIED")
     private String result;
 
     @Schema(description = "精确请求追踪标识，32位十六进制，大小写输入均可")
