@@ -28,6 +28,11 @@
         </rollingPolicy>
         <encoder><pattern>%msg%n</pattern><charset>UTF-8</charset></encoder>
     </appender>
-    <logger name="diagnostic.events" level="INFO" additivity="false"><appender-ref ref="DIAGNOSTICS"/></logger>
+    <appender name="ASYNC_DIAGNOSTICS" class="com.streamfusion.platform.monitor.diagnostics.DiagnosticAsyncAppender">
+        <queueSize>1024</queueSize>
+        <maxFlushTime>1000</maxFlushTime>
+        <appender-ref ref="DIAGNOSTICS"/>
+    </appender>
+    <logger name="diagnostic.events" level="INFO" additivity="false"><appender-ref ref="ASYNC_DIAGNOSTICS"/></logger>
     <root level="INFO"><appender-ref ref="CONSOLE"/><appender-ref ref="FILE"/></root>
 </configuration>

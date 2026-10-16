@@ -9,6 +9,8 @@ export interface DiagnosticQuery {
   checkId?: string
   kind?: string
   level?: string
+  size?: number
+  cursor?: string
 }
 export interface DiagnosticEvent {
   occurredAt: string
@@ -146,6 +148,9 @@ export async function getDiagnostics(query: DiagnosticQuery) {
           unavailable: boolean(row.unavailable),
           retentionDays: integer(row.retentionDays),
           limit: integer(row.limit),
+          nextCursor: optionalString(row.nextCursor),
+          cursorExpired: boolean(row.cursorExpired),
+          droppedEvents: integer(row.droppedEvents),
         }
       },
     })

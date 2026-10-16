@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   ElButton,
   ElDatePicker,
-  ElDrawer,
+  ElDialog,
   ElEmpty,
   ElForm,
   ElFormItem,
@@ -17,16 +17,24 @@ import {
   ElMessage,
   vLoading,
 } from 'element-plus'
-import { getDiagnostics, type DiagnosticEvent } from '../../api/diagnostics/api'
+import {
+  getDiagnostics,
+  type DiagnosticEvent,
+  type DiagnosticQuery,
+} from '../../api/diagnostics/api'
 import { eventReason, eventResult } from '../../features/diagnostics/presentation'
 import { normalizedTraceId } from '../../features/audit/presentation'
 import RequestError from '../../components/feedback/RequestError.vue'
 import CaptureDialog from '../../features/diagnostics/CaptureDialog.vue'
+import TablePanel from '../../components/table/TablePanel.vue'
 import { sessionState } from '../../session/state'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
 
 defineOptions({ name: 'MonitorDiagnostics' })
+const props = defineProps<{
+  context?: { traceId?: string; planId?: string; checkId?: string; time?: string }
+}>()
 const route = useRoute()
 const captureOpen = ref(false)
 const captureScope = usePageScope()
@@ -41,13 +49,19 @@ const unavailable = ref(false)
 const selected = ref<DiagnosticEvent | null>(null)
 const drawer = ref(false)
 const lastRead = ref('')
+const pageSize = ref(50)
+const page = ref(1)
+const cursors = ref<string[]>([''])
+const nextCursor = ref<string | null>(null)
+const cursorExpired = ref(false)
+const droppedEvents = ref(0)
+let activeQuery: DiagnosticQuery = {}
 let sequence = 0
-const summary = computed(
-  () => `${rows.value.length} 条记录${lastRead.value ? ` · 更新于 ${lastRead.value}` : ''}`,
-)
 const asEvent = (value: unknown) => value as DiagnosticEvent
 
 async function load() {
+  ++sequence
+  loading.value = false
   validation.value = ''
   const traceId = filters.traceId.trim()
   if (traceId && !normalizedTraceId(traceId)) validation.value = '请输入完整的32位请求标识'
@@ -60,31 +74,52 @@ async function load() {
   )
     validation.value = '请选择不超过7天的时间范围'
   if (validation.value) return
+  activeQuery = {
+    ...filters,
+    traceId: traceId ? normalizedTraceId(traceId)! : '',
+    startTime: range.value[0]!.toISOString(),
+    endTime: range.value[1]!.toISOString(),
+    size: pageSize.value,
+  }
+  cursors.value = ['']
+  page.value = 1
+  rows.value = []
+  nextCursor.value = null
+  cursorExpired.value = false
+  truncated.value = unavailable.value = false
+  await fetchPage(1, '')
+}
+async function fetchPage(target: number, cursor: string) {
   const current = ++sequence
   const inScope = captureScope()
   loading.value = true
   error.value = null
-  rows.value = []
-  truncated.value = unavailable.value = false
   selected.value = null
   drawer.value = false
   try {
-    const result = await getDiagnostics({
-      ...filters,
-      traceId: traceId ? normalizedTraceId(traceId)! : '',
-      startTime: range.value[0]!.toISOString(),
-      endTime: range.value[1]!.toISOString(),
-    })
+    const result = await getDiagnostics({ ...activeQuery, cursor })
     if (current !== sequence || !inScope()) return
     rows.value = result.items
     truncated.value = result.truncated
     unavailable.value = result.unavailable
+    nextCursor.value = result.nextCursor ?? null
+    cursorExpired.value = result.cursorExpired ?? false
+    droppedEvents.value = result.droppedEvents ?? 0
+    page.value = target
+    cursors.value[target - 1] = cursor
     lastRead.value = formatDateTime(new Date())
   } catch (failure) {
     if (current === sequence && inScope()) error.value = failure
   } finally {
     if (current === sequence && inScope()) loading.value = false
   }
+}
+function nextPage() {
+  if (nextCursor.value && !loading.value) void fetchPage(page.value + 1, nextCursor.value)
+}
+function previousPage() {
+  if (page.value > 1 && !loading.value)
+    void fetchPage(page.value - 1, cursors.value[page.value - 2]!)
 }
 function reset() {
   Object.assign(filters, { traceId: '', planId: '', checkId: '', kind: '', level: '' })
@@ -116,7 +151,7 @@ async function copy() {
   }
 }
 watch(
-  () => route.query,
+  () => props.context ?? route.query,
   (query) => {
     Object.assign(filters, {
       traceId: typeof query.traceId === 'string' ? query.traceId : '',
@@ -142,14 +177,11 @@ watch(
 
 <template>
   <section class="diagnostics-page">
-    <div v-if="sessionState.me?.isSuperAdmin" class="capture-actions">
-      <ElButton @click="captureOpen = true">临时详细记录</ElButton>
-    </div>
     <CaptureDialog
       v-if="captureOpen && sessionState.me?.isSuperAdmin"
       @close="captureOpen = false"
     />
-    <ElForm class="diagnostic-filters" label-position="top" @submit.prevent="load">
+    <ElForm class="search-form" inline @submit.prevent="load">
       <ElFormItem label="时间范围" class="time-filter"
         ><ElDatePicker
           v-model="range"
@@ -186,18 +218,36 @@ watch(
       </div>
     </ElForm>
     <p v-if="validation" role="alert" class="query-warning">{{ validation }}</p>
-    <RequestError :error="error" />
-    <div class="log-toolbar">
-      <span>{{ summary }}</span>
-    </div>
-    <p v-if="truncated" class="query-warning" role="status">
-      已达到本次查询上限，请缩小时间范围或补充请求、任务编号。
-    </p>
-    <p v-if="unavailable" class="query-warning" role="status">
-      部分日志不可读取或尚未生成，当前结果可能不完整。
-    </p>
-    <div v-loading="loading" class="log-table">
-      <ElTable :data="rows" stripe @row-dblclick="show">
+    <RequestError :error="error" :diagnostic-link="false" />
+    <TablePanel>
+      <template #actions>
+        <ElButton v-if="!context && sessionState.me?.isSuperAdmin" @click="captureOpen = true"
+          >临时详细记录</ElButton
+        >
+        <span v-if="truncated" class="query-warning" role="status"
+          >已达到扫描预算，可继续下一页或缩小查询范围。</span
+        >
+        <span v-if="unavailable" class="query-warning" role="status"
+          >部分日志不可读取或尚未生成，当前结果可能不完整。</span
+        >
+        <span v-if="cursorExpired" class="query-warning" role="status"
+          >日志已轮转清理或截断，请重新查询。</span
+        >
+        <span v-if="droppedEvents" class="query-warning" role="status"
+          >本进程累计丢弃 {{ droppedEvents }} 条诊断日志（队列满），结果可能不完整。</span
+        >
+      </template>
+      <template #tools
+        ><span v-if="lastRead" class="last-read">更新于 {{ lastRead }}</span
+        ><ElButton :loading="loading" @click="load">刷新</ElButton></template
+      >
+      <ElTable
+        v-loading="loading"
+        :data="rows"
+        :max-height="context ? 420 : 620"
+        border
+        @row-dblclick="show"
+      >
         <ElTableColumn label="发生时间" width="180"
           ><template #default="{ row }">{{
             formatDateTime(asEvent(row).occurredAt)
@@ -243,13 +293,43 @@ watch(
           ><ElEmpty description="没有找到日志，请检查时间范围和筛选条件" :image-size="72"
         /></template>
       </ElTable>
-    </div>
-    <ElDrawer v-model="drawer" title="诊断详情" size="min(760px, 100%)" destroy-on-close>
+      <template #footer>
+        <div class="log-pagination">
+          <span>第 {{ page }} 页 · 本页 {{ rows.length }} 条</span>
+          <ElSelect v-model="pageSize" aria-label="每页条数" class="page-size" @change="load"
+            ><ElOption
+              v-for="size in [20, 50, 100, 200]"
+              :key="size"
+              :label="`${size} 条/页`"
+              :value="size"
+          /></ElSelect>
+          <ElButton :disabled="loading || page === 1 || cursorExpired" @click="previousPage"
+            >上一页</ElButton
+          >
+          <ElButton :disabled="loading || !nextCursor || cursorExpired" @click="nextPage"
+            >下一页</ElButton
+          >
+        </div>
+      </template>
+    </TablePanel>
+    <ElDialog
+      v-model="drawer"
+      title="诊断详情"
+      width="min(820px, calc(100vw - 32px))"
+      append-to-body
+      destroy-on-close
+    >
       <template v-if="selected">
         <div class="detail-heading">
-          <ElTag :type="selected.level === 'INFO' ? 'success' : 'warning'">{{
-            eventResult(selected)
-          }}</ElTag
+          <ElTag
+            :type="
+              selected.level === 'ERROR'
+                ? 'danger'
+                : selected.level === 'INFO'
+                  ? 'success'
+                  : 'warning'
+            "
+            >{{ eventResult(selected) }}</ElTag
           ><span>{{ formatDateTime(selected.occurredAt) }}</span>
         </div>
         <dl class="event-detail">
@@ -294,7 +374,7 @@ watch(
           <ElButton type="primary" plain @click="copy">复制排查信息</ElButton
           ><ElButton v-if="selected.planId" @click="relatedPlan">查看同任务检查</ElButton>
         </div>
-        <details v-if="selected.exceptionType" class="exception-detail">
+        <details v-if="selected.exceptionType" open class="exception-detail">
           <summary>技术堆栈</summary>
           <pre
             >{{ selected.exceptionType
@@ -304,16 +384,19 @@ watch(
                 : ''
             }}{{ '\n' }}{{ selected.stack.join('\n') }}</pre>
         </details>
-        <details v-if="selected.request" class="exception-detail">
+        <details v-if="selected.request" open class="exception-detail">
           <summary>请求参数（已脱敏）</summary>
           <pre>{{ JSON.stringify(selected.request, null, 2) }}</pre>
         </details>
-        <details v-if="selected.response" class="exception-detail">
+        <details v-if="selected.response" open class="exception-detail">
           <summary>返回内容（已脱敏）</summary>
           <pre>{{ JSON.stringify(selected.response, null, 2) }}</pre>
         </details>
+        <p v-if="!selected.request && !selected.response" class="last-read">
+          该记录未采集请求参数或返回内容；临时详细记录仅对开启后匹配的请求生效。
+        </p>
       </template>
-    </ElDrawer>
+    </ElDialog>
   </section>
 </template>
 
@@ -321,46 +404,28 @@ watch(
 .diagnostics-page {
   min-width: 0;
 }
-.capture-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 12px;
-}
-.diagnostic-filters {
-  display: grid;
-  grid-template-columns: minmax(340px, 2fr) repeat(3, minmax(160px, 1fr));
-  gap: 0 16px;
-  padding: 18px 20px 2px;
-  background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 8px;
-}
-.diagnostic-filters :deep(.el-form-item) {
-  min-width: 0;
-  margin-bottom: 16px;
-}
-.diagnostic-filters :deep(.el-date-editor) {
-  width: 100%;
-  min-width: 0;
-}
 .filter-actions {
-  display: flex;
-  align-items: flex-end;
-  padding-bottom: 16px;
+  display: inline-flex;
+  margin-bottom: 18px;
 }
-.log-toolbar {
+.log-pagination {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
   color: var(--el-text-color-secondary);
   font-size: 12px;
-  margin: 18px 0 10px;
 }
-.log-table {
-  overflow: hidden;
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 8px;
+.page-size {
+  width: 120px;
+}
+.last-read {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+.search-form :deep(.el-input),
+.search-form :deep(.el-select) {
+  width: 190px;
 }
 .event-title {
   font-size: 13px;
@@ -422,18 +487,19 @@ watch(
   line-height: 1.7;
   font-size: 12px;
 }
-@media (max-width: 1100px) {
-  .diagnostic-filters {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .time-filter {
-    grid-column: 1 / -1;
-  }
-}
 @media (max-width: 560px) {
-  .diagnostic-filters {
-    grid-template-columns: minmax(0, 1fr);
-    padding: 14px 12px 0;
+  .search-form :deep(.el-form-item),
+  .search-form :deep(.el-date-editor) {
+    width: 100%;
+    min-width: 0;
+    margin-right: 0;
+  }
+  .search-form :deep(.el-form-item__content) {
+    min-width: 0;
+  }
+  .search-form :deep(.el-input),
+  .search-form :deep(.el-select) {
+    width: 100%;
   }
   .event-detail > div {
     grid-template-columns: 90px minmax(0, 1fr);

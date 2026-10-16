@@ -12,11 +12,17 @@ class DiagnosticIntegrationTest extends CameraTestSupport {
     void diagnosticModuleHasIndependentPermissionAndRequestCorrelation() throws Exception {
         mvc.perform(get("/diagnostics/events")).andExpect(status().isUnauthorized());
         var auth = admin();
-        String trace = "d".repeat(32);
+        String trace = java.util.UUID.randomUUID().toString().replace("-", "");
         mvc.perform(get("/camera-status/plans").session(auth.session()).header("X-Trace-Id", trace))
                 .andExpect(status().isOk());
-        var result = read("/diagnostics/events?traceId=" + trace, auth);
-        assertThat(result.path("items").toString()).contains(trace, "/camera-status/plans");
+        org.awaitility.Awaitility.await()
+                .atMost(java.time.Duration.ofSeconds(3))
+                .untilAsserted(
+                        () -> {
+                            var result = read("/diagnostics/events?traceId=" + trace, auth);
+                            assertThat(result.path("items").toString())
+                                    .contains(trace, "/camera-status/plans");
+                        });
         mvc.perform(
                         get("/diagnostics/events")
                                 .session(auth.session())

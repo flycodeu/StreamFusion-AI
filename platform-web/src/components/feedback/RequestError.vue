@@ -5,7 +5,7 @@ import { WarningFilled } from '@element-plus/icons-vue'
 import { ApiRequestError } from '../../lib/http/error'
 import { formatDateTime } from '../../utils/dateTime'
 
-const props = defineProps<{ error: unknown; advice?: string }>()
+const props = defineProps<{ error: unknown; advice?: string; diagnosticLink?: boolean }>()
 const detail = computed(() => (props.error instanceof ApiRequestError ? props.error : null))
 const fieldNames: Record<string, string> = {
   name: '名称',
@@ -141,7 +141,11 @@ const time = computed(() => {
             <dd class="trace-id">{{ detail.traceId }}</dd>
           </div>
         </dl>
-        <DiagnosticLink :trace-id="detail.traceId" :time="detail.timestamp || detail.receivedAt" />
+        <DiagnosticLink
+          v-if="diagnosticLink !== false"
+          :trace-id="detail.traceId"
+          :time="detail.timestamp || detail.receivedAt"
+        />
       </details>
     </div>
   </div>
