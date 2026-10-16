@@ -1,6 +1,7 @@
 package com.streamfusion.platform.camera.status;
 
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
+import com.streamfusion.platform.camera.access.adapter.HikPlatformApi;
 import com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity;
 import com.streamfusion.platform.camera.status.CameraProbeResult.Outcome;
 import java.time.Duration;
@@ -273,6 +274,41 @@ public final class CameraStatusWorker implements AutoCloseable {
         return true;
     }
 
+    /** One source request consumes one worker slot; members retain independent check identities. */
+    public synchronized List<Submission> trySubmitBatch(List<Request> requests) {
+        if (requests.isEmpty()
+                || requests.size() > HikPlatformApi.STATUS_BATCH_SIZE
+                || requests.stream().anyMatch(r -> r.layer() != CameraStatusLayer.UPSTREAM)
+                || requests.stream().map(Request::sourceId).distinct().count() != 1
+                || requests.stream().map(Request::checkId).distinct().count() != requests.size()
+                || requests.stream().map(Request::streamProfileId).distinct().count()
+                        != requests.size())
+            throw new IllegalArgumentException("Invalid upstream batch");
+        String reason =
+                closed
+                        ? "WORKER_STOPPED"
+                        : requests.stream().anyMatch(r -> submitted.containsKey(r.checkId()))
+                                ? "CHECK_ID_CONFLICT"
+                                : null;
+        if (reason == null && !capacity.tryAcquire()) reason = "WORKER_BUSY";
+        if (reason != null) {
+            String rejectedReason = reason;
+            return requests.stream().map(r -> rejected(rejectedReason)).toList();
+        }
+        var batch = new BatchWork(requests);
+        batch.members.forEach(w -> submitted.put(w.request.checkId(), w));
+        try {
+            executor.execute(batch);
+        } catch (RejectedExecutionException ex) {
+            String rejectedReason = closed ? "WORKER_STOPPED" : "WORKER_BUSY";
+            batch.finish(local(rejectedReason));
+            return batch.members.stream()
+                    .map(w -> new Submission(false, rejectedReason, w.completion))
+                    .toList();
+        }
+        return batch.members.stream().map(w -> new Submission(true, null, w.completion)).toList();
+    }
+
     private Submission replay(Work work, Request request) {
         if (!work.request.sameInput(request)) return rejected("CHECK_ID_CONFLICT");
         return new Submission(true, null, work.completion);
@@ -315,7 +351,94 @@ public final class CameraStatusWorker implements AutoCloseable {
             submitted.values().forEach(Work::requestCancellation);
             queued = executor.shutdownNow();
         }
-        for (Runnable work : queued) ((Work) work).finish(cancelled());
+        for (Runnable work : queued) {
+            if (work instanceof Work single) single.finish(cancelled());
+            else ((BatchWork) work).finish(cancelled());
+        }
+    }
+
+    private final class BatchWork implements Runnable {
+        private final List<Work> members;
+        private boolean finished;
+
+        private BatchWork(List<Request> requests) {
+            members = requests.stream().map(r -> new Work(r, true)).toList();
+        }
+
+        @Override
+        public void run() {
+            var previous = MDC.getCopyOfContextMap();
+            var owner = members.get(0);
+            var active = new java.util.ArrayList<Work>();
+            try {
+                MDC.put("traceId", owner.request.traceId());
+                if (sources.putIfAbsent(owner.request.sourceId(), owner) != null) {
+                    finish(local("SOURCE_BUSY"));
+                    return;
+                }
+                if (!reserveStart()) {
+                    finish(local("START_BUDGET_BUSY"));
+                    return;
+                }
+                for (var member : members) {
+                    try {
+                        if (member.cancellation.isCancelled()) {
+                            member.finish(cancelled());
+                            continue;
+                        }
+                        if (System.nanoTime() >= member.deadline) {
+                            member.finish(local("QUEUE_DEADLINE_EXCEEDED"));
+                            continue;
+                        }
+                        if (profiles.putIfAbsent(member.request.streamProfileId(), member)
+                                != null) {
+                            member.finish(local("PROFILE_BUSY"));
+                            continue;
+                        }
+                        MDC.put("checkId", Long.toString(member.request.checkId()));
+                        member.request.beforeProbe().run();
+                        active.add(member);
+                    } catch (CameraAdapterException ex) {
+                        member.finish(local(RtspDescribeProbe.authorizationReason(ex)));
+                    } catch (RuntimeException ex) {
+                        member.finish(local("PROBE_UNAVAILABLE"));
+                    }
+                }
+                if (!active.isEmpty()) {
+                    if (platformProbe == null)
+                        throw new CameraAdapterException("PLATFORM_STATUS_UNAVAILABLE");
+                    var results =
+                            platformProbe.executeBatch(
+                                    active.stream()
+                                            .map(
+                                                    w ->
+                                                            new CameraPlatformProbe.Target(
+                                                                    w.request.mediaProfile(),
+                                                                    w.request.authorization(),
+                                                                    w.deadline,
+                                                                    w.cancellation))
+                                            .toList());
+                    for (int i = 0; i < active.size(); i++) active.get(i).finish(results.get(i));
+                }
+            } catch (CameraAdapterException ex) {
+                members.forEach(w -> w.finish(local(ex.reasonCode())));
+            } catch (RuntimeException ex) {
+                members.forEach(w -> w.finish(local("PLATFORM_STATUS_UNAVAILABLE")));
+            } finally {
+                finish(local("PROBE_UNAVAILABLE"));
+                if (previous == null) MDC.clear();
+                else MDC.setContextMap(previous);
+            }
+        }
+
+        private synchronized void finish(CameraProbeResult fallback) {
+            if (finished) return;
+            finished = true;
+            members.forEach(w -> w.finish(fallback));
+            sources.remove(members.get(0).request.sourceId(), members.get(0));
+            members.forEach(w -> profiles.remove(w.request.streamProfileId(), w));
+            capacity.release();
+        }
     }
 
     private final class Work implements Runnable {
@@ -325,9 +448,15 @@ public final class CameraStatusWorker implements AutoCloseable {
                 new RtspDescribeProbe.Cancellation();
         private final CompletableFuture<CameraProbeResult> completion = new CompletableFuture<>();
         private boolean finished;
+        private final boolean grouped;
 
         private Work(Request request) {
+            this(request, false);
+        }
+
+        private Work(Request request, boolean grouped) {
             this.request = request;
+            this.grouped = grouped;
             deadline = System.nanoTime() + request.timeout().toNanos();
         }
 
@@ -415,10 +544,10 @@ public final class CameraStatusWorker implements AutoCloseable {
                 cancellation.afterResourcesStopped(
                         () -> {
                             profiles.remove(request.streamProfileId(), this);
-                            sources.remove(request.sourceId(), this);
+                            if (!grouped) sources.remove(request.sourceId(), this);
                         });
                 submitted.remove(request.checkId(), this);
-                capacity.release();
+                if (!grouped) capacity.release();
             }
             LOG.info(
                     "Camera status probe ended traceId={} checkId={} reasonCode={} durationMs={}",

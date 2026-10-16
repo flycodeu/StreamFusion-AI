@@ -17,16 +17,34 @@ public interface CameraStatusPlanMapper extends BaseMapper<CameraStatusPlanEntit
     CameraStatusPlanEntity byRequest(@Param("actor") long actor, @Param("key") String key);
 
     @Select(
-            "SELECT COALESCE(SUM(target_count * 1.0 / interval_minutes),0) FROM camera_status_plan WHERE state='ACTIVE' AND end_at>#{now}")
-    double targetsPerMinute(LocalDateTime now);
+            """
+            SELECT COALESCE(SUM(units * 1.0 / interval_minutes),0) FROM (
+              SELECT p.id,p.interval_minutes,
+                CASE WHEN s.adapter_type='HIK_PLATFORM' THEN CEIL(COUNT(*) / 100.0) ELSE COUNT(*) END units
+              FROM camera_status_plan p JOIN camera_status_plan_target t ON t.plan_id=p.id
+              JOIN camera_stream_profile f ON f.id=t.profile_id JOIN camera_source s ON s.id=f.source_id
+              WHERE p.state='ACTIVE' AND p.end_at>#{now}
+              GROUP BY p.id,p.interval_minutes,f.source_id,s.adapter_type,
+                CASE WHEN s.adapter_type='HIK_PLATFORM' THEN t.next_at ELSE NULL END
+            ) rates
+            """)
+    double requestsPerMinute(LocalDateTime now);
 
     @Select(
             "SELECT COALESCE(SUM(media_target_count * 1.0 / interval_minutes),0) FROM camera_status_plan WHERE state='ACTIVE' AND layer='MEDIA' AND end_at>#{now}")
     double mediaTargetsPerMinute(LocalDateTime now);
 
     @Select(
-            "SELECT COUNT(*) FROM camera_status_check WHERE plan_id=#{planId} AND execution_state IN ('QUEUED','RUNNING') AND deadline_at>#{now}")
+            "SELECT COUNT(DISTINCT CASE WHEN layer='UPSTREAM' THEN CONCAT('s',source_id) ELSE CONCAT('c',id) END) FROM camera_status_check WHERE plan_id=#{planId} AND execution_state IN ('QUEUED','RUNNING') AND deadline_at>#{now}")
     int pending(@Param("planId") long planId, @Param("now") LocalDateTime now);
+
+    @Select(
+            "SELECT COUNT(DISTINCT CASE WHEN layer='UPSTREAM' THEN CONCAT('p',COALESCE(plan_id,id),':',source_id) ELSE CONCAT('c',id) END) FROM camera_status_check WHERE execution_state IN ('QUEUED','RUNNING') AND deadline_at>#{now}")
+    int pendingRequests(LocalDateTime now);
+
+    @Select(
+            "SELECT COUNT(*) FROM camera_status_check WHERE source_id=#{sourceId} AND layer='UPSTREAM' AND execution_state IN ('QUEUED','RUNNING') AND deadline_at>#{now}")
+    int pendingSource(@Param("sourceId") long sourceId, @Param("now") LocalDateTime now);
 
     @Select(
             """

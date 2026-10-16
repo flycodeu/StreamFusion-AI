@@ -151,7 +151,10 @@ export function usePreviewSlots() {
       }
       if (current(index, revision)) {
         slot.state = 'ERROR'
-        slot.error = previewReason(failure instanceof Error ? failure.message : null)
+        slot.error =
+          failure instanceof ApiRequestError
+            ? `${failure.code === 'RATE_LIMITED' ? previewReason(failure.code) : failure.message} (${failure.code})`
+            : previewReason(failure instanceof Error ? failure.message : null)
       }
     } finally {
       if (recovering.get(index) === revision) recovering.delete(index)
@@ -212,7 +215,7 @@ export function usePreviewSlots() {
       slot.state = 'ERROR'
       slot.error =
         failure instanceof ApiRequestError
-          ? `${failure.message} (${failure.code})`
+          ? `${failure.code === 'RATE_LIMITED' ? previewReason(failure.code) : failure.message} (${failure.code})`
           : previewReason(failure instanceof Error ? failure.message : null)
     }
   }

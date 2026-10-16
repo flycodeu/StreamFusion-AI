@@ -38,6 +38,40 @@ class SchemaSqlTest {
     }
 
     @Test
+    void cameraListAndBusySourceIndexesKeepTheirQueryColumnOrder() throws Exception {
+        for (var entry :
+                java.util.Map.of(
+                                "camera_channel", java.util.List.of("CREATED_AT", "ID"),
+                                "camera_status_check",
+                                        java.util.List.of(
+                                                "SOURCE_ID",
+                                                "LAYER",
+                                                "EXECUTION_STATE",
+                                                "DEADLINE_AT"))
+                        .entrySet()) {
+            String index =
+                    "camera_channel".equals(entry.getKey())
+                            ? "IX_CAMERA_CHANNEL_CREATED"
+                            : "IX_CAMERA_STATUS_SOURCE";
+            var columns = new java.util.ArrayList<String>();
+            try (var rows =
+                    connection
+                            .getMetaData()
+                            .getIndexInfo(
+                                    null,
+                                    null,
+                                    entry.getKey().toUpperCase(java.util.Locale.ROOT),
+                                    false,
+                                    false)) {
+                while (rows.next())
+                    if (index.equals(rows.getString("INDEX_NAME")))
+                        columns.add(rows.getString("COLUMN_NAME"));
+            }
+            assertThat(columns).containsExactlyElementsOf(entry.getValue());
+        }
+    }
+
+    @Test
     void navigationMetadataDefaultsNewDirectoriesToBusinessAndRejectsUnknownPartitions()
             throws Exception {
         try (var sql = connection.createStatement()) {

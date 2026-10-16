@@ -19,6 +19,128 @@ import org.junit.jupiter.api.Test;
 
 class CameraStatusWorkerTest {
     @Test
+    void platformBatchUsesOneWorkerSlotAndOneSourceGateWithIndependentCancellation()
+            throws Exception {
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var platform = mock(CameraPlatformProbe.class);
+        var claims = new AtomicInteger();
+        var requests =
+                java.util.stream.LongStream.rangeClosed(1, 100)
+                        .mapToObj(
+                                id -> {
+                                    var profile =
+                                            new com.streamfusion.platform.camera.pojo.entity
+                                                    .CameraProfileEntity();
+                                    profile.setId(id);
+                                    profile.setSourceId(1L);
+                                    return CameraStatusWorker.Request.upstream(
+                                            id,
+                                            1,
+                                            id,
+                                            "batch_trace",
+                                            profile,
+                                            Duration.ofSeconds(5),
+                                            claims::incrementAndGet,
+                                            () -> {});
+                                })
+                        .toList();
+        when(platform.executeBatch(anyList()))
+                .thenAnswer(
+                        call -> {
+                            java.util.List<CameraPlatformProbe.Target> targets =
+                                    call.getArgument(0);
+                            entered.countDown();
+                            assertThat(release.await(3, TimeUnit.SECONDS)).isTrue();
+                            return targets.stream().map(t -> accessible()).toList();
+                        });
+        try (var worker =
+                new CameraStatusWorker(
+                        mock(RtspDescribeProbe.class),
+                        mock(CameraMediaProbe.class),
+                        platform,
+                        new CameraStatusWorker.Limits(2, 1, Duration.ZERO))) {
+            var batch = worker.trySubmitBatch(requests);
+            try {
+                assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
+                assertThat(batch).hasSize(100).allMatch(CameraStatusWorker.Submission::accepted);
+                assertThat(claims).hasValue(100);
+                assertThat(
+                                worker.trySubmit(request(101, 1, 101))
+                                        .completion()
+                                        .get(2, TimeUnit.SECONDS)
+                                        .reasonCode())
+                        .isEqualTo("SOURCE_BUSY");
+                assertThat(worker.cancel(50)).isTrue();
+            } finally {
+                release.countDown();
+            }
+            for (int index = 0; index < batch.size(); index++) {
+                var result = batch.get(index).completion().get(2, TimeUnit.SECONDS);
+                assertThat(result.outcome())
+                        .isEqualTo(
+                                index == 49
+                                        ? CameraProbeResult.Outcome.CANCELLED
+                                        : CameraProbeResult.Outcome.ACCESSIBLE);
+            }
+            verify(platform).executeBatch(anyList());
+        }
+    }
+
+    @Test
+    void failedBatchClaimDoesNotDiscardHealthyMembers() throws Exception {
+        var platform = mock(CameraPlatformProbe.class);
+        var first = new com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity();
+        first.setId(1L);
+        first.setSourceId(1L);
+        var second = new com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity();
+        second.setId(2L);
+        second.setSourceId(1L);
+        when(platform.executeBatch(anyList()))
+                .thenAnswer(
+                        call -> {
+                            java.util.List<CameraPlatformProbe.Target> active = call.getArgument(0);
+                            assertThat(active).hasSize(1);
+                            assertThat(active.getFirst().profile().getId()).isEqualTo(2L);
+                            return java.util.List.of(accessible());
+                        });
+        try (var worker =
+                new CameraStatusWorker(
+                        mock(RtspDescribeProbe.class),
+                        mock(CameraMediaProbe.class),
+                        platform,
+                        new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
+            var batch =
+                    worker.trySubmitBatch(
+                            java.util.List.of(
+                                    CameraStatusWorker.Request.upstream(
+                                            1,
+                                            1,
+                                            1,
+                                            "revoked",
+                                            first,
+                                            Duration.ofSeconds(3),
+                                            () -> {
+                                                throw new CameraAdapterException("ACTOR_REVOKED");
+                                            },
+                                            () -> {}),
+                                    CameraStatusWorker.Request.upstream(
+                                            2,
+                                            1,
+                                            2,
+                                            "allowed",
+                                            second,
+                                            Duration.ofSeconds(3),
+                                            () -> {},
+                                            () -> {})));
+            assertThat(batch.getFirst().completion().get(2, TimeUnit.SECONDS).outcome())
+                    .isEqualTo(CameraProbeResult.Outcome.NOT_EXECUTED);
+            assertThat(batch.getLast().completion().get(2, TimeUnit.SECONDS).outcome())
+                    .isEqualTo(CameraProbeResult.Outcome.ACCESSIBLE);
+        }
+    }
+
+    @Test
     void mediaUsesTheSharedSourceGateUntilOwnedPullCleanupCompletes() throws Exception {
         var control = mock(RtspDescribeProbe.class);
         var media = mock(CameraMediaProbe.class);

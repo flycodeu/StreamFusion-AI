@@ -25,8 +25,73 @@ class PreviewTranscodeRegistryTest {
                     "test");
 
     @Test
-    void concurrentDistinctResourcesAreAllRegisteredWithoutACountQuota() throws Exception {
-        var registry = new PreviewTranscodeRegistry(directory, json);
+    void concurrentStartsCannotExceedTheTranscodeBudget() throws Exception {
+        var registry = new PreviewTranscodeRegistry(directory, json, 2);
+        try (var workers = Executors.newFixedThreadPool(8)) {
+            var work = new ArrayList<java.util.concurrent.Future<Boolean>>();
+            for (int index = 0; index < 32; index++) {
+                int target = index;
+                work.add(
+                        workers.submit(
+                                () -> {
+                                    try {
+                                        registry.register(stream(target), output(target));
+                                        return true;
+                                    } catch (PreviewFailure full) {
+                                        assertThat(full.reason())
+                                                .isEqualTo("TRANSCODE_CAPACITY_EXCEEDED");
+                                        return false;
+                                    }
+                                }));
+            }
+            int accepted = 0;
+            for (var result : work) if (result.get()) accepted++;
+            assertThat(accepted).isEqualTo(2);
+            assertThat(registry.occupied()).isEqualTo(2);
+        } finally {
+            registry.close();
+        }
+    }
+
+    @Test
+    void disabledTranscodingNeverRegistersANewResource() {
+        var registry = new PreviewTranscodeRegistry(directory, json, 0);
+        try {
+            assertThatThrownBy(() -> registry.register(stream(1), output(1)))
+                    .hasMessage("TRANSCODE_DISABLED");
+            assertThat(registry.occupied()).isZero();
+        } finally {
+            registry.close();
+        }
+    }
+
+    @Test
+    void restartAndLoweredBudgetKeepOldReservationsUntilConfirmedExit() {
+        var first = new PreviewTranscodeRegistry(directory, json, 2);
+        first.register(stream(1), output(1));
+        first.register(stream(2), output(2));
+        first.close();
+        var restarted = new PreviewTranscodeRegistry(directory, json, 1);
+        try {
+            assertThat(restarted.occupied()).isEqualTo(2);
+            restarted.releasing(output(1).key());
+            assertThat(restarted.occupied()).isEqualTo(2);
+            assertThatThrownBy(() -> restarted.register(stream(3), output(3)))
+                    .hasMessage("TRANSCODE_CAPACITY_EXCEEDED");
+            restarted.exited(output(1).key());
+            assertThatThrownBy(() -> restarted.register(stream(3), output(3)))
+                    .hasMessage("TRANSCODE_CAPACITY_EXCEEDED");
+            restarted.exited(output(2).key());
+            restarted.register(stream(3), output(3));
+            assertThat(restarted.occupied()).isEqualTo(1);
+        } finally {
+            restarted.close();
+        }
+    }
+
+    @Test
+    void concurrentDistinctResourcesAreRegisteredWithinAnExplicitBudget() throws Exception {
+        var registry = new PreviewTranscodeRegistry(directory, json, 32);
         try (var workers = Executors.newFixedThreadPool(8)) {
             var work = new ArrayList<java.util.concurrent.Future<?>>();
             for (int index = 0; index < 32; index++) {
@@ -40,7 +105,7 @@ class PreviewTranscodeRegistryTest {
         } finally {
             registry.close();
         }
-        var restarted = new PreviewTranscodeRegistry(directory, json);
+        var restarted = new PreviewTranscodeRegistry(directory, json, 32);
         try {
             assertThat(restarted.keys()).hasSize(32);
             assertThat(restarted.recoverable(runtime)).hasSize(32);
@@ -205,7 +270,7 @@ class PreviewTranscodeRegistryTest {
         byte[] before = json.writeValueAsBytes(entries);
         assertThat(before).hasSize(targetBytes);
         Files.write(journal(), before);
-        var registry = new PreviewTranscodeRegistry(directory, json);
+        var registry = new PreviewTranscodeRegistry(directory, json, 2048);
         try {
             assertThat(registry.keys()).hasSize(1024);
             assertThatThrownBy(() -> registry.register(stream(2048), output(2048)))
@@ -241,7 +306,7 @@ class PreviewTranscodeRegistryTest {
 
     @Test
     void recoverySelectsOneEligibleRecordAndRotatesWithoutWritingTheJournal() throws Exception {
-        var registry = new PreviewTranscodeRegistry(directory, json);
+        var registry = new PreviewTranscodeRegistry(directory, json, 8);
         try {
             for (int index = 1; index <= 4; index++)
                 registry.register(stream(index), output(index));

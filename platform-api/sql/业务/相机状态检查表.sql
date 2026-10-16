@@ -48,6 +48,7 @@ CREATE TABLE camera_status_check (
     KEY ix_camera_status_deadline (execution_state,deadline_at,id),
     KEY ix_camera_status_retain (execution_state,retain_until,id),
     KEY ix_camera_status_plan (plan_id,execution_state,deadline_at),
+    KEY ix_camera_status_source (source_id,layer,execution_state,deadline_at),
     CONSTRAINT ck_camera_status_probe CHECK ((layer='CONTROL' AND probe_kind='RTSP_DESCRIBE') OR (layer='MEDIA' AND probe_kind='ZLM_RTP_FRAMES') OR (layer='UPSTREAM' AND probe_kind='HIK_PLATFORM_ONLINE')),
     CONSTRAINT ck_camera_status_execution CHECK (execution_state IN ('QUEUED','RUNNING','COMPLETED','SKIPPED','CANCELLED','INTERRUPTED')),
     CONSTRAINT ck_camera_status_result CHECK (result_value IS NULL OR result_value IN ('ACCESSIBLE','FAILED','UNSUPPORTED')),

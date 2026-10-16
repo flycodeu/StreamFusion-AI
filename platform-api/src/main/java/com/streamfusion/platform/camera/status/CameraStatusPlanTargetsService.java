@@ -63,11 +63,11 @@ public class CameraStatusPlanTargetsService {
                         || query.groupIds().isEmpty()
                         || query.groupIds().size() > 100) throw invalid();
                 selectedGroups =
-                        query.groupIds().stream()
-                                .map(id -> DecimalInput.id(id, "groupId"))
-                                .flatMap(id -> groups.queryGroupIds(id, true).stream())
-                                .distinct()
-                                .toList();
+                        groups.queryGroupIds(
+                                query.groupIds().stream()
+                                        .map(id -> DecimalInput.id(id, "groupId"))
+                                        .toList(),
+                                true);
                 if (selectedGroups.isEmpty()) return new Preview(List.of(), false);
                 keys = null;
             }

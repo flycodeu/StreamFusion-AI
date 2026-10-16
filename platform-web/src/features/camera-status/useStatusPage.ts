@@ -10,8 +10,15 @@ import {
 } from 'vue'
 import type { Ref } from 'vue'
 import { getStatusPage } from '../../api/camera-status/api'
-import type { LayerStatus, StatusPage, StatusSearch } from '../../api/camera-status/types'
+import type {
+  LayerStatus,
+  StatusPage,
+  StatusProfile,
+  StatusSearch,
+} from '../../api/camera-status/types'
 import { isTerminal } from './model'
+import { pageCoverage, representativeConnection } from './health'
+import { sessionState } from '../../session/state'
 
 export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
   const result = shallowRef<StatusPage | null>(null)
@@ -22,7 +29,10 @@ export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
   const visible = ref(typeof document === 'undefined' || !document.hidden),
     activated = ref(true),
     elapsed = ref(0)
-  const enabled = computed(() => active.value && visible.value && activated.value)
+  const authorized = computed(() => !!sessionState.me?.modules.includes('camera'))
+  const enabled = computed(
+    () => active.value && visible.value && activated.value && authorized.value,
+  )
   const rows = computed(() => {
     if (!result.value) return []
     const now = Date.parse(result.value.serverNow) + elapsed.value
@@ -32,9 +42,31 @@ export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
         ...profile,
         control: expire(profile.control, now),
         media: expire(profile.media, now),
+        ...(profile.upstream ? { upstream: expire(profile.upstream, now) } : {}),
       })),
     }))
   })
+  const summary = computed(() => {
+    if (!result.value) return null
+    // The server owns the selected-layer baseline. Apply only locally expired transitions,
+    // without replacing its counts with a new interpretation of card state.
+    const updated = { ...result.value.summary }
+    result.value.items.forEach((channel, index) => {
+      const before = representativeConnection(channel, query.value.layer)
+      const after = representativeConnection(rows.value[index]!, query.value.layer)
+      if (before !== after && updated[before] > 0) {
+        --updated[before]
+        ++updated[after]
+      }
+    })
+    return updated
+  })
+  const coverage = computed(() =>
+    result.value ? pageCoverage(rows.value, query.value.layer) : null,
+  )
+  function layers(profile: StatusProfile) {
+    return [profile.control, profile.media, ...(profile.upstream ? [profile.upstream] : [])]
+  }
   function expire(layer: LayerStatus, now: number): LayerStatus {
     return layer.freshness === 'CURRENT' &&
       layer.observation &&
@@ -69,7 +101,7 @@ export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
     const now = Date.parse(result.value.serverNow) + elapsed.value
     const deadlines = result.value.items.flatMap((channel) =>
       channel.profiles.flatMap((profile) =>
-        [profile.control, profile.media].flatMap((layer) =>
+        layers(profile).flatMap((layer) =>
           layer.freshness === 'CURRENT' && layer.observation
             ? [Date.parse(layer.observation.validUntil)]
             : [],
@@ -89,9 +121,7 @@ export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
     const progressing =
       result.value?.items.some((channel) =>
         channel.profiles.some((profile) =>
-          [profile.control, profile.media].some(
-            (layer) => layer.latestCheck && !isTerminal(layer.latestCheck),
-          ),
+          layers(profile).some((layer) => layer.latestCheck && !isTerminal(layer.latestCheck)),
         ),
       ) ?? false
     if ((progressing && reads >= 30) || failures >= 3) {
@@ -137,11 +167,28 @@ export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
     paused.value = false
     await read(epoch, false)
   }
+  // Identity cleanup increments epoch before clearing me. Invalidate synchronously, never read
+  // from this callback with the still-present old identity (401 must not trigger another GET).
   watch(
-    [query, enabled],
-    ([nextQuery], [previousQuery]) => {
+    () => sessionState.epoch,
+    () => {
       stop()
-      if (nextQuery !== previousQuery) result.value = null
+      result.value = null
+      total.value = 0
+      error.value = null
+      reads = 0
+      failures = 0
+      paused.value = false
+    },
+    { flush: 'sync' },
+  )
+  watch(
+    [query, enabled, () => sessionState.me?.user.id, authorized],
+    ([nextQuery, , nextUser], [previousQuery, , previousUser]) => {
+      stop()
+      if (nextQuery !== previousQuery || nextUser !== previousUser || !authorized.value)
+        result.value = null
+      if (nextUser !== previousUser) total.value = 0
       error.value = null
       reads = 0
       failures = 0
@@ -170,5 +217,18 @@ export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
     if (typeof document !== 'undefined')
       document.removeEventListener('visibilitychange', visibilityChanged)
   })
-  return { rows, result, total, loading, error, paused, refresh }
+  const displayedResult = computed(() =>
+    result.value ? { ...result.value, summary: summary.value! } : null,
+  )
+  return {
+    rows,
+    result: displayedResult,
+    summary,
+    coverage,
+    total,
+    loading,
+    error,
+    paused,
+    refresh,
+  }
 }

@@ -458,6 +458,46 @@ class CameraAccessAdapterTest {
     }
 
     @Test
+    void platformOnlineBatchIsOneRequestAndSeparatesMissingUnknownAndDuplicateFacts() {
+        var bodies = new ArrayList<com.fasterxml.jackson.databind.JsonNode>();
+        server.createContext(
+                "/artemis/api/nms/v1/online/camera/get",
+                exchange -> {
+                    bodies.add(json.readTree(exchange.getRequestBody()));
+                    reply(
+                            exchange,
+                            200,
+                            """
+                    {"code":"0","data":{"total":5,"list":[
+                      {"indexCode":"a","online":"1"},{"cameraIndexCode":"b","online":0},
+                      {"indexCode":"c","online":true},{"indexCode":"d","online":1},
+                      {"indexCode":"d","online":0}]}}
+                    """);
+                });
+        var api = new HikPlatformApi(transport, json);
+        var statuses = api.onlineBatch(context, List.of("a", "b", "c", "d", "e"));
+        assertThat(bodies).hasSize(1);
+        assertThat(bodies.getFirst().path("indexCodes")).hasSize(5);
+        assertThat(bodies.getFirst().path("pageSize").asInt()).isEqualTo(5);
+        assertThat(statuses.get("a").value()).isEqualTo(1);
+        assertThat(statuses.get("b").value()).isZero();
+        assertThat(statuses.get("c").reasonCode()).isEqualTo("PLATFORM_STATUS_UNKNOWN");
+        assertThat(statuses.get("d").reasonCode()).isEqualTo("PLATFORM_STATUS_UNKNOWN");
+        assertThat(statuses.get("e").reasonCode()).isEqualTo("PLATFORM_STATUS_MISSING");
+        assertThatThrownBy(() -> api.onlineBatch(context, List.of("a", "a")))
+                .hasMessage("PLATFORM_STATUS_BATCH_INVALID");
+        assertThatThrownBy(
+                        () ->
+                                api.onlineBatch(
+                                        context,
+                                        java.util.stream.IntStream.range(0, 101)
+                                                .mapToObj(Integer::toString)
+                                                .toList()))
+                .hasMessage("PLATFORM_STATUS_BATCH_INVALID");
+        assertThat(bodies).hasSize(1);
+    }
+
+    @Test
     void platformSignatureMatchesLocalOfficialArtemisSdk1115Vector() {
         // Generated with com.hikvision.ga:artemis-http-client:1.1.15.RELEASE SignUtil.sign.
         var headers =

@@ -4,10 +4,10 @@ import com.streamfusion.platform.camera.mapper.CameraChannelMapper;
 import com.streamfusion.platform.camera.mapper.CameraProfileMapper;
 import com.streamfusion.platform.camera.pojo.entity.CameraChannelEntity;
 import com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity;
-import com.streamfusion.platform.camera.pojo.vo.CameraAddressVo;
 import com.streamfusion.platform.camera.service.CameraAccessService;
 import com.streamfusion.platform.camera.service.CameraCryptoService;
 import com.streamfusion.platform.camera.service.CameraRtspTargetService;
+import com.streamfusion.platform.camera.service.CameraSourceService;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.validation.DecimalInput;
@@ -39,6 +39,7 @@ public class CameraStatusQueryService {
     private final CameraAccessService cameras;
     private final CameraCryptoService crypto;
     private final CameraRtspTargetService targets;
+    private final CameraSourceService sources;
     private final Clock clock;
 
     @Transactional(readOnly = true)
@@ -96,6 +97,9 @@ public class CameraStatusQueryService {
                         query.getLayer().name(),
                         cameras.visibility(actor));
         var rows = page.getRecords();
+        var addresses =
+                sources.displayAddresses(
+                        rows.stream().map(CameraChannelEntity::getSourceId).toList());
         var profilesByCamera = profileStatuses(rows, false);
         var items = new ArrayList<CameraStatusPageVo.Item>();
         for (var row : rows)
@@ -105,10 +109,7 @@ public class CameraStatusQueryService {
                             row.getDeviceId() == null ? "c" + row.getId() : "d" + row.getDeviceId(),
                             row.getName(),
                             row.getDeviceName(),
-                            CameraAddressVo.of(
-                                    row.getConnectionCategory(),
-                                    row.getAddressHost(),
-                                    row.getAddressPort()),
+                            addresses.get(row.getSourceId()),
                             row.getLifecycle(),
                             row.getDefaultPreviewProfileId() == null
                                     ? null

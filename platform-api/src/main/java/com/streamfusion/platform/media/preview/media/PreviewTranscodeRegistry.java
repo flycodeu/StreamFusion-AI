@@ -3,6 +3,7 @@ package com.streamfusion.platform.media.preview.media;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.streamfusion.platform.common.config.PlatformProperties;
 import com.streamfusion.platform.media.preview.PreviewFailure;
+import com.streamfusion.platform.media.preview.PreviewProperties;
 import com.streamfusion.platform.media.runtime.service.MediaRuntimeService.ActiveZlm;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
@@ -31,6 +32,7 @@ public final class PreviewTranscodeRegistry {
     private static final int MAX_JOURNAL_BYTES = 4 * 1024 * 1024;
     private final Path file;
     private final ObjectMapper json;
+    private final int maxTranscodes;
     private final Set<String> current = new HashSet<>();
     private LinkedHashMap<String, Entry> entries;
     private FileChannel lockChannel;
@@ -38,13 +40,20 @@ public final class PreviewTranscodeRegistry {
     private boolean closed;
 
     @Autowired
-    public PreviewTranscodeRegistry(PlatformProperties platform, ObjectMapper json) {
-        this(platform.workDir(), json);
+    public PreviewTranscodeRegistry(
+            PlatformProperties platform, ObjectMapper json, PreviewProperties limits) {
+        this(platform.workDir(), json, limits.maxTranscodes());
     }
 
     PreviewTranscodeRegistry(Path directory, ObjectMapper json) {
+        this(directory, json, 2);
+    }
+
+    PreviewTranscodeRegistry(Path directory, ObjectMapper json, int maxTranscodes) {
+        if (maxTranscodes < 0) throw new IllegalArgumentException("Invalid transcode capacity");
         this.file = directory.resolve("preview-transcodes.json");
         this.json = json;
+        this.maxTranscodes = maxTranscodes;
     }
 
     synchronized void register(
@@ -52,6 +61,9 @@ public final class PreviewTranscodeRegistry {
         load();
         if (entries.containsKey(output.key()))
             throw new PreviewFailure("TRANSCODE_RECOVERY_REQUIRED");
+        if (maxTranscodes == 0) throw new PreviewFailure("TRANSCODE_DISABLED");
+        if (entries.size() >= maxTranscodes)
+            throw new PreviewFailure("TRANSCODE_CAPACITY_EXCEEDED");
         var next = new LinkedHashMap<>(entries);
         next.put(
                 output.key(),
@@ -108,6 +120,12 @@ public final class PreviewTranscodeRegistry {
     synchronized Set<String> keys() {
         load();
         return Set.copyOf(entries.keySet());
+    }
+
+    /** Includes old-runtime and unknown-start records until exit has been confirmed. */
+    public synchronized int occupied() {
+        load();
+        return entries.size();
     }
 
     synchronized List<Entry> recoverable(ActiveZlm runtime) {

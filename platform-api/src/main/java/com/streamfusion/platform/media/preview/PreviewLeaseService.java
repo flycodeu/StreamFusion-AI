@@ -10,6 +10,8 @@ import com.streamfusion.platform.common.validation.DecimalInput;
 import com.streamfusion.platform.media.preview.media.PreviewMediaGateway;
 import com.streamfusion.platform.media.preview.media.PreviewMediaGateway.Stream;
 import com.streamfusion.platform.media.preview.media.PreviewMediaGateway.Transcode;
+import com.streamfusion.platform.media.preview.media.PreviewPullRegistry;
+import com.streamfusion.platform.media.preview.media.PreviewTranscodeRegistry;
 import com.streamfusion.platform.media.preview.source.PreviewLocatorService;
 import com.streamfusion.platform.media.runtime.service.MediaRuntimeService;
 import com.streamfusion.platform.system.auth.pojo.dto.SessionPrincipalDto;
@@ -35,17 +37,21 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.boot.web.context.WebServerApplicationContext;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
-/** Bounded ephemeral leases; each lease owns an independently revocable ZLM tuple. */
+/** Bounded viewer leases with one remote pull per configuration and isolated local outputs. */
 @Service
 public class PreviewLeaseService {
     private static final Logger LOG = LoggerFactory.getLogger(PreviewLeaseService.class);
     private static final Duration TTL = Duration.ofSeconds(90);
     private static final Duration CREATE_TIMEOUT = Duration.ofSeconds(18);
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
-    private static final int MAX_LEASES = 256;
-    private static final int MAX_USER_LEASES = 64;
+    private static final Duration CLEANUP_TIMEOUT = Duration.ofSeconds(12);
+    private static final int MAX_LEASES = 64;
+    private static final int MAX_PENDING_REQUESTS = 512;
     private static final int MAX_CLEANUP_ATTEMPTS = 6;
     private final PreviewAuthorization authorization;
     private final CameraChannelMapper channels;
@@ -54,12 +60,21 @@ public class PreviewLeaseService {
     private final PreviewMediaGateway media;
     private final MediaRuntimeService runtimes;
     private final Clock clock;
+    private final PreviewProperties limits;
+    private final PreviewTranscodeRegistry transcodes;
+    private final PreviewPullRegistry pulls;
+    private final Map<PreviewPullRegistry.Entry, Integer> recoveryAttempts = new HashMap<>();
+    private long nextRecoveryRequest;
+    private String lastRecoveryFailure;
     private final String app =
             "sf_preview_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
     private final Object guard = new Object();
     private final Map<String, Lease> leases = new HashMap<>();
+    // Membership and closing are guarded by guard. Network calls never hold that monitor.
+    private final Map<UpstreamKey, SharedUpstream> upstreams = new HashMap<>();
     private final Map<RequestKey, RequestEntry> requests = new HashMap<>();
     private volatile boolean shuttingDown;
+    private volatile boolean recoveryEnabled;
     private final ThreadPoolExecutor cleanupWorkers =
             new ThreadPoolExecutor(
                     4,
@@ -88,7 +103,10 @@ public class PreviewLeaseService {
             PreviewLocatorService locators,
             PreviewMediaGateway media,
             MediaRuntimeService runtimes,
-            Clock clock) {
+            Clock clock,
+            PreviewProperties limits,
+            PreviewTranscodeRegistry transcodes,
+            PreviewPullRegistry pulls) {
         this.authorization = authorization;
         this.channels = channels;
         this.profiles = profiles;
@@ -96,7 +114,10 @@ public class PreviewLeaseService {
         this.media = media;
         this.runtimes = runtimes;
         this.clock = clock;
-        reaper.scheduleWithFixedDelay(this::reapSafely, 10, 10, TimeUnit.SECONDS);
+        this.limits = limits;
+        this.transcodes = transcodes;
+        this.pulls = pulls;
+        reaper.scheduleWithFixedDelay(this::reapSafely, 1, 10, TimeUnit.SECONDS);
     }
 
     public PreviewModels.LeaseView create(PreviewModels.CreateLease input) {
@@ -122,12 +143,10 @@ public class PreviewLeaseService {
                     throw BusinessException.error(ErrorCode.CONFLICT);
                 lease = null;
             } else {
-                if (leases.size() >= MAX_LEASES
-                        || requests.size() >= MAX_LEASES * 2
-                        || leases.values().stream()
-                                        .filter(v -> v.owner.getUserId() == owner.getUserId())
-                                        .count()
-                                >= MAX_USER_LEASES)
+                if (leases.size() >= limits.maxSessions())
+                    throw BusinessException.error(ErrorCode.RATE_LIMITED)
+                            .diagnosed("PREVIEW_CAPACITY_EXCEEDED");
+                if (requests.size() >= MAX_PENDING_REQUESTS)
                     throw BusinessException.error(ErrorCode.RATE_LIMITED);
                 String id = UUID.randomUUID().toString();
                 lease = new Lease(id, owner, cameraId, input, now().plus(TTL), MDC.get("traceId"));
@@ -186,6 +205,31 @@ public class PreviewLeaseService {
         }
     }
 
+    public PreviewModels.Capacity capacity() {
+        authorization.capacity();
+        int occupied;
+        int closing;
+        synchronized (guard) {
+            occupied = leases.size();
+            // closing is volatile: do not acquire lease monitors while holding guard.
+            closing = (int) leases.values().stream().filter(lease -> lease.closing).count();
+        }
+        Integer occupiedTranscodes;
+        try {
+            occupiedTranscodes = transcodes.occupied();
+        } catch (PreviewFailure unavailable) {
+            occupiedTranscodes = null;
+        }
+        return new PreviewModels.Capacity(
+                limits.maxSessions(),
+                occupied,
+                closing,
+                limits.maxTranscodes(),
+                occupiedTranscodes,
+                occupiedTranscodes != null,
+                now());
+    }
+
     private PreviewModels.LeaseView initialize(Lease lease) {
         var deadline = lease.createDeadline;
         beginOperation(lease, deadline);
@@ -205,6 +249,7 @@ public class PreviewLeaseService {
 
     private PreviewModels.LeaseView initialize(Lease lease, PreviewDeadline deadline) {
         deadline.check();
+        requireRecovered();
         var channel = channels.selectById(lease.cameraId);
         if (channel == null) throw new PreviewFailure("CAMERA_NOT_FOUND");
         if (!"ENABLED".equals(channel.getLifecycle())) throw new PreviewFailure("CAMERA_DISABLED");
@@ -219,21 +264,22 @@ public class PreviewLeaseService {
         if (!Boolean.TRUE.equals(profile.getEnabled()))
             throw new PreviewFailure("PROFILE_DISABLED");
         var runtime = runtimes.activeZlm().orElseThrow(() -> new PreviewFailure("ZLM_NOT_READY"));
-        var source =
-                locators.resolve(
-                        profile,
-                        () -> {
-                            deadline.check();
-                            authorization.request(lease.owner, lease.cameraId);
-                        },
-                        deadline);
+        authorization.request(lease.owner, lease.cameraId);
+        lease.connectionKey = locators.connectionKey(profile);
+        var upstream = attachUpstream(lease, profile, runtime, deadline);
+        checkActive(lease, deadline);
+        authorization.request(lease.owner, lease.cameraId);
+        requireEnabled(lease);
         String id = lease.id.replace("-", "");
         synchronized (lease) {
             checkActive(lease, deadline);
             // Retain the exact tuple before mutation, including timeout with unknown outcome.
-            lease.stream = new Stream(runtime, app, id, "__defaultVhost__/" + app + "/" + id);
+            var pending = new Stream(runtime, app, id, "__defaultVhost__/" + app + "/" + id);
+            pulls.register(pending, true);
+            lease.stream = pending;
         }
-        var stream = media.open(runtime, app, id, source.uri(), deadline);
+        var stream = media.openViewer(upstream, app, id, deadline);
+        pulls.started(stream);
         synchronized (lease) {
             lease.stream = stream;
         }
@@ -262,9 +308,76 @@ public class PreviewLeaseService {
         synchronized (lease) {
             checkActive(lease, deadline);
             lease.codec = PreviewPlaybackPlanner.normalize(stats.videoCodec());
+            lease.upstream.established = true;
             lease.ready = true;
             lease.expiresAt = now().plus(TTL);
             return view(lease);
+        }
+    }
+
+    private Stream attachUpstream(
+            Lease lease,
+            CameraProfileEntity profile,
+            MediaRuntimeService.ActiveZlm runtime,
+            PreviewDeadline deadline) {
+        var key = new UpstreamKey(profile.getId(), lease.connectionKey, runtime);
+        SharedUpstream shared;
+        boolean creator;
+        synchronized (guard) {
+            // The lease operation stays registered until this attachment has settled.
+            deadline.check();
+            shared = upstreams.get(key);
+            creator = shared == null;
+            if (creator) {
+                String id = UUID.randomUUID().toString().replace("-", "");
+                shared =
+                        new SharedUpstream(
+                                key,
+                                new Stream(runtime, app, id, "__defaultVhost__/" + app + "/" + id));
+                upstreams.put(key, shared);
+            }
+            if (shared.closing) throw new PreviewFailure("PREVIEW_PENDING");
+            shared.members.add(lease.id);
+            lease.upstream = shared;
+        }
+        if (creator) {
+            try {
+                var source =
+                        locators.resolve(
+                                profile,
+                                () -> {
+                                    checkActive(lease, deadline);
+                                    authorization.request(lease.owner, lease.cameraId);
+                                },
+                                deadline);
+                checkActive(lease, deadline);
+                // Record the exact tuple before mutation, even for unknown network outcomes.
+                pulls.register(shared.stream, false);
+                shared.openAttempted = true;
+                shared.stream =
+                        media.open(runtime, app, shared.stream.id(), source.uri(), deadline);
+                pulls.started(shared.stream);
+                checkActive(lease, deadline);
+                shared.opened.complete(shared.stream);
+            } catch (RuntimeException failure) {
+                shared.opened.completeExceptionally(failure);
+                throw failure;
+            }
+        }
+        try {
+            // Each joining viewer keeps its own finite budget and authorization lifecycle.
+            var stream = shared.opened.get(deadline.remaining().toNanos(), TimeUnit.NANOSECONDS);
+            checkUpstream(lease, deadline);
+            return stream;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new PreviewFailure("CANCELLED");
+        } catch (java.util.concurrent.TimeoutException ex) {
+            throw new PreviewFailure("PREVIEW_PENDING");
+        } catch (ExecutionException ex) {
+            // A creator's authorization failure is not the joining viewer's identity result.
+            if (ex.getCause() instanceof PreviewFailure failure) throw failure;
+            throw new PreviewFailure("PREVIEW_UNAVAILABLE");
         }
     }
 
@@ -292,11 +405,36 @@ public class PreviewLeaseService {
     public PreviewModels.LeaseView renew(String id) {
         var lease = owned(id);
         requireEnabled(lease);
-        synchronized (lease) {
-            checkReady(lease);
-            lease.expiresAt = now().plus(TTL);
-            return view(lease);
+        var deadline = PreviewDeadline.after(REQUEST_TIMEOUT);
+        beginOperation(lease, deadline);
+        try {
+            checkUpstream(lease, deadline);
+            synchronized (lease) {
+                checkReady(lease);
+                lease.expiresAt = now().plus(TTL);
+                return view(lease);
+            }
+        } finally {
+            endOperation(lease, deadline);
         }
+    }
+
+    private void checkUpstream(Lease lease, PreviewDeadline deadline) {
+        var shared = lease.upstream;
+        if (shared == null || !shared.established) return;
+        if (media.exists(shared.stream, deadline)) return;
+        List<Lease> affected;
+        synchronized (guard) {
+            shared.closing = true;
+            affected =
+                    shared.members.stream()
+                            .map(leases::get)
+                            .filter(java.util.Objects::nonNull)
+                            .toList();
+        }
+        // Confirmed missing generation: do not keep renewing or reusing its dead tuple.
+        affected.forEach(this::closeLater);
+        throw new PreviewFailure("MEDIA_NOT_READY");
     }
 
     public PreviewModels.Answer answer(String id, PreviewModels.Offer offer) {
@@ -316,6 +454,7 @@ public class PreviewLeaseService {
             lease.signalling = true;
         }
         try {
+            checkUpstream(lease, deadline);
             var answer = media.answer(lease.stream, output(lease), offer.sdp(), deadline);
             authorization.request(lease.owner, lease.cameraId);
             requireEnabled(lease);
@@ -345,6 +484,7 @@ public class PreviewLeaseService {
         beginOperation(lease, deadline);
         try {
             var result = media.stats(lease.stream, output(lease), deadline);
+            if (!"READY".equals(result.state())) checkUpstream(lease, deadline);
             authorization.request(lease.owner, lease.cameraId);
             checkActive(lease, deadline);
             return result;
@@ -412,6 +552,18 @@ public class PreviewLeaseService {
                 || !Boolean.TRUE.equals(profile.getEnabled())) {
             closeLater(lease);
             throw new PreviewFailure("CAMERA_DISABLED");
+        }
+        try {
+            if (lease.connectionKey != null
+                    && !lease.connectionKey.equals(locators.connectionKey(profile)))
+                throw new PreviewFailure("CONFIGURATION_CHANGED");
+            var shared = lease.upstream;
+            if (shared != null
+                    && runtimes.activeZlm().filter(shared.key.runtime()::equals).isEmpty())
+                throw new PreviewFailure("ZLM_NOT_READY");
+        } catch (RuntimeException failure) {
+            closeLater(lease);
+            throw failure;
         }
     }
 
@@ -506,7 +658,13 @@ public class PreviewLeaseService {
             transcode = lease.transcode;
         }
         try {
-            if (stream != null) media.close(stream, transcode);
+            var deadline = PreviewDeadline.after(CLEANUP_TIMEOUT);
+            if (stream != null && !lease.viewerClosed) {
+                media.close(stream, transcode, deadline);
+                pulls.exited(stream);
+                lease.viewerClosed = true;
+            }
+            detachUpstream(lease, deadline);
             synchronized (lease) {
                 lease.cleanupComplete = true;
             }
@@ -529,6 +687,30 @@ public class PreviewLeaseService {
             synchronized (lease) {
                 lease.cleanupRunning = false;
             }
+        }
+    }
+
+    private void detachUpstream(Lease lease, PreviewDeadline deadline) {
+        SharedUpstream shared;
+        synchronized (guard) {
+            shared = lease.upstream;
+            if (shared == null) return;
+            if (shared.members.size() > 1) {
+                shared.members.remove(lease.id);
+                lease.upstream = null;
+                return;
+            }
+            // Retain the last member and its session slot until upstream cleanup is confirmed.
+            shared.closing = true;
+        }
+        if (shared.openAttempted) {
+            media.close(shared.stream, null, deadline);
+            pulls.exited(shared.stream);
+        }
+        synchronized (guard) {
+            shared.members.remove(lease.id);
+            upstreams.remove(shared.key, shared);
+            lease.upstream = null;
         }
     }
 
@@ -596,6 +778,13 @@ public class PreviewLeaseService {
                 }
                 if (asynchronous) queueCleanup(lease);
                 else release(lease);
+            } else if (lease.profileId != null) {
+                try {
+                    requireEnabled(lease);
+                } catch (RuntimeException invalid) {
+                    if (asynchronous) queueCleanup(lease);
+                    else release(lease);
+                }
             }
         }
     }
@@ -621,9 +810,95 @@ public class PreviewLeaseService {
 
     private void reapSafely() {
         try {
+            if (recoveryEnabled) {
+                reconcile();
+                lastRecoveryFailure = null;
+            }
+        } catch (RuntimeException ex) {
+            String reason =
+                    ex instanceof PreviewFailure known ? known.reason() : "DEPENDENCY_UNAVAILABLE";
+            if (!reason.equals(lastRecoveryFailure))
+                LOG.warn(
+                        "Preview recovery deferred traceId={} reasonCode={}",
+                        "preview-recovery",
+                        reason);
+            lastRecoveryFailure = reason;
+        }
+        try {
             sweep(true);
         } catch (RuntimeException ex) {
             LOG.warn("Preview lease sweep deferred reasonCode={}", "DEPENDENCY_UNAVAILABLE");
+        }
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void ready(ApplicationReadyEvent event) {
+        recoveryEnabled = event.getApplicationContext() instanceof WebServerApplicationContext;
+    }
+
+    private void requireRecovered() {
+        try {
+            pulls.requireRecovered();
+        } catch (PreviewFailure pending) {
+            synchronized (recoveryAttempts) {
+                if (System.nanoTime() >= nextRecoveryRequest) {
+                    recoveryAttempts.clear();
+                    nextRecoveryRequest = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                }
+            }
+            throw pending;
+        }
+    }
+
+    /** Old leases are invalidated, not restored. Only durable exact tuples may be closed. */
+    void reconcile() {
+        var pending = pulls.pending();
+        synchronized (recoveryAttempts) {
+            recoveryAttempts.keySet().retainAll(pending);
+        }
+        var deadline = PreviewDeadline.after(Duration.ofSeconds(3));
+        int processed = 0;
+        for (var entry : pending) {
+            if (shuttingDown || processed >= 16 || deadline.remaining().toMillis() < 100) break;
+            if (Instant.now().toEpochMilli() < entry.notBefore()) continue;
+            synchronized (recoveryAttempts) {
+                int attempts = recoveryAttempts.getOrDefault(entry, 0);
+                if (attempts >= MAX_CLEANUP_ATTEMPTS) continue;
+                recoveryAttempts.put(entry, attempts + 1);
+            }
+            processed++;
+            try {
+                var runtime =
+                        runtimes.activeZlm()
+                                .filter(entry::matches)
+                                .or(() -> runtimes.recoveryZlm(entry.api(), entry.config()))
+                                .orElseThrow(() -> new PreviewFailure("ZLM_NOT_READY"));
+                var stream =
+                        new Stream(
+                                runtime,
+                                entry.app(),
+                                entry.id(),
+                                "__defaultVhost__/" + entry.app() + "/" + entry.id());
+                media.closeRecovered(stream, deadline);
+                pulls.exited(stream);
+                synchronized (recoveryAttempts) {
+                    recoveryAttempts.remove(entry);
+                }
+                LOG.info(
+                        "Preview orphan stopped traceId={} app={} streamId={}",
+                        "preview-recovery",
+                        entry.app(),
+                        entry.id());
+            } catch (RuntimeException ex) {
+                LOG.warn(
+                        "Preview orphan cleanup pending traceId={} app={} streamId={} reasonCode={}",
+                        "preview-recovery",
+                        entry.app(),
+                        entry.id(),
+                        ex instanceof PreviewFailure known
+                                ? known.reason()
+                                : "DEPENDENCY_UNAVAILABLE");
+            }
         }
     }
 
@@ -654,6 +929,24 @@ public class PreviewLeaseService {
 
     private record RequestKey(Long owner, String requestId) {}
 
+    private record UpstreamKey(
+            Long profileId, String connectionKey, MediaRuntimeService.ActiveZlm runtime) {}
+
+    private static final class SharedUpstream {
+        final UpstreamKey key;
+        final Set<String> members = new HashSet<>();
+        final CompletableFuture<Stream> opened = new CompletableFuture<>();
+        volatile Stream stream;
+        volatile boolean openAttempted;
+        volatile boolean established;
+        boolean closing;
+
+        SharedUpstream(UpstreamKey key, Stream stream) {
+            this.key = key;
+            this.stream = stream;
+        }
+    }
+
     private static final class RequestEntry {
         final PreviewModels.CreateLease input;
         final Instant expiresAt;
@@ -675,6 +968,8 @@ public class PreviewLeaseService {
         final String traceId;
         volatile Instant expiresAt;
         volatile Long profileId;
+        volatile String connectionKey;
+        volatile SharedUpstream upstream;
         boolean ready;
         volatile boolean closing;
         boolean signalled;
@@ -686,6 +981,7 @@ public class PreviewLeaseService {
         Transcode transcode;
         volatile int cleanupAttempts;
         boolean cleanupRunning;
+        boolean viewerClosed;
         volatile boolean cleanupComplete;
         volatile Instant nextCleanupAt;
         final AtomicBoolean cleanupQueued = new AtomicBoolean();

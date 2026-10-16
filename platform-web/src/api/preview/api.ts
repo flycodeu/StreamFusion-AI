@@ -1,8 +1,27 @@
 import { request } from '../client'
 import { empty } from '../parse'
-import { parseAnswer, parseLease, parsePreviewCatalog, parseStats } from './types'
+import {
+  parseAnswer,
+  parseLease,
+  parsePreviewCatalog,
+  parseStats,
+  parsePreviewCapacity,
+} from './types'
 import type { PreviewUsage } from './types'
 import { ApiRequestError } from '../../lib/http/error'
+
+export async function getPreviewCapacity(signal?: AbortSignal) {
+  return (
+    await request({
+      path: '/preview/capacity',
+      method: 'GET',
+      successStatus: 200,
+      timeoutMs: 10000,
+      signal,
+      decode: parsePreviewCapacity,
+    })
+  ).data
+}
 
 export function isUnknownPreviewReceipt(cause: unknown): boolean {
   return (

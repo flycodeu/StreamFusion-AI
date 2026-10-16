@@ -37,6 +37,7 @@ class ZlmPreviewGatewayTest {
     private ZlmPreviewGateway gateway;
     private boolean failDelete;
     private String directProxy = "0";
+    private String noneReaderDelay = "20000";
     @TempDir Path directory;
     private PreviewTranscodeRegistry registry;
     private PreviewProcessInspector inspector;
@@ -48,6 +49,7 @@ class ZlmPreviewGatewayTest {
     private boolean retainJobs;
     private boolean retainMedia;
     private boolean failAddTranscode;
+    private Object presenceResponseOverride;
     private long configDelayMillis;
     private long cleanupDelayMillis;
     private java.util.concurrent.ExecutorService handlers;
@@ -111,6 +113,8 @@ class ZlmPreviewGatewayTest {
                                                         Map.of(
                                                                 "rtsp.directProxy",
                                                                 directProxy,
+                                                                "general.streamNoneReaderDelayMS",
+                                                                noneReaderDelay,
                                                                 "ffmpeg.bin",
                                                                 ffmpegBinary,
                                                                 "ffmpeg.cmd",
@@ -168,6 +172,14 @@ class ZlmPreviewGatewayTest {
                                                                                         1080,
                                                                                         "fps",
                                                                                         25)))));
+                                case "isMediaOnline" ->
+                                        presenceResponseOverride != null
+                                                ? presenceResponseOverride
+                                                : Map.of(
+                                                        "code",
+                                                        0,
+                                                        "online",
+                                                        !closed.contains(params.get("stream")));
                                 case "webrtc" ->
                                         Map.of("code", 0, "type", "answer", "sdp", "v=0\r\n");
                                 case "delStreamProxy" ->
@@ -207,6 +219,89 @@ class ZlmPreviewGatewayTest {
         server.stop(0);
         handlers.shutdownNow();
         registry.close();
+    }
+
+    @Test
+    void onlyAnExplicitBooleanConfirmsWhetherTheTupleExists() {
+        var stream =
+                new PreviewMediaGateway.Stream(
+                        runtime, APP, ID, "__defaultVhost__/" + APP + "/" + ID);
+        assertThat(gateway.exists(stream, PreviewDeadline.after(Duration.ofSeconds(5)))).isTrue();
+        for (Object broken : List.of(Map.of("code", 0), Map.of("code", 0, "online", "false"))) {
+            presenceResponseOverride = broken;
+            assertThatThrownBy(
+                            () ->
+                                    gateway.exists(
+                                            stream, PreviewDeadline.after(Duration.ofSeconds(5))))
+                    .hasMessage("ZLM_INVALID_RESPONSE");
+        }
+        presenceResponseOverride = Map.of("code", 0, "online", false);
+        assertThat(gateway.exists(stream, PreviewDeadline.after(Duration.ofSeconds(5)))).isFalse();
+    }
+
+    @Test
+    void viewerUsesOnlyOwnedLocalRtspTupleWithoutUpstreamCredentials() {
+        var root = gateway.open(runtime, APP, ID, URI.create("rtsp://user:pass@10.0.0.1/live"));
+        String viewer = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var stream =
+                gateway.openViewer(root, APP, viewer, PreviewDeadline.after(Duration.ofSeconds(5)));
+        assertThat(stream.id()).isEqualTo(viewer);
+        var opens = requests.stream().filter(r -> r.api.equals("addStreamProxy")).toList();
+        assertThat(opens).hasSize(2);
+        assertThat(opens.get(1).params)
+                .containsEntry("url", "rtsp://127.0.0.1:8554/" + APP + "/" + ID)
+                .containsEntry("auto_close", "1")
+                .containsEntry("retry_count", "0");
+        assertThat(opens.get(1).body).doesNotContain("user", "pass", "10.0.0.1");
+    }
+
+    @Test
+    void viewerRejectsForeignAppOrNonLoopbackRuntimeBeforeOpening() {
+        var root =
+                new PreviewMediaGateway.Stream(
+                        runtime, APP, ID, "__defaultVhost__/" + APP + "/" + ID);
+        assertThatThrownBy(
+                        () ->
+                                gateway.openViewer(
+                                        root,
+                                        "sf_preview_aaaaaaaaaaaa",
+                                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                        PreviewDeadline.after(Duration.ofSeconds(5))))
+                .hasMessage("CLEANUP_DESTINATION_REJECTED");
+        var remote =
+                new MediaRuntimeService.ActiveZlm(
+                        URI.create("http://10.0.0.1:8080"),
+                        "secret",
+                        runtime.executablePath(),
+                        runtime.configPath(),
+                        "1");
+        var foreign =
+                new PreviewMediaGateway.Stream(
+                        remote, APP, ID, "__defaultVhost__/" + APP + "/" + ID);
+        assertThatThrownBy(
+                        () ->
+                                gateway.openViewer(
+                                        foreign,
+                                        APP,
+                                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                                        PreviewDeadline.after(Duration.ofSeconds(5))))
+                .hasMessage("CLEANUP_DESTINATION_REJECTED");
+        assertThat(requests).isEmpty();
+    }
+
+    @Test
+    void insufficientNoReaderGraceRejectsPreviewButDoesNotChangeObservation() {
+        noneReaderDelay = "1000";
+        assertThatThrownBy(() -> gateway.open(runtime, APP, ID, URI.create("rtsp://10.0.0.1/live")))
+                .hasMessage("ZLM_RTC_NOT_CONFIGURED");
+        assertThat(requests).noneMatch(r -> r.api.equals("addStreamProxy"));
+        gateway.openObservation(
+                runtime,
+                APP,
+                ID,
+                URI.create("rtsp://10.0.0.1/live"),
+                PreviewDeadline.after(Duration.ofSeconds(5)));
+        assertThat(requests).filteredOn(r -> r.api.equals("addStreamProxy")).hasSize(1);
     }
 
     @Test
@@ -348,7 +443,7 @@ class ZlmPreviewGatewayTest {
     }
 
     @Test
-    void transcodesHaveNoCountQuotaAndDoNotCountForeignJobs() throws Exception {
+    void transcodeQuotaCountsOwnedReservationsButDoesNotCountOrStopForeignJobs() throws Exception {
         configureFfmpeg();
         String foreignKey = "f".repeat(32);
         jobs.put(
@@ -360,16 +455,18 @@ class ZlmPreviewGatewayTest {
                         "rtsp://127.0.0.1/foreign/input",
                         "dst_url",
                         "rtmp://127.0.0.1/foreign/output"));
-        for (int index = 1; index <= 3; index++) {
+        for (int index = 1; index <= 2; index++) {
             String id = "%032x".formatted(index);
             var source =
                     new PreviewMediaGateway.Stream(
                             runtime, APP, id, "__defaultVhost__/" + APP + "/" + id);
             gateway.transcode(source, id + "h264");
         }
-        assertThat(registry.keys()).hasSize(3);
-        assertThat(jobs).hasSize(4).containsKey(foreignKey);
-        assertThat(requests.stream().filter(r -> r.api.equals("addFFmpegSource"))).hasSize(3);
+        assertThatThrownBy(() -> gateway.transcode(stream(), ID + "h264"))
+                .hasMessage("TRANSCODE_CAPACITY_EXCEEDED");
+        assertThat(registry.keys()).hasSize(2);
+        assertThat(jobs).hasSize(3).containsKey(foreignKey);
+        assertThat(requests.stream().filter(r -> r.api.equals("addFFmpegSource"))).hasSize(2);
     }
 
     @Test
@@ -408,6 +505,9 @@ class ZlmPreviewGatewayTest {
 
     @Test
     void successiveNewStartsRecoverOnlyOneOldRecordAndRotateFailures() throws Exception {
+        registry.close();
+        registry = new PreviewTranscodeRegistry(directory, json, 8);
+        gateway = new ZlmPreviewGateway(json, runtimes, registry, inspector);
         configureFfmpeg();
         String first = registerOldResource(1);
         String second = registerOldResource(2);

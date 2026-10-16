@@ -44,9 +44,19 @@ public class CameraGroupService {
     }
 
     public List<Long> queryGroupIds(long groupId, boolean descendants) {
+        return queryGroupIds(List.of(groupId), descendants);
+    }
+
+    /** A plan may select multiple roots; load their common tree once, preserving root order. */
+    public List<Long> queryGroupIds(Collection<Long> groupIds, boolean descendants) {
+        if (groupIds.isEmpty()) return List.of();
         var tree = tree();
-        if (tree.all().stream().noneMatch(g -> g.getId() == groupId)) return List.of();
-        return descendants ? tree.descendants(List.of(groupId)) : List.of(groupId);
+        var known = new HashSet<>(tree.all().stream().map(CameraGroupEntity::getId).toList());
+        return groupIds.stream()
+                .filter(known::contains)
+                .flatMap(id -> (descendants ? tree.descendants(List.of(id)) : List.of(id)).stream())
+                .distinct()
+                .toList();
     }
 
     /** Import confirmation reuses exactly the tree, scope and identity revision proof of moves. */
@@ -131,10 +141,11 @@ public class CameraGroupService {
         var tree = tree();
         Long parent = optionalId(parentId);
         String term = text(name, 64, false);
-        var visibility = access.visibility(actor);
+        var visibility = access.visibility(actor, tree);
+        var directCounts = scopes.visibleGroupCounts(visibility);
         Set<Long> visible = new HashSet<>();
         if (actor.superAdmin()) tree.all().forEach(g -> visible.add(g.getId()));
-        else for (Long gid : scopes.visibleGroups(visibility)) visible.addAll(tree.ancestors(gid));
+        else for (var count : directCounts) visible.addAll(tree.ancestors(count.getGroupId()));
         List<CameraGroupEntity> rows =
                 tree.all().stream()
                         .filter(g -> visible.contains(g.getId()))
@@ -147,7 +158,7 @@ public class CameraGroupService {
                                                         .contains(term.toLowerCase(Locale.ROOT)))
                         .toList();
         long offset = (long) (page - 1) * size;
-        var counts = visibleCounts(tree, visibility);
+        var counts = visibleCounts(tree, directCounts);
         Instant observedAt = clock.instant();
         return new PageResultVo<>(
                 rows.stream()
@@ -164,11 +175,12 @@ public class CameraGroupService {
     public List<CameraGroupVo> visibleTree() {
         var actor = access.readActor();
         var tree = tree();
-        var visibility = access.visibility(actor);
+        var visibility = access.visibility(actor, tree);
+        var directCounts = scopes.visibleGroupCounts(visibility);
         Set<Long> visible = new HashSet<>();
         if (actor.superAdmin()) tree.all().forEach(g -> visible.add(g.getId()));
-        else for (Long gid : scopes.visibleGroups(visibility)) visible.addAll(tree.ancestors(gid));
-        var counts = visibleCounts(tree, visibility);
+        else for (var count : directCounts) visible.addAll(tree.ancestors(count.getGroupId()));
+        var counts = visibleCounts(tree, directCounts);
         var observedAt = clock.instant();
         return tree.all().stream()
                 .filter(g -> visible.contains(g.getId()))
@@ -837,8 +849,13 @@ public class CameraGroupService {
 
     private Map<Long, Long> visibleCounts(
             CameraGroupTree tree, CameraAccessService.Visibility visibility) {
+        return visibleCounts(tree, scopes.visibleGroupCounts(visibility));
+    }
+
+    private Map<Long, Long> visibleCounts(
+            CameraGroupTree tree, List<CameraGroupCountRow> directCounts) {
         Map<Long, Long> counts = new HashMap<>();
-        for (var row : scopes.visibleGroupCounts(visibility))
+        for (var row : directCounts)
             for (Long id : tree.ancestors(row.getGroupId()))
                 counts.merge(id, row.getCameraCount(), Long::sum);
         return counts;

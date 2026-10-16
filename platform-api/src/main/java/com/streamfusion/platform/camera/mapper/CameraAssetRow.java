@@ -9,8 +9,6 @@ import lombok.Setter;
 @Setter
 public class CameraAssetRow extends CameraChannelEntity {
     private String sourceType;
-    private String addressHost;
-    private Integer addressPort;
     private String connectionCategory;
     private String vendorHint;
     private String sourceDisplayName;

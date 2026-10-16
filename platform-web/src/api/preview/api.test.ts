@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createPreviewLease, exchangeWebRtc } from './api'
+import { createPreviewLease, exchangeWebRtc, getPreviewCapacity } from './api'
 import { clearIdentity, sessionState } from '../../session/state'
 
 const input = {
@@ -43,6 +43,17 @@ afterEach(() => {
   vi.useRealTimers()
 })
 describe('preview creation receipt recovery', () => {
+  it('reads aggregate capacity with a cancellable GET and no retry on rejection', async () => {
+    const controller = new AbortController()
+    const fetchMock = vi.fn().mockResolvedValue(response(null, 403, 'ACCESS_DENIED'))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(getPreviewCapacity(controller.signal)).rejects.toMatchObject({
+      code: 'ACCESS_DENIED',
+    })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/preview/capacity')
+    expect(fetchMock.mock.calls[0]![1].method).toBe('GET')
+  })
   it('preserves an explicit idempotency key across one lost receipt', async () => {
     const fetchMock = vi
       .fn()

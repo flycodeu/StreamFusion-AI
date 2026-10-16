@@ -54,6 +54,19 @@ SHOW TABLES;
 
 本目录只交付当前安装结构，不要求新用户依次执行开发阶段的历史 SQL。已有菜单通过菜单管理维护，新增页面会自动关联超级管理员，普通角色须明确授权。
 
+### 相机列表与巡检查询索引
+
+通道排序使用 `(created_at,id)`，海康忙碌来源检查使用 `(source_id,layer,execution_state,deadline_at)`。新安装已包含对应索引；已有库不会在应用启动时自动补齐。
+
+升级前备份并核对实际索引名称和列顺序。如果尚无等价索引，在隔离副本验证锁等待及执行时间后，安排维护窗口增量执行：
+
+```sql
+CREATE INDEX ix_camera_channel_created ON camera_channel(created_at,id);
+CREATE INDEX ix_camera_status_source ON camera_status_check(source_id,layer,execution_state,deadline_at);
+```
+
+不要重放初始化脚本，也不要在已有等价索引时重复添加。回退应用无需删除这两个索引；如需撤销，应另行评估后使用准确索引名称删除。索引存在不保证优化器一定选用，仍需对实际数据执行 `EXPLAIN`。名称包含匹配继续保留原语义，不声称 `%关键词%` 已变成索引检索。
+
 ## 验证
 
 在 `platform-api` 目录执行：

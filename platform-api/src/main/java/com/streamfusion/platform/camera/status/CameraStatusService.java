@@ -28,6 +28,8 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -110,14 +112,7 @@ public class CameraStatusService {
                     var target = targets.inspect(camera, profile, keyId, () -> {});
                     if (target.blockingReasonCode() != null)
                         throw error(ErrorCode.CONFLICT).diagnosed(target.blockingReasonCode());
-                    long pending =
-                            checks.selectCount(
-                                    new LambdaQueryWrapper<CameraStatusCheckEntity>()
-                                            .in(
-                                                    CameraStatusCheckEntity::getExecutionState,
-                                                    "QUEUED",
-                                                    "RUNNING")
-                                            .gt(CameraStatusCheckEntity::getDeadlineAt, now()));
+                    long pending = plans.pendingRequests(now());
                     long recent =
                             checks.selectCount(
                                     new LambdaQueryWrapper<CameraStatusCheckEntity>()
@@ -170,6 +165,32 @@ public class CameraStatusService {
 
     /** Called after the check transaction commits; no DNS or protocol exchange here. */
     public void dispatch(long id, String sessionId) {
+        dispatch(id, sessionId, null);
+    }
+
+    public void dispatchBatch(List<Long> ids) {
+        var pending = new ArrayList<Pending>();
+        ids.forEach(id -> dispatch(id, null, pending));
+        if (pending.isEmpty()) return;
+        try {
+            var submissions =
+                    worker.trySubmitBatch(pending.stream().map(Pending::request).toList());
+            for (int index = 0; index < pending.size(); index++)
+                onCompletion(pending.get(index), submissions.get(index));
+        } catch (RuntimeException ex) {
+            for (var member : pending) {
+                submitted.remove(member.check().getId(), member.execution());
+                skipQueued(member.check().getId(), "WORKER_BUSY");
+            }
+        }
+    }
+
+    private record Pending(
+            CameraStatusCheckEntity check,
+            Execution execution,
+            CameraStatusWorker.Request request) {}
+
+    private void dispatch(long id, String sessionId, List<Pending> batch) {
         var check = checks.selectById(id);
         if (check == null
                 || !"QUEUED".equals(check.getExecutionState())
@@ -200,7 +221,8 @@ public class CameraStatusService {
                                     check.getProfileId(),
                                     check.getTraceId(),
                                     profile,
-                                    Duration.ofMillis(Math.min(10_000, remaining)),
+                                    Duration.ofMillis(
+                                            Math.min(properties.getProbeTimeoutMs(), remaining)),
                                     () -> execution.claim.set(claim(id, sessionId)),
                                     () -> checkWork(id, execution.claim.get(), sessionId))
                             : "MEDIA".equals(check.getLayer())
@@ -225,33 +247,14 @@ public class CameraStatusService {
                                                             remaining)),
                                             () -> execution.claim.set(claim(id, sessionId)),
                                             inspection.targetResolver());
-            var submission = worker.trySubmit(request);
-            submission
-                    .completion()
-                    .whenComplete(
-                            (result, failure) -> {
-                                try {
-                                    complete(
-                                            id,
-                                            execution.claim.get(),
-                                            sessionId,
-                                            failure == null && result != null
-                                                    ? result
-                                                    : new CameraProbeResult(
-                                                            CameraProbeResult.Outcome.NOT_EXECUTED,
-                                                            "PROBE_UNAVAILABLE",
-                                                            0,
-                                                            0,
-                                                            null));
-                                } catch (RuntimeException ex) {
-                                    LOG.warn(
-                                            "Camera status completion unavailable traceId={} checkId={}",
-                                            check.getTraceId(),
-                                            id);
-                                } finally {
-                                    submitted.remove(id, execution);
-                                }
-                            });
+            var pending = new Pending(check, execution, request);
+            if (batch != null) {
+                if (!"UPSTREAM".equals(check.getLayer()) || check.getPlanId() == null)
+                    throw new CameraAdapterException("STATUS_LAYER_NOT_APPLICABLE");
+                batch.add(pending);
+                return;
+            }
+            onCompletion(pending, worker.trySubmit(request));
         } catch (CameraAdapterException ex) {
             submitted.remove(id, execution);
             skipQueued(id, ex.reasonCode());
@@ -259,6 +262,39 @@ public class CameraStatusService {
             submitted.remove(id, execution);
             skipQueued(id, "CONFIGURATION_UNAVAILABLE");
         }
+    }
+
+    private void onCompletion(Pending pending, CameraStatusWorker.Submission submission) {
+        var check = pending.check();
+        var execution = pending.execution();
+        long id = check.getId();
+        String sessionId = execution.sessionId;
+        submission
+                .completion()
+                .whenComplete(
+                        (result, failure) -> {
+                            try {
+                                complete(
+                                        id,
+                                        execution.claim.get(),
+                                        sessionId,
+                                        failure == null && result != null
+                                                ? result
+                                                : new CameraProbeResult(
+                                                        CameraProbeResult.Outcome.NOT_EXECUTED,
+                                                        "PROBE_UNAVAILABLE",
+                                                        0,
+                                                        0,
+                                                        null));
+                            } catch (RuntimeException ex) {
+                                LOG.warn(
+                                        "Camera status completion unavailable traceId={} checkId={}",
+                                        check.getTraceId(),
+                                        id);
+                            } finally {
+                                submitted.remove(id, execution);
+                            }
+                        });
     }
 
     public String claim(long id, String sessionId) {
@@ -552,7 +588,10 @@ public class CameraStatusService {
 
     /** Called inside the scheduler's locked plan/target transaction; no session or network work. */
     CameraStatusCheckVo createScheduled(
-            CameraStatusPlanEntity plan, CameraStatusPlanTargetEntity target, LocalDateTime slot) {
+            CameraStatusPlanEntity plan,
+            CameraStatusPlanTargetEntity target,
+            LocalDateTime slot,
+            boolean batchCapacityReserved) {
         var camera = lockCamera(target.getCameraId());
         var profile = lockProfile(target.getCameraId(), target.getProfileId());
         if (camera == null || profile == null) throw new CameraAdapterException("TARGET_DELETED");
@@ -564,12 +603,9 @@ public class CameraStatusService {
                 || !MessageDigest.isEqual(
                         target.getConnectionDigest(), inspected.connectionDigest()))
             throw new CameraAdapterException("CONFIGURATION_CHANGED");
-        long pending =
-                checks.selectCount(
-                        new LambdaQueryWrapper<CameraStatusCheckEntity>()
-                                .in(CameraStatusCheckEntity::getExecutionState, "QUEUED", "RUNNING")
-                                .gt(CameraStatusCheckEntity::getDeadlineAt, now()));
-        if (pending >= properties.getWorkerThreads() + properties.getQueueCapacity())
+        if (!batchCapacityReserved
+                && plans.pendingRequests(now())
+                        >= properties.getWorkerThreads() + properties.getQueueCapacity())
             throw new CameraAdapterException("WORKER_BUSY");
         String keyId = crypto.activeKeyId();
         var check = new CameraStatusCheckEntity();

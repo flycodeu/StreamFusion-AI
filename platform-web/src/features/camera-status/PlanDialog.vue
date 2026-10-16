@@ -358,20 +358,20 @@ onDeactivated(() => {
                 label="有界并行"
               /> </ElSelect
           ></ElFormItem>
-          <ElFormItem v-if="dispatchMode === 'PARALLEL'" label="最大并发">
+          <ElFormItem v-if="dispatchMode === 'PARALLEL'" label="并发请求数">
             <ElSelect v-model="parallelism" :disabled="layer === 'MEDIA'">
               <ElOption
                 v-for="count in layer === 'MEDIA' ? [1] : [1, 2, 3, 4]"
                 :key="count"
                 :value="count"
-                :label="`${count} 路`"
+                :label="`${count} 个请求`"
               />
             </ElSelect>
           </ElFormItem>
           <ElFormItem label="2. 检测间隔"
             ><ElSelect v-model="interval" aria-label="检测间隔">
               <ElOption
-                v-for="minutes in [15, 30, 60, 120, 1440]"
+                v-for="minutes in [5, 10, 15, 30, 60, 120, 1440]"
                 :key="minutes"
                 :value="minutes"
                 :label="minutes >= 60 ? `每 ${minutes / 60} 小时` : `每 ${minutes} 分钟`"
@@ -401,6 +401,9 @@ onDeactivated(() => {
           >重新核对</ElButton
         >
       </div>
+      <p class="patrol-note">
+        每台设备只检查一路代表流，不表示其全部通道已检测。海康平台同源最多100路合为一个请求。检测间隔不延长结果有效期，结果过期仅表示需要刷新。
+      </p>
       <div v-if="blockedTargets.length" class="patrol-blocked">
         <details>
           <summary>查看 {{ blockedTargets.length }} 台跳过原因（不计为离线）</summary>

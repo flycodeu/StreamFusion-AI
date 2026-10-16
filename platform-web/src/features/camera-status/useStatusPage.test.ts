@@ -3,6 +3,12 @@ import { effectScope, ref, shallowRef } from 'vue'
 import type { EffectScope, Ref } from 'vue'
 import type { ExecutionState, StatusPage, StatusSearch } from '../../api/camera-status/types'
 import { useStatusPage } from './useStatusPage'
+import { clearIdentity, sessionState } from '../../session/state'
+import type { AuthUser } from '../../api/auth/types'
+
+function signIn(id = '1') {
+  sessionState.me = { user: { id }, modules: ['camera'] } as AuthUser
+}
 
 const api = vi.hoisted(() => ({ page: vi.fn() }))
 const hooks = vi.hoisted(() => ({
@@ -107,6 +113,7 @@ beforeEach(async () => {
   documentState = Object.assign(new EventTarget(), { hidden: false })
   vi.stubGlobal('document', documentState)
   api.page.mockReset().mockResolvedValue(page())
+  signIn()
   query = shallowRef({ page: 1, size: 20, layer: 'CONTROL' })
   active = ref(true)
   scope = effectScope()
@@ -115,12 +122,135 @@ beforeEach(async () => {
 })
 afterEach(() => {
   scope.stop()
+  clearIdentity()
   hooks.activated.splice(0)
   hooks.deactivated.splice(0)
   vi.unstubAllGlobals()
   vi.useRealTimers()
 })
 describe('aggregate camera status page read owner', () => {
+  it('expires platform evidence and the local summary/coverage together, without renewing timestamps', async () => {
+    const response = page()
+    const profile = response.items[0]!.profiles[0]!
+    profile.upstream = {
+      ...profile.control,
+      layer: 'UPSTREAM',
+      probeKind: 'HIK_PLATFORM_ONLINE',
+      freshness: 'CURRENT',
+      latestCheck: null,
+      observation: {
+        value: 'ACCESSIBLE',
+        reasonCode: 'PLATFORM_ONLINE',
+        checkId: '100',
+        observedAt: now,
+        readAt: now,
+        validUntil: '2026-10-13T01:00:05Z',
+        mediaEvidence: null,
+      },
+    }
+    response.summary = { ...response.summary, accessible: 1, unknown: 0 }
+    api.page.mockResolvedValue(response)
+    await controls.refresh()
+    expect(controls.summary.value?.accessible).toBe(1)
+    expect(controls.coverage.value).toEqual({ current: 1, enabled: 1, percent: 100 })
+    await vi.advanceTimersByTimeAsync(5001)
+    expect(controls.rows.value[0]!.profiles[0]!.upstream?.freshness).toBe('STALE')
+    expect(controls.summary.value).toMatchObject({ accessible: 0, stale: 1 })
+    expect(controls.coverage.value?.current).toBe(0)
+    expect(response.items[0]!.profiles[0]!.upstream?.freshness).toBe('CURRENT')
+    expect(controls.rows.value[0]!.profiles[0]!.upstream?.observation?.observedAt).toBe(now)
+    expect(api.page).toHaveBeenCalledTimes(2)
+  })
+  it('preserves the authoritative server summary when no local fact has expired', async () => {
+    const response = page()
+    response.summary = { ...response.summary, unknown: 0, stale: 1 }
+    api.page.mockResolvedValue(response)
+    await controls.refresh()
+    expect(controls.result.value?.summary).toEqual(response.summary)
+  })
+  it('polls a running upstream check at the bounded progress interval', async () => {
+    const response = page()
+    const profile = response.items[0]!.profiles[0]!
+    profile.upstream = {
+      ...page('RUNNING').items[0]!.profiles[0]!.control,
+      layer: 'UPSTREAM',
+      probeKind: 'HIK_PLATFORM_ONLINE',
+    }
+    response.summary = { ...response.summary, checking: 1, unknown: 0 }
+    api.page.mockResolvedValue(response)
+    await controls.refresh()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(api.page).toHaveBeenCalledTimes(3)
+    expect(controls.summary.value?.checking).toBe(1)
+  })
+  it('keeps locally expiring valid evidence after network reads pause', async () => {
+    const response = page('RUNNING')
+    response.items[0]!.profiles[0]!.control = {
+      ...response.items[0]!.profiles[0]!.control,
+      freshness: 'CURRENT',
+      observation: {
+        value: 'FAILED',
+        reasonCode: 'RTSP_TIMEOUT',
+        checkId: '100',
+        observedAt: now,
+        readAt: now,
+        validUntil: '2026-10-13T01:00:10Z',
+        mediaEvidence: null,
+      },
+    }
+    api.page.mockResolvedValue(response)
+    await controls.refresh()
+    api.page.mockRejectedValue(new Error('offline'))
+    await vi.advanceTimersByTimeAsync(6001)
+    expect(controls.paused.value).toBe(true)
+    expect(controls.coverage.value?.current).toBe(1)
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(controls.coverage.value?.current).toBe(0)
+  })
+  it('clears previous-account data and ignores its late receipt across session epochs', async () => {
+    const pending = deferred<StatusPage>()
+    api.page.mockReturnValueOnce(pending.promise)
+    const reading = controls.refresh()
+    const signal = api.page.mock.calls.at(-1)![1] as AbortSignal
+    const next = deferred<StatusPage>()
+    api.page.mockReturnValueOnce(next.promise)
+    const calls = api.page.mock.calls.length
+    clearIdentity()
+    expect(signal.aborted).toBe(true)
+    expect(controls.result.value).toBeNull()
+    expect(controls.total.value).toBe(0)
+    expect(controls.coverage.value).toBeNull()
+    expect(api.page).toHaveBeenCalledTimes(calls)
+    pending.resolve(page(null, 'old'))
+    await reading
+    expect(controls.result.value).toBeNull()
+    signIn('2')
+    next.resolve(page(null, 'new'))
+    await flush()
+    expect(controls.rows.value[0]?.cameraId).toBe('new')
+  })
+  it('does not repeat GET after the request handler clears identity on 401', async () => {
+    api.page.mockImplementationOnce(async () => {
+      clearIdentity()
+      throw new Error('401')
+    })
+    const calls = api.page.mock.calls.length
+    await controls.refresh()
+    await vi.advanceTimersByTimeAsync(120000)
+    expect(api.page).toHaveBeenCalledTimes(calls + 1)
+    expect(controls.rows.value).toEqual([])
+    expect(controls.summary.value).toBeNull()
+    await controls.refresh()
+    expect(api.page).toHaveBeenCalledTimes(calls + 1)
+  })
+  it('clears results if camera authorization is removed while page reads are paused', async () => {
+    active.value = false
+    expect(controls.rows.value).toHaveLength(1)
+    sessionState.me!.modules = []
+    expect(controls.result.value).toBeNull()
+    expect(controls.coverage.value).toBeNull()
+    expect(api.page).toHaveBeenCalledOnce()
+  })
   it('expires MEDIA independently without changing CONTROL or starting a probe', async () => {
     const response = page()
     const profile = response.items[0]!.profiles[0]!
@@ -244,6 +374,9 @@ describe('aggregate camera status page read owner', () => {
       }
       await vi.advanceTimersByTimeAsync(20000)
       expect(api.page).toHaveBeenCalledTimes(before)
+      // Opening a patrol/detail dialog must keep rows used by the current-page target scope.
+      expect(controls.rows.value).toHaveLength(1)
+      expect(controls.summary.value?.total).toBe(1)
       if (kind === 'inactive') active.value = true
       else if (kind === 'deactivated') hooks.activated.forEach((callback) => callback())
       else {

@@ -3,6 +3,8 @@ package com.streamfusion.platform.camera.access.adapter;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -11,6 +13,7 @@ import org.springframework.stereotype.Component;
 /** Shared Artemis transport. Platform errors never become empty successful directories. */
 @Component
 public class HikPlatformApi {
+    public static final int STATUS_BATCH_SIZE = 100;
     private final CameraHttpTransport transport;
     private final ObjectMapper json;
 
@@ -96,33 +99,54 @@ public class HikPlatformApi {
     }
 
     public int online(CameraAccessContext context, String cameraCode) {
-        requireCode(cameraCode);
+        var result = onlineBatch(context, List.of(cameraCode)).get(cameraCode);
+        if (result.value() == null) throw new CameraAdapterException(result.reasonCode());
+        return result.value();
+    }
+
+    public record OnlineStatus(Integer value, String reasonCode) {}
+
+    /** One bounded request; missing/unknown entries never become offline facts. */
+    public Map<String, OnlineStatus> onlineBatch(CameraAccessContext context, List<String> codes) {
+        if (codes == null || codes.isEmpty() || codes.size() > STATUS_BATCH_SIZE)
+            throw new CameraAdapterException("PLATFORM_STATUS_BATCH_INVALID");
+        codes.forEach(HikPlatformApi::requireCode);
+        if (new HashSet<>(codes).size() != codes.size())
+            throw new CameraAdapterException("PLATFORM_STATUS_BATCH_INVALID");
         var data =
                 page(
                         post(
                                 context,
                                 "/artemis/api/nms/v1/online/camera/get",
-                                Map.of(
-                                        "indexCodes",
-                                        List.of(cameraCode),
-                                        "pageNo",
-                                        1,
-                                        "pageSize",
-                                        1)),
-                        1);
+                                Map.of("indexCodes", codes, "pageNo", 1, "pageSize", codes.size())),
+                        codes.size());
+        var results = new LinkedHashMap<String, OnlineStatus>();
+        codes.forEach(code -> results.put(code, new OnlineStatus(null, "PLATFORM_STATUS_MISSING")));
+        var seen = new HashSet<String>();
         for (var item : data.path("list")) {
-            if (!cameraCode.equals(item.path("indexCode").asText())
-                    && !cameraCode.equals(item.path("cameraIndexCode").asText())) continue;
+            String code = item.path("indexCode").asText("");
+            String alternative = item.path("cameraIndexCode").asText("");
+            if (code.isEmpty()) code = alternative;
+            if (!alternative.isEmpty() && !code.equals(alternative))
+                throw new CameraAdapterException("INVALID_PROTOCOL_RESPONSE");
+            if (!results.containsKey(code)) continue;
+            if (!seen.add(code)) {
+                results.put(code, new OnlineStatus(null, "PLATFORM_STATUS_UNKNOWN"));
+                continue;
+            }
             var value = item.path("online");
+            Integer online = null;
             if (value.isIntegralNumber()
                     && value.canConvertToInt()
-                    && (value.intValue() == 0 || value.intValue() == 1)) return value.intValue();
+                    && (value.intValue() == 0 || value.intValue() == 1)) online = value.intValue();
             if (value.isTextual()
                     && ("0".equals(value.textValue()) || "1".equals(value.textValue())))
-                return Integer.parseInt(value.textValue());
-            throw new CameraAdapterException("PLATFORM_STATUS_UNKNOWN");
+                online = Integer.parseInt(value.textValue());
+            results.put(
+                    code,
+                    new OnlineStatus(online, online == null ? "PLATFORM_STATUS_UNKNOWN" : null));
         }
-        throw new CameraAdapterException("PLATFORM_STATUS_MISSING");
+        return Map.copyOf(results);
     }
 
     private static JsonNode page(JsonNode data, int size) {

@@ -19,6 +19,7 @@ import {
 } from '../../features/preview/layouts'
 import PreviewCameraTree from '../../features/preview/PreviewCameraTree.vue'
 import PreviewLayoutPicker from '../../features/preview/PreviewLayoutPicker.vue'
+import PreviewCapacity from '../../features/preview/PreviewCapacity.vue'
 import { usePreviewSlots } from '../../features/preview/usePreviewSlots'
 
 defineOptions({ name: 'PreviewCenter' })
@@ -442,6 +443,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <footer class="stage-controls" aria-label="预览控制">
+        <PreviewCapacity />
         <ElButton
           v-if="!deviceMode"
           class="catalog-toggle"

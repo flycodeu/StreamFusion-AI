@@ -9,7 +9,4 @@ import lombok.Setter;
 @Setter
 public class CameraStatusPageRow extends CameraChannelEntity {
     private String deviceName;
-    private String connectionCategory;
-    private String addressHost;
-    private Integer addressPort;
 }

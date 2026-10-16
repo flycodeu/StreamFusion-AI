@@ -28,6 +28,7 @@ CREATE TABLE camera_channel (
     KEY ix_camera_channel_group (group_id,lifecycle,id),
     KEY ix_camera_channel_device (device_id,id),
     KEY ix_camera_channel_lifecycle (lifecycle,id),
+    KEY ix_camera_channel_created (created_at,id),
     CONSTRAINT fk_camera_channel_source FOREIGN KEY (source_id) REFERENCES camera_source(id),
     CONSTRAINT fk_camera_channel_device FOREIGN KEY (source_id,device_id) REFERENCES camera_device(source_id,id),
     CONSTRAINT fk_camera_channel_group FOREIGN KEY (group_id) REFERENCES camera_group(id),

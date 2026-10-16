@@ -20,6 +20,8 @@ import com.streamfusion.platform.media.preview.source.PreviewLocatorService;
 import com.streamfusion.platform.media.runtime.service.MediaRuntimeService;
 import com.streamfusion.platform.media.runtime.service.MediaRuntimeService.ActiveFfmpeg;
 import com.streamfusion.platform.media.runtime.service.MediaRuntimeService.ActiveZlm;
+import java.net.BindException;
+import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.URI;
@@ -398,6 +400,7 @@ class ZlmPreviewRealMediaTest {
                     await(() -> frames(app, input) > before + 3, Duration.ofSeconds(5));
                     result.put("sourceCodec", codec);
                     result.put("sourceFramesIncreasing", true);
+                    verifyLocalViewerIsolation(gateway, stream, codec, result);
                     if ("H265".equals(codec)) {
                         transcode =
                                 gateway.transcode(
@@ -439,6 +442,7 @@ class ZlmPreviewRealMediaTest {
                         gateway = new ZlmPreviewGateway(json, service, registry, inspector);
                         result.put("restartRetainsRegistration", true);
                     }
+                    verifyRestartPullCleanup(gateway, stream, sourceApp, rtsp, result);
                 } catch (PreviewFailure failure) {
                     bodyFailed = true;
                     result.put("failureReason", failure.reason());
@@ -577,6 +581,56 @@ class ZlmPreviewRealMediaTest {
         }
     }
 
+    private void verifyRestartPullCleanup(
+            ZlmPreviewGateway gateway,
+            PreviewMediaGateway.Stream owned,
+            String sourceApp,
+            int rtsp,
+            Map<String, Object> result)
+            throws Exception {
+        Path journal = directory.resolve("pull-registry-" + owned.id());
+        try (var before = new PreviewPullRegistry(journal, json)) {
+            before.register(owned, false);
+            before.started(owned);
+        }
+        // An unrelated tuple in the SAME app must survive. Prefix-wide deletion is forbidden.
+        var unrelated =
+                gateway.open(
+                        runtime,
+                        owned.app(),
+                        UUID.randomUUID().toString().replace("-", ""),
+                        URI.create("rtsp://127.0.0.1:" + rtsp + "/" + sourceApp + "/source"),
+                        PreviewDeadline.after(Duration.ofSeconds(18)));
+        try (var restarted = new PreviewPullRegistry(journal, json)) {
+            // addStreamProxy acknowledges registration before the first RTP/media publication.
+            // Prove this unrelated tuple actually existed before testing its survival.
+            await(() -> frames(unrelated.app(), unrelated.id()) > 0, Duration.ofSeconds(5));
+            assertThat(restarted.pending()).hasSize(1);
+            assertThat(restarted.pending().getFirst().id()).isEqualTo(owned.id());
+            result.put("restartRetainsPullRegistration", true);
+            await(
+                    () -> {
+                        try {
+                            gateway.closeRecovered(
+                                    owned, PreviewDeadline.after(Duration.ofSeconds(3)));
+                            restarted.exited(owned);
+                            return true;
+                        } catch (PreviewFailure pending) {
+                            return false;
+                        }
+                    },
+                    Duration.ofSeconds(30));
+            restarted.requireRecovered();
+            assertThat(restarted.pending()).isEmpty();
+            assertThat(gateway.exists(unrelated, PreviewDeadline.after(Duration.ofSeconds(2))))
+                    .isTrue();
+            result.put("unrelatedSameAppTupleSurvived", true);
+            result.put("restartPullJournalEmpty", true);
+        } finally {
+            gateway.close(unrelated, null, PreviewDeadline.after(Duration.ofSeconds(5)));
+        }
+    }
+
     private Process publisher(Path ffmpeg, int port, String app, String codec) throws Exception {
         var arguments =
                 new java.util.ArrayList<>(
@@ -627,6 +681,57 @@ class ZlmPreviewRealMediaTest {
                 .redirectErrorStream(true)
                 .redirectOutput(directory.resolve(codec + "-publisher.log").toFile())
                 .start();
+    }
+
+    private void verifyLocalViewerIsolation(
+            ZlmPreviewGateway gateway,
+            PreviewMediaGateway.Stream root,
+            String codec,
+            Map<String, Object> result)
+            throws Exception {
+        var viewers = new java.util.ArrayList<PreviewMediaGateway.Stream>();
+        try {
+            for (int viewer = 0; viewer < 2; viewer++) {
+                String id = UUID.randomUUID().toString().replace("-", "");
+                viewers.add(
+                        gateway.openViewer(
+                                root,
+                                root.app(),
+                                id,
+                                PreviewDeadline.after(Duration.ofSeconds(18))));
+            }
+            for (var viewer : viewers) {
+                await(
+                        () -> codec.equals(gateway.stats(viewer, viewer.id()).videoCodec()),
+                        Duration.ofSeconds(5));
+                long before = frames(viewer.app(), viewer.id());
+                await(() -> frames(viewer.app(), viewer.id()) > before + 3, Duration.ofSeconds(5));
+            }
+            assertThat(gateway.stats(root, root.id()).readers()).isEqualTo(2);
+            var first = viewers.get(0);
+            gateway.close(first, null);
+            assertThat(gateway.exists(first, PreviewDeadline.after(Duration.ofSeconds(3))))
+                    .isFalse();
+            var survivor = viewers.get(1);
+            long before = frames(survivor.app(), survivor.id());
+            await(() -> frames(survivor.app(), survivor.id()) > before + 3, Duration.ofSeconds(5));
+            assertThat(gateway.exists(root, PreviewDeadline.after(Duration.ofSeconds(3)))).isTrue();
+            result.put("twoLocalViewersReceivedFrames", true);
+            result.put("closingOneViewerPreservesOtherAndRoot", true);
+        } finally {
+            for (var viewer : viewers) {
+                await(
+                        () -> {
+                            try {
+                                gateway.close(viewer, null);
+                                return true;
+                            } catch (PreviewFailure pending) {
+                                return false;
+                            }
+                        },
+                        Duration.ofSeconds(15));
+            }
+        }
     }
 
     private String config(Path ffmpeg, int api, int rtsp, int rtmp, int rtc) {
@@ -754,11 +859,18 @@ class ZlmPreviewRealMediaTest {
     }
 
     private static int unusedPort(HashSet<Integer> chosen) throws Exception {
-        while (true)
-            try (var socket = new ServerSocket(0, 0, InetAddress.getLoopbackAddress())) {
-                int port = socket.getLocalPort();
+        // RTC uses UDP as well as TCP; Windows may reserve different ranges for each.
+        for (int attempt = 0; attempt < 100; attempt++)
+            try (var udp = new DatagramSocket(0, InetAddress.getLoopbackAddress());
+                    var socket =
+                            new ServerSocket(
+                                    udp.getLocalPort(), 0, InetAddress.getLoopbackAddress())) {
+                int port = udp.getLocalPort();
                 if (chosen.add(port)) return port;
+            } catch (BindException unavailable) {
+                // Select another OS-assigned UDP port; never change machine port reservations.
             }
+        throw new java.io.IOException("No isolated TCP/UDP test port available");
     }
 
     private static void await(BooleanSupplier condition, Duration registry) throws Exception {

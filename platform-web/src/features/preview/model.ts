@@ -101,7 +101,13 @@ export function previewReason(code: string | null): string {
     LEASE_RELEASE_FAILED: '预览资源释放未确认，请重试关闭后再打开',
     PREVIEW_TIMEOUT: '媒体准备超时，请重连或检查媒体服务',
     PREVIEW_BUSY: '预览资源繁忙，请稍后重试',
+    PREVIEW_CAPACITY_EXCEEDED: '全站预览容量已满，请关闭其他画面后重试',
+    RATE_LIMITED: '预览配额或请求上限已达，请关闭其他画面或稍后重试',
+    TRANSCODE_CAPACITY_EXCEEDED: '转码容量已满，请选择浏览器支持的码流或关闭其他转码画面',
+    TRANSCODE_DISABLED: '服务器未开放软件转码，请选择浏览器支持的码流',
     TRANSCODE_RECOVERY_REQUIRED: '转码登记待核对，请管理员检查工作目录和媒体进程',
+    PREVIEW_RECOVERY_REQUIRED:
+      '重启后的预览资源正在核对，请稍后重连；持续失败请管理员检查媒体服务和资源日志',
     CLEANUP_PENDING: '预览资源释放未确认，请稍后重试关闭',
     CANCELLED: '预览已取消',
   }

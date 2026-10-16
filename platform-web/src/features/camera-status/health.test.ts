@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StatusChannel, StatusProfile, LayerStatus } from '../../api/camera-status/types'
-import { representativeProfile, representativeConnection } from './health'
+import { representativeProfile, representativeConnection, pageCoverage } from './health'
 
 const profile: StatusProfile = {
   streamProfileId: '2',
@@ -47,6 +47,60 @@ const channel: StatusChannel = {
 }
 
 describe('channel connection summary', () => {
+  it('counts current successful and failed facts, not an online rate or profile count', () => {
+    const failed = {
+      ...channel,
+      cameraId: '2',
+      profiles: [
+        {
+          ...profile,
+          control: {
+            ...profile.control,
+            observation: { ...profile.control.observation!, value: 'FAILED' as const },
+          },
+        },
+      ],
+    }
+    const result = pageCoverage(
+      [channel, failed, { ...channel, cameraId: '3', lifecycle: 'DISABLED' }],
+      'CONTROL',
+    )
+    expect(result).toEqual({ enabled: 2, current: 2, percent: 100 })
+    expect(representativeConnection(failed, 'CONTROL')).toBe('failed')
+  })
+  it('excludes stale, changed, missing, unsupported and disabled evidence from coverage', () => {
+    const variants: StatusChannel[] = [
+      { ...channel, profiles: [] },
+      ...[
+        { ...profile.control, freshness: 'STALE' as const },
+        { ...profile.control, configurationCurrent: false },
+        {
+          ...profile.control,
+          observation: { ...profile.control.observation!, value: 'UNSUPPORTED' as const },
+        },
+      ].map((control) => ({ ...channel, profiles: [{ ...profile, control }] })),
+    ]
+    expect(pageCoverage(variants, 'CONTROL')).toEqual({ enabled: 4, current: 0, percent: 0 })
+    expect(pageCoverage([], 'MEDIA')).toEqual({ enabled: 0, current: 0, percent: null })
+    expect(pageCoverage([{ ...channel, lifecycle: 'DISABLED' }], 'CONTROL').percent).toBeNull()
+  })
+  it('prefers platform evidence and preserves a valid prior fact during a new check', () => {
+    const upstream: LayerStatus = {
+      ...profile.control,
+      layer: 'UPSTREAM',
+      probeKind: 'HIK_PLATFORM_ONLINE',
+      latestCheck: { executionState: 'RUNNING' } as LayerStatus['latestCheck'],
+    }
+    const platform = { ...channel, profiles: [{ ...profile, upstream }] }
+    expect(pageCoverage([platform], 'MEDIA').current).toBe(1)
+    expect(representativeConnection(platform, 'MEDIA')).toBe('checking')
+    expect(
+      pageCoverage(
+        [{ ...channel, profiles: [{ ...profile, upstream: { ...upstream, freshness: 'STALE' } }] }],
+        'CONTROL',
+      ).current,
+    ).toBe(0)
+  })
   it('prefers the enabled default preview even when it is not MAIN', () => {
     const sub = { ...profile, streamProfileId: '5', streamKind: 'SUB' }
     expect(

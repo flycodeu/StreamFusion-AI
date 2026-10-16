@@ -77,15 +77,20 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                         clock,
                         bean(com.streamfusion.platform.monitor.audit.service.AuditService.class),
                         bean(CameraGroupService.class));
-        when(worker.trySubmit(any()))
+        when(worker.trySubmit(any())).thenAnswer(call -> recordSubmission(call.getArgument(0)));
+        when(worker.trySubmitBatch(anyList()))
                 .thenAnswer(
                         call -> {
-                            CameraStatusWorker.Request request = call.getArgument(0);
-                            submitted.put(request.checkId(), request);
-                            var future = new CompletableFuture<CameraProbeResult>();
-                            futures.put(request.checkId(), future);
-                            return new CameraStatusWorker.Submission(true, null, future);
+                            List<CameraStatusWorker.Request> requests = call.getArgument(0);
+                            return requests.stream().map(this::recordSubmission).toList();
                         });
+    }
+
+    private CameraStatusWorker.Submission recordSubmission(CameraStatusWorker.Request request) {
+        submitted.put(request.checkId(), request);
+        var future = new CompletableFuture<CameraProbeResult>();
+        futures.put(request.checkId(), future);
+        return new CameraStatusWorker.Submission(true, null, future);
     }
 
     @AfterEach
@@ -900,6 +905,363 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
         clock.value = clock.value.plusSeconds(1800);
         scheduler.tick();
         assertThat(submitted.values()).anyMatch(value -> value.layer() == CameraStatusLayer.MEDIA);
+    }
+
+    @Test
+    void twoThousandPlatformTargetsUseTwentySlotsAndKeepPerTargetFences() throws Exception {
+        var auth = admin();
+        var group = enabled(auth).path("groupId").asLong();
+        long source = platformFixture(auth, group, 2000, 10000);
+        var keys =
+                java.util.stream.IntStream.range(0, 2000)
+                        .mapToObj(i -> "c" + (10000 + 2 * i))
+                        .toList();
+        var plan = write(post("/camera-status/plans"), auth, input(keys, 5, 1), 201);
+        assertThat(plan.path("targetCount").asInt()).isEqualTo(2000);
+        assertThat(
+                        bean(CameraStatusPlanMapper.class)
+                                .requestsPerMinute(
+                                        LocalDateTime.ofInstant(
+                                                clock.instant(), ZoneId.of("Asia/Shanghai"))))
+                .isEqualTo(4.0);
+        var slots =
+                jdbc.queryForList(
+                        "SELECT next_at,COUNT(*) n FROM camera_status_plan_target GROUP BY next_at ORDER BY next_at");
+        assertThat(slots).hasSize(20).allMatch(row -> ((Number) row.get("n")).intValue() == 100);
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        scheduler.tick();
+        scheduler.tick();
+        assertThat(submitted).hasSize(100);
+        verify(worker)
+                .trySubmitBatch(
+                        argThat(
+                                batch ->
+                                        batch.size() == 100
+                                                && batch.stream()
+                                                        .allMatch(r -> r.sourceId() == source)));
+        var firstBatch =
+                submitted.values().stream()
+                        .sorted(
+                                Comparator.comparingLong(
+                                        CameraStatusWorker.Request::streamProfileId))
+                        .toList();
+        firstBatch.forEach(request -> request.beforeProbe().run());
+        // A changed Profile must not poison the other 99 members or receive a stale fact.
+        jdbc.update(
+                "UPDATE camera_stream_profile SET enabled=0,version=version+1 WHERE id=?",
+                firstBatch.getLast().streamProfileId());
+        when(platformApi.onlineBatch(any(), anyList()))
+                .thenAnswer(
+                        call -> {
+                            jdbc.update(
+                                    "UPDATE camera_stream_profile SET enabled=0,version=version+1 WHERE id=?",
+                                    firstBatch.get(1).streamProfileId());
+                            List<String> codes = call.getArgument(1);
+                            var results =
+                                    new HashMap<
+                                            String,
+                                            com.streamfusion.platform.camera.access.adapter
+                                                    .HikPlatformApi.OnlineStatus>();
+                            for (int i = 0; i < codes.size() - 1; i++)
+                                results.put(
+                                        codes.get(i),
+                                        new com.streamfusion.platform.camera.access.adapter
+                                                .HikPlatformApi.OnlineStatus(i % 2, null));
+                            return results;
+                        });
+        var result =
+                bean(CameraPlatformProbe.class)
+                        .executeBatch(
+                                firstBatch.stream()
+                                        .map(
+                                                r ->
+                                                        new CameraPlatformProbe.Target(
+                                                                r.mediaProfile(),
+                                                                r.authorization(),
+                                                                System.nanoTime()
+                                                                        + java.util.concurrent
+                                                                                .TimeUnit.SECONDS
+                                                                                .toNanos(10),
+                                                                new RtspDescribeProbe
+                                                                        .Cancellation()))
+                                        .toList());
+        for (int i = 0; i < firstBatch.size(); i++)
+            futures.get(firstBatch.get(i).checkId()).complete(result.get(i));
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM camera_status_snapshot WHERE layer='UPSTREAM'",
+                                Integer.class))
+                .isEqualTo(97);
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM camera_status_check WHERE execution_state='SKIPPED'",
+                                Integer.class))
+                .isEqualTo(3);
+        verify(platformApi).onlineBatch(any(), argThat(codes -> codes.size() == 99));
+        verify(platformApi, never()).online(any(), anyString());
+
+        clock.value = clock.value.plusSeconds(15);
+        scheduler.tick();
+        assertThat(submitted).hasSize(200);
+        var secondBatch = submitted.values().stream().filter(r -> !firstBatch.contains(r)).toList();
+        secondBatch.forEach(r -> r.beforeProbe().run());
+        write(
+                post("/camera-status/plans/" + plan.path("planId").asText() + "/stop"),
+                auth,
+                Map.of("version", "0"),
+                200);
+        secondBatch.forEach(
+                r ->
+                        futures.get(r.checkId())
+                                .complete(
+                                        new CameraProbeResult(
+                                                CameraProbeResult.Outcome.ACCESSIBLE,
+                                                "PLATFORM_ONLINE",
+                                                0,
+                                                1,
+                                                null)));
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM camera_status_snapshot", Integer.class))
+                .isEqualTo(97);
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM camera_status_check WHERE execution_state IN ('QUEUED','RUNNING')",
+                                Integer.class))
+                .isZero();
+    }
+
+    @Test
+    void platformSourcesAreNeverCombinedAndAStoppedPlanResumesInBatches() throws Exception {
+        var auth = admin();
+        long group = enabled(auth).path("groupId").asLong();
+        platformFixture(auth, group, 2, 10000);
+        platformFixture(auth, group, 2, 20000);
+        var plan =
+                write(
+                        post("/camera-status/plans"),
+                        auth,
+                        input(List.of("c10000", "c10002", "c20000", "c20002"), 5, 1),
+                        201);
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        scheduler.tick();
+        assertThat(submitted).hasSize(2);
+        assertThat(submitted.values().stream().map(CameraStatusWorker.Request::sourceId).distinct())
+                .hasSize(1);
+        write(
+                post("/camera-status/plans/" + plan.path("planId").asText() + "/stop"),
+                auth,
+                Map.of("version", "0"),
+                200);
+        write(
+                post("/camera-status/plans/" + plan.path("planId").asText() + "/resume"),
+                auth,
+                Map.of("version", "1"),
+                200);
+        assertThat(jdbc.queryForList("SELECT DISTINCT next_at FROM camera_status_plan_target"))
+                .hasSize(2);
+        clock.value = clock.value.plusSeconds(1);
+        scheduler.tick();
+        // Existing queued generation cannot be claimed after stop/resume.
+        for (var old : new ArrayList<>(submitted.values())) {
+            if (futures.get(old.checkId()).isDone()) continue;
+            assertThatThrownBy(() -> old.beforeProbe().run())
+                    .isInstanceOf(
+                            com.streamfusion.platform.camera.access.adapter.CameraAdapterException
+                                    .class);
+            futures.get(old.checkId())
+                    .complete(
+                            new CameraProbeResult(
+                                    CameraProbeResult.Outcome.NOT_EXECUTED,
+                                    "CHECK_NO_LONGER_ACTIVE",
+                                    0,
+                                    0,
+                                    null));
+        }
+        assertThat(jdbc.queryForList("SELECT * FROM camera_status_snapshot")).isEmpty();
+        scheduler.tick();
+        assertThat(submitted).hasSize(4);
+        submitted.values().stream()
+                .filter(r -> !futures.get(r.checkId()).isDone())
+                .forEach(r -> r.beforeProbe().run());
+    }
+
+    @Test
+    void busyPlatformSourceDoesNotHideOtherSourcesBehindTheDueScanLimit() throws Exception {
+        var auth = admin();
+        long group = enabled(auth).path("groupId").asLong();
+        long busySource = platformFixture(auth, group, 200, 10000);
+        long availableSource = platformFixture(auth, group, 1, 20000);
+        for (int offset : List.of(0, 100)) {
+            var keys =
+                    java.util.stream.IntStream.range(offset, offset + 100)
+                            .mapToObj(i -> "c" + (10000 + 2 * i))
+                            .toList();
+            write(post("/camera-status/plans"), auth, input(keys, 5, 1), 201);
+        }
+        write(post("/camera-status/plans"), auth, input(List.of("c20000"), 5, 1), 201);
+        clock.value =
+                jdbc.queryForObject(
+                                "SELECT MAX(start_at) FROM camera_status_plan", LocalDateTime.class)
+                        .atZone(ZoneId.of("Asia/Shanghai"))
+                        .toInstant();
+        scheduler.tick();
+        assertThat(submitted).hasSize(100);
+        assertThat(submitted.values()).allMatch(r -> r.sourceId() == busySource);
+        // The next 100 due targets belong to the busy source; they must not hide this one.
+        scheduler.tick();
+        assertThat(submitted).hasSize(101);
+        assertThat(submitted.values()).anyMatch(r -> r.sourceId() == availableSource);
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM camera_status_snapshot", Integer.class))
+                .isZero();
+    }
+
+    @Test
+    void expiredBatchMemberDoesNotSetTheTransportDeadlineForSurvivingMembers() throws Exception {
+        var auth = admin();
+        long group = enabled(auth).path("groupId").asLong();
+        platformFixture(auth, group, 2, 10000);
+        var profileMapper = bean(CameraProfileMapper.class);
+        long expired = System.nanoTime() - java.util.concurrent.TimeUnit.SECONDS.toNanos(1);
+        long live = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+        var targetList =
+                List.of(
+                        new CameraPlatformProbe.Target(
+                                profileMapper.selectById(10001L),
+                                () -> {},
+                                expired,
+                                new RtspDescribeProbe.Cancellation()),
+                        new CameraPlatformProbe.Target(
+                                profileMapper.selectById(10003L),
+                                () -> {},
+                                live,
+                                new RtspDescribeProbe.Cancellation()));
+        when(platformApi.onlineBatch(any(), anyList()))
+                .thenAnswer(
+                        call -> {
+                            com.streamfusion.platform.camera.access.adapter.CameraAccessContext
+                                    context = call.getArgument(0);
+                            assertThat(context.deadlineNanos()).isEqualTo(live);
+                            context.checkAuthorization().run();
+                            List<String> codes = call.getArgument(1);
+                            return Map.of(
+                                    codes.getFirst(),
+                                    new com.streamfusion.platform.camera.access.adapter
+                                            .HikPlatformApi.OnlineStatus(1, null));
+                        });
+        var results = bean(CameraPlatformProbe.class).executeBatch(targetList);
+        assertThat(results.getFirst().reasonCode()).isEqualTo("PLATFORM_STATUS_TIMEOUT");
+        assertThat(results.getLast().reasonCode()).isEqualTo("PLATFORM_ONLINE");
+        verify(platformApi).onlineBatch(any(), argThat(codes -> codes.size() == 1));
+    }
+
+    @Test
+    void upstreamRequestHonorsTheConfiguredProbeTimeout() throws Exception {
+        var auth = admin();
+        long group = enabled(auth).path("groupId").asLong();
+        platformFixture(auth, group, 1, 10000);
+        var plan = write(post("/camera-status/plans"), auth, input(List.of("c10000"), 5, 1), 201);
+        var properties = bean(CameraStatusProperties.class);
+        long previous = properties.getProbeTimeoutMs();
+        try {
+            properties.setProbeTimeoutMs(1000);
+            clock.value = Instant.parse(plan.path("startAt").asText());
+            scheduler.tick();
+            assertThat(submitted.values())
+                    .singleElement()
+                    .satisfies(r -> assertThat(r.timeout()).isEqualTo(Duration.ofSeconds(1)));
+        } finally {
+            properties.setProbeTimeoutMs(previous);
+        }
+    }
+
+    private long platformFixture(Csrf auth, long group, int count, int firstId) throws Exception {
+        var source =
+                write(
+                                post("/camera-sources"),
+                                auth,
+                                Map.of(
+                                        "clientRequestId",
+                                        requestId(),
+                                        "name",
+                                        "批量平台" + firstId,
+                                        "adapterType",
+                                        "HIK_PLATFORM",
+                                        "networkPolicyKey",
+                                        "test",
+                                        "enabled",
+                                        true,
+                                        "credentials",
+                                        List.of(
+                                                Map.of(
+                                                        "purpose",
+                                                        "PLATFORM_HTTP",
+                                                        "username",
+                                                        Map.of(
+                                                                "action",
+                                                                "REPLACE",
+                                                                "value",
+                                                                "fixture-key"),
+                                                        "password",
+                                                        Map.of(
+                                                                "action",
+                                                                "REPLACE",
+                                                                "value",
+                                                                "fixture-secret"))),
+                                        "endpoints",
+                                        List.of(
+                                                Map.of(
+                                                        "purpose",
+                                                        "PLATFORM_HTTP",
+                                                        "scheme",
+                                                        "https",
+                                                        "host",
+                                                        "10.0.1.8",
+                                                        "port",
+                                                        442,
+                                                        "basePath",
+                                                        "/artemis",
+                                                        "authMode",
+                                                        "DRIVER_NEGOTIATED",
+                                                        "credentialPurpose",
+                                                        "PLATFORM_HTTP",
+                                                        "tlsPolicy",
+                                                        "SYSTEM_CA"))),
+                                201)
+                        .path("sourceId")
+                        .asLong();
+        new TransactionTemplate(bean(PlatformTransactionManager.class))
+                .executeWithoutResult(
+                        tx -> {
+                            for (int i = 0; i < count; i++) {
+                                long channel = firstId + 2L * i, profile = channel + 1;
+                                String code = "camera-" + channel;
+                                jdbc.update(
+                                        "INSERT INTO camera_channel(id,source_id,external_channel_key,group_id,name,lifecycle,mapping_origin) VALUES(?,?,?,?,'批量相机','ENABLED','ADAPTER')",
+                                        channel,
+                                        source,
+                                        code,
+                                        group);
+                                jdbc.update(
+                                        "INSERT INTO camera_stream_profile(id,source_id,channel_id,external_profile_key,label,usage_hint,usage_origin,enabled) VALUES(?,?,?,'main','主码流','MAIN','UNKNOWN',1)",
+                                        profile,
+                                        source,
+                                        channel);
+                                bean(CameraLocatorService.class)
+                                        .createImported(
+                                                source,
+                                                profile,
+                                                code,
+                                                "main",
+                                                new com.streamfusion.platform.camera.access.adapter
+                                                        .CameraAccessCatalog.Locator(
+                                                        "HIK_PLATFORM", null, code, 0),
+                                                554);
+                            }
+                        });
+        return source;
     }
 
     @Test

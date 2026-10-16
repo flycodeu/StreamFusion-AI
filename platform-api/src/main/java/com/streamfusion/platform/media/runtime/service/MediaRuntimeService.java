@@ -309,6 +309,39 @@ public class MediaRuntimeService {
                 .findFirst();
     }
 
+    /** Recovery only uses already-discovered, trusted runtimes, never paths/URLs from a journal. */
+    public Optional<ActiveZlm> recoveryZlm(String api, String configPath) {
+        Inventory value = inventory;
+        if (value == null) return Optional.empty();
+        return snapshot(value).candidates().stream()
+                .filter(
+                        c ->
+                                c.kind().equals("ZLM")
+                                        && c.status().equals("READY")
+                                        && c.configPath() != null)
+                .filter(
+                        c ->
+                                Path.of(c.configPath())
+                                        .toAbsolutePath()
+                                        .normalize()
+                                        .toString()
+                                        .equals(configPath))
+                .flatMap(
+                        c -> {
+                            var config = value.zlmConfigs().get(c.id());
+                            if (config == null || !config.apiBase().toString().equals(api))
+                                return java.util.stream.Stream.empty();
+                            return java.util.stream.Stream.of(
+                                    new ActiveZlm(
+                                            config.apiBase(),
+                                            config.secret(),
+                                            Path.of(c.executablePath()),
+                                            Path.of(c.configPath()),
+                                            c.softwareVersion()));
+                        })
+                .findFirst();
+    }
+
     public record ActiveZlm(
             URI apiBase, String secret, Path executablePath, Path configPath, String version) {
         @Override

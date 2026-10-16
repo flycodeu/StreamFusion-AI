@@ -50,7 +50,7 @@ watch(
   },
   { immediate: true },
 )
-const { rows, result, total, loading, error, paused, refresh } = useStatusPage(
+const { rows, result, coverage, total, loading, error, paused, refresh } = useStatusPage(
   query,
   computed(() => !drawerOpen.value && !plansOpen.value),
 )
@@ -187,6 +187,16 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
           <span>{{ result?.total ?? '—' }} 个通道</span>
         </div>
       </header>
+      <p
+        v-if="coverage"
+        class="coverage-note"
+        aria-label="当前页有效结果覆盖"
+        title="按每个已启用通道的代表码流统计；海康使用平台状态，其余使用所选检查层。异常结果同样计入已获取结果，过期或配置已变更不计入。"
+      >
+        当前页有效结果 {{ coverage.current }}/{{ coverage.enabled
+        }}<template v-if="coverage.percent !== null">（{{ coverage.percent }}%）</template> ·
+        仅本页代表流，不代表全站
+      </p>
       <div class="status-metrics">
         <div
           v-for="state in stateOrder"
@@ -445,6 +455,13 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
   margin: 16px 0 0;
   color: var(--text-secondary);
   font-size: 13px;
+}
+.coverage-note {
+  margin: 12px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 @media (max-width: 520px) {
   .overview-heading {

@@ -8,6 +8,7 @@ import com.streamfusion.platform.camera.config.CameraProperties;
 import com.streamfusion.platform.camera.mapper.*;
 import com.streamfusion.platform.camera.pojo.dto.*;
 import com.streamfusion.platform.camera.pojo.entity.*;
+import com.streamfusion.platform.camera.pojo.vo.CameraAddressVo;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.pojo.vo.PageResultVo;
@@ -57,6 +58,19 @@ public class CameraSourceService {
 
     public boolean storageReady() {
         return crypto.ready();
+    }
+
+    /** Display-only lookup after channel authorization/pagination, never a source-directory API. */
+    public Map<Long, CameraAddressVo> displayAddresses(List<Long> sourceIds) {
+        if (sourceIds.isEmpty()) return Map.of();
+        var result = new HashMap<Long, CameraAddressVo>();
+        for (var address : endpoints.displayAddresses(sourceIds.stream().distinct().toList())) {
+            if (!result.containsKey(address.sourceId()))
+                result.put(
+                        address.sourceId(),
+                        CameraAddressVo.of(address.category(), address.host(), address.port()));
+        }
+        return result;
     }
 
     public boolean supportsAdapter(String type) {

@@ -18,6 +18,10 @@ public class PreviewAuthorization {
     private final AccessService access;
     private final UserService users;
 
+    public void capacity() {
+        cameras.readActor();
+    }
+
     public SessionPrincipalDto principal(long cameraId) {
         var actor = cameras.readActor();
         cameras.requireVisible(cameraId, actor);

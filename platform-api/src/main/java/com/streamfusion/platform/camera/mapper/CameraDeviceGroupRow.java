@@ -13,8 +13,7 @@ public class CameraDeviceGroupRow {
     private String model;
     private String sourceDisplayName;
     private String sourceType;
-    private String addressHost;
-    private Integer addressPort;
+    private Long sourceId;
     private String connectionCategory;
     private long channelCount;
     private long enabledCount;

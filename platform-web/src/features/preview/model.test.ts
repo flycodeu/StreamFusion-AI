@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PreviewChannel } from '../../api/preview/types'
-import { groupCatalog, selectProfile } from './model'
+import { groupCatalog, selectProfile, previewReason } from './model'
 import { deviceLayout, layoutCount, MAX_PREVIEW_SLOTS } from './layouts'
 
 const channel = (cameraId: string, deviceGroupKey = 'd1'): PreviewChannel => ({
@@ -27,6 +27,10 @@ const channel = (cameraId: string, deviceGroupKey = 'd1'): PreviewChannel => ({
   ],
 })
 describe('preview catalog selection', () => {
+  it('explains restart reconciliation without promising playback restoration', () => {
+    expect(previewReason('PREVIEW_RECOVERY_REQUIRED')).toContain('重启后的预览资源正在核对')
+    expect(previewReason('PREVIEW_RECOVERY_REQUIRED')).toContain('管理员')
+  })
   it('keeps two device channels under the same physical camera', () => {
     const result = groupCatalog([channel('1'), channel('2'), channel('3', 'd2')])
     expect(result).toHaveLength(1)

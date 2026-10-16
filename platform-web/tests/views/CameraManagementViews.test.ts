@@ -607,7 +607,7 @@ describe('camera management interaction boundaries', () => {
     await (field(root, '视频分组', 'ElTreeSelect').props.onChange as () => Promise<void>)()
     await setField(root, '检查内容', 'CONTROL', 'ElSelect')
     await setField(root, '调度方式', 'PARALLEL', 'ElSelect')
-    await setField(root, '最大并发', 2, 'ElSelect')
+    await setField(root, '并发请求数', 2, 'ElSelect')
     await click(root, '启动巡检')
     expect(api.inspectPlanTargets).toHaveBeenCalledWith({ scope: 'GROUPS', groupIds: ['3'] })
     expect(api.createStatusPlan).toHaveBeenCalledWith(
@@ -1710,6 +1710,30 @@ describe('camera management interaction boundaries', () => {
     expect(text(root)).not.toContain('当前检查 RTSP 连接')
     expect(button(root, '启动巡检').props.disabled).toBe(true)
     expect(button(root, '关闭')).toBeDefined()
+  })
+  it('offers the existing five and ten minute patrol intervals without extending fact freshness', async () => {
+    api.getStatusPlans.mockResolvedValue([])
+    api.createStatusPlan.mockResolvedValue({ planId: '1' })
+    api.inspectPlanTargets.mockResolvedValue({
+      targets: [{ groupKey: 'd100', name: '入口', reasonCode: null }],
+      limitExceeded: false,
+    })
+    const root = await mount(PlanDialog, { groupKeys: ['d100'] })
+    await choosePatrolPage(root)
+    const options = nodes(root).filter((item) => item.type === 'ElOption')
+    expect(options.some((item) => item.props.value === 5 && item.props.label === '每 5 分钟')).toBe(
+      true,
+    )
+    expect(
+      options.some((item) => item.props.value === 10 && item.props.label === '每 10 分钟'),
+    ).toBe(true)
+    const field = nodes(root).find(
+      (item) => item.type === 'ElSelect' && item.props['aria-label'] === '检测间隔',
+    )!
+    ;(field.props['onUpdate:modelValue'] as (value: number) => void)(5)
+    await click(root, '启动巡检')
+    expect(api.createStatusPlan.mock.calls[0]![0]).toMatchObject({ intervalMinutes: 5 })
+    expect(text(root)).toContain('检测间隔不延长结果有效期')
   })
   it('passes the plan version when stopping and permits correcting a rejected new plan', async () => {
     api.inspectPlanTargets.mockResolvedValue({

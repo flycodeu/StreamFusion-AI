@@ -4,8 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
+import com.streamfusion.platform.camera.access.adapter.HikPlatformApi;
 import com.streamfusion.platform.camera.mapper.CameraChannelMapper;
 import com.streamfusion.platform.camera.mapper.CameraProfileMapper;
+import com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity;
 import com.streamfusion.platform.camera.service.CameraAccessService;
 import com.streamfusion.platform.camera.service.CameraCryptoService;
 import com.streamfusion.platform.camera.service.CameraRequestKey;
@@ -22,6 +24,8 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -143,11 +147,7 @@ public class CameraStatusPlanService {
                                 .eq(CameraStatusPlanEntity::getState, "ACTIVE")
                                 .gt(CameraStatusPlanEntity::getEndAt, now()))
                 >= 10) throw error(ErrorCode.RATE_LIMITED).diagnosed("PLAN_ACTIVE_LIMIT");
-        var selectedGroups =
-                groupIds.stream()
-                        .flatMap(id -> groups.queryGroupIds(id, true).stream())
-                        .distinct()
-                        .toList();
+        var selectedGroups = groups.queryGroupIds(groupIds, true);
         if (!groupIds.isEmpty() && selectedGroups.isEmpty())
             throw error(ErrorCode.CONFLICT).diagnosed("PLAN_TARGET_UNAVAILABLE");
         var candidates =
@@ -210,7 +210,8 @@ public class CameraStatusPlanService {
                                 properties.getWorkerThreads()
                                         * 60_000.0
                                         / properties.getProbeTimeoutMs()));
-        if (plans.targetsPerMinute(now()) + rows.size() * 1.0 / command.intervalMinutes()
+        var batches = batches(chosen);
+        if (plans.requestsPerMinute(now()) + batches.size() * 1.0 / command.intervalMinutes()
                 > perMinute)
             throw error(ErrorCode.RATE_LIMITED).diagnosed("PLAN_CAPACITY_EXCEEDED");
         if (command.effectiveLayer() == CameraStatusLayer.MEDIA
@@ -238,19 +239,21 @@ public class CameraStatusPlanService {
         plan.setVersion(0L);
         plans.insert(plan);
         long intervalMs = command.intervalMinutes() * 60_000L;
-        for (int index = 0; index < chosen.size(); index++) {
-            var profile = chosen.get(index);
-            var target = new CameraStatusPlanTargetEntity();
-            target.setId(DefaultIdentifierGenerator.getInstance().nextId(target).longValue());
-            target.setPlanId(plan.getId());
-            target.setCameraId(profile.getChannelId());
-            target.setProfileId(profile.getId());
-            target.setConnectionKeyId(keyId);
-            target.setConnectionDigest(inspections.get(profile.getId()).connectionDigest());
-            target.setNextAt(
-                    plan.getStartAt().plusNanos(index * intervalMs / chosen.size() * 1_000_000));
-            target.setBlocked(false);
-            targets.insert(target);
+        for (int index = 0; index < batches.size(); index++) {
+            for (var profile : batches.get(index)) {
+                var target = new CameraStatusPlanTargetEntity();
+                target.setId(DefaultIdentifierGenerator.getInstance().nextId(target).longValue());
+                target.setPlanId(plan.getId());
+                target.setCameraId(profile.getChannelId());
+                target.setProfileId(profile.getId());
+                target.setConnectionKeyId(keyId);
+                target.setConnectionDigest(inspections.get(profile.getId()).connectionDigest());
+                target.setNextAt(
+                        plan.getStartAt()
+                                .plusNanos(index * intervalMs / batches.size() * 1_000_000));
+                target.setBlocked(false);
+                targets.insert(target);
+            }
         }
         audit.record(
                 actor.userId(),
@@ -321,58 +324,21 @@ public class CameraStatusPlanService {
                         .set(CameraStatusPlanEntity::getState, "EXPIRED")
                         .set(CameraStatusPlanEntity::getUpdatedAt, now())
                         .setIncrBy(CameraStatusPlanEntity::getVersion, 1));
+        var visited = new java.util.HashSet<Long>();
         for (var due : targets.due(now())) {
-            Long checkId =
+            if (!visited.add(due.getId())) continue;
+            var platformBatch =
+                    targets.duePlatformBatch(due.getPlanId(), due.getProfileId(), now());
+            boolean batched = !platformBatch.isEmpty();
+            var candidates = batched ? platformBatch : List.of(due);
+            candidates.forEach(target -> visited.add(target.getId()));
+            List<Long> checkIds =
                     new TransactionTemplate(manager)
-                            .execute(
-                                    tx -> {
-                                        coordination.lockSuperAdminRole();
-                                        var plan = plans.lock(due.getPlanId());
-                                        var target = targets.lock(due.getId());
-                                        if (plan == null
-                                                || target == null
-                                                || !"ACTIVE".equals(plan.getState())
-                                                || target.getBlocked()
-                                                || !now().isBefore(plan.getEndAt())
-                                                || now().isBefore(target.getNextAt())) return null;
-                                        if (plans.pending(plan.getId(), now())
-                                                >= plan.getParallelism()) return null;
-                                        var slot = target.getNextAt();
-                                        long interval = plan.getIntervalMinutes() * 60_000L;
-                                        long slots =
-                                                Math.max(
-                                                        1,
-                                                        Duration.between(slot, now()).toMillis()
-                                                                        / interval
-                                                                + 1);
-                                        target.setNextAt(
-                                                slot.plusNanos(slots * interval * 1_000_000));
-                                        Long created = null;
-                                        if (!status.planActorAllowed(
-                                                plan.getActorUserId(), target.getCameraId())) {
-                                            target.setBlocked(true);
-                                            target.setReasonCode("ACTOR_REVOKED");
-                                        } else if (slot.isBefore(now().minusSeconds(30))) {
-                                            target.setReasonCode("MISSED_SLOT");
-                                        } else {
-                                            try {
-                                                var check =
-                                                        status.createScheduled(plan, target, slot);
-                                                created = Long.valueOf(check.checkId());
-                                                target.setLastCheckId(created);
-                                                target.setReasonCode(null);
-                                            } catch (BusinessException ex) {
-                                                target.setReasonCode("CONFIGURATION_UNAVAILABLE");
-                                            } catch (CameraAdapterException ex) {
-                                                target.setReasonCode(ex.reasonCode());
-                                                if ("CONFIGURATION_CHANGED".equals(ex.reasonCode()))
-                                                    target.setBlocked(true);
-                                            }
-                                        }
-                                        targets.updateById(target);
-                                        return created;
-                                    });
-            if (checkId != null) status.dispatch(checkId, null);
+                            .execute(tx -> prepareDue(due, candidates, batched));
+            if (checkIds != null && !checkIds.isEmpty()) {
+                if (batched && checkIds.size() > 1) status.dispatchBatch(checkIds);
+                else checkIds.forEach(id -> status.dispatch(id, null));
+            }
         }
         var old =
                 plans.selectList(
@@ -395,6 +361,63 @@ public class CameraStatusPlanService {
                                 plans.deleteById(plan.getId());
                                 return null;
                             });
+    }
+
+    /** One transaction reserves request capacity, then creates individually fenced checks. */
+    private List<Long> prepareDue(
+            CameraStatusPlanTargetEntity seed,
+            List<CameraStatusPlanTargetEntity> candidates,
+            boolean batched) {
+        coordination.lockSuperAdminRole();
+        var plan = plans.lock(seed.getPlanId());
+        if (plan == null
+                || !"ACTIVE".equals(plan.getState())
+                || !now().isBefore(plan.getEndAt())
+                || plans.pending(plan.getId(), now()) >= plan.getParallelism()) return List.of();
+        if (batched) {
+            var profile = profiles.selectById(seed.getProfileId());
+            if (profile == null
+                    || plans.pendingRequests(now())
+                            >= properties.getWorkerThreads() + properties.getQueueCapacity()
+                    || plans.pendingSource(profile.getSourceId(), now()) > 0) return List.of();
+        }
+        var ids = new ArrayList<Long>();
+        for (var candidate : candidates) {
+            Long id = prepareTarget(plan, candidate.getId(), batched);
+            if (id != null) ids.add(id);
+        }
+        return ids;
+    }
+
+    private Long prepareTarget(CameraStatusPlanEntity plan, long id, boolean batched) {
+        var target = targets.lock(id);
+        if (target == null || target.getBlocked() || now().isBefore(target.getNextAt()))
+            return null;
+        var slot = target.getNextAt();
+        long interval = plan.getIntervalMinutes() * 60_000L;
+        long slots = Math.max(1, Duration.between(slot, now()).toMillis() / interval + 1);
+        target.setNextAt(slot.plusNanos(slots * interval * 1_000_000));
+        Long created = null;
+        if (!status.planActorAllowed(plan.getActorUserId(), target.getCameraId())) {
+            target.setBlocked(true);
+            target.setReasonCode("ACTOR_REVOKED");
+        } else if (slot.isBefore(now().minusSeconds(30))) {
+            target.setReasonCode("MISSED_SLOT");
+        } else {
+            try {
+                var check = status.createScheduled(plan, target, slot, batched);
+                created = Long.valueOf(check.checkId());
+                target.setLastCheckId(created);
+                target.setReasonCode(null);
+            } catch (BusinessException ex) {
+                target.setReasonCode("CONFIGURATION_UNAVAILABLE");
+            } catch (CameraAdapterException ex) {
+                target.setReasonCode(ex.reasonCode());
+                if ("CONFIGURATION_CHANGED".equals(ex.reasonCode())) target.setBlocked(true);
+            }
+        }
+        targets.updateById(target);
+        return created;
     }
 
     private LocalDateTime now() {
@@ -454,8 +477,15 @@ public class CameraStatusPlanService {
                                 properties.getWorkerThreads()
                                         * 60_000.0
                                         / properties.getProbeTimeoutMs()));
-        double rate = plan.getTargetCount() * 1.0 / plan.getIntervalMinutes();
-        if (plans.targetsPerMinute(now()) + rate > capacity
+        var items = targets.forPlan(plan.getId());
+        var chosen =
+                profiles.selectByIds(
+                        items.stream().map(CameraStatusPlanTargetEntity::getProfileId).toList());
+        if (chosen.size() != items.size())
+            throw error(ErrorCode.CONFLICT).diagnosed("PLAN_TARGET_NOT_CHECKABLE");
+        var batches = batches(chosen);
+        double rate = batches.size() * 1.0 / plan.getIntervalMinutes();
+        if (plans.requestsPerMinute(now()) + rate > capacity
                 || "MEDIA".equals(plan.getLayer())
                         && plans.mediaTargetsPerMinute(now())
                                         + plan.getMediaTargetCount()
@@ -463,18 +493,23 @@ public class CameraStatusPlanService {
                                                 / plan.getIntervalMinutes()
                                 > 60.0 / 21)
             throw error(ErrorCode.RATE_LIMITED).diagnosed("PLAN_CAPACITY_EXCEEDED");
-        var items = targets.forPlan(plan.getId());
         long intervalMs = plan.getIntervalMinutes() * 60_000L;
         var start = now().plusSeconds(1);
-        for (int index = 0; index < items.size(); index++) {
-            var target = items.get(index);
-            if (Boolean.TRUE.equals(target.getBlocked()))
-                throw error(ErrorCode.CONFLICT).diagnosed("PLAN_TARGET_NOT_CHECKABLE");
-            if (!status.planActorAllowed(actor.userId(), target.getCameraId()))
-                throw error(ErrorCode.CONFLICT).diagnosed("ACTOR_REVOKED");
-            target.setNextAt(
-                    start.plusNanos(index * intervalMs / Math.max(1, items.size()) * 1_000_000));
-            targets.updateById(target);
+        var byProfile =
+                items.stream()
+                        .collect(
+                                java.util.stream.Collectors.toMap(
+                                        CameraStatusPlanTargetEntity::getProfileId, t -> t));
+        for (int index = 0; index < batches.size(); index++) {
+            for (var profile : batches.get(index)) {
+                var target = byProfile.get(profile.getId());
+                if (Boolean.TRUE.equals(target.getBlocked()))
+                    throw error(ErrorCode.CONFLICT).diagnosed("PLAN_TARGET_NOT_CHECKABLE");
+                if (!status.planActorAllowed(actor.userId(), target.getCameraId()))
+                    throw error(ErrorCode.CONFLICT).diagnosed("ACTOR_REVOKED");
+                target.setNextAt(start.plusNanos(index * intervalMs / batches.size() * 1_000_000));
+                targets.updateById(target);
+            }
         }
         plan.setState("ACTIVE");
         plan.setVersion(plan.getVersion() + 1);
@@ -494,5 +529,26 @@ public class CameraStatusPlanService {
 
     private static BusinessException error(ErrorCode code) {
         return BusinessException.error(code);
+    }
+
+    private List<List<CameraProfileEntity>> batches(List<CameraProfileEntity> chosen) {
+        var platform =
+                rtsp.platformProfiles(chosen.stream().map(CameraProfileEntity::getId).toList());
+        var result = new ArrayList<List<CameraProfileEntity>>();
+        var bySource = new LinkedHashMap<Long, List<CameraProfileEntity>>();
+        for (var profile : chosen) {
+            if (!platform.contains(profile.getId())) {
+                result.add(List.of(profile));
+                continue;
+            }
+            var batch = bySource.get(profile.getSourceId());
+            if (batch == null || batch.size() == HikPlatformApi.STATUS_BATCH_SIZE) {
+                batch = new ArrayList<>();
+                bySource.put(profile.getSourceId(), batch);
+                result.add(batch);
+            }
+            batch.add(profile);
+        }
+        return result;
     }
 }

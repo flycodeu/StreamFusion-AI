@@ -44,6 +44,41 @@ export interface PreviewStats {
   readers: number | null
   observedAt: string | null
 }
+export interface PreviewCapacity {
+  maxSessions: number
+  occupiedSessions: number
+  closingSessions: number
+  maxTranscodes: number
+  occupiedTranscodes: number | null
+  transcodesAvailable: boolean
+  observedAt: string
+}
+export function parsePreviewCapacity(value: unknown): PreviewCapacity {
+  const row = object(value)
+  const result: PreviewCapacity = {
+    maxSessions: integer(row.maxSessions),
+    occupiedSessions: integer(row.occupiedSessions),
+    closingSessions: integer(row.closingSessions),
+    maxTranscodes: integer(row.maxTranscodes),
+    occupiedTranscodes: row.occupiedTranscodes === null ? null : integer(row.occupiedTranscodes),
+    transcodesAvailable: boolean(row.transcodesAvailable),
+    observedAt: string(row.observedAt),
+  }
+  if (
+    result.maxSessions < 1 ||
+    result.maxSessions > 64 ||
+    result.occupiedSessions < 0 ||
+    result.closingSessions < 0 ||
+    result.closingSessions > result.occupiedSessions ||
+    result.maxTranscodes < 0 ||
+    result.maxTranscodes > 8 ||
+    (result.occupiedTranscodes !== null && result.occupiedTranscodes < 0) ||
+    result.transcodesAvailable !== (result.occupiedTranscodes !== null) ||
+    !Number.isFinite(Date.parse(result.observedAt))
+  )
+    throw new Error('preview capacity')
+  return result
+}
 function nullableNumber(value: unknown): number | null {
   if (value == null) return null
   return typeof value === 'number' && Number.isFinite(value) ? value : null

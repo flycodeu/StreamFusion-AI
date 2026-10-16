@@ -47,6 +47,15 @@ public final class PreviewModels {
             String usage,
             List<String> videoCodecs) {}
 
+    public record Capacity(
+            int maxSessions,
+            int occupiedSessions,
+            int closingSessions,
+            int maxTranscodes,
+            Integer occupiedTranscodes,
+            boolean transcodesAvailable,
+            Instant observedAt) {}
+
     public record LeaseView(
             String leaseId,
             String cameraId,

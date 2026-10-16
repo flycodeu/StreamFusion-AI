@@ -81,6 +81,9 @@ public class CameraAssetService {
         Actor actor = access.readActor();
         var filter = queryFilter(query);
         var page = channels.pageVisible(query.toPage(), filter, access.visibility(actor));
+        var addresses =
+                sources.displayAddresses(
+                        page.getRecords().stream().map(CameraChannelEntity::getSourceId).toList());
         Map<Long, String> paths =
                 groups.paths(
                         page.getRecords().stream()
@@ -91,7 +94,14 @@ public class CameraAssetService {
         return PageResultVo.from(
                 page,
                 page.getRecords().stream()
-                        .map(row -> view(row, actor, paths.get(row.getGroupId()), null))
+                        .map(
+                                row ->
+                                        view(
+                                                row,
+                                                actor,
+                                                paths.get(row.getGroupId()),
+                                                null,
+                                                addresses.get(row.getSourceId())))
                         .toList());
     }
 
@@ -119,8 +129,12 @@ public class CameraAssetService {
     public PageResultVo<CameraDeviceGroupVo> deviceGroups(CameraQueryDto query) {
         Actor actor = access.readActor();
         var filter = queryFilter(query);
-        var page = channels.pageDeviceGroups(query.toPage(), filter, access.visibility(actor));
-        var summaries = status.deviceSummaries(page.getRecords(), access.visibility(actor));
+        var visibility = access.visibility(actor);
+        var page = channels.pageDeviceGroups(query.toPage(), filter, visibility);
+        var addresses =
+                sources.displayAddresses(
+                        page.getRecords().stream().map(row -> row.getSourceId()).toList());
+        var summaries = status.deviceSummaries(page.getRecords(), visibility);
         var paths =
                 groups.paths(
                         page.getRecords().stream()
@@ -142,10 +156,7 @@ public class CameraAssetService {
                                                 row.getSourceDisplayName(),
                                                 row.getSourceType(),
                                                 row.getConnectionCategory(),
-                                                CameraAddressVo.of(
-                                                        row.getConnectionCategory(),
-                                                        row.getAddressHost(),
-                                                        row.getAddressPort()),
+                                                addresses.get(row.getSourceId()),
                                                 summaries.get(row.getGroupKey()),
                                                 row.getChannelCount(),
                                                 row.getEnabledCount(),
@@ -168,6 +179,9 @@ public class CameraAssetService {
         var page =
                 channels.pageDeviceChannels(
                         query.toPage(), groupKey, filter, access.visibility(actor));
+        var addresses =
+                sources.displayAddresses(
+                        page.getRecords().stream().map(CameraChannelEntity::getSourceId).toList());
         Map<Long, String> paths =
                 groups.paths(
                         page.getRecords().stream()
@@ -178,7 +192,14 @@ public class CameraAssetService {
         return PageResultVo.from(
                 page,
                 page.getRecords().stream()
-                        .map(row -> view(row, actor, paths.get(row.getGroupId()), null))
+                        .map(
+                                row ->
+                                        view(
+                                                row,
+                                                actor,
+                                                paths.get(row.getGroupId()),
+                                                null,
+                                                addresses.get(row.getSourceId())))
                         .toList());
     }
 
@@ -755,11 +776,16 @@ public class CameraAssetService {
                 row,
                 actor,
                 path,
-                profileEntities(id).stream().map(profile -> profileView(profile, actor)).toList());
+                profileEntities(id).stream().map(profile -> profileView(profile, actor)).toList(),
+                sources.displayAddresses(List.of(row.getSourceId())).get(row.getSourceId()));
     }
 
     private static CameraVo view(
-            CameraAssetRow row, Actor actor, String path, List<CameraProfileVo> items) {
+            CameraAssetRow row,
+            Actor actor,
+            String path,
+            List<CameraProfileVo> items,
+            CameraAddressVo address) {
         CameraVo.DeviceSummary device =
                 row.getDeviceId() == null
                         ? null
@@ -775,8 +801,7 @@ public class CameraAssetService {
                 path,
                 row.getSourceType(),
                 row.getConnectionCategory(),
-                CameraAddressVo.of(
-                        row.getConnectionCategory(), row.getAddressHost(), row.getAddressPort()),
+                address,
                 row.getVendorHint(),
                 device,
                 row.getLifecycle(),

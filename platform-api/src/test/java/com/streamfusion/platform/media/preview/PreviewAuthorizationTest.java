@@ -22,6 +22,16 @@ class PreviewAuthorizationTest {
     final SessionPrincipalDto owner = new SessionPrincipalDto(1L, 0L, Instant.now());
 
     @Test
+    void capacityRechecksCurrentAccountAndModuleWithoutRevealingCameraScopes() {
+        authorization.capacity();
+        verify(cameras).readActor();
+        verify(cameras, never()).requireVisible(anyLong(), any());
+        var denied = BusinessException.error(ErrorCode.FORBIDDEN);
+        when(cameras.readActor()).thenThrow(denied);
+        assertThatThrownBy(authorization::capacity).isSameAs(denied);
+    }
+
+    @Test
     void checksOwnershipBeforeCameraPermissionsCanFail() {
         when(current.principal()).thenReturn(new SessionPrincipalDto(2L, 0L, Instant.now()));
         assertThatThrownBy(() -> authorization.request(owner, 10L)).hasMessage("LEASE_NOT_FOUND");

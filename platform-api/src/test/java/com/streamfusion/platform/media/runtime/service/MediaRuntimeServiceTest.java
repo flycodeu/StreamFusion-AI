@@ -159,6 +159,44 @@ class MediaRuntimeServiceTest {
     }
 
     @Test
+    void recoveryMatchesOnlyTrustedDiscoveredRuntimeWithoutChangingSelection() throws Exception {
+        var service = org.mockito.Mockito.spy(service(false));
+        String configPath =
+                directory.resolve("old/config.ini").toAbsolutePath().normalize().toString();
+        var candidate =
+                new Candidate(
+                        ZLM.id(),
+                        "ZLM",
+                        ZLM.executablePath(),
+                        configPath,
+                        "http://127.0.0.1:8088",
+                        "test",
+                        "READY",
+                        true,
+                        List.of(7L),
+                        List.of(),
+                        Instant.now(),
+                        null);
+        var config =
+                new RuntimeProbe.ZlmConfig(
+                        URI.create("http://127.0.0.1:8088"), "not-persisted", List.of(), null);
+        seed(service, List.of(candidate), System.nanoTime(), Map.of(candidate.id(), config));
+        assertThat(service.activeZlm()).isEmpty();
+        var recovered = service.recoveryZlm("http://127.0.0.1:8088", configPath);
+        assertThat(recovered).isPresent();
+        assertThat(recovered.orElseThrow().configPath().toString()).isEqualTo(configPath);
+        assertThat(service.recoveryZlm("http://10.0.0.1:8088", configPath)).isEmpty();
+        assertThat(
+                        service.recoveryZlm(
+                                "http://127.0.0.1:8088",
+                                directory.resolve("unknown.ini").toString()))
+                .isEmpty();
+        assertThat(service.activeZlm()).isEmpty();
+        org.mockito.Mockito.verify(service, org.mockito.Mockito.never()).detect();
+        org.mockito.Mockito.verify(service, org.mockito.Mockito.never()).current();
+    }
+
+    @Test
     void previewUsesTheDiscoveredSelectionWithoutAnExpiredCacheRescan() throws Exception {
         new RuntimeSelectionStore(directory, new ObjectMapper())
                 .update("WINDOWS", new Selection(null, FFMPEG.id()), "0");
@@ -197,14 +235,22 @@ class MediaRuntimeServiceTest {
     private static void seed(
             MediaRuntimeService service, List<Candidate> candidates, long detectedAt)
             throws Exception {
+        seed(service, candidates, detectedAt, Map.of());
+    }
+
+    private static void seed(
+            MediaRuntimeService service,
+            List<Candidate> candidates,
+            long detectedAt,
+            Map<String, RuntimeProbe.ZlmConfig> configs)
+            throws Exception {
         var type = Class.forName(MediaRuntimeService.class.getName() + "$Inventory");
         var constructor = type.getDeclaredConstructors()[0];
         constructor.setAccessible(true);
         ReflectionTestUtils.setField(
                 service,
                 "inventory",
-                constructor.newInstance(
-                        candidates, Map.of(), Instant.now(), detectedAt, List.of()));
+                constructor.newInstance(candidates, configs, Instant.now(), detectedAt, List.of()));
     }
 
     private static Selection match(

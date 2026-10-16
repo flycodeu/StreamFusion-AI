@@ -10,7 +10,7 @@ public record CameraStatusPlanCommand(
         @Schema(description = "任务执行时长，1至168小时，不能短于检查间隔") Integer durationHours,
         @Schema(description = "CONTROL连接检查或MEDIA视频收帧") CameraStatusLayer layer,
         @Schema(description = "POLLING逐个执行或PARALLEL有界并行") String dispatchMode,
-        @Schema(description = "任务最大并发，1至4；MEDIA固定为1") Integer parallelism,
+        @Schema(description = "任务最大并发请求，1至4；MEDIA固定为1。海康同源最多100通道合并为一次请求") Integer parallelism,
         @Schema(description = "按视频分组创建时的分组ID，包含子分组") List<String> groupIds,
         @Schema(description = "复用本人已有任务的固定通道范围；不能与groupIds同时提供") String planId) {
     public CameraStatusPlanCommand(

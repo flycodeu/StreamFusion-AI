@@ -84,6 +84,42 @@ public class PreviewLocatorService {
         }
     }
 
+    /** Stable local configuration identity, not an expiring vendor playback URL. */
+    public String connectionKey(CameraProfileEntity profile) {
+        var locator = locators.selectById(profile.getId());
+        var source = sources.selectById(profile.getSourceId());
+        if (locator == null || source == null || !Boolean.TRUE.equals(source.getEnabled()))
+            throw new PreviewFailure("LOCATOR_NOT_CONFIGURED");
+        if (!profile.getSourceId().equals(locator.getSourceId()))
+            throw new PreviewFailure("LOCATOR_INVALID");
+        var endpoint =
+                endpoints.selectOne(
+                        new LambdaQueryWrapper<CameraEndpointEntity>()
+                                .eq(CameraEndpointEntity::getSourceId, profile.getSourceId())
+                                .eq(
+                                        CameraEndpointEntity::getPurpose,
+                                        locator.getEndpointPurpose()));
+        if (endpoint == null) throw new PreviewFailure("LOCATOR_NOT_CONFIGURED");
+        var snapshot = new java.util.LinkedHashMap<String, Object>();
+        snapshot.put("profileId", profile.getId());
+        snapshot.put("sourceId", profile.getSourceId());
+        snapshot.put("channelId", profile.getChannelId());
+        snapshot.put("profileVersion", profile.getVersion());
+        snapshot.put("sourceVersion", source.getVersion());
+        snapshot.put("networkPolicy", source.getNetworkPolicyKey());
+        snapshot.put("rtspPort", source.getRtspPort());
+        snapshot.put("locator", locator);
+        snapshot.put("endpoint", endpoint);
+        if (endpoint.getCredentialId() != null) {
+            var credential = credentials.selectById(endpoint.getCredentialId());
+            if (credential == null || !source.getId().equals(credential.getSourceId()))
+                throw new PreviewFailure("LOCATOR_INVALID");
+            snapshot.put("credential", credential);
+        }
+        // Only the HMAC is retained. Neither plaintext credentials nor vendor URLs are cached.
+        return crypto.sign("preview-connection", snapshot);
+    }
+
     public Resolved resolve(CameraProfileEntity profile, Runnable authorization) {
         return resolve(profile, authorization, PreviewDeadline.after(Duration.ofSeconds(10)));
     }
@@ -103,7 +139,10 @@ public class PreviewLocatorService {
         var endpoint =
                 endpoints.selectOne(
                         new LambdaQueryWrapper<CameraEndpointEntity>()
-                                .eq(CameraEndpointEntity::getSourceId, profile.getSourceId()));
+                                .eq(CameraEndpointEntity::getSourceId, profile.getSourceId())
+                                .eq(
+                                        CameraEndpointEntity::getPurpose,
+                                        locator.getEndpointPurpose()));
         if (endpoint == null) throw new PreviewFailure("LOCATOR_NOT_CONFIGURED");
         String username = null, password = null;
         if (endpoint.getCredentialId() != null) {

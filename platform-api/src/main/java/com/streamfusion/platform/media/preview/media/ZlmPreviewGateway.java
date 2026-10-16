@@ -67,7 +67,8 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
     @Override
     public Stream open(
             ActiveZlm runtime, String app, String id, URI source, PreviewDeadline deadline) {
-        return open(runtime, app, id, source, deadline, false);
+        proxyConfig(runtime, deadline, false);
+        return addProxy(runtime, app, id, source, deadline, false);
     }
 
     @Override
@@ -75,21 +76,53 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
             ActiveZlm runtime, String app, String id, URI source, PreviewDeadline deadline) {
         if (!app.matches("sf_preview_[a-f0-9]{12}") || !id.matches("[a-f0-9]{32}"))
             throw new PreviewFailure("CLEANUP_DESTINATION_REJECTED");
-        return open(runtime, app, id, source, deadline, true);
+        proxyConfig(runtime, deadline, true);
+        return addProxy(runtime, app, id, source, deadline, true);
     }
 
-    private Stream open(
+    @Override
+    public Stream openViewer(Stream upstream, String app, String id, PreviewDeadline deadline) {
+        if (!upstream.app().equals(app)
+                || !app.matches("sf_preview_[a-f0-9]{12}")
+                || !upstream.id().matches("[a-f0-9]{32}")
+                || !upstream.proxyKey().equals(VHOST + "/" + app + "/" + upstream.id())
+                || !id.matches("[a-f0-9]{32}")
+                || upstream.id().equals(id))
+            throw new PreviewFailure("CLEANUP_DESTINATION_REJECTED");
+        String host = upstream.runtime().apiBase().getHost();
+        if (!List.of("127.0.0.1", "localhost", "::1", "[::1]").contains(host))
+            throw new PreviewFailure("CLEANUP_DESTINATION_REJECTED");
+        var config = proxyConfig(upstream.runtime(), deadline, false);
+        int port = config.path("rtsp.port").asInt(0);
+        if (port < 1 || port > 65535) throw new PreviewFailure("ZLM_RTC_NOT_CONFIGURED");
+        if (host.contains(":") && !host.startsWith("[")) host = "[" + host + "]";
+        return addProxy(
+                upstream.runtime(),
+                app,
+                id,
+                URI.create("rtsp://" + host + ":" + port + "/" + app + "/" + upstream.id()),
+                deadline,
+                false);
+    }
+
+    private JsonNode proxyConfig(ActiveZlm runtime, PreviewDeadline deadline, boolean observation) {
+        JsonNode configs = call(runtime, "getServerConfig", Map.of(), deadline).path("data");
+        if (!configs.isArray()
+                || configs.isEmpty()
+                || !"0".equals(configs.get(0).path("rtsp.directProxy").asText())
+                || !observation
+                        && configs.get(0).path("general.streamNoneReaderDelayMS").asLong(0) < 20000)
+            throw new PreviewFailure("ZLM_RTC_NOT_CONFIGURED");
+        return configs.get(0);
+    }
+
+    private Stream addProxy(
             ActiveZlm runtime,
             String app,
             String id,
             URI source,
             PreviewDeadline deadline,
             boolean observation) {
-        JsonNode configs = call(runtime, "getServerConfig", Map.of(), deadline).path("data");
-        if (!configs.isArray()
-                || configs.isEmpty()
-                || !"0".equals(configs.get(0).path("rtsp.directProxy").asText()))
-            throw new PreviewFailure("ZLM_RTC_NOT_CONFIGURED");
         var params = tuple(app, id);
         params.put("url", source.toASCIIString());
         params.put("retry_count", "0");
@@ -104,6 +137,8 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
         params.put("enable_ts", "0");
         params.put("enable_fmp4", "0");
         params.put("enable_audio", "0");
+        // The lease manager closes explicitly; this is also a crash-safety fallback.
+        // Its verified grace period exceeds the whole 18s create budget, including local attach.
         params.put("auto_close", "1");
         String identity = runtime.apiBase() + "/" + app + "/" + id;
         if (uncertainOpens.size() >= 256) throw new PreviewFailure("PREVIEW_BUSY");
@@ -351,6 +386,18 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
     }
 
     @Override
+    public void closeRecovered(Stream source, PreviewDeadline deadline) {
+        var outputs =
+                registry.recoverable(source.runtime()).stream()
+                        .filter(e -> e.app().equals(source.app()) && e.input().equals(source.id()))
+                        .toList();
+        if (outputs.isEmpty()) close(source, null, deadline);
+        else
+            for (var entry : outputs)
+                close(source, new Transcode(entry.output(), entry.key()), deadline);
+    }
+
+    @Override
     public void close(Stream source, Transcode output, PreviewDeadline deadline) {
         if (!source.app().matches("sf_preview_[a-f0-9]{12}")
                 || !source.id().matches("[a-f0-9]{32}")
@@ -440,6 +487,17 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
         if (values.isMissingNode() || values.isNull()) return false;
         if (!values.isArray()) throw new PreviewFailure("CLEANUP_PENDING");
         return !values.isEmpty();
+    }
+
+    @Override
+    public boolean exists(Stream stream, PreviewDeadline deadline) {
+        var params = tuple(stream.app(), stream.id());
+        params.put("schema", "rtsp");
+        // This deployed ZLM omits getMediaList.data for an empty result. Use its explicit
+        // presence flag instead of treating missing JSON as either absence or corruption.
+        var online = call(stream.runtime(), "isMediaOnline", params, deadline).path("online");
+        if (!online.isBoolean()) throw new PreviewFailure("ZLM_INVALID_RESPONSE");
+        return online.booleanValue();
     }
 
     private void verifyTranscodeTarget(Stream source, Transcode output, PreviewDeadline deadline) {

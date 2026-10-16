@@ -26,6 +26,12 @@ public class PreviewController {
     private final PreviewCatalogService catalog;
     private final PreviewLeaseService leases;
 
+    @GetMapping("/capacity")
+    @Operation(summary = "读取全站预览与转码容量摘要")
+    public R<PreviewModels.Capacity> capacity() {
+        return R.success(leases.capacity());
+    }
+
     @GetMapping("/catalog")
     @Operation(summary = "读取当前账户可见的预览目录")
     public R<PageResultVo<PreviewModels.Channel>> catalog(

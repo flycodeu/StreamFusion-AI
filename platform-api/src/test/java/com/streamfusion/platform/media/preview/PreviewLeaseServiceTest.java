@@ -12,6 +12,8 @@ import com.streamfusion.platform.camera.service.CameraAccessService;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.media.preview.media.PreviewMediaGateway;
+import com.streamfusion.platform.media.preview.media.PreviewPullRegistry;
+import com.streamfusion.platform.media.preview.media.PreviewTranscodeRegistry;
 import com.streamfusion.platform.media.preview.source.PreviewLocatorService;
 import com.streamfusion.platform.media.runtime.service.MediaRuntimeService;
 import com.streamfusion.platform.system.access.service.AccessService;
@@ -42,6 +44,8 @@ class PreviewLeaseServiceTest {
     final PreviewLocatorService locators = mock(PreviewLocatorService.class);
     final PreviewMediaGateway media = mock(PreviewMediaGateway.class);
     final MediaRuntimeService runtimes = mock(MediaRuntimeService.class);
+    final PreviewTranscodeRegistry transcodes = mock(PreviewTranscodeRegistry.class);
+    final PreviewPullRegistry pulls = mock(PreviewPullRegistry.class);
     final MutableClock clock = new MutableClock();
     PreviewLeaseService service;
     CameraProfileEntity main;
@@ -70,6 +74,7 @@ class PreviewLeaseServiceTest {
                         Path.of("D:/runtime/config.ini"),
                         "1");
         when(runtimes.activeZlm()).thenReturn(Optional.of(runtime));
+        when(locators.connectionKey(any())).thenReturn("connection-1");
         when(locators.resolve(any(), any(), any()))
                 .thenAnswer(
                         invocation -> {
@@ -89,14 +94,479 @@ class PreviewLeaseServiceTest {
                                                 + "/"
                                                 + invocation.getArgument(2)));
         when(media.stats(any(), anyString(), any())).thenReturn(stats("H264"));
+        when(media.exists(any(), any())).thenReturn(true);
+        // Preserve the simple close fixture while exercising the service's shared cleanup budget.
+        doAnswer(
+                        call -> {
+                            ((PreviewDeadline) call.getArgument(2)).check();
+                            media.close(call.getArgument(0), call.getArgument(1));
+                            return null;
+                        })
+                .when(media)
+                .close(any(), nullable(PreviewMediaGateway.Transcode.class), any());
+        when(media.openViewer(any(), anyString(), anyString(), any()))
+                .thenAnswer(
+                        invocation -> {
+                            PreviewMediaGateway.Stream upstream = invocation.getArgument(0);
+                            String app = invocation.getArgument(1), id = invocation.getArgument(2);
+                            return new PreviewMediaGateway.Stream(
+                                    upstream.runtime(),
+                                    app,
+                                    id,
+                                    "__defaultVhost__/" + app + "/" + id);
+                        });
         service =
                 new PreviewLeaseService(
-                        authorization, channels, profiles, locators, media, runtimes, clock);
+                        authorization,
+                        channels,
+                        profiles,
+                        locators,
+                        media,
+                        runtimes,
+                        clock,
+                        new PreviewProperties(36, 2),
+                        transcodes,
+                        pulls);
     }
 
     @AfterEach
     void close() {
         service.close();
+    }
+
+    @Test
+    void twoOwnersShareOneRemotePullButKeepIndependentOutputsAndBudgets() {
+        var first = service.create(input("MAIN"));
+        when(authorization.principal(10L))
+                .thenReturn(new SessionPrincipalDto(2L, 0L, clock.instant()));
+        var second = service.create(input("MAIN"));
+        assertThat(second.leaseId()).isNotEqualTo(first.leaseId());
+        assertThat(service.capacity().occupiedSessions()).isEqualTo(2);
+        verify(locators).resolve(any(), any(), any());
+        var root = org.mockito.ArgumentCaptor.forClass(PreviewMediaGateway.Stream.class);
+        verify(media, times(2)).openViewer(root.capture(), anyString(), anyString(), any());
+        assertThat(root.getAllValues().get(0)).isSameAs(root.getAllValues().get(1));
+        verify(media).open(any(), any(), any(), any(), any());
+
+        service.delete(first.leaseId());
+        verify(media)
+                .close(argThat(s -> s.id().equals(first.leaseId().replace("-", ""))), isNull());
+        verify(media, never()).close(same(root.getValue()), any());
+        assertThat(service.renew(second.leaseId()).state()).isEqualTo("READY");
+        assertThat(service.capacity().occupiedSessions()).isEqualTo(1);
+        service.delete(second.leaseId());
+        verify(media).close(same(root.getValue()), isNull());
+        assertThat(service.capacity().occupiedSessions()).isZero();
+    }
+
+    @Test
+    void restartBlocksNewPullsUntilExactOldResourcesAreReconciled(
+            @org.junit.jupiter.api.io.TempDir Path directory) {
+        service.close();
+        var runtime = runtimes.activeZlm().orElseThrow();
+        String oldApp = "sf_preview_abcdef012345", oldId = "a".repeat(32);
+        var old =
+                new PreviewMediaGateway.Stream(
+                        runtime, oldApp, oldId, "__defaultVhost__/" + oldApp + "/" + oldId);
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        try (var prior = new PreviewPullRegistry(directory, json)) {
+            prior.register(old, true);
+            prior.started(old);
+        }
+        try (var restarted = new PreviewPullRegistry(directory, json)) {
+            service =
+                    new PreviewLeaseService(
+                            authorization,
+                            channels,
+                            profiles,
+                            locators,
+                            media,
+                            runtimes,
+                            clock,
+                            new PreviewProperties(36, 2),
+                            transcodes,
+                            restarted);
+            assertThat(service.create(input("MAIN")).reasonCode())
+                    .isEqualTo("PREVIEW_RECOVERY_REQUIRED");
+            verify(media, never()).open(any(), any(), any(), any(), any());
+            doThrow(new PreviewFailure("CLEANUP_PENDING")).when(media).closeRecovered(any(), any());
+            service.reconcile();
+            assertThat(restarted.pending()).hasSize(1);
+            doNothing().when(media).closeRecovered(any(), any());
+            service.reconcile();
+            assertThat(restarted.pending()).isEmpty();
+            verify(media, times(2)).closeRecovered(eq(old), any());
+            var fresh = service.create(input("MAIN"));
+            assertThat(fresh.state()).isEqualTo("READY");
+            assertThatThrownBy(() -> service.renew("00000000-0000-0000-0000-000000000000"))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).code())
+                    .isEqualTo(ErrorCode.NOT_FOUND);
+            // Reconciliation never enumerates media or closes new-process tuples.
+            service.reconcile();
+            verify(media, times(2)).closeRecovered(any(), any());
+            service.delete(fresh.leaseId());
+            service.close();
+        }
+    }
+
+    @Test
+    void concurrentViewersJoinThePendingPullWithoutOpeningAnotherRemoteConnection()
+            throws Exception {
+        var opening = new CountDownLatch(1);
+        var proceed = new CountDownLatch(1);
+        when(media.open(any(), anyString(), anyString(), any(), any()))
+                .thenAnswer(
+                        call -> {
+                            opening.countDown();
+                            await(proceed);
+                            String app = call.getArgument(1), id = call.getArgument(2);
+                            return new PreviewMediaGateway.Stream(
+                                    call.getArgument(0),
+                                    app,
+                                    id,
+                                    "__defaultVhost__/" + app + "/" + id);
+                        });
+        var first = CompletableFuture.supplyAsync(() -> service.create(input("MAIN")));
+        await(opening);
+        var second = CompletableFuture.supplyAsync(() -> service.create(input("MAIN")));
+        try {
+            verify(authorization, timeout(1000).atLeast(2)).principal(10L);
+            org.awaitility.Awaitility.await()
+                    .atMost(java.time.Duration.ofSeconds(2))
+                    .untilAsserted(
+                            () -> assertThat(service.capacity().occupiedSessions()).isEqualTo(2));
+            verify(media).open(any(), any(), any(), any(), any());
+            verify(media, never()).openViewer(any(), any(), any(), any());
+        } finally {
+            proceed.countDown();
+        }
+        assertThat(first.get(2, TimeUnit.SECONDS).state()).isEqualTo("READY");
+        assertThat(second.get(2, TimeUnit.SECONDS).state()).isEqualTo("READY");
+        verify(media).open(any(), any(), any(), any(), any());
+        verify(media, times(2)).openViewer(any(), any(), any(), any());
+    }
+
+    @Test
+    void revokingOneOwnerClosesOnlyThatViewer() {
+        var first = service.create(input("MAIN"));
+        var other = new SessionPrincipalDto(2L, 0L, clock.instant());
+        when(authorization.principal(10L)).thenReturn(other);
+        var second = service.create(input("MAIN"));
+        when(authorization.stillAllowed(any(), eq(10L)))
+                .thenAnswer(call -> ((SessionPrincipalDto) call.getArgument(0)).getUserId() == 2L);
+        service.reap();
+        verify(media)
+                .close(argThat(s -> s.id().equals(first.leaseId().replace("-", ""))), isNull());
+        verify(media, times(1)).close(any(), any());
+        assertThat(service.renew(second.leaseId()).state()).isEqualTo("READY");
+    }
+
+    @Test
+    void failedLastUpstreamCleanupRetainsSlotAndBlocksReattachmentUntilConfirmed() {
+        var first = service.create(input("MAIN"));
+        String viewer = first.leaseId().replace("-", "");
+        doAnswer(
+                        call -> {
+                            PreviewMediaGateway.Stream stream = call.getArgument(0);
+                            if (!stream.id().equals(viewer))
+                                throw new PreviewFailure("CLEANUP_PENDING");
+                            return null;
+                        })
+                .when(media)
+                .close(any(), any());
+        assertThatThrownBy(() -> service.delete(first.leaseId())).hasMessage("CLEANUP_PENDING");
+        assertThat(service.capacity().closingSessions()).isEqualTo(1);
+        assertThat(service.create(input("MAIN")).reasonCode()).isEqualTo("PREVIEW_PENDING");
+        verify(media).open(any(), any(), any(), any(), any());
+        clock.instant = clock.instant.plusSeconds(61);
+        doNothing().when(media).close(any(), any());
+        service.delete(first.leaseId());
+        // Only the root is retried; the already confirmed viewer is not closed again.
+        verify(media).close(argThat(s -> s.id().equals(viewer)), isNull());
+        assertThat(service.create(input("MAIN")).state()).isEqualTo("READY");
+        verify(media, times(2)).open(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void changedConfigurationGetsANewPullAndInvalidatesTheOldLease() {
+        var first = service.create(input("MAIN"));
+        when(locators.connectionKey(any())).thenReturn("connection-2");
+        var second = service.create(input("MAIN"));
+        verify(media, times(2)).open(any(), any(), any(), any(), any());
+        assertThatThrownBy(() -> service.renew(first.leaseId()))
+                .hasMessage("CONFIGURATION_CHANGED");
+        assertThat(service.renew(second.leaseId()).state()).isEqualTo("READY");
+    }
+
+    @Test
+    void changedConfigurationDuringRootOpenNeverStartsTheViewer() {
+        when(locators.connectionKey(any())).thenReturn("connection-1", "connection-2");
+        assertThat(service.create(input("MAIN")).reasonCode()).isEqualTo("CONFIGURATION_CHANGED");
+        verify(media, never()).openViewer(any(), any(), any(), any());
+        verify(media, timeout(1000)).close(any(), isNull());
+    }
+
+    @Test
+    void failedViewerDoesNotDestroyAnAlreadyWorkingSharedPull() {
+        var first = service.create(input("MAIN"));
+        when(media.openViewer(any(), any(), any(), any()))
+                .thenThrow(new PreviewFailure("ZLM_UNAVAILABLE"));
+        assertThat(service.create(input("MAIN")).state()).isEqualTo("UNAVAILABLE");
+        verify(media, timeout(1000))
+                .close(argThat(s -> !s.id().equals(first.leaseId().replace("-", ""))), isNull());
+        verify(media).open(any(), any(), any(), any(), any());
+        assertThat(service.renew(first.leaseId()).state()).isEqualTo("READY");
+    }
+
+    @Test
+    void missingGenerationCannotBeRenewedOrReusedAndCanBeRebuiltAfterCleanup() {
+        var first = service.create(input("MAIN"));
+        when(media.exists(any(), any())).thenReturn(false);
+        assertThat(service.create(input("MAIN")).reasonCode()).isEqualTo("MEDIA_NOT_READY");
+        assertThatThrownBy(() -> service.renew(first.leaseId()))
+                .isInstanceOf(RuntimeException.class);
+        verify(media).open(any(), any(), any(), any(), any());
+        service.reap();
+        org.awaitility.Awaitility.await()
+                .atMost(java.time.Duration.ofSeconds(2))
+                .untilAsserted(() -> assertThat(service.capacity().occupiedSessions()).isZero());
+        when(media.exists(any(), any())).thenReturn(true);
+        assertThat(service.create(input("MAIN")).state()).isEqualTo("READY");
+        verify(media, times(2)).open(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void joiningOwnersDoNotInheritTheCreatorsAuthorizationFailure() throws Exception {
+        var resolving = new CountDownLatch(1);
+        var proceed = new CountDownLatch(1);
+        doAnswer(
+                        call -> {
+                            resolving.countDown();
+                            await(proceed);
+                            throw BusinessException.error(ErrorCode.FORBIDDEN);
+                        })
+                .when(locators)
+                .resolve(any(), any(), any());
+        var first = CompletableFuture.supplyAsync(() -> service.create(input("MAIN")));
+        await(resolving);
+        var joined = new CountDownLatch(1);
+        when(locators.connectionKey(any()))
+                .thenAnswer(
+                        call -> {
+                            joined.countDown();
+                            return "connection-1";
+                        });
+        var joiningThread = new AtomicReference<Thread>();
+        var second =
+                CompletableFuture.supplyAsync(
+                        () -> {
+                            joiningThread.set(Thread.currentThread());
+                            return service.create(input("MAIN"));
+                        });
+        await(joined);
+        try {
+            org.awaitility.Awaitility.await()
+                    .atMost(java.time.Duration.ofSeconds(2))
+                    .until(() -> joiningThread.get().getState() == Thread.State.TIMED_WAITING);
+        } finally {
+            proceed.countDown();
+        }
+        assertThatThrownBy(() -> first.get(2, TimeUnit.SECONDS))
+                .hasCauseInstanceOf(BusinessException.class);
+        assertThat(second.get(2, TimeUnit.SECONDS).reasonCode()).isEqualTo("PREVIEW_UNAVAILABLE");
+        verify(media, never()).open(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void lastReleaseAndNewJoinCannotRaceIntoAClosingUpstream() throws Exception {
+        var first = service.create(input("MAIN"));
+        String viewerId = first.leaseId().replace("-", "");
+        var rootClosing = new CountDownLatch(1);
+        var proceed = new CountDownLatch(1);
+        doAnswer(
+                        call -> {
+                            PreviewMediaGateway.Stream stream = call.getArgument(0);
+                            if (!stream.id().equals(viewerId)) {
+                                rootClosing.countDown();
+                                await(proceed);
+                            }
+                            return null;
+                        })
+                .when(media)
+                .close(any(), any());
+        var closing = CompletableFuture.runAsync(() -> service.delete(first.leaseId()));
+        await(rootClosing);
+        try {
+            assertThat(service.create(input("MAIN")).reasonCode()).isEqualTo("PREVIEW_PENDING");
+            verify(media).open(any(), any(), any(), any(), any());
+            assertThat(service.capacity().closingSessions()).isGreaterThanOrEqualTo(1);
+        } finally {
+            proceed.countDown();
+        }
+        closing.get(2, TimeUnit.SECONDS);
+        assertThat(service.create(input("MAIN")).state()).isEqualTo("READY");
+        verify(media, times(2)).open(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void browsersWithDifferentCodecSupportShareOnlyTheRemotePull() {
+        when(media.stats(any(), anyString(), any()))
+                .thenAnswer(
+                        call ->
+                                stats(
+                                        ((String) call.getArgument(1)).endsWith("h264")
+                                                ? "H264"
+                                                : "H265"));
+        when(media.transcode(any(), any(), any()))
+                .thenAnswer(call -> new PreviewMediaGateway.Transcode(call.getArgument(1), "key"));
+        var nativeRequest =
+                new PreviewModels.CreateLease(
+                        UUID.randomUUID().toString(), "10", null, "MAIN", List.of("H264", "H265"));
+        var nativeViewer = service.create(nativeRequest);
+        var convertedViewer = service.create(input("MAIN"));
+        assertThat(nativeViewer.videoCodec()).isEqualTo("H265");
+        assertThat(nativeViewer.transcoded()).isFalse();
+        assertThat(convertedViewer.videoCodec()).isEqualTo("H264");
+        assertThat(convertedViewer.transcoded()).isTrue();
+        verify(media).open(any(), any(), any(), any(), any());
+        verify(media).transcode(any(), any(), any());
+        service.delete(nativeViewer.leaseId());
+        assertThat(service.renew(convertedViewer.leaseId()).state()).isEqualTo("READY");
+    }
+
+    @Test
+    void viewerAndLastRootCleanupShareOneFiniteBudget() {
+        var created = service.create(input("MAIN"));
+        service.delete(created.leaseId());
+        var deadlines = org.mockito.ArgumentCaptor.forClass(PreviewDeadline.class);
+        verify(media, times(2))
+                .close(any(), nullable(PreviewMediaGateway.Transcode.class), deadlines.capture());
+        assertThat(deadlines.getAllValues().get(0)).isSameAs(deadlines.getAllValues().get(1));
+        assertThat(deadlines.getValue().remaining())
+                .isLessThanOrEqualTo(java.time.Duration.ofSeconds(12));
+    }
+
+    @Test
+    void globalBudgetCountsAllUsersButDoesNotDoubleCountIdempotentReplay() {
+        useLimits(1, 2);
+        var request = input("MAIN");
+        var first = service.create(request);
+        assertThat(service.create(request).leaseId()).isEqualTo(first.leaseId());
+        when(authorization.principal(10L))
+                .thenReturn(new SessionPrincipalDto(2L, 0L, clock.instant()));
+        var failure =
+                catchThrowableOfType(() -> service.create(input("MAIN")), BusinessException.class);
+        assertThat(failure.code()).isEqualTo(ErrorCode.RATE_LIMITED);
+        assertThat(failure.diagnosticReason()).isEqualTo("PREVIEW_CAPACITY_EXCEEDED");
+        assertThat(service.capacity().occupiedSessions()).isEqualTo(1);
+        verify(media, times(1)).open(any(), any(), any(), any(), any());
+        service.delete(first.leaseId());
+        assertThat(service.capacity().occupiedSessions()).isZero();
+        assertThat(service.create(input("MAIN")).state()).isEqualTo("READY");
+    }
+
+    @Test
+    void rapidCreateAndReleaseDoesNotConfuseReceiptHistoryWithOccupiedSessions() {
+        useLimits(1, 2);
+        var startedAt = clock.instant();
+        for (int attempt = 0; attempt < 129; attempt++) {
+            var created = service.create(input("MAIN"));
+            assertThat(created.state()).isEqualTo("READY");
+            assertThat(service.capacity().occupiedSessions()).isEqualTo(1);
+            service.delete(created.leaseId());
+            assertThat(service.capacity().occupiedSessions()).isZero();
+        }
+        // No receipt expired: the old 128-entry coupling would reject the 129th request.
+        assertThat(clock.instant()).isEqualTo(startedAt);
+        verify(media, times(129)).open(any(), any(), any(), any(), any());
+        verify(media, times(258)).close(any(), isNull());
+    }
+
+    @Test
+    void creationReservesTheGlobalSlotBeforeContactingMedia() throws Exception {
+        useLimits(1, 2);
+        var started = new CountDownLatch(1);
+        var proceed = new CountDownLatch(1);
+        when(media.open(any(), any(), any(), any(), any()))
+                .thenAnswer(
+                        invocation -> {
+                            started.countDown();
+                            await(proceed);
+                            return new PreviewMediaGateway.Stream(
+                                    invocation.getArgument(0),
+                                    invocation.getArgument(1),
+                                    invocation.getArgument(2),
+                                    "proxy");
+                        });
+        var result = CompletableFuture.supplyAsync(() -> service.create(input("MAIN")));
+        try {
+            await(started);
+            assertThat(service.capacity().occupiedSessions()).isEqualTo(1);
+            assertThat(service.capacity().closingSessions()).isZero();
+            assertThatThrownBy(() -> service.create(input("MAIN")))
+                    .isInstanceOf(BusinessException.class);
+            verify(media, times(1)).open(any(), any(), any(), any(), any());
+        } finally {
+            proceed.countDown();
+        }
+        assertThat(result.get(2, TimeUnit.SECONDS).state()).isEqualTo("READY");
+    }
+
+    @Test
+    void closingSlotIsNotReleasedUntilCleanupHasBeenConfirmed() {
+        useLimits(1, 2);
+        var created = service.create(input("MAIN"));
+        doThrow(new PreviewFailure("CLEANUP_PENDING")).when(media).close(any(), any());
+        assertThatThrownBy(() -> service.delete(created.leaseId())).hasMessage("CLEANUP_PENDING");
+        assertThat(service.capacity().occupiedSessions()).isEqualTo(1);
+        assertThat(service.capacity().closingSessions()).isEqualTo(1);
+        assertThatThrownBy(() -> service.create(input("SUB")))
+                .isInstanceOf(BusinessException.class);
+        clock.instant = clock.instant.plusSeconds(61);
+        doNothing().when(media).close(any(), any());
+        service.delete(created.leaseId());
+        assertThat(service.capacity().occupiedSessions()).isZero();
+    }
+
+    @Test
+    void capacityReportsUnknownTranscodesInsteadOfInventingAnEmptyJournal() {
+        when(transcodes.occupied()).thenReturn(2);
+        var first = service.capacity();
+        assertThat(first.maxSessions()).isEqualTo(36);
+        assertThat(first.maxTranscodes()).isEqualTo(2);
+        assertThat(first.occupiedTranscodes()).isEqualTo(2);
+        assertThat(first.transcodesAvailable()).isTrue();
+        assertThat(first.observedAt()).isEqualTo(clock.instant());
+        when(transcodes.occupied()).thenThrow(new PreviewFailure("TRANSCODE_RECOVERY_REQUIRED"));
+        var unavailable = service.capacity();
+        assertThat(unavailable.occupiedTranscodes()).isNull();
+        assertThat(unavailable.transcodesAvailable()).isFalse();
+        verify(authorization, times(2)).capacity();
+        assertThat(service.create(input("MAIN")).state()).isEqualTo("READY");
+    }
+
+    @Test
+    void deniedCapacityReadDoesNotReadGlobalUsage() {
+        doThrow(BusinessException.error(ErrorCode.FORBIDDEN)).when(authorization).capacity();
+        assertThatThrownBy(service::capacity).isInstanceOf(BusinessException.class);
+        verifyNoInteractions(transcodes);
+    }
+
+    private void useLimits(int sessions, int transcodeLimit) {
+        service.close();
+        service =
+                new PreviewLeaseService(
+                        authorization,
+                        channels,
+                        profiles,
+                        locators,
+                        media,
+                        runtimes,
+                        clock,
+                        new PreviewProperties(sessions, transcodeLimit),
+                        transcodes,
+                        pulls);
     }
 
     @Test
@@ -169,7 +639,7 @@ class PreviewLeaseServiceTest {
         var result = service.create(input("MAIN"));
         assertThat(result.state()).isEqualTo("UNAVAILABLE");
         assertThat(result.reasonCode()).isEqualTo("TRANSCODE_NOT_CONFIGURED");
-        verify(media, timeout(1000)).close(any(), isNull());
+        verify(media, timeout(1000).times(2)).close(any(), isNull());
     }
 
     @Test
@@ -177,11 +647,11 @@ class PreviewLeaseServiceTest {
         service.create(input("MAIN"));
         clock.instant = clock.instant.plusSeconds(91);
         service.reap();
-        verify(media).close(any(), isNull());
+        verify(media, times(2)).close(any(), isNull());
         service.create(input("SUB"));
         when(authorization.stillAllowed(any(), anyLong())).thenReturn(false);
         service.reap();
-        verify(media, times(2)).close(any(), isNull());
+        verify(media, times(4)).close(any(), isNull());
     }
 
     @Test
@@ -219,9 +689,9 @@ class PreviewLeaseServiceTest {
         verify(media, times(1)).close(any(), any());
         clock.instant = clock.instant.plusSeconds(20);
         service.delete(created.leaseId());
-        verify(media, times(2)).close(any(), any());
+        verify(media, times(3)).close(any(), any());
         service.delete(created.leaseId());
-        verify(media, times(2)).close(any(), any());
+        verify(media, times(3)).close(any(), any());
     }
 
     @Test
@@ -383,7 +853,7 @@ class PreviewLeaseServiceTest {
         }
         assertThatThrownBy(() -> answer.get(2, TimeUnit.SECONDS))
                 .hasCauseInstanceOf(PreviewFailure.class);
-        verify(media, timeout(1000)).close(any(), isNull());
+        verify(media, timeout(1000).times(2)).close(any(), isNull());
         service.delete(created.leaseId());
     }
 
@@ -409,7 +879,16 @@ class PreviewLeaseServiceTest {
         when(cameraAccess.readActor()).thenReturn(new CameraAccessService.Actor(1L, false));
         service =
                 new PreviewLeaseService(
-                        actualAuthorization, channels, profiles, locators, media, runtimes, clock);
+                        actualAuthorization,
+                        channels,
+                        profiles,
+                        locators,
+                        media,
+                        runtimes,
+                        clock,
+                        new PreviewProperties(36, 2),
+                        transcodes,
+                        pulls);
         var created = service.create(input("MAIN"));
         when(current.principal()).thenReturn(new SessionPrincipalDto(2L, 0L, clock.instant()));
         when(cameraAccess.readActor()).thenThrow(BusinessException.error(ErrorCode.FORBIDDEN));
@@ -419,7 +898,7 @@ class PreviewLeaseServiceTest {
         when(current.principal()).thenReturn(principal);
         doReturn(new CameraAccessService.Actor(1L, false)).when(cameraAccess).readActor();
         service.delete(created.leaseId());
-        verify(media).close(any(), isNull());
+        verify(media, times(2)).close(any(), isNull());
     }
 
     @Test
@@ -428,7 +907,7 @@ class PreviewLeaseServiceTest {
         var denied = BusinessException.error(ErrorCode.FORBIDDEN);
         doThrow(denied).when(authorization).request(any(), eq(10L));
         assertThatThrownBy(() -> service.stats(created.leaseId())).isSameAs(denied);
-        verify(media, timeout(1000)).close(any(), isNull());
+        verify(media, timeout(1000).times(2)).close(any(), isNull());
     }
 
     @Test
@@ -452,9 +931,9 @@ class PreviewLeaseServiceTest {
         verify(media, times(7)).close(any(), any());
         doNothing().when(media).close(any(), any());
         service.delete(created.leaseId());
-        verify(media, times(8)).close(any(), any());
+        verify(media, times(9)).close(any(), any());
         service.delete(created.leaseId());
-        verify(media, times(8)).close(any(), any());
+        verify(media, times(9)).close(any(), any());
     }
 
     @Test
@@ -465,7 +944,7 @@ class PreviewLeaseServiceTest {
         assertThatThrownBy(
                         () -> service.answer(created.leaseId(), new PreviewModels.Offer("v=0\r\n")))
                 .hasMessage("ZLM_UNAVAILABLE");
-        verify(media, timeout(1000)).close(any(), isNull());
+        verify(media, timeout(1000).times(2)).close(any(), isNull());
         assertThatThrownBy(() -> service.renew(created.leaseId()))
                 .isInstanceOf(BusinessException.class);
     }

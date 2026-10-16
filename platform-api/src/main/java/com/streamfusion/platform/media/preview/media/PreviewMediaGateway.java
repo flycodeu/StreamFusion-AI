@@ -26,6 +26,12 @@ public interface PreviewMediaGateway {
 
     Stream open(ActiveZlm runtime, String app, String id, URI source);
 
+    /** Isolated viewer output from an owned local upstream; never accepts a caller URL. */
+    Stream openViewer(Stream upstream, String app, String id, PreviewDeadline deadline);
+
+    /** Exact tuple presence, distinct from video tracks not yet being ready. */
+    boolean exists(Stream stream, PreviewDeadline deadline);
+
     Stream openObservation(
             ActiveZlm runtime, String app, String id, URI source, PreviewDeadline deadline);
 
@@ -58,6 +64,11 @@ public interface PreviewMediaGateway {
     }
 
     void close(Stream source, Transcode output);
+
+    /** Reconcile a recorded tuple after API restart, including any recorded transcode. */
+    default void closeRecovered(Stream source, PreviewDeadline deadline) {
+        close(source, null, deadline);
+    }
 
     default void close(Stream source, Transcode output, PreviewDeadline deadline) {
         deadline.check();

@@ -40,13 +40,20 @@ public class CameraAccessService {
     }
 
     public Visibility visibility(Actor actor) {
+        return visibility(
+                actor, actor.superAdmin() ? null : new CameraGroupTree(groups.allBounded()));
+    }
+
+    /**
+     * Reuses a caller's request-local group snapshot; no authorization is cached across requests.
+     */
+    Visibility visibility(Actor actor, CameraGroupTree tree) {
         return new Visibility(
                 actor.superAdmin(),
                 actor.userId(),
                 actor.superAdmin()
                         ? List.of()
-                        : new CameraGroupTree(groups.allBounded())
-                                .descendants(scopes.grantedGroups(actor.userId())));
+                        : tree.descendants(scopes.grantedGroups(actor.userId())));
     }
 
     public void requireVisible(long cameraId, Actor actor) {
