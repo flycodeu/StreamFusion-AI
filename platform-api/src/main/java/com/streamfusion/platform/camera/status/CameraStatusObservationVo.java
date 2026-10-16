@@ -11,7 +11,7 @@ public record CameraStatusObservationVo(
         @Schema(description = "受控事实原因码") String reasonCode,
         @Schema(description = "事实观测时间，UTC，不随GET刷新") Instant observedAt,
         @Schema(description = "采集器读取事实时间，UTC，不是GET时间") Instant readAt,
-        @Schema(description = "事实有效截止，UTC，过期不代表离线") Instant validUntil,
+        @Schema(description = "历史兼容字段，UTC；不再用于结果失效判断，最近结果持续保留") Instant validUntil,
         @Schema(description = "产生该事实的检查ID") String checkId,
         @Schema(description = "MEDIA接收计数证据，CONTROL为空", nullable = true)
                 CameraMediaEvidence mediaEvidence) {

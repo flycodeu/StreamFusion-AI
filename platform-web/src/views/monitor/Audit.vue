@@ -229,11 +229,6 @@ watch(
     </ElTabs>
     <IpBlockPanel v-if="activeTab === 'ip' && sessionState.me?.isSuperAdmin" />
     <template v-else>
-      <div class="audit-maintenance-actions">
-        <ElButton v-if="sessionState.me?.isSuperAdmin" @click="retentionOpen = true"
-          >保留策略</ElButton
-        ><ElButton @click="exportOpen = true">导出与记录</ElButton>
-      </div>
       <RetentionDialog
         v-if="retentionOpen && sessionState.me?.isSuperAdmin"
         @close="retentionOpen = false"
@@ -301,6 +296,12 @@ watch(
       </ElForm>
       <RequestError :error="error" />
       <TablePanel>
+        <template #actions>
+          <ElButton @click="exportOpen = true">导出与记录</ElButton>
+          <ElButton v-if="sessionState.me?.isSuperAdmin" @click="retentionOpen = true"
+            >保留策略</ElButton
+          >
+        </template>
         <template #tools
           ><ElButton :loading="loading" @click="load">刷新</ElButton
           ><ColumnPicker v-model="columns" :options="columnOptions"
@@ -469,12 +470,6 @@ watch(
 </template>
 
 <style scoped>
-.audit-maintenance-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-bottom: 12px;
-}
 .detail-section-title {
   margin: 24px 0 12px;
   font-size: 15px;

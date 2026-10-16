@@ -54,14 +54,14 @@ describe('passive CONTROL fact component', () => {
     expect(html).not.toContain('未增长间隔')
     expect(html).not.toMatch(/解码正常|持续稳定|已离线|>在线</)
   })
-  it('renders observation and validity times without requests or timers', async () => {
+  it('renders the last observation without a validity deadline, requests or timers', async () => {
     const timer = vi.spyOn(globalThis, 'setTimeout'),
       fetchMock = vi.spyOn(globalThis, 'fetch')
     const html = await renderToString(createSSRApp(StatusFact, { profile }))
     expect(html).toContain('连接检查通过')
     expect(html).toContain('连接检查结果')
     expect(html).toContain('检查时间')
-    expect(html).toContain('有效至')
+    expect(html).not.toContain('有效至')
     expect(html).not.toMatch(/在线|流正常/)
     expect(timer).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()

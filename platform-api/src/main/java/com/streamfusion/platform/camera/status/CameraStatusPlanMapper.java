@@ -20,18 +20,19 @@ public interface CameraStatusPlanMapper extends BaseMapper<CameraStatusPlanEntit
             """
             SELECT COALESCE(SUM(units * 1.0 / interval_minutes),0) FROM (
               SELECT p.id,p.interval_minutes,
-                CASE WHEN s.adapter_type='HIK_PLATFORM' THEN CEIL(COUNT(*) / 100.0) ELSE COUNT(*) END units
+                CASE WHEN s.adapter_type='HIK_PLATFORM' THEN CEIL(COUNT(*) / 100.0)
+                  WHEN p.check_video=1 THEN COUNT(*) * 2 ELSE COUNT(*) END units
               FROM camera_status_plan p JOIN camera_status_plan_target t ON t.plan_id=p.id
               JOIN camera_stream_profile f ON f.id=t.profile_id JOIN camera_source s ON s.id=f.source_id
               WHERE p.state='ACTIVE' AND p.end_at>#{now}
-              GROUP BY p.id,p.interval_minutes,f.source_id,s.adapter_type,
+              GROUP BY p.id,p.interval_minutes,p.check_video,f.source_id,s.adapter_type,
                 CASE WHEN s.adapter_type='HIK_PLATFORM' THEN t.next_at ELSE NULL END
             ) rates
             """)
     double requestsPerMinute(LocalDateTime now);
 
     @Select(
-            "SELECT COALESCE(SUM(media_target_count * 1.0 / interval_minutes),0) FROM camera_status_plan WHERE state='ACTIVE' AND layer='MEDIA' AND end_at>#{now}")
+            "SELECT COALESCE(SUM(media_target_count * 1.0 / interval_minutes),0) FROM camera_status_plan WHERE state='ACTIVE' AND end_at>#{now}")
     double mediaTargetsPerMinute(LocalDateTime now);
 
     @Select(

@@ -131,6 +131,11 @@ class CameraStatusPageIntegrationTest extends CameraTestSupport {
         addFact(accessible, 1, "FAILED", false);
         addFact(failed, 0, "FAILED", false);
         addFact(stale, 0, "ACCESSIBLE", true);
+        // Configuration changes, not an old timestamp, invalidate the last observation.
+        jdbc.update(
+                "UPDATE camera_status_snapshot SET connection_digest=? WHERE camera_id=?",
+                new byte[32],
+                stale.path("cameraId").asLong());
         addFact(unsupported, 0, "UNSUPPORTED", false);
         addCheck(checking, 0, 201L, LocalDateTime.now(ZoneId.of("Asia/Shanghai")));
         jdbc.update(
@@ -240,7 +245,7 @@ class CameraStatusPageIntegrationTest extends CameraTestSupport {
         assertThat(first.get(0).path("control").path("configurationCurrent").asBoolean()).isTrue();
         assertThat(first.get(0).path("control").path("latestCheck").path("checkId").asText())
                 .isEqualTo("102");
-        assertThat(first.get(1).path("control").path("freshness").asText()).isEqualTo("STALE");
+        assertThat(first.get(1).path("control").path("freshness").asText()).isEqualTo("CURRENT");
         var a2 =
                 read("/cameras/" + camera.path("cameraId").asText() + "/status", auth)
                         .path("profiles");
@@ -276,6 +281,52 @@ class CameraStatusPageIntegrationTest extends CameraTestSupport {
                 .isEqualTo("STALE");
         assertThat(changed.path("control").path("observation"))
                 .isEqualTo(first.get(0).path("control").path("observation"));
+        verifyNoInteractions(worker);
+    }
+
+    @Test
+    void lastResultSurvivesAnHourWithoutRenewingEvidence() throws Exception {
+        var auth = admin();
+        var camera = camera(auth, source(auth).path("sourceId").asText(), "每小时巡检");
+        enable(auth, camera);
+        addFact(camera, 0, "ACCESSIBLE", true);
+        var observed = LocalDateTime.now(ZoneId.of("Asia/Shanghai")).minusHours(1).withNano(0);
+        jdbc.update(
+                "UPDATE camera_status_snapshot SET observed_at=?,read_at=?,valid_until=?,check_requested_at=?,updated_at=? WHERE camera_id=?",
+                observed,
+                observed,
+                observed.plusMinutes(5),
+                observed,
+                observed,
+                camera.path("cameraId").asLong());
+        var first =
+                read("/cameras/" + camera.path("cameraId").asText() + "/status", auth)
+                        .path("profiles")
+                        .get(0)
+                        .path("control");
+        assertThat(first.path("freshness").asText()).isEqualTo("CURRENT");
+        assertThat(
+                        read("/cameras/devices/page", auth)
+                                .path("items")
+                                .get(0)
+                                .path("statusSummary")
+                                .path("state")
+                                .asText())
+                .isEqualTo("ACCESSIBLE");
+        assertThat(
+                        read("/camera-status?layer=CONTROL", auth)
+                                .path("summary")
+                                .path("accessible")
+                                .asInt())
+                .isOne();
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT observed_at FROM camera_status_snapshot WHERE camera_id=?",
+                                LocalDateTime.class,
+                                camera.path("cameraId").asLong()))
+                .isEqualTo(observed);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM camera_status_check", Integer.class))
+                .isZero();
         verifyNoInteractions(worker);
     }
 

@@ -15,6 +15,7 @@ public class CameraStatusProperties {
     private long startIntervalMs = 250;
     private long probeTimeoutMs = 10_000;
     private long executionTimeoutMs = 30_000;
+    // Legacy validUntil metadata only; the latest matching observation no longer expires.
     private long freshnessMs = 300_000;
     private int retentionDays = 7;
 

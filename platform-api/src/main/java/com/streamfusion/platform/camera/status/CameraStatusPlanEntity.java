@@ -18,6 +18,7 @@ public class CameraStatusPlanEntity {
     private byte[] requestFingerprint;
     private String state;
     private String layer;
+    private Boolean checkVideo;
     private String dispatchMode;
     private Integer parallelism;
     private Integer mediaTargetCount;

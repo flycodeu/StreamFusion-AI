@@ -129,7 +129,7 @@ afterEach(() => {
   vi.useRealTimers()
 })
 describe('aggregate camera status page read owner', () => {
-  it('expires platform evidence and the local summary/coverage together, without renewing timestamps', async () => {
+  it('retains platform evidence and summary after the legacy deadline without renewing timestamps', async () => {
     const response = page()
     const profile = response.items[0]!.profiles[0]!
     profile.upstream = {
@@ -154,9 +154,9 @@ describe('aggregate camera status page read owner', () => {
     expect(controls.summary.value?.accessible).toBe(1)
     expect(controls.coverage.value).toEqual({ current: 1, enabled: 1, percent: 100 })
     await vi.advanceTimersByTimeAsync(5001)
-    expect(controls.rows.value[0]!.profiles[0]!.upstream?.freshness).toBe('STALE')
-    expect(controls.summary.value).toMatchObject({ accessible: 0, stale: 1 })
-    expect(controls.coverage.value?.current).toBe(0)
+    expect(controls.rows.value[0]!.profiles[0]!.upstream?.freshness).toBe('CURRENT')
+    expect(controls.summary.value).toMatchObject({ accessible: 1, stale: 0 })
+    expect(controls.coverage.value?.current).toBe(1)
     expect(response.items[0]!.profiles[0]!.upstream?.freshness).toBe('CURRENT')
     expect(controls.rows.value[0]!.profiles[0]!.upstream?.observation?.observedAt).toBe(now)
     expect(api.page).toHaveBeenCalledTimes(2)
@@ -183,7 +183,7 @@ describe('aggregate camera status page read owner', () => {
     expect(api.page).toHaveBeenCalledTimes(3)
     expect(controls.summary.value?.checking).toBe(1)
   })
-  it('keeps locally expiring valid evidence after network reads pause', async () => {
+  it('retains the last result after network reads pause', async () => {
     const response = page('RUNNING')
     response.items[0]!.profiles[0]!.control = {
       ...response.items[0]!.profiles[0]!.control,
@@ -205,7 +205,7 @@ describe('aggregate camera status page read owner', () => {
     expect(controls.paused.value).toBe(true)
     expect(controls.coverage.value?.current).toBe(1)
     await vi.advanceTimersByTimeAsync(4000)
-    expect(controls.coverage.value?.current).toBe(0)
+    expect(controls.coverage.value?.current).toBe(1)
   })
   it('clears previous-account data and ignores its late receipt across session epochs', async () => {
     const pending = deferred<StatusPage>()
@@ -251,7 +251,7 @@ describe('aggregate camera status page read owner', () => {
     expect(controls.coverage.value).toBeNull()
     expect(api.page).toHaveBeenCalledOnce()
   })
-  it('expires MEDIA independently without changing CONTROL or starting a probe', async () => {
+  it('retains MEDIA and CONTROL without starting a probe when legacy deadlines pass', async () => {
     const response = page()
     const profile = response.items[0]!.profiles[0]!
     const fact = {
@@ -284,7 +284,7 @@ describe('aggregate camera status page read owner', () => {
     api.page.mockResolvedValue(response)
     await controls.refresh()
     await vi.advanceTimersByTimeAsync(5001)
-    expect(controls.rows.value[0]?.profiles[0]?.media.freshness).toBe('STALE')
+    expect(controls.rows.value[0]?.profiles[0]?.media.freshness).toBe('CURRENT')
     expect(controls.rows.value[0]?.profiles[0]?.control.freshness).toBe('CURRENT')
     expect(api.page).toHaveBeenCalledTimes(2)
   })
@@ -387,7 +387,7 @@ describe('aggregate camera status page read owner', () => {
       expect(api.page).toHaveBeenCalledTimes(before + 1)
     },
   )
-  it('expires multiple facts with one local timer and no network or timestamp refresh', async () => {
+  it('retains multiple facts without an expiry timer or timestamp refresh', async () => {
     const response = page()
     const profile = response.items[0]!.profiles[0]!
     profile.control.freshness = 'CURRENT'
@@ -410,17 +410,17 @@ describe('aggregate camera status page read owner', () => {
     })
     api.page.mockResolvedValue(response)
     await controls.refresh()
-    expect(vi.getTimerCount()).toBe(2)
+    expect(vi.getTimerCount()).toBe(1)
     await vi.advanceTimersByTimeAsync(5001)
     expect(controls.rows.value[0]?.profiles.map((entry) => entry.control.freshness)).toEqual([
-      'STALE',
+      'CURRENT',
       'CURRENT',
     ])
-    expect(vi.getTimerCount()).toBe(2)
+    expect(vi.getTimerCount()).toBe(1)
     await vi.advanceTimersByTimeAsync(3000)
     expect(controls.rows.value[0]?.profiles.map((entry) => entry.control.freshness)).toEqual([
-      'STALE',
-      'STALE',
+      'CURRENT',
+      'CURRENT',
     ])
     expect(controls.rows.value[0]?.profiles[0]?.control.observation?.observedAt).toBe(now)
     expect(api.page).toHaveBeenCalledTimes(2)

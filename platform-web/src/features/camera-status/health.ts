@@ -61,7 +61,7 @@ export const mediaLabels: Record<ConnectionState, string> = {
   accessible: '采样收帧正常',
   failed: '采样收帧异常',
   checking: '检测中',
-  stale: '待刷新',
+  stale: '配置已变更',
   unknown: '尚未检查',
   disabled: '未启用',
 }
@@ -70,7 +70,7 @@ export const connectionLabels: Record<ConnectionState, string> = {
   accessible: '代表流可达',
   failed: '连接异常',
   checking: '检测中',
-  stale: '结果已过期',
+  stale: '配置已变更',
   unknown: '未确认',
   disabled: '未启用',
 }
@@ -78,7 +78,7 @@ export const upstreamLabels: Record<ConnectionState, string> = {
   accessible: '平台在线',
   failed: '平台离线',
   checking: '查询中',
-  stale: '结果已过期',
+  stale: '配置已变更',
   unknown: '未获取',
   disabled: '未启用',
 }

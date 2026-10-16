@@ -12,7 +12,35 @@ public record CameraStatusPlanCommand(
         @Schema(description = "POLLING逐个执行或PARALLEL有界并行") String dispatchMode,
         @Schema(description = "任务最大并发请求，1至4；MEDIA固定为1。海康同源最多100通道合并为一次请求") Integer parallelism,
         @Schema(description = "按视频分组创建时的分组ID，包含子分组") List<String> groupIds,
-        @Schema(description = "复用本人已有任务的固定通道范围；不能与groupIds同时提供") String planId) {
+        @Schema(description = "复用本人已有任务的固定通道范围；不能与groupIds同时提供") String planId,
+        @Schema(description = "连接通过后检查直连视频；默认关闭，平台目标仅查询在线状态") Boolean checkVideo) {
+    public CameraStatusPlanCommand(
+            String clientRequestId,
+            List<String> groupKeys,
+            Integer intervalMinutes,
+            Integer durationHours,
+            CameraStatusLayer layer,
+            String dispatchMode,
+            Integer parallelism,
+            List<String> groupIds,
+            String planId) {
+        this(
+                clientRequestId,
+                groupKeys,
+                intervalMinutes,
+                durationHours,
+                layer,
+                dispatchMode,
+                parallelism,
+                groupIds,
+                planId,
+                false);
+    }
+
+    public boolean includesVideo() {
+        return Boolean.TRUE.equals(checkVideo);
+    }
+
     public CameraStatusPlanCommand(
             String clientRequestId,
             List<String> groupKeys,

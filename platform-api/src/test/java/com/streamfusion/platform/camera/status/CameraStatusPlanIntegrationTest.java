@@ -108,6 +108,253 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
     }
 
     @Test
+    void connectionThenVideoIsDurableBoundedAndNeverReplayed() throws Exception {
+        var auth = admin();
+        var camera = enabled(auth);
+        var body = new HashMap<>(input(List.of("c" + camera.path("cameraId").asText()), 60, 24));
+        body.put("checkVideo", true);
+        var plan = write(post("/camera-status/plans"), auth, body, 201);
+        assertThat(plan.path("checkVideo").asBoolean()).isTrue();
+        assertThat(write(post("/camera-status/plans"), auth, body, 201).path("planId"))
+                .isEqualTo(plan.path("planId"));
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        scheduler.tick();
+        var control = submitted.values().iterator().next();
+        assertThat(control.layer()).isEqualTo(CameraStatusLayer.CONTROL);
+        scheduler.tick();
+        assertThat(submitted).hasSize(1);
+        completeConnection(control, CameraProbeResult.Outcome.ACCESSIBLE);
+        // Startup recovery must not erase the completed connection hand-off.
+        background.recoverInterruptedOnStartup();
+        scheduler.tick();
+        var media =
+                submitted.values().stream()
+                        .filter(r -> r.layer() == CameraStatusLayer.MEDIA)
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(submitted).hasSize(2);
+        scheduler.tick();
+        assertThat(submitted).hasSize(2);
+        media.beforeProbe().run();
+        var started = clock.instant();
+        clock.value = started.plusSeconds(5);
+        futures.get(media.checkId())
+                .complete(
+                        new CameraProbeResult(
+                                CameraProbeResult.Outcome.ACCESSIBLE,
+                                "MEDIA_RECEIVING",
+                                0,
+                                5000,
+                                new CameraMediaEvidence(
+                                        started, clock.instant(), 10, 100, 3, 2500)));
+        scheduler.tick();
+        assertThat(submitted).hasSize(2);
+        assertThat(
+                        bean(CameraStatusSnapshotMapper.class)
+                                .get(media.streamProfileId(), "MEDIA")
+                                .getValue())
+                .isEqualTo("ACCESSIBLE");
+        assertThat(
+                        bean(CameraStatusPlanMapper.class)
+                                .mediaTargetsPerMinute(
+                                        LocalDateTime.ofInstant(
+                                                clock.instant(), ZoneId.of("Asia/Shanghai"))))
+                .isCloseTo(1.0 / 60, within(0.0001));
+        assertThat(
+                        bean(CameraStatusPlanMapper.class)
+                                .requestsPerMinute(
+                                        LocalDateTime.ofInstant(
+                                                clock.instant(), ZoneId.of("Asia/Shanghai"))))
+                .isCloseTo(2.0 / 60, within(0.0001));
+    }
+
+    @Test
+    void failedConnectionSkipsVideoAndNextHourStartsWithConnectionAgain() throws Exception {
+        var auth = admin();
+        var camera = enabled(auth);
+        var body = new HashMap<>(input(List.of("c" + camera.path("cameraId").asText()), 60, 24));
+        body.put("checkVideo", true);
+        var plan = write(post("/camera-status/plans"), auth, body, 201);
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        scheduler.tick();
+        var control = submitted.values().iterator().next();
+        completeConnection(control, CameraProbeResult.Outcome.FAILED);
+        scheduler.tick();
+        assertThat(submitted).hasSize(1);
+        clock.value = clock.value.plusSeconds(3600);
+        scheduler.tick();
+        assertThat(submitted).hasSize(2);
+        assertThat(submitted.values()).allMatch(r -> r.layer() == CameraStatusLayer.CONTROL);
+        assertThat(bean(CameraStatusSnapshotMapper.class).get(control.streamProfileId(), "MEDIA"))
+                .isNull();
+    }
+
+    @Test
+    void stoppedAndResumedPlanCannotUseAnOldConnectionToStartVideo() throws Exception {
+        var auth = admin();
+        var camera = enabled(auth);
+        var body = new HashMap<>(input(List.of("c" + camera.path("cameraId").asText()), 60, 24));
+        body.put("checkVideo", true);
+        var plan = write(post("/camera-status/plans"), auth, body, 201);
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        scheduler.tick();
+        completeConnection(
+                submitted.values().iterator().next(), CameraProbeResult.Outcome.ACCESSIBLE);
+        write(
+                post("/camera-status/plans/" + plan.path("planId").asText() + "/stop"),
+                auth,
+                Map.of("version", "0"),
+                200);
+        scheduler.tick();
+        assertThat(submitted).hasSize(1);
+        write(
+                post("/camera-status/plans/" + plan.path("planId").asText() + "/resume"),
+                auth,
+                Map.of("version", "1"),
+                200);
+        scheduler.tick();
+        assertThat(submitted).hasSize(1);
+        clock.value = clock.value.plusSeconds(1);
+        scheduler.tick();
+        assertThat(submitted).hasSize(2);
+        assertThat(submitted.values()).allMatch(r -> r.layer() == CameraStatusLayer.CONTROL);
+    }
+
+    @Test
+    void changedConfigurationBetweenStagesBlocksVideo() throws Exception {
+        var auth = admin();
+        var camera = enabled(auth);
+        var body = new HashMap<>(input(List.of("c" + camera.path("cameraId").asText()), 60, 24));
+        body.put("checkVideo", true);
+        var plan = write(post("/camera-status/plans"), auth, body, 201);
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        scheduler.tick();
+        completeConnection(
+                submitted.values().iterator().next(), CameraProbeResult.Outcome.ACCESSIBLE);
+        jdbc.update(
+                "UPDATE camera_source_endpoint SET port=8554 WHERE source_id=? AND purpose='RTSP'",
+                camera.path("sourceId").asLong());
+        scheduler.tick();
+        assertThat(submitted).hasSize(1);
+        assertThat(
+                        bean(CameraStatusPlanTargetMapper.class)
+                                .forPlan(plan.path("planId").asLong())
+                                .getFirst()
+                                .getBlocked())
+                .isTrue();
+    }
+
+    @Test
+    void oldSuccessfulConnectionCannotStartVideoAfterTheNextSlot() throws Exception {
+        var auth = admin();
+        var camera = enabled(auth);
+        var body = new HashMap<>(input(List.of("c" + camera.path("cameraId").asText()), 60, 24));
+        body.put("checkVideo", true);
+        var plan = write(post("/camera-status/plans"), auth, body, 201);
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        scheduler.tick();
+        completeConnection(
+                submitted.values().iterator().next(), CameraProbeResult.Outcome.ACCESSIBLE);
+        clock.value = clock.value.plusSeconds(3600);
+        scheduler.tick();
+        assertThat(submitted).hasSize(2);
+        assertThat(submitted.values()).allMatch(r -> r.layer() == CameraStatusLayer.CONTROL);
+    }
+
+    @Test
+    void platformOnlineIsNeverUsedAsVideoEvidence() throws Exception {
+        var auth = admin();
+        long group = enabled(auth).path("groupId").asLong();
+        platformFixture(auth, group, 1, 10000);
+        var body = new HashMap<>(input(List.of("c10000"), 60, 24));
+        body.put("checkVideo", true);
+        var plan = write(post("/camera-status/plans"), auth, body, 201);
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        scheduler.tick();
+        var online = submitted.values().iterator().next();
+        assertThat(online.layer()).isEqualTo(CameraStatusLayer.UPSTREAM);
+        online.beforeProbe().run();
+        futures.get(online.checkId())
+                .complete(
+                        new CameraProbeResult(
+                                CameraProbeResult.Outcome.ACCESSIBLE,
+                                "PLATFORM_ONLINE",
+                                0,
+                                5,
+                                null));
+        scheduler.tick();
+        assertThat(submitted).hasSize(1);
+        assertThat(
+                        bean(CameraStatusPlanMapper.class)
+                                .mediaTargetsPerMinute(
+                                        LocalDateTime.ofInstant(
+                                                clock.instant(), ZoneId.of("Asia/Shanghai"))))
+                .isZero();
+        assertThat(bean(CameraStatusSnapshotMapper.class).get(online.streamProfileId(), "MEDIA"))
+                .isNull();
+    }
+
+    @Test
+    void combinedPlansCannotBypassTheMediaSamplingBudget() throws Exception {
+        var auth = admin();
+        var first = enabled(auth);
+        var keys = new ArrayList<String>();
+        keys.add("c" + first.path("cameraId").asText());
+        for (int i = 1; i < 15; i++) {
+            var camera = camera(auth, first.path("sourceId").asText(), "视频预算" + i);
+            jdbc.update(
+                    "UPDATE camera_channel SET group_id=?,lifecycle='ENABLED' WHERE id=?",
+                    first.path("groupId").asLong(),
+                    camera.path("cameraId").asLong());
+            keys.add("c" + camera.path("cameraId").asText());
+        }
+        var body = new HashMap<>(input(keys, 5, 24));
+        body.put("checkVideo", true);
+        write(post("/camera-status/plans"), auth, body, 429);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM camera_status_plan", Integer.class))
+                .isZero();
+    }
+
+    @Test
+    void videoOptionReservesMediaCapacityAndRejectsIncompatibleParallelism() throws Exception {
+        var auth = admin();
+        var camera = enabled(auth);
+        var body = new HashMap<>(input(List.of("c" + camera.path("cameraId").asText()), 5, 24));
+        body.put("checkVideo", true);
+        body.put("dispatchMode", "PARALLEL");
+        body.put("parallelism", 2);
+        write(post("/camera-status/plans"), auth, body, 400);
+        body.put("parallelism", 1);
+        bean(CameraStatusProperties.class).setStartIntervalMs(60_000);
+        try {
+            // Each combined target costs two requests, not one.
+            for (int i = 0; i < 2; i++) {
+                body.put("clientRequestId", requestId());
+                write(post("/camera-status/plans"), auth, body, 201);
+            }
+            body.put("clientRequestId", requestId());
+            write(post("/camera-status/plans"), auth, body, 429);
+        } finally {
+            bean(CameraStatusProperties.class).setStartIntervalMs(250);
+        }
+    }
+
+    private void completeConnection(
+            CameraStatusWorker.Request request, CameraProbeResult.Outcome outcome) {
+        request.beforeProbe().run();
+        futures.get(request.checkId())
+                .complete(
+                        new CameraProbeResult(
+                                outcome,
+                                outcome == CameraProbeResult.Outcome.ACCESSIBLE
+                                        ? "RTSP_DESCRIBE_OK"
+                                        : "RTSP_TIMEOUT",
+                                0,
+                                5,
+                                null));
+    }
+
+    @Test
     void fixedRepresentativeSlotsAreIdempotentAndContinueWithoutLoginSession() throws Exception {
         var auth = admin();
         var first = enabled(auth);
@@ -180,7 +427,8 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                 "UPDATE camera_status_snapshot SET valid_until=DATEADD('SECOND',-1,CURRENT_TIMESTAMP)");
         for (var item : read("/cameras/devices/page", signedIn).path("items")) {
             if (item.path("groupKey").asText().equals("c" + requestCamera(request)))
-                assertThat(item.path("statusSummary").path("state").asText()).isEqualTo("STALE");
+                assertThat(item.path("statusSummary").path("state").asText())
+                        .isEqualTo("ACCESSIBLE");
         }
         jdbc.update(
                 "UPDATE camera_channel SET default_preview_profile_id=(SELECT id FROM camera_stream_profile WHERE channel_id=? AND usage_hint='SUB') WHERE id=?",

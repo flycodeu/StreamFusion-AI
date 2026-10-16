@@ -18,6 +18,7 @@ public record CameraStatusPlanVo(
         @Schema(description = "响应服务器时间，UTC") Instant serverNow,
         @Schema(description = "直连检查层：CONTROL或MEDIA；平台目标执行UPSTREAM") CameraStatusLayer layer,
         @Schema(description = "调度方式：POLLING逐个轮询、PARALLEL有界并行") String dispatchMode,
-        @Schema(description = "单任务最大进行中检查数，1至4；MEDIA当前为1") int parallelism) {
+        @Schema(description = "单任务最大进行中检查数，1至4；含视频检查时为1") int parallelism,
+        @Schema(description = "连接通过后检查直连视频；平台目标仅查询在线状态") boolean checkVideo) {
     public record Progress(int success, int failed, int pending, int skipped, int unknown) {}
 }

@@ -616,6 +616,7 @@ class ZlmPreviewRealMediaTest {
                             restarted.exited(owned);
                             return true;
                         } catch (PreviewFailure pending) {
+                            result.put("restartPullCleanupPendingReason", pending.reason());
                             return false;
                         }
                     },
@@ -734,7 +735,14 @@ class ZlmPreviewRealMediaTest {
         }
     }
 
-    private String config(Path ffmpeg, int api, int rtsp, int rtmp, int rtc) {
+    private String config(Path ffmpeg, int api, int rtsp, int rtmp, int rtc)
+            throws java.io.IOException {
+        String previewCommand =
+                Files.readAllLines(Path.of("config/zlm-preview.ini.example")).stream()
+                        .filter(line -> line.startsWith("cmd="))
+                        .map(line -> line.substring("cmd=".length()))
+                        .findFirst()
+                        .orElseThrow();
         return """
                 [api]
                 apiDebug=0
@@ -766,6 +774,7 @@ class ZlmPreviewRealMediaTest {
                 [rtp_proxy]
                 port=0
                 [protocol]
+                paced_sender_ms=20
                 enable_hls=0
                 enable_mp4=0
                 enable_rtsp=1
@@ -773,7 +782,7 @@ class ZlmPreviewRealMediaTest {
                 enable_audio=0
                 [ffmpeg]
                 bin=%s
-                cmd=%%s -nostdin -rtsp_transport tcp -i %%s -an -c:v libx264 -preset ultrafast -tune zerolatency -threads 1 -r 8 -g 8 -b:v 180k -f flv %%s
+                cmd=%s
                 log=%s
                 restart_sec=0
                 """
@@ -785,6 +794,7 @@ class ZlmPreviewRealMediaTest {
                         rtc,
                         rtc,
                         ffmpeg.toString().replace('\\', '/'),
+                        previewCommand,
                         directory.resolve("ffmpeg.log").toString().replace('\\', '/'));
     }
 

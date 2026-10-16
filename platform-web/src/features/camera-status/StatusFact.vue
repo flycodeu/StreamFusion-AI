@@ -35,10 +35,6 @@ const display = computed(() => factPresentation(props.profile))
           <dt>检查时间</dt>
           <dd>{{ formatDateTime(profile.observation.observedAt) }}</dd>
         </div>
-        <div>
-          <dt>有效至</dt>
-          <dd>{{ formatDateTime(profile.observation.validUntil) }}</dd>
-        </div>
         <template v-if="profile.observation.mediaEvidence">
           <div>
             <dt>采样窗口</dt>

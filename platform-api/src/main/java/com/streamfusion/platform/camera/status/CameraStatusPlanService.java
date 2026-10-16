@@ -72,10 +72,12 @@ public class CameraStatusPlanService {
                 || command.effectiveParallelism() < 1
                 || command.effectiveParallelism() > 4
                 || "POLLING".equals(command.effectiveMode()) && command.effectiveParallelism() != 1
-                || command.effectiveLayer() == CameraStatusLayer.MEDIA
+                || (command.effectiveLayer() == CameraStatusLayer.MEDIA || command.includesVideo())
                         && command.effectiveParallelism() != 1)
             throw error(ErrorCode.VALIDATION_ERROR);
         if (command.effectiveLayer() == CameraStatusLayer.UPSTREAM)
+            throw error(ErrorCode.VALIDATION_ERROR);
+        if (command.includesVideo() && command.effectiveLayer() != CameraStatusLayer.CONTROL)
             throw error(ErrorCode.VALIDATION_ERROR);
         if (command.groupIds() != null
                 && (command.groupIds().isEmpty() || command.groupIds().size() > 100))
@@ -120,6 +122,11 @@ public class CameraStatusPlanService {
                         groupIds,
                         "planId",
                         reusedPlanId);
+        // Keep the legacy fingerprint unchanged when the new optional switch is off.
+        if (command.includesVideo()) {
+            input = new LinkedHashMap<>(input);
+            input.put("checkVideo", true);
+        }
         var prior = plans.byRequest(actor.userId(), command.clientRequestId());
         if (prior != null) {
             if (!MessageDigest.isEqual(
@@ -189,7 +196,7 @@ public class CameraStatusPlanService {
             throw error(ErrorCode.CONFLICT).diagnosed("PLAN_PROFILE_MISSING");
         String keyId = crypto.activeKeyId();
         int mediaTargetCount =
-                command.effectiveLayer() == CameraStatusLayer.MEDIA
+                command.effectiveLayer() == CameraStatusLayer.MEDIA || command.includesVideo()
                         ? chosen.size()
                                 - rtsp.platformProfiles(
                                                 chosen.stream().map(p -> p.getId()).toList())
@@ -211,10 +218,13 @@ public class CameraStatusPlanService {
                                         * 60_000.0
                                         / properties.getProbeTimeoutMs()));
         var batches = batches(chosen);
-        if (plans.requestsPerMinute(now()) + batches.size() * 1.0 / command.intervalMinutes()
+        if (plans.requestsPerMinute(now())
+                        + (batches.size() + (command.includesVideo() ? mediaTargetCount : 0))
+                                * 1.0
+                                / command.intervalMinutes()
                 > perMinute)
             throw error(ErrorCode.RATE_LIMITED).diagnosed("PLAN_CAPACITY_EXCEEDED");
-        if (command.effectiveLayer() == CameraStatusLayer.MEDIA
+        if (mediaTargetCount > 0
                 && plans.mediaTargetsPerMinute(now())
                                 + mediaTargetCount * 1.0 / command.intervalMinutes()
                         > 60.0 / 21)
@@ -227,6 +237,7 @@ public class CameraStatusPlanService {
         plan.setRequestFingerprint(crypto.digest(keyId, "camera-status-plan-request", input));
         plan.setState("ACTIVE");
         plan.setLayer(command.effectiveLayer().name());
+        plan.setCheckVideo(command.includesVideo());
         plan.setDispatchMode(command.effectiveMode());
         plan.setParallelism(command.effectiveParallelism());
         plan.setMediaTargetCount(mediaTargetCount);
@@ -324,6 +335,10 @@ public class CameraStatusPlanService {
                         .set(CameraStatusPlanEntity::getState, "EXPIRED")
                         .set(CameraStatusPlanEntity::getUpdatedAt, now())
                         .setIncrBy(CameraStatusPlanEntity::getVersion, 1));
+        for (var ready : targets.readyVideo(now())) {
+            Long checkId = new TransactionTemplate(manager).execute(tx -> prepareVideo(ready));
+            if (checkId != null) status.dispatch(checkId, null);
+        }
         var visited = new java.util.HashSet<Long>();
         for (var due : targets.due(now())) {
             if (!visited.add(due.getId())) continue;
@@ -361,6 +376,38 @@ public class CameraStatusPlanService {
                                 plans.deleteById(plan.getId());
                                 return null;
                             });
+    }
+
+    /** The plan/target lock makes the persisted connection-to-video hand-off single-use. */
+    private Long prepareVideo(CameraStatusPlanTargetEntity candidate) {
+        coordination.lockSuperAdminRole();
+        var plan = plans.lock(candidate.getPlanId());
+        if (plan == null
+                || !"ACTIVE".equals(plan.getState())
+                || !Boolean.TRUE.equals(plan.getCheckVideo())
+                || !now().isBefore(plan.getEndAt())
+                || plans.pending(plan.getId(), now()) >= plan.getParallelism()) return null;
+        var target = targets.lock(candidate.getId());
+        if (target == null
+                || target.getBlocked()
+                || target.getReasonCode() != null
+                || !now().isBefore(target.getNextAt())
+                || !Objects.equals(candidate.getLastCheckId(), target.getLastCheckId()))
+            return null;
+        try {
+            var check = status.createScheduledVideo(plan, target);
+            if (check == null) return null;
+            target.setLastCheckId(Long.valueOf(check.checkId()));
+            targets.updateById(target);
+            return target.getLastCheckId();
+        } catch (BusinessException ex) {
+            target.setReasonCode("CONFIGURATION_UNAVAILABLE");
+        } catch (CameraAdapterException ex) {
+            target.setReasonCode(ex.reasonCode());
+            if ("CONFIGURATION_CHANGED".equals(ex.reasonCode())) target.setBlocked(true);
+        }
+        targets.updateById(target);
+        return null;
     }
 
     /** One transaction reserves request capacity, then creates individually fenced checks. */
@@ -449,7 +496,8 @@ public class CameraStatusPlanService {
                 clock.instant(),
                 CameraStatusLayer.valueOf(plan.getLayer()),
                 plan.getDispatchMode(),
-                plan.getParallelism());
+                plan.getParallelism(),
+                Boolean.TRUE.equals(plan.getCheckVideo()));
     }
 
     @Transactional
@@ -484,9 +532,15 @@ public class CameraStatusPlanService {
         if (chosen.size() != items.size())
             throw error(ErrorCode.CONFLICT).diagnosed("PLAN_TARGET_NOT_CHECKABLE");
         var batches = batches(chosen);
-        double rate = batches.size() * 1.0 / plan.getIntervalMinutes();
+        double rate =
+                (batches.size()
+                                + (Boolean.TRUE.equals(plan.getCheckVideo())
+                                        ? plan.getMediaTargetCount()
+                                        : 0))
+                        * 1.0
+                        / plan.getIntervalMinutes();
         if (plans.requestsPerMinute(now()) + rate > capacity
-                || "MEDIA".equals(plan.getLayer())
+                || plan.getMediaTargetCount() > 0
                         && plans.mediaTargetsPerMinute(now())
                                         + plan.getMediaTargetCount()
                                                 * 1.0

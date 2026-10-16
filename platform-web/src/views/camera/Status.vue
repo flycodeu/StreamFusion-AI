@@ -11,6 +11,8 @@ import {
   ElOption,
   ElPagination,
   ElSelect,
+  ElRadioGroup,
+  ElRadioButton,
   vLoading,
 } from 'element-plus'
 import { CircleCheck, Warning, Clock, QuestionFilled, SwitchButton } from '@element-plus/icons-vue'
@@ -36,8 +38,8 @@ defineOptions({ name: 'CameraStatus' })
 const route = useRoute()
 const name = ref(''),
   observation = ref<ObservationFilter | null>(null)
-const layer = ref<StatusLayer>('MEDIA')
-const query = shallowRef<StatusSearch>({ page: 1, size: 20, layer: 'MEDIA' })
+const layer = ref<StatusLayer>('CONTROL')
+const query = shallowRef<StatusSearch>({ page: 1, size: 20, layer: 'CONTROL' })
 const drawerOpen = ref(false)
 const plansOpen = ref(false)
 const target = shallowRef<{ channel: StatusChannel; profileId: string } | null>(null)
@@ -50,16 +52,15 @@ watch(
   },
   { immediate: true },
 )
-const { rows, result, coverage, total, loading, error, paused, refresh } = useStatusPage(
+const { rows, result, summary, total, loading, error, paused, refresh } = useStatusPage(
   query,
   computed(() => !drawerOpen.value && !plansOpen.value),
 )
-const summary = computed(() => result.value?.summary ?? null)
 const stateLabels = computed(() => ({
   accessible: '检查通过',
   failed: '检查异常',
   checking: '检测中',
-  stale: '结果过期',
+  stale: '配置已变更',
   unknown: '尚未检查',
   disabled: '未启用',
 }))
@@ -132,7 +133,12 @@ function search() {
 function reset() {
   name.value = ''
   observation.value = null
-  layer.value = 'MEDIA'
+  search()
+}
+function changeLayer(value: string | number | boolean | undefined) {
+  if (value !== 'CONTROL' && value !== 'MEDIA') return
+  layer.value = value
+  observation.value = null
   search()
 }
 function changePage(page: number) {
@@ -146,19 +152,15 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
 
 <template>
   <div class="content-page camera-status-page">
-    <section class="patrol-entry" aria-label="巡检任务入口">
-      <strong>巡检任务</strong>
-      <ElButton type="primary" size="large" @click="plansOpen = true">创建 / 管理任务</ElButton>
-    </section>
     <ElForm class="search-form status-search" inline @submit.prevent="search">
+      <ElFormItem label="检查类型">
+        <ElRadioGroup :model-value="layer" aria-label="检查类型" @update:model-value="changeLayer">
+          <ElRadioButton value="CONTROL">相机连接</ElRadioButton>
+          <ElRadioButton value="MEDIA">视频检查</ElRadioButton>
+        </ElRadioGroup>
+      </ElFormItem>
       <ElFormItem label="设备 / 通道">
         <ElInput v-model="name" placeholder="搜索设备或通道名称" clearable maxlength="128" />
-      </ElFormItem>
-      <ElFormItem label="检查类型">
-        <ElSelect v-model="layer" @change="observation = null">
-          <ElOption value="MEDIA" label="视频收帧 / 平台状态" />
-          <ElOption value="CONTROL" label="连接 / 平台状态" />
-        </ElSelect>
       </ElFormItem>
       <ElFormItem label="最近检查结果">
         <ElSelect v-model="observation" clearable placeholder="全部结果（含历史）">
@@ -180,23 +182,10 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
     <section class="status-overview" aria-label="当前页相机检查总览">
       <header class="overview-heading">
         <div>
-          <h3>相机检查总览</h3>
+          <h3>{{ layer === 'CONTROL' ? '连接检查' : '视频检查' }}</h3>
           <span>当前页 {{ summary?.total ?? '—' }} 个通道</span>
         </div>
-        <div class="overview-actions">
-          <span>{{ result?.total ?? '—' }} 个通道</span>
-        </div>
       </header>
-      <p
-        v-if="coverage"
-        class="coverage-note"
-        aria-label="当前页有效结果覆盖"
-        title="按每个已启用通道的代表码流统计；海康使用平台状态，其余使用所选检查层。异常结果同样计入已获取结果，过期或配置已变更不计入。"
-      >
-        当前页有效结果 {{ coverage.current }}/{{ coverage.enabled
-        }}<template v-if="coverage.percent !== null">（{{ coverage.percent }}%）</template> ·
-        仅本页代表流，不代表全站
-      </p>
       <div class="status-metrics">
         <div
           v-for="state in stateOrder"
@@ -225,13 +214,16 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
       </div>
     </section>
     <TablePanel>
-      <template #actions><span class="table-caption">相机概览</span></template>
+      <template #actions
+        ><ElButton type="primary" @click="plansOpen = true">巡检任务</ElButton></template
+      >
       <template #tools><ElButton :loading="loading" @click="refresh">刷新结果</ElButton></template>
       <div v-loading="loading" class="camera-card-grid">
         <StatusCard
           v-for="channel in rows"
           :key="channel.cameraId"
           :channel="channel"
+          :layer="query.layer"
           @details="showDiagnostic"
         />
         <p v-if="!rows.length && !loading" class="empty-list">
@@ -284,21 +276,6 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
 .camera-status-page {
   min-width: 0;
 }
-.patrol-entry {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 14px 16px;
-  margin-bottom: 12px;
-  border-left: 3px solid var(--el-color-primary);
-  background: var(--el-bg-color);
-  border-radius: 6px;
-}
-.patrol-entry strong {
-  font-size: 16px;
-}
 .overview-heading {
   display: flex;
   align-items: center;
@@ -314,15 +291,6 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
   color: var(--text-secondary);
   font-size: 12px;
 }
-.overview-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-.overview-actions > span,
-.table-caption,
 .capacity-hint {
   color: var(--text-secondary);
   font-size: 13px;
@@ -456,19 +424,9 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
   color: var(--text-secondary);
   font-size: 13px;
 }
-.coverage-note {
-  margin: 12px 0;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
 @media (max-width: 520px) {
   .overview-heading {
     align-items: flex-start;
-  }
-  .overview-actions > span {
-    display: none;
   }
   .status-overview {
     padding: 12px;

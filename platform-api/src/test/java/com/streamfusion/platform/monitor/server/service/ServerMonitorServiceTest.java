@@ -15,8 +15,53 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class ServerMonitorServiceTest {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void clearsCollectionBeforePublishingSuccessOrFailure(boolean failCollection) throws Exception {
+        ServerCollector collector = mock(ServerCollector.class);
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var clock = new MutableClock();
+        var sample = sample(clock.instant());
+        when(collector.collect())
+                .thenAnswer(
+                        call -> {
+                            entered.countDown();
+                            release.await(5, TimeUnit.SECONDS);
+                            if (failCollection) throw new IllegalStateException("private error");
+                            return sample;
+                        })
+                .thenAnswer(call -> sample(clock.instant()));
+        var service = new ServerMonitorService(collector, properties(), clock);
+        try {
+            var first = service.snapshot();
+            assertThat(entered.await(1, TimeUnit.SECONDS)).isTrue();
+            // Completion callbacks run inline: force a refresh before the worker can return.
+            var refresh =
+                    first.thenApply(
+                            ignored -> {
+                                clock.now = clock.now.plusSeconds(31);
+                                return service.snapshot();
+                            });
+            release.countDown();
+            var second = refresh.get(3, TimeUnit.SECONDS);
+            assertThat(second).isNotSameAs(first);
+            var fresh = second.get(3, TimeUnit.SECONDS);
+            assertThat(fresh.stale()).isFalse();
+            assertThat(fresh.state()).isEqualTo("READY");
+            assertThat(fresh.sampledAt()).isEqualTo(clock.instant());
+            assertThat(service.snapshot().get()).isSameAs(fresh);
+            verify(collector, times(2)).collect();
+        } finally {
+            release.countDown();
+            service.close();
+        }
+    }
+
     @Test
     void sharesOneCollectionAndCachesThenFallsBackToStaleSample() throws Exception {
         ServerCollector collector = mock(ServerCollector.class);
@@ -135,7 +180,7 @@ class ServerMonitorServiceTest {
     }
 
     private static final class MutableClock extends Clock {
-        private Instant now = Instant.parse("2026-09-26T00:00:00Z");
+        private volatile Instant now = Instant.parse("2026-09-26T00:00:00Z");
 
         @Override
         public ZoneId getZone() {

@@ -10,6 +10,7 @@ import ScopeManage from '../../src/views/camera-scope/Manage.vue'
 import CreateDialog from '../../src/features/camera/CreateDialog.vue'
 import DetailDialog from '../../src/features/camera/DetailDialog.vue'
 import PlanDialog from '../../src/features/camera-status/PlanDialog.vue'
+import PlanCameraPicker from '../../src/features/camera-status/PlanCameraPicker.vue'
 import DeviceDetailPanel from '../../src/features/camera/DeviceDetailPanel.vue'
 import DeviceMoveDialog from '../../src/features/camera/DeviceMoveDialog.vue'
 import DeviceEditor from '../../src/features/camera/DeviceEditor.vue'
@@ -102,6 +103,10 @@ vi.mock('element-plus', async () => {
     'ElDescriptionsItem',
     'ElTabs',
     'ElTabPane',
+    'ElSteps',
+    'ElStep',
+    'ElRadioGroup',
+    'ElRadioButton',
     'ElDropdown',
     'ElDropdownMenu',
     'ElDropdownItem',
@@ -370,8 +375,21 @@ async function openPlatformRegion(root: Host, reused = true) {
   await selectPlatformRegion(root)
 }
 async function choosePatrolPage(root: Host) {
-  await setField(root, '1. 检测范围', 'PAGE', 'ElSelect')
-  await (field(root, '1. 检测范围', 'ElSelect').props.onChange as () => Promise<void>)()
+  await click(root, '下一步')
+  if (nodes(root).some((item) => item.type === 'ElFormItem' && item.props.label === '调度方式')) {
+    await click(root, '下一步')
+    await click(root, '下一步')
+  }
+  await settle()
+}
+async function patrolTab(root: Host, tab: 'create' | 'tasks') {
+  const tabs = nodes(root).find((item) => item.type === 'ElTabs')!
+  ;(tabs.props['onUpdate:modelValue'] as (value: string) => void)(tab)
+  await settle()
+}
+async function patrolScope(root: Host, scope: string) {
+  await setField(root, '选择范围', scope, 'ElRadioGroup')
+  ;(field(root, '选择范围', 'ElRadioGroup').props.onChange as () => void)()
   await settle()
 }
 let app: App | null = null
@@ -593,7 +611,7 @@ describe('camera management interaction boundaries', () => {
     expect(resolve).not.toHaveBeenCalled()
     expect(reject).not.toHaveBeenCalled()
   })
-  it('defaults patrol to video groups and sends explicit parallel CONTROL settings', async () => {
+  it('starts with a camera list and sends explicit group and parallel CONTROL settings through steps', async () => {
     api.getStatusPlans.mockResolvedValue([])
     api.inspectPlanTargets.mockResolvedValue({
       targets: [{ groupKey: 'c10', name: '组内相机', reasonCode: null }],
@@ -601,13 +619,19 @@ describe('camera management interaction boundaries', () => {
     })
     api.createStatusPlan.mockResolvedValue({ planId: '1' })
     const root = await mount(PlanDialog, { groupKeys: ['c20'] })
-    expect(field(root, '1. 检测范围', 'ElSelect').props.modelValue).toBe('GROUPS')
+    expect(field(root, '选择范围', 'ElRadioGroup').props.modelValue).toBe('PAGE')
     expect(api.inspectPlanTargets).not.toHaveBeenCalled()
-    await setField(root, '视频分组', ['3'], 'ElTreeSelect')
-    await (field(root, '视频分组', 'ElTreeSelect').props.onChange as () => Promise<void>)()
-    await setField(root, '检查内容', 'CONTROL', 'ElSelect')
+    expect(text(root)).not.toContain('检测间隔')
+    await patrolScope(root, 'GROUPS')
+    ;(field(root, '视频分组', 'ElTree').props.onCheck as (...args: unknown[]) => void)(
+      {},
+      { checkedKeys: ['3'] },
+    )
+    await click(root, '下一步')
     await setField(root, '调度方式', 'PARALLEL', 'ElSelect')
     await setField(root, '并发请求数', 2, 'ElSelect')
+    await click(root, '下一步')
+    await click(root, '下一步')
     await click(root, '启动巡检')
     expect(api.inspectPlanTargets).toHaveBeenCalledWith({ scope: 'GROUPS', groupIds: ['3'] })
     expect(api.createStatusPlan).toHaveBeenCalledWith(
@@ -636,6 +660,7 @@ describe('camera management interaction boundaries', () => {
     api.getStatusPlans.mockResolvedValue([plan])
     api.resumeStatusPlan.mockResolvedValue({ ...plan, state: 'ACTIVE' })
     const root = await mount(PlanDialog, { groupKeys: [] })
+    await patrolTab(root, 'tasks')
     await click(root, '恢复执行')
     expect(api.resumeStatusPlan).toHaveBeenCalledWith(plan)
     expect(api.createStatusPlan).not.toHaveBeenCalled()
@@ -1693,6 +1718,7 @@ describe('camera management interaction boundaries', () => {
     expect(api.createStatusPlan).not.toHaveBeenCalled()
     await click(root, '启动巡检')
     expect(text(root)).toContain('响应未确认')
+    expect(button(root, '上一步').props.disabled).toBe(true)
     await click(root, '重试原计划')
     expect(api.createStatusPlan.mock.calls[1]).toEqual(api.createStatusPlan.mock.calls[0])
     expect(api.createStatusPlan.mock.calls[0]![0]).toMatchObject({
@@ -1701,6 +1727,114 @@ describe('camera management interaction boundaries', () => {
       durationHours: 24,
     })
   })
+  it('creates a sequential video plan only after completing the dialog steps', async () => {
+    api.getStatusPlans.mockResolvedValue([])
+    api.inspectPlanTargets.mockResolvedValue({
+      targets: [{ groupKey: 'd100', name: '入口', reasonCode: null }],
+      limitExceeded: false,
+    })
+    api.createStatusPlan.mockResolvedValue({ planId: '1' })
+    const root = await mount(PlanDialog, { groupKeys: ['d100'] })
+    await click(root, '下一步')
+    expect(field(root, '调度方式', 'ElSelect')).toBeDefined()
+    expect(text(root)).not.toContain('检测间隔')
+    await setField(root, '调度方式', 'PARALLEL', 'ElSelect')
+    await setField(root, '并发请求数', 2, 'ElSelect')
+    await click(root, '下一步')
+    await setField(root, '连接通过后检查视频', true, 'ElSwitch')
+    expect(text(root)).toContain('连接异常则跳过')
+    expect(api.createStatusPlan).not.toHaveBeenCalled()
+    await click(root, '上一步')
+    expect(field(root, '并发请求数', 'ElSelect').props.disabled).toBe(true)
+    await click(root, '下一步')
+    await click(root, '下一步')
+    expect(field(root, '检测间隔', 'ElSelect')).toBeDefined()
+    await click(root, '启动巡检')
+    expect(api.createStatusPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        layer: 'CONTROL',
+        checkVideo: true,
+        parallelism: 1,
+        intervalMinutes: 60,
+      }),
+    )
+  })
+  it('keeps camera selections across list pages and back navigation without creating a task', async () => {
+    api.getStatusPlans.mockResolvedValue([])
+    api.getCameraDevices
+      .mockResolvedValueOnce({ items: [device], total: 11 })
+      .mockResolvedValue({ items: [{ ...device, groupKey: 'd200', name: '设备二' }], total: 11 })
+    api.inspectPlanTargets.mockResolvedValue({
+      targets: [
+        { groupKey: 'd100', name: '设备一', reasonCode: null },
+        { groupKey: 'd200', name: '设备二', reasonCode: null },
+      ],
+      limitExceeded: false,
+    })
+    const root = await mount(PlanDialog, { groupKeys: [] })
+    const checkbox = () => nodes(root).find((item) => item.type === 'ElCheckbox')!
+    ;(checkbox().props['onUpdate:modelValue'] as (value: boolean) => void)(true)
+    await settle()
+    const pager = nodes(root).find((item) => item.type === 'ElPagination')!
+    ;(pager.props['onUpdate:currentPage'] as (value: number) => void)(2)
+    await (pager.props.onCurrentChange as () => Promise<void>)()
+    await settle()
+    expect(api.getCameraDevices).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 2, size: 10, lifecycle: 'ENABLED' }),
+    )
+    ;(checkbox().props['onUpdate:modelValue'] as (value: boolean) => void)(true)
+    await settle()
+    expect(text(root)).toContain('已选 2 台')
+    await click(root, '下一步')
+    expect(api.inspectPlanTargets).toHaveBeenCalledWith({
+      scope: 'PAGE',
+      groupKeys: ['d100', 'd200'],
+    })
+    expect(field(root, '调度方式', 'ElSelect')).toBeDefined()
+    expect(text(root)).not.toContain('检测间隔')
+    await click(root, '上一步')
+    expect(text(root)).toContain('已选 2 台')
+    expect(api.createStatusPlan).not.toHaveBeenCalled()
+  })
+  it('ignores a late camera search response and prevents changes when the picker is locked', async () => {
+    let finish!: (value: unknown) => void
+    api.getCameraDevices
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+      )
+      .mockResolvedValue({ items: [{ ...device, name: '新查询' }], total: 1 })
+    const update = vi.fn()
+    const root = await mount(PlanCameraPicker, {
+      modelValue: [],
+      disabled: true,
+      'onUpdate:modelValue': update,
+    })
+    await click(root, '查询')
+    finish({ items: [{ ...device, name: '旧查询' }], total: 1 })
+    await settle()
+    expect(text(root)).toContain('新查询')
+    expect(text(root)).not.toContain('旧查询')
+    const checkbox = nodes(root).find((item) => item.type === 'ElCheckbox')!
+    ;(checkbox.props['onUpdate:modelValue'] as (value: boolean) => void)(true)
+    expect(update).not.toHaveBeenCalled()
+  })
+  it('blocks a patrol period shorter than its interval after step navigation', async () => {
+    api.getStatusPlans.mockResolvedValue([])
+    api.inspectPlanTargets.mockResolvedValue({
+      targets: [{ groupKey: 'd100', name: '设备', reasonCode: null }],
+      limitExceeded: false,
+    })
+    const root = await mount(PlanDialog, { groupKeys: ['d100'] })
+    await choosePatrolPage(root)
+    await setField(root, '检测间隔', 1440, 'ElSelect')
+    await setField(root, '持续时间', 1, 'ElSelect')
+    expect(button(root, '启动巡检').props.disabled).toBe(true)
+    await click(root, '启动巡检')
+    expect(api.createStatusPlan).not.toHaveBeenCalled()
+    expect(text(root)).toContain('持续时间不能小于检测间隔')
+  })
   it('keeps the wider patrol dialog free of redundant notes without enabling an empty task', async () => {
     api.getStatusPlans.mockResolvedValue([])
     const root = await mount(PlanDialog, { groupKeys: [] })
@@ -1708,7 +1842,7 @@ describe('camera management interaction boundaries', () => {
     expect(text(root)).not.toContain('每台检查一路代表通道')
     expect(text(root)).not.toContain('当前范围没有可检测目标')
     expect(text(root)).not.toContain('当前检查 RTSP 连接')
-    expect(button(root, '启动巡检').props.disabled).toBe(true)
+    expect(button(root, '下一步').props.disabled).toBe(true)
     expect(button(root, '关闭')).toBeDefined()
   })
   it('offers the existing five and ten minute patrol intervals without extending fact freshness', async () => {
@@ -1733,7 +1867,7 @@ describe('camera management interaction boundaries', () => {
     ;(field.props['onUpdate:modelValue'] as (value: number) => void)(5)
     await click(root, '启动巡检')
     expect(api.createStatusPlan.mock.calls[0]![0]).toMatchObject({ intervalMinutes: 5 })
-    expect(text(root)).toContain('检测间隔不延长结果有效期')
+    expect(text(root)).not.toContain('检测间隔不延长结果有效期')
   })
   it('passes the plan version when stopping and permits correcting a rejected new plan', async () => {
     api.inspectPlanTargets.mockResolvedValue({
@@ -1756,8 +1890,10 @@ describe('camera management interaction boundaries', () => {
     )
     const root = await mount(PlanDialog, { groupKeys: ['d100'] })
     await choosePatrolPage(root)
+    await patrolTab(root, 'tasks')
     await click(root, '停止')
     expect(api.stopStatusPlan).toHaveBeenCalledWith(plan)
+    await patrolTab(root, 'create')
     await click(root, '启动巡检')
     expect(text(root)).not.toContain('响应未确认')
     expect(button(root, '启动巡检')).toBeDefined()
@@ -1779,6 +1915,7 @@ describe('camera management interaction boundaries', () => {
     }
     api.getStatusPlans.mockResolvedValue([plan])
     const root = await mount(PlanDialog, { groupKeys: [] })
+    await patrolTab(root, 'tasks')
     expect(button(root, '停止')).toBeDefined()
     expect(text(root)).toContain('未执行 1')
     await vi.advanceTimersByTimeAsync(6000)
@@ -1804,6 +1941,7 @@ describe('camera management interaction boundaries', () => {
       .mockResolvedValue([{ ...plan, state: 'EXPIRED', version: '2' }])
     api.stopStatusPlan.mockRejectedValue(new ApiRequestError('CONFLICT', '冲突', { status: 409 }))
     const root = await mount(PlanDialog, { groupKeys: [] })
+    await patrolTab(root, 'tasks')
     await click(root, '停止')
     expect(api.getStatusPlans).toHaveBeenCalledTimes(2)
     expect(text(root)).toContain('任务状态已变化')
@@ -1823,6 +1961,7 @@ describe('camera management interaction boundaries', () => {
     }
     api.getStatusPlans.mockResolvedValueOnce([plan]).mockRejectedValue(new Error('unavailable'))
     const root = await mount(PlanDialog, { groupKeys: [] })
+    await patrolTab(root, 'tasks')
     await vi.advanceTimersByTimeAsync(120000)
     await settle()
     expect(api.getStatusPlans).toHaveBeenCalledTimes(4)
@@ -1846,8 +1985,8 @@ describe('camera management interaction boundaries', () => {
     expect(api.inspectPlanTargets).toHaveBeenCalledTimes(1)
     expect(text(root).replace(/\s+/g, ' ')).toContain('0 台可检测 / 1 台 · 1 台跳过')
     expect(text(root)).toContain('此接入方式的连接检测尚未适配')
-    expect(button(root, '启动巡检').props.disabled).toBe(true)
-    await click(root, '启动巡检')
+    expect(button(root, '启动巡检')).toBeUndefined()
+    await click(root, '下一步')
     expect(api.createStatusPlan).not.toHaveBeenCalled()
   })
   it('shows excluded targets before creating a supported subset', async () => {
@@ -1873,7 +2012,7 @@ describe('camera management interaction boundaries', () => {
     api.inspectPlanTargets.mockRejectedValue(new ApiRequestError('REQUEST_TIMEOUT', '核对超时'))
     const root = await mount(PlanDialog, { groupKeys: ['d100'] })
     await choosePatrolPage(root)
-    expect(button(root, '启动巡检').props.disabled).toBe(true)
+    expect(button(root, '启动巡检')).toBeUndefined()
     expect(text(root)).not.toContain('离线')
     expect(button(root, '重新核对目标')).toBeDefined()
   })
@@ -1881,12 +2020,12 @@ describe('camera management interaction boundaries', () => {
     api.getStatusPlans.mockResolvedValue([])
     const root = await mount(PlanDialog, { groupKeys: ['d100'] })
     api.inspectPlanTargets.mockResolvedValue({ targets: [], limitExceeded: true })
-    await setField(root, '1. 检测范围', 'ALL', 'ElSelect')
-    await (field(root, '1. 检测范围', 'ElSelect').props.onChange as () => Promise<void>)()
+    await patrolScope(root, 'ALL')
+    await click(root, '下一步')
     await settle()
     expect(api.inspectPlanTargets).toHaveBeenLastCalledWith({ scope: 'ALL' })
     expect(text(root)).toContain('超过 2000 台')
-    expect(button(root, '启动巡检').props.disabled).toBe(true)
+    expect(button(root, '启动巡检')).toBeUndefined()
     expect(api.createStatusPlan).not.toHaveBeenCalled()
   })
   it('rechecks a stopped task range and requires confirmation to start a fresh finite task', async () => {
@@ -1909,11 +2048,13 @@ describe('camera management interaction boundaries', () => {
       targets: [{ groupKey: 'd900', name: '模拟设备', reasonCode: null }],
       limitExceeded: false,
     })
+    await patrolTab(root, 'tasks')
     await click(root, '复用范围')
     await settle()
     expect(api.inspectPlanTargets).toHaveBeenLastCalledWith({ scope: 'PLAN', planId: '9' })
     expect(text(root)).toContain('确认后启动新任务')
     expect(api.createStatusPlan).not.toHaveBeenCalled()
+    await choosePatrolPage(root)
     await click(root, '启动巡检')
     expect(api.createStatusPlan).toHaveBeenCalledWith(
       expect.objectContaining({ groupKeys: ['d900'], intervalMinutes: 30, durationHours: 6 }),
@@ -1928,14 +2069,13 @@ describe('camera management interaction boundaries', () => {
     )
     api.getStatusPlans.mockResolvedValue([])
     const root = await mount(PlanDialog, { groupKeys: ['d100'] })
-    await setField(root, '1. 检测范围', 'PAGE', 'ElSelect')
-    const old = (field(root, '1. 检测范围', 'ElSelect').props.onChange as () => Promise<void>)()
+    const old = (button(root, '下一步').props.onClick as () => Promise<void>)()
     api.inspectPlanTargets.mockResolvedValue({
       targets: [{ groupKey: 'd200', name: '全量目标', reasonCode: null }],
       limitExceeded: false,
     })
-    await setField(root, '1. 检测范围', 'ALL', 'ElSelect')
-    await (field(root, '1. 检测范围', 'ElSelect').props.onChange as () => Promise<void>)()
+    await patrolScope(root, 'ALL')
+    await choosePatrolPage(root)
     resolve({
       targets: [{ groupKey: 'd100', name: '旧目标', reasonCode: null }],
       limitExceeded: false,

@@ -19,7 +19,7 @@ public record CameraStatusPageVo(
             @Schema(description = "代表码流所选层具有有效通过事实的通道数") int accessible,
             @Schema(description = "代表码流所选层具有有效失败事实的通道数") int failed,
             @Schema(description = "代表码流检查等待或执行中的通道数") int checking,
-            @Schema(description = "代表码流事实过期或配置已变化的通道数") int stale,
+            @Schema(description = "代表码流最近结果与当前连接配置不匹配的通道数") int stale,
             @Schema(description = "尚无可用代表码流事实的启用通道数") int unknown,
             @Schema(description = "未启用的通道数，包含停用及待归档") int disabled) {}
 

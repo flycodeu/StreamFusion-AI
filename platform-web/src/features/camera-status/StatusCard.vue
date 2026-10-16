@@ -2,9 +2,8 @@
 import { computed } from 'vue'
 import { ElButton, ElIcon } from 'element-plus'
 import { VideoCamera } from '@element-plus/icons-vue'
-import type { StatusChannel, StatusProfile } from '../../api/camera-status/types'
+import type { StatusChannel, StatusLayer, StatusProfile } from '../../api/camera-status/types'
 import { addressLabel, addressText } from '../camera/address'
-import { formatDateTime } from '../../utils/dateTime'
 import {
   connectionLabels,
   mediaLabels,
@@ -12,41 +11,30 @@ import {
   representativeProfile,
   upstreamLabels,
 } from './health'
-import { observationSpan } from './timeline'
 
-const props = defineProps<{ channel: StatusChannel }>()
+const props = withDefaults(defineProps<{ channel: StatusChannel; layer?: StatusLayer }>(), {
+  layer: 'CONTROL',
+})
 const emit = defineEmits<{ details: [channel: StatusChannel, profile: StatusProfile] }>()
 const profile = computed(() => representativeProfile(props.channel))
-const state = computed(() => representativeConnection(props.channel, 'MEDIA'))
+const state = computed(() => representativeConnection(props.channel, props.layer))
 const platform = computed(
   () =>
     !!profile.value?.upstream &&
     profile.value.upstream.blockingReasonCode !== 'STATUS_LAYER_NOT_APPLICABLE',
 )
-const media = computed(() =>
-  platform.value ? (profile.value?.upstream ?? null) : (profile.value?.media ?? null),
+const labels = computed(() =>
+  platform.value ? upstreamLabels : props.layer === 'CONTROL' ? connectionLabels : mediaLabels,
 )
-const labels = computed(() => (platform.value ? upstreamLabels : mediaLabels))
-const connection = computed(() =>
+const statusLabel = computed(() =>
   props.channel.lifecycle === 'DISABLED'
     ? '已停用'
     : props.channel.lifecycle === 'PENDING_ASSIGNMENT'
       ? '待归档'
       : !profile.value
         ? '无可用码流'
-        : connectionLabels[representativeConnection(props.channel)],
+        : labels.value[state.value],
 )
-const failureSince = computed(() =>
-  media.value?.configurationCurrent && media.value.observation?.value === 'FAILED'
-    ? media.value.timeline?.stateSince
-    : null,
-)
-const lastResult = computed(() => {
-  const fact = media.value?.observation
-  if (!fact) return '暂无检测记录'
-  if (platform.value) return fact.value === 'ACCESSIBLE' ? '平台报告在线' : '平台报告离线'
-  return `上次${fact.value === 'ACCESSIBLE' ? '采样收到视频帧' : fact.value === 'FAILED' ? '采样收帧异常' : '检测待适配'}`
-})
 </script>
 
 <template>
@@ -71,36 +59,11 @@ const lastResult = computed(() => {
     </header>
     <div class="card-states">
       <div class="video-state">
-        <span>{{ platform ? '平台状态' : '视频收帧' }}</span
-        ><strong><i class="state-dot" aria-hidden="true" />{{ labels[state] }}</strong>
-      </div>
-      <div v-if="!platform" class="connection-state">
-        <span>连接</span><strong><i class="state-dot" aria-hidden="true" />{{ connection }}</strong>
+        <span>{{ platform ? '平台状态' : layer === 'CONTROL' ? '相机连接' : '视频收帧' }}</span
+        ><strong><i class="state-dot" aria-hidden="true" />{{ statusLabel }}</strong>
       </div>
     </div>
-    <dl class="card-times">
-      <div>
-        <dt>最近检查</dt>
-        <dd>
-          <time v-if="media?.observation" :datetime="media.observation.observedAt">{{
-            formatDateTime(media.observation.observedAt)
-          }}</time
-          ><span v-else>暂无记录</span>
-        </dd>
-      </div>
-      <div v-if="failureSince">
-        <dt>异常首检</dt>
-        <dd>
-          <time :datetime="failureSince">{{ formatDateTime(failureSince) }}</time>
-        </dd>
-      </div>
-      <div v-if="failureSince">
-        <dt>观测跨度</dt>
-        <dd :title="'截止最近检查，不是连续离线时长'">{{ observationSpan(media) }}</dd>
-      </div>
-    </dl>
     <footer class="camera-card-footer">
-      <span v-if="media?.observation" class="last-check">{{ lastResult }}</span>
       <ElButton v-if="profile" link type="primary" @click="emit('details', channel, profile)"
         >详情</ElButton
       >
@@ -159,7 +122,6 @@ const lastResult = computed(() => {
   padding: 4px 12px 8px;
   font-size: 13px;
 }
-.connection-state,
 .video-state {
   display: flex;
   align-items: center;
@@ -177,14 +139,6 @@ const lastResult = computed(() => {
   font-size: 13px;
   font-weight: 600;
 }
-.connection-state strong {
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 500;
-}
-.connection-state .state-dot {
-  display: none;
-}
 .state-dot {
   width: 6px;
   height: 6px;
@@ -192,43 +146,16 @@ const lastResult = computed(() => {
   background: currentColor;
   flex-shrink: 0;
 }
-.card-times {
-  display: grid;
-  gap: 4px;
-  margin: 0;
-  padding: 6px 12px 10px;
-  font-size: 12px;
-  line-height: 18px;
-  font-variant-numeric: tabular-nums;
-}
-.card-times > div {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
-.card-times dt {
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-.card-times dd {
-  margin: 0;
-  text-align: right;
-  overflow-wrap: anywhere;
-}
 .camera-card-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
   margin-top: auto;
   padding: 6px 12px;
   min-height: 32px;
   background: var(--el-fill-color-extra-light);
   border-top: 1px solid var(--el-border-color-lighter);
-}
-.last-check {
-  color: var(--text-secondary);
-  font-size: 12px;
 }
 .camera-card-footer > .el-button {
   flex-shrink: 0;

@@ -1,16 +1,14 @@
 import type { CameraDeviceGroup } from '../../api/camera/types'
 
-export function deviceStatus(device: CameraDeviceGroup, now = Date.now()) {
+export function deviceStatus(device: CameraDeviceGroup) {
   const summary = device.statusSummary
-  let state = summary?.state ?? 'NEVER'
-  if (summary?.validUntil && Date.parse(summary.validUntil) <= now && state !== 'CHECKING')
-    state = 'STALE'
+  const state = summary?.state ?? 'NEVER'
   const labels = {
     ACCESSIBLE: '可达',
     FAILED: '连接异常',
     PARTIAL: '部分未确认 / 异常',
     CHECKING: '检测中',
-    STALE: '结果已过期',
+    STALE: '配置已变更',
     NEVER: '未检测',
   }
   return {

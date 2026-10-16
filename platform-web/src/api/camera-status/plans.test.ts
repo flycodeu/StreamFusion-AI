@@ -18,7 +18,16 @@ const plan = {
 }
 describe('finite patrol contract', () => {
   it('retains target diagnostics and decimal identifiers', () => {
-    expect(parseStatusPlan(plan)).toEqual(plan)
+    expect(parseStatusPlan(plan)).toEqual({ ...plan, checkVideo: false })
+  })
+  it('supports sequential video plans while retaining legacy media-only plans', () => {
+    expect(parseStatusPlan({ ...plan, checkVideo: true }).checkVideo).toBe(true)
+    expect(parseStatusPlan({ ...plan, layer: 'MEDIA' }).checkVideo).toBe(false)
+    expect(() => parseStatusPlan({ ...plan, layer: 'MEDIA', checkVideo: true })).toThrow()
+    expect(() =>
+      parseStatusPlan({ ...plan, checkVideo: true, dispatchMode: 'PARALLEL', parallelism: 2 }),
+    ).toThrow()
+    expect(() => parseStatusPlan({ ...plan, checkVideo: 'true' })).toThrow()
   })
   it('validates latest receipt counts and server time without confusing skipped with failed', () => {
     const progress = { success: 0, failed: 0, pending: 0, skipped: 1, unknown: 1 }

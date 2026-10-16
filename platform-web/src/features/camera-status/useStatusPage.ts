@@ -10,14 +10,9 @@ import {
 } from 'vue'
 import type { Ref } from 'vue'
 import { getStatusPage } from '../../api/camera-status/api'
-import type {
-  LayerStatus,
-  StatusPage,
-  StatusProfile,
-  StatusSearch,
-} from '../../api/camera-status/types'
+import type { StatusPage, StatusProfile, StatusSearch } from '../../api/camera-status/types'
 import { isTerminal } from './model'
-import { pageCoverage, representativeConnection } from './health'
+import { pageCoverage } from './health'
 import { sessionState } from '../../session/state'
 
 export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
@@ -27,93 +22,35 @@ export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
     paused = ref(false),
     error = shallowRef<unknown>(null)
   const visible = ref(typeof document === 'undefined' || !document.hidden),
-    activated = ref(true),
-    elapsed = ref(0)
+    activated = ref(true)
   const authorized = computed(() => !!sessionState.me?.modules.includes('camera'))
   const enabled = computed(
     () => active.value && visible.value && activated.value && authorized.value,
   )
-  const rows = computed(() => {
-    if (!result.value) return []
-    const now = Date.parse(result.value.serverNow) + elapsed.value
-    return result.value.items.map((channel) => ({
-      ...channel,
-      profiles: channel.profiles.map((profile) => ({
-        ...profile,
-        control: expire(profile.control, now),
-        media: expire(profile.media, now),
-        ...(profile.upstream ? { upstream: expire(profile.upstream, now) } : {}),
-      })),
-    }))
-  })
-  const summary = computed(() => {
-    if (!result.value) return null
-    // The server owns the selected-layer baseline. Apply only locally expired transitions,
-    // without replacing its counts with a new interpretation of card state.
-    const updated = { ...result.value.summary }
-    result.value.items.forEach((channel, index) => {
-      const before = representativeConnection(channel, query.value.layer)
-      const after = representativeConnection(rows.value[index]!, query.value.layer)
-      if (before !== after && updated[before] > 0) {
-        --updated[before]
-        ++updated[after]
-      }
-    })
-    return updated
-  })
+  const rows = computed(() => result.value?.items ?? [])
+  const summary = computed(() => result.value?.summary ?? null)
   const coverage = computed(() =>
     result.value ? pageCoverage(rows.value, query.value.layer) : null,
   )
   function layers(profile: StatusProfile) {
     return [profile.control, profile.media, ...(profile.upstream ? [profile.upstream] : [])]
   }
-  function expire(layer: LayerStatus, now: number): LayerStatus {
-    return layer.freshness === 'CURRENT' &&
-      layer.observation &&
-      Date.parse(layer.observation.validUntil) <= now
-      ? { ...layer, freshness: 'STALE' }
-      : layer
-  }
   let disposed = false,
     epoch = 0,
     reads = 0,
-    failures = 0,
-    receivedAt = 0
+    failures = 0
   let controller: AbortController | undefined
   let pollTimer: ReturnType<typeof setTimeout> | undefined
-  let expiryTimer: ReturnType<typeof setTimeout> | undefined
 
   function stop() {
     ++epoch
     clearTimeout(pollTimer)
-    clearTimeout(expiryTimer)
     controller?.abort()
     controller = undefined
     loading.value = false
   }
   function current(generation: number) {
     return !disposed && enabled.value && generation === epoch
-  }
-  function updateExpiry() {
-    clearTimeout(expiryTimer)
-    elapsed.value = Math.max(0, performance.now() - receivedAt)
-    if (!enabled.value || !result.value) return
-    const now = Date.parse(result.value.serverNow) + elapsed.value
-    const deadlines = result.value.items.flatMap((channel) =>
-      channel.profiles.flatMap((profile) =>
-        layers(profile).flatMap((layer) =>
-          layer.freshness === 'CURRENT' && layer.observation
-            ? [Date.parse(layer.observation.validUntil)]
-            : [],
-        ),
-      ),
-    )
-    const next = Math.min(...deadlines.filter((deadline) => deadline > now))
-    if (Number.isFinite(next))
-      expiryTimer = setTimeout(
-        updateExpiry,
-        Math.min(Math.max(1, Math.ceil(next - now)), 2_147_483_647),
-      )
   }
   function schedule(generation: number) {
     clearTimeout(pollTimer)
@@ -141,11 +78,8 @@ export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
       if (!current(generation)) return
       result.value = response
       total.value = response.total
-      receivedAt = performance.now()
-      elapsed.value = 0
       failures = 0
       error.value = null
-      updateExpiry()
     } catch (cause) {
       if (current(generation)) {
         error.value = cause
@@ -193,7 +127,6 @@ export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
       reads = 0
       failures = 0
       paused.value = false
-      updateExpiry()
       if (enabled.value) void read(epoch, false)
     },
     { immediate: true, flush: 'sync' },

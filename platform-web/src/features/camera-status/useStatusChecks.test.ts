@@ -351,7 +351,7 @@ describe('manual CONTROL check read owner', () => {
     expect(controls.check.value).toBeNull()
     expect(controls.selectedProfile.value?.streamProfileId).toBe('11')
   })
-  it('expires a CURRENT fact locally without probing or extending its observation times', async () => {
+  it('keeps the last result for an hour without probing or extending observation times', async () => {
     const result = status()
     result.profiles[0]!.control.freshness = 'CURRENT'
     result.profiles[0]!.control.observation = {
@@ -366,8 +366,8 @@ describe('manual CONTROL check read owner', () => {
     api.status.mockResolvedValue(result)
     await controls.refresh()
     expect(controls.selected.value?.freshness).toBe('CURRENT')
-    await vi.advanceTimersByTimeAsync(5001)
-    expect(controls.selected.value?.freshness).toBe('STALE')
+    await vi.advanceTimersByTimeAsync(3_600_001)
+    expect(controls.selected.value?.freshness).toBe('CURRENT')
     expect(controls.selected.value?.observation?.observedAt).toBe(now)
     expect(api.status).toHaveBeenCalledTimes(2)
     expect(api.create).not.toHaveBeenCalled()

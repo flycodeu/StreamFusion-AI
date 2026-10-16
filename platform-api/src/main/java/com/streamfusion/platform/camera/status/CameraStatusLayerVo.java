@@ -8,7 +8,7 @@ public record CameraStatusLayerVo(
         @Schema(description = "RTSP_DESCRIBE/ZLM_RTP_FRAMES/HIK_PLATFORM_ONLINE") String probeKind,
         @Schema(description = "最近合法事实，未检查为空", nullable = true)
                 CameraStatusObservationVo observation,
-        @Schema(description = "NEVER/CURRENT/STALE") String freshness,
+        @Schema(description = "NEVER未检查/CURRENT最近结果/STALE连接配置已变化；不按时间失效") String freshness,
         @Schema(description = "事实是否仍匹配当前连接配置") boolean configurationCurrent,
         @Schema(description = "本层最新检查回执", nullable = true) CameraStatusCheckVo latestCheck,
         @Schema(description = "当前配置允许新检查，执行时仍复核权限") boolean canCheck,

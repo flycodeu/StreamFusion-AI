@@ -6,7 +6,6 @@ import { findPreviewPath } from '../../features/preview/model'
 import { deviceStatus } from '../../features/camera-status/deviceStatus'
 import { useDeviceRefresh } from '../../features/camera-status/useDeviceRefresh'
 import PlanDialog from '../../features/camera-status/PlanDialog.vue'
-import { formatDateTime } from '../../utils/dateTime'
 import {
   ElButton,
   ElCheckbox,
@@ -398,9 +397,6 @@ onMounted(refresh)
                   }}</ElTag>
                 </ElButton>
               </div>
-              <span v-if="row.statusSummary?.checkedAt" class="table-secondary">{{
-                formatDateTime(row.statusSummary.checkedAt)
-              }}</span>
             </template>
           </ElTableColumn>
           <ElTableColumn
@@ -477,9 +473,6 @@ onMounted(refresh)
                       deviceStatus(row).label
                     }}</ElTag></ElButton
                   >
-                  <span v-if="row.statusSummary?.checkedAt" class="table-secondary">{{
-                    formatDateTime(row.statusSummary.checkedAt)
-                  }}</span>
                 </dd>
               </div>
               <div>

@@ -44,8 +44,7 @@ export function useStatusChecks(
     readPaused = ref(false)
   const error = shallowRef<unknown>(null)
   const visible = ref(typeof document === 'undefined' || !document.hidden)
-  const activated = ref(true),
-    expired = ref(false)
+  const activated = ref(true)
   const enabled = computed(
     () => active.value && visible.value && activated.value && !!cameraId.value,
   )
@@ -54,7 +53,7 @@ export function useStatusChecks(
   )
   const selected = computed<LayerStatus | null>(() => {
     const profile = selectedProfile.value?.[layerKey(layer.value)]
-    return profile ? (expired.value ? { ...profile, freshness: 'STALE' } : profile) : null
+    return profile ?? null
   })
   const check = computed(() => localCheck.value ?? selected.value?.latestCheck ?? null)
   const pendingHere = computed(
@@ -79,8 +78,6 @@ export function useStatusChecks(
   let readController: AbortController | undefined
   let postController: AbortController | undefined
   let pollTimer: ReturnType<typeof setTimeout> | undefined
-  let expiryTimer: ReturnType<typeof setTimeout> | undefined
-  let receivedAt = 0
 
   function viewing(targetCamera: string, targetProfile: string | null, current: number) {
     return (
@@ -94,23 +91,9 @@ export function useStatusChecks(
   function stopReads() {
     ++generation
     clearTimeout(pollTimer)
-    clearTimeout(expiryTimer)
     readController?.abort()
     readController = undefined
     reading.value = false
-  }
-  function updateExpiry() {
-    clearTimeout(expiryTimer)
-    expired.value = false
-    const fact = selectedProfile.value?.[layerKey(layer.value)]
-    if (!snapshot.value || !fact?.observation || fact.freshness !== 'CURRENT') return
-    const remaining =
-      Date.parse(fact.observation.validUntil) -
-      Date.parse(snapshot.value.serverNow) -
-      Math.max(0, performance.now() - receivedAt)
-    if (remaining <= 0) expired.value = true
-    else if (enabled.value)
-      expiryTimer = setTimeout(updateExpiry, Math.min(remaining, 2_147_483_647))
   }
   function schedule(current: number) {
     clearTimeout(pollTimer)
@@ -152,14 +135,12 @@ export function useStatusChecks(
       const result = await api.getCameraStatus(targetCamera, controller.signal)
       if (!viewing(targetCamera, targetProfile, current)) return
       snapshot.value = result
-      receivedAt = performance.now()
       localCheck.value =
         result.profiles.find((item) => item.streamProfileId === targetProfile)?.[
           layerKey(layer.value)
         ]?.latestCheck ?? null
       failures = 0
       error.value = null
-      updateExpiry()
     } catch (cause) {
       if (viewing(targetCamera, targetProfile, current)) {
         error.value = cause
@@ -263,7 +244,6 @@ export function useStatusChecks(
         pollCount = 0
         failures = 0
         readPaused.value = false
-        updateExpiry()
         if (isTerminal(result)) await readSnapshot()
         else schedule(generation)
       } else if (
@@ -299,7 +279,6 @@ export function useStatusChecks(
       pollCount = 0
       failures = 0
       readPaused.value = false
-      updateExpiry()
       if (enabled.value) void readSnapshot()
     },
     { immediate: true, flush: 'sync' },

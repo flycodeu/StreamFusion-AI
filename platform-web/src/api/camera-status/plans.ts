@@ -18,6 +18,7 @@ export interface StatusPlan {
   layer: 'CONTROL' | 'MEDIA'
   dispatchMode: 'POLLING' | 'PARALLEL'
   parallelism: number
+  checkVideo?: boolean
 }
 export interface PlanProgress {
   success: number
@@ -36,6 +37,7 @@ export interface StatusPlanInput {
   parallelism?: number
   groupIds?: string[]
   planId?: string
+  checkVideo?: boolean
 }
 export function parseStatusPlan(value: unknown): StatusPlan {
   const row = object(value),
@@ -65,12 +67,15 @@ export function parseStatusPlan(value: unknown): StatusPlan {
   const layer = row.layer == null ? 'CONTROL' : string(row.layer)
   const dispatchMode = row.dispatchMode == null ? 'POLLING' : string(row.dispatchMode)
   const parallelism = row.parallelism == null ? 1 : integer(row.parallelism)
+  if (row.checkVideo != null && typeof row.checkVideo !== 'boolean') throw new Error('plan video')
+  const checkVideo = row.checkVideo === true
   if (
     !['CONTROL', 'MEDIA'].includes(layer) ||
     !['POLLING', 'PARALLEL'].includes(dispatchMode) ||
     parallelism < 1 ||
     parallelism > 4 ||
-    ((layer === 'MEDIA' || dispatchMode === 'POLLING') && parallelism !== 1)
+    ((layer === 'MEDIA' || checkVideo || dispatchMode === 'POLLING') && parallelism !== 1) ||
+    (checkVideo && layer !== 'CONTROL')
   )
     throw new Error('plan dispatch bounds')
   if (
@@ -97,6 +102,7 @@ export function parseStatusPlan(value: unknown): StatusPlan {
     layer: layer as StatusPlan['layer'],
     dispatchMode: dispatchMode as StatusPlan['dispatchMode'],
     parallelism,
+    checkVideo,
     blockedCount,
     nextAt,
     lastReasonCode: row.lastReasonCode == null ? null : string(row.lastReasonCode),

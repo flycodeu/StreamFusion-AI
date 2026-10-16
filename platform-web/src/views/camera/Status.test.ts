@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createSSRApp } from 'vue'
 import { renderToString } from 'vue/server-renderer'
-import { ID_INJECTION_KEY } from 'element-plus'
+import { ID_INJECTION_KEY, ZINDEX_INJECTION_KEY } from 'element-plus'
 import type { StatusChannel, StatusSearch } from '../../api/camera-status/types'
 import type { Ref } from 'vue'
 import Status from './Status.vue'
+import StatusCard from '../../features/camera-status/StatusCard.vue'
 import { ApiRequestError } from '../../lib/http/error'
 
 const mock = vi.hoisted(() => ({
@@ -24,6 +25,15 @@ vi.mock('../../features/camera-status/useStatusPage', async () => {
       mock.query = query.value
       return {
         rows: ref(mock.rows),
+        summary: ref({
+          total: 1,
+          accessible: 0,
+          failed: 0,
+          checking: 0,
+          stale: 1,
+          unknown: 0,
+          disabled: 0,
+        }),
         result: ref({
           total: 17,
           summary: {
@@ -102,7 +112,11 @@ function channel(): StatusChannel {
 async function renderPage() {
   const app = createSSRApp(Status)
   app.provide(ID_INJECTION_KEY, { prefix: 1, current: 0 })
+  app.provide(ZINDEX_INJECTION_KEY, { current: 0 })
   return renderToString(app)
+}
+async function renderMediaCard(row: StatusChannel) {
+  return renderToString(createSSRApp(StatusCard, { channel: row, layer: 'MEDIA' }))
 }
 describe('independent camera status page presentation', () => {
   it('shows official upstream facts without implying media reception or displaying RTSP state', async () => {
@@ -143,14 +157,15 @@ describe('independent camera status page presentation', () => {
       observation: { ...row.profiles[0]!.control.observation!, reasonCode: 'MEDIA_RECEIVING' },
     }
     mock.rows = [row]
+    row.profiles[0]!.control.freshness = 'CURRENT'
     const html = await renderPage()
-    expect(html).toContain('采样收帧正常')
+    expect(html).toContain('代表流可达')
     expect(html).toContain('检查通过 0')
-    expect(html).toContain('结果过期 1')
-    expect(html).toContain('相机检查总览')
-    expect(mock.query?.layer).toBe('MEDIA')
+    expect(html).toContain('配置已变更 1')
+    expect(html).toContain('连接检查')
+    expect(mock.query?.layer).toBe('CONTROL')
   })
-  it('shows failure observation time without extending sampled duration to the present', async () => {
+  it('keeps observation times and failure duration out of the overview card', async () => {
     const row = channel()
     const profile = row.profiles[0]!.media
     profile.observation = { ...row.profiles[0]!.control.observation!, value: 'FAILED' }
@@ -160,10 +175,11 @@ describe('independent camera status page presentation', () => {
       lastFailedAt: profile.observation.observedAt,
     }
     mock.rows = [row]
-    const html = await renderPage()
-    expect(html).toContain('异常首检')
-    expect(html).toContain('2026/10/13 07:00:00')
-    expect(html).toContain('2 小时 0 分钟')
+    const html = await renderMediaCard(row)
+    expect(html).not.toContain('异常首检')
+    expect(html).not.toContain('2026/10/13 07:00:00')
+    expect(html).not.toContain('2 小时 0 分钟')
+    expect(html).not.toContain('<time')
     expect(html).not.toContain('已离线')
     profile.configurationCurrent = false
     expect(await renderPage()).not.toContain('异常首检')
@@ -174,9 +190,10 @@ describe('independent camera status page presentation', () => {
     expect(html).toContain('当前页 1 个通道')
     expect(html).toContain('status-distribution')
     expect(html).toContain('role="img"')
-    expect(html).toContain('结果过期 1')
+    expect(html).toContain('配置已变更 1')
     expect(html).toContain('检查通过 0')
-    expect(html).toContain('创建 / 管理任务')
+    expect(html).toContain('巡检任务')
+    expect(html).not.toContain('当前页有效结果')
     expect(html).not.toContain('定时检查 · 全量范围 · 启停管理')
     expect(html).not.toContain('<h2>相机状态</h2>')
     expect(html).not.toMatch(/在线率|视频正常率|历史趋势/)
@@ -208,9 +225,8 @@ describe('independent camera status page presentation', () => {
       },
     ]
     mock.rows = [row]
-    const html = await renderPage()
+    const html = await renderMediaCard(row)
     expect(html).toContain('采样收帧异常')
-    expect(html).toContain('检查通过 0')
     expect(html).toContain('state-dot')
     expect(html).not.toContain('stream-row')
   })
@@ -229,11 +245,15 @@ describe('independent camera status page presentation', () => {
     mock.rows = [channel()]
     const fetchMock = vi.spyOn(globalThis, 'fetch')
     const html = await renderPage()
-    expect(html).toContain('17 个通道')
-    expect(html).toContain('视频收帧')
-    expect(html).toContain('尚未检查')
+    expect(html).toContain('Total 17')
+    expect(html).toContain('相机连接')
+    expect(html).toContain('视频检查')
+    expect(html).not.toContain('下一步')
+    expect(html).not.toContain('上一步')
+    expect(html).toContain('配置已变更')
+    expect(await renderMediaCard(mock.rows[0]!)).toContain('尚未检查')
     expect(html).toContain('最近检查结果')
-    expect(html).toContain('结果过期')
+    expect(html).not.toContain('结果过期')
     expect(html).not.toContain('辅码流')
     expect(html).not.toContain('el-tag--success')
     expect(html).not.toContain('在线状态')
@@ -275,7 +295,7 @@ describe('independent camera status page presentation', () => {
     expect(html.match(/>详情</g)).toHaveLength(1)
     expect(html).not.toMatch(/mainStream|subStream|thirdStream|stream-row/)
     const card = html.slice(html.indexOf('<article'), html.indexOf('</article>'))
-    expect(card).toContain('尚未检查')
+    expect(card).toContain('未确认')
     expect(card).not.toContain('检测待适配')
   })
   it('does not claim video normality from a current accessible CONTROL observation', async () => {
@@ -284,7 +304,7 @@ describe('independent camera status page presentation', () => {
     mock.rows = [row]
     const html = await renderPage()
     expect(html).toContain('代表流可达')
-    expect(html).toContain('尚未检查')
+    expect(await renderMediaCard(row)).toContain('尚未检查')
     expect(html).not.toMatch(/>在线<|>正常<|>离线</)
   })
   it('keeps disabled configuration separate from offline state', async () => {
@@ -300,7 +320,7 @@ describe('independent camera status page presentation', () => {
     mock.route.query = { name: '北门相机' }
     await renderPage()
     expect(mock.query?.name).toBe('北门相机')
-    expect(mock.query?.layer).toBe('MEDIA')
+    expect(mock.query?.layer).toBe('CONTROL')
   })
   it('distinguishes a failed page read from an empty filtered page', async () => {
     mock.error = new ApiRequestError('CONFLICT', '状态页码流数量超过限制', {

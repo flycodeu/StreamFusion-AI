@@ -277,7 +277,6 @@ public class CameraStatusQueryService {
         }
         var layers = new HashMap<LayerKey, CameraStatusLayerVo>();
         var platformProfiles = targets.platformProfiles(profileIds);
-        Instant serverNow = nowInstant();
         for (var layer : CameraStatusLayer.values()) {
             var observedKeys = new HashMap<Long, String>();
             for (var fact : facts)
@@ -302,7 +301,6 @@ public class CameraStatusQueryService {
                                 latestByProfile.get(key),
                                 inspections.current().get(profile.getId()),
                                 inspections.observed().get(profile.getId()),
-                                serverNow,
                                 platformProfiles.contains(profile.getId())
                                         ? CameraStatusLayer.UPSTREAM
                                         : layer == CameraStatusLayer.UPSTREAM
@@ -339,7 +337,6 @@ public class CameraStatusQueryService {
             CameraStatusCheckEntity latest,
             CameraRtspTargetService.Inspection currentInspection,
             CameraRtspTargetService.Inspection observedInspection,
-            Instant serverNow,
             CameraStatusLayer effectiveLayer) {
         boolean current =
                 fact != null
@@ -347,12 +344,7 @@ public class CameraStatusQueryService {
                         && observedInspection.connectionDigest() != null
                         && MessageDigest.isEqual(
                                 fact.getConnectionDigest(), observedInspection.connectionDigest());
-        String freshness =
-                fact == null
-                        ? "NEVER"
-                        : current && serverNow.isBefore(instant(fact.getValidUntil()))
-                                ? "CURRENT"
-                                : "STALE";
+        String freshness = fact == null ? "NEVER" : current ? "CURRENT" : "STALE";
         String blocking =
                 currentInspection == null
                         ? "CONFIGURATION_UNAVAILABLE"

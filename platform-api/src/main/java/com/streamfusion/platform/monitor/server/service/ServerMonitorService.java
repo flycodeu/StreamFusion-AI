@@ -62,27 +62,29 @@ public class ServerMonitorService {
         try {
             worker.execute(
                     () -> {
+                        ServerSnapshotVo sample = null;
                         try {
                             synchronized (this) {
                                 collectorThread = Thread.currentThread();
                                 if (result.isDone()) return;
                             }
-                            ServerSnapshotVo sample = collector.collect();
-                            synchronized (this) {
-                                if (!result.isDone() && !Thread.currentThread().isInterrupted()) {
-                                    cached = sample;
-                                    result.complete(sample);
-                                }
-                            }
+                            sample = collector.collect();
                         } catch (RuntimeException ignored) {
-                            synchronized (this) {
-                                result.complete(fallback());
-                            }
+                            // Publish the fallback only after collection state has been cleared.
                         } finally {
                             timer.cancel(false);
                             synchronized (this) {
                                 collecting = false;
                                 collectorThread = null;
+                                // Completion can immediately wake callers or run inline callbacks.
+                                // Do not clear state after publishing: a new refresh may have
+                                // begun.
+                                if (!result.isDone()) {
+                                    if (sample != null && !Thread.currentThread().isInterrupted()) {
+                                        cached = sample;
+                                        result.complete(sample);
+                                    } else result.complete(fallback());
+                                }
                             }
                         }
                     });

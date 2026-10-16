@@ -592,11 +592,38 @@ public class CameraStatusService {
             CameraStatusPlanTargetEntity target,
             LocalDateTime slot,
             boolean batchCapacityReserved) {
+        return createScheduled(
+                plan,
+                target,
+                slot,
+                batchCapacityReserved,
+                CameraStatusLayer.valueOf(plan.getLayer()));
+    }
+
+    CameraStatusCheckVo createScheduledVideo(
+            CameraStatusPlanEntity plan, CameraStatusPlanTargetEntity target) {
+        var connection = checks.selectById(target.getLastCheckId());
+        if (connection == null
+                || !Objects.equals(connection.getPlanId(), plan.getId())
+                || !"CONTROL".equals(connection.getLayer())
+                || !"COMPLETED".equals(connection.getExecutionState())
+                || !"ACCESSIBLE".equals(connection.getResultValue())) return null;
+        if (!scheduledAllowed(connection))
+            throw new CameraAdapterException("PLAN_NO_LONGER_ACTIVE");
+        return createScheduled(
+                plan, target, connection.getRequestedAt(), false, CameraStatusLayer.MEDIA);
+    }
+
+    private CameraStatusCheckVo createScheduled(
+            CameraStatusPlanEntity plan,
+            CameraStatusPlanTargetEntity target,
+            LocalDateTime slot,
+            boolean batchCapacityReserved,
+            CameraStatusLayer requestedLayer) {
         var camera = lockCamera(target.getCameraId());
         var profile = lockProfile(target.getCameraId(), target.getProfileId());
         if (camera == null || profile == null) throw new CameraAdapterException("TARGET_DELETED");
-        var layer =
-                targets.effectiveLayer(profile.getId(), CameraStatusLayer.valueOf(plan.getLayer()));
+        var layer = targets.effectiveLayer(profile.getId(), requestedLayer);
         var inspected = targets.inspect(camera, profile, target.getConnectionKeyId(), () -> {});
         if (inspected.blockingReasonCode() != null
                 || inspected.connectionDigest() == null
@@ -619,7 +646,7 @@ public class CameraStatusService {
                 nowInstant().toEpochMilli()
                         + "-"
                         + UUID.nameUUIDFromBytes(
-                                (plan.getId() + "/" + target.getId() + "/" + slot)
+                                (plan.getId() + "/" + target.getId() + "/" + slot + "/" + layer)
                                         .getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         check.setRequestKeyId(keyId);
         check.setRequestFingerprint(
