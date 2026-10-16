@@ -10,7 +10,7 @@ spring:
   session:
     timeout: ${SF_AUTH_IDLE_TIMEOUT:30m}
     redis:
-      namespace: streamfusion:${spring.profiles.active:${spring.profiles.default}}:session
+      namespace: streamfusion:${spring.profiles.active:${spring.profiles.default}}:session:v2
       flush-mode: immediate
   lifecycle:
     timeout-per-shutdown-phase: ${streamfusion.shutdown-grace}

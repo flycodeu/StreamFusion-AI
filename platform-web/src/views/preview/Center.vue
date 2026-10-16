@@ -144,12 +144,16 @@ function addDevice(deviceChannels: PreviewChannel[]) {
     for (const channel of additions) addChannel(channel)
   }
 }
-function chooseLayout(value: PreviewLayout) {
-  layout.value = value
+let layoutSequence = 0
+async function chooseLayout(value: PreviewLayout): Promise<boolean> {
+  const revision = ++layoutSequence,
+    active = captureScope()
   context.value = null
+  if (!(await trim(value)) || revision !== layoutSequence || !active()) return false
+  layout.value = value
   const count = layoutCount(value)
   activeSlot.value = Math.min(activeSlot.value, count - 1)
-  void trim(value)
+  return true
 }
 async function load(append = false) {
   const active = captureScope(),
@@ -184,7 +188,7 @@ async function load(append = false) {
     total.value = result.total
     if (deviceMode.value && !append) {
       const selectedLayout = deviceLayout(result.items.length)
-      chooseLayout(selectedLayout)
+      if (!(await chooseLayout(selectedLayout)) || !active() || current !== sequence) return
       for (let index = 0; index < Math.min(result.items.length, MAX_PREVIEW_SLOTS); index++)
         void assign(index, result.items[index], 'SUB')
       if (selectedLayout === '64')
@@ -259,8 +263,16 @@ watch(search, () => {
 })
 watch(
   () => [route.query.mode, route.query.device],
-  () => {
-    for (let index = 0; index < MAX_PREVIEW_SLOTS; index++) void stop(index)
+  async () => {
+    const revision = ++layoutSequence,
+      active = captureScope()
+    sequence++
+    const closed = await Promise.all(slots.map((_slot, index) => stop(index)))
+    if (!active() || revision !== layoutSequence) return
+    if (closed.some((result) => result < 0)) {
+      loading.value = false
+      return
+    }
     layout.value = deviceMode.value ? '1' : '16'
     void load()
   },

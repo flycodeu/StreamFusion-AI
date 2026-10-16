@@ -25,15 +25,25 @@ import org.springframework.web.bind.annotation.RestController;
 public class CameraStatusController {
     private final CameraStatusService service;
     private final CameraStatusQueryService query;
+    private final CameraStatusHistoryService history;
+
+    @GetMapping("/status-checks")
+    @Operation(summary = "分页读取指定码流留存的分层检查记录与有界采样统计，不推算连续在线时长")
+    public R<CameraStatusHistoryService.History> history(
+            @PathVariable String cameraId,
+            @org.springframework.web.bind.annotation.ModelAttribute
+                    CameraStatusHistoryService.Query input) {
+        return R.success(history.history(cameraId, input));
+    }
 
     @GetMapping("/status")
-    @Operation(summary = "读取当前授权通道的码流控制状态，不外呼相机")
+    @Operation(summary = "读取当前授权通道的分层状态，不外呼相机")
     public R<CameraStatusSnapshotVo> status(@PathVariable String cameraId) {
         return R.success(query.status(cameraId));
     }
 
     @PostMapping("/status-checks")
-    @Operation(summary = "手动检查指定RTSP码流，仅DESCRIBE并返回后台执行回执")
+    @Operation(summary = "手动检查指定码流的连接或媒体接收，返回后台执行回执")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public R<CameraStatusCheckVo> create(
             @PathVariable String cameraId,

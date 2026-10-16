@@ -8,8 +8,17 @@ import {
   ElOption,
   ElSelect,
   ElMessageBox,
+  ElTreeSelect,
 } from 'element-plus'
-import { createStatusPlan, getStatusPlans, stopStatusPlan } from '../../api/camera-status/plans'
+import {
+  createStatusPlan,
+  getStatusPlans,
+  stopStatusPlan,
+  resumeStatusPlan,
+} from '../../api/camera-status/plans'
+import { getGroupTree } from '../../api/camera-groups/api'
+import { groupTree } from '../camera-groups/tree'
+import type { GroupNode } from '../camera-groups/tree'
 import type { StatusPlan, StatusPlanInput } from '../../api/camera-status/plans'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
@@ -20,7 +29,12 @@ import { inspectPlanTargets } from '../../api/camera-status/planTargets'
 import type { PlanTarget } from '../../api/camera-status/planTargets'
 
 const props = defineProps<{ groupKeys: string[] }>()
-const scope = ref<'PAGE' | 'ALL' | 'PLAN'>('PAGE')
+const scope = ref<'PAGE' | 'ALL' | 'PLAN' | 'GROUPS'>('GROUPS')
+const selectedGroups = ref<string[]>([])
+const groupNodes = ref<GroupNode[]>([])
+const layer = ref<'CONTROL' | 'MEDIA'>('MEDIA')
+const dispatchMode = ref<'POLLING' | 'PARALLEL'>('POLLING')
+const parallelism = ref(1)
 const reusedPlan = ref<StatusPlan | null>(null)
 const createPanel = ref<globalThis.HTMLElement | null>(null)
 const limitExceeded = ref(false)
@@ -34,7 +48,8 @@ const busy = ref(false),
   error = ref<unknown>(null),
   pending = ref<StatusPlanInput | null>(null)
 const capture = usePageScope()
-const errorOperation = ref<'load' | 'create' | 'stop'>('load')
+const errorOperation = ref<'load' | 'create' | 'stop' | 'resume'>('load')
+const groupError = ref<unknown>(null)
 const now = ref(Date.now())
 const pollPaused = ref(false)
 let clockOffset = 0
@@ -67,13 +82,19 @@ async function inspectTargets() {
   inspectionError.value = null
   targets.value = []
   limitExceeded.value = false
+  if (scope.value === 'GROUPS' && !selectedGroups.value.length) {
+    inspecting.value = false
+    return
+  }
   try {
     const result = await inspectPlanTargets(
-      scope.value === 'ALL'
-        ? { scope: 'ALL' }
-        : scope.value === 'PLAN' && reusedPlan.value
-          ? { scope: 'PLAN', planId: reusedPlan.value.planId }
-          : { scope: 'PAGE', groupKeys: [...new Set(props.groupKeys)] },
+      scope.value === 'GROUPS'
+        ? { scope: 'GROUPS', groupIds: [...selectedGroups.value] }
+        : scope.value === 'ALL'
+          ? { scope: 'ALL' }
+          : scope.value === 'PLAN' && reusedPlan.value
+            ? { scope: 'PLAN', planId: reusedPlan.value.planId }
+            : { scope: 'PAGE', groupKeys: [...new Set(props.groupKeys)] },
     )
     if (active() && requestId === inspectionId) {
       targets.value = result.targets
@@ -94,15 +115,19 @@ async function reuse(plan: StatusPlan) {
     1,
     Math.min(168, Math.round((Date.parse(plan.endAt) - Date.parse(plan.startAt)) / 3_600_000)),
   )
+  layer.value = plan.layer
+  dispatchMode.value = plan.dispatchMode
+  parallelism.value = plan.parallelism
   await inspectTargets()
   createPanel.value?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
 }
 const planErrorAdvice = computed(() => {
   if (!(error.value instanceof ApiRequestError)) return undefined
-  if (error.value.status === 429 && errorOperation.value === 'create')
+  if (error.value.status === 429 && ['create', 'resume'].includes(errorOperation.value))
     return '巡检容量已满，请减少目标、增大检测间隔，或停止不需要的任务。'
   if (error.value.status !== 409) return undefined
   if (errorOperation.value === 'stop') return '任务状态已变化，请刷新任务后确认是否仍需停止。'
+  if (errorOperation.value === 'resume') return '任务已到期或配置已变化，请刷新任务并核对目标。'
   if (errorOperation.value !== 'create') return undefined
   return '检测配置或授权已变化，请重新核对目标后启动。'
 })
@@ -148,6 +173,12 @@ async function create() {
     groupKeys: [...eligibleKeys.value],
     intervalMinutes: interval.value,
     durationHours: hours.value,
+    layer: layer.value,
+    dispatchMode: dispatchMode.value,
+    parallelism:
+      layer.value === 'MEDIA' || dispatchMode.value === 'POLLING' ? 1 : parallelism.value,
+    ...(scope.value === 'GROUPS' ? { groupIds: [...selectedGroups.value] } : {}),
+    ...(scope.value === 'PLAN' ? { planId: reusedPlan.value!.planId } : {}),
   }
   busy.value = true
   error.value = null
@@ -196,6 +227,24 @@ async function stop(plan: StatusPlan) {
     if (active()) busy.value = false
   }
 }
+async function resume(plan: StatusPlan) {
+  if (busy.value) return
+  const active = capture()
+  busy.value = true
+  error.value = null
+  errorOperation.value = 'resume'
+  try {
+    await resumeStatusPlan(plan)
+    if (active()) {
+      emit('changed')
+      await load()
+    }
+  } catch (cause) {
+    if (active()) error.value = cause
+  } finally {
+    if (active()) busy.value = false
+  }
+}
 async function close() {
   if (busy.value) return
   if (pending.value) {
@@ -210,10 +259,21 @@ async function close() {
   }
   emit('close')
 }
+async function loadGroups() {
+  const active = capture()
+  groupError.value = null
+  try {
+    const groups = await getGroupTree()
+    if (active()) groupNodes.value = groupTree(groups)
+  } catch (cause) {
+    if (active()) groupError.value = cause
+  }
+}
 onMounted(() => {
   void load()
-  void inspectTargets()
   const active = capture()
+  void loadGroups()
+  inspecting.value = false
   timer = globalThis.setInterval(() => {
     if (!pageActive || !active() || globalThis.document?.hidden) return
     now.value = Date.now() + clockOffset
@@ -247,6 +307,8 @@ onDeactivated(() => {
   >
     <RequestError :error="error" :advice="planErrorAdvice" />
     <RequestError :error="inspectionError" />
+    <RequestError :error="groupError" />
+    <ElButton v-if="groupError" link @click="loadGroups">重新加载分组</ElButton>
     <ElButton
       v-if="inspectionError"
       link
@@ -259,12 +321,53 @@ onDeactivated(() => {
       <ElForm label-position="top" :disabled="busy || !!pending" @submit.prevent="create">
         <ElFormItem label="1. 检测范围">
           <ElSelect v-model="scope" aria-label="检测范围" @change="inspectTargets">
+            <ElOption value="GROUPS" label="选择视频分组" />
             <ElOption value="PAGE" :label="`当前页设备（${new Set(groupKeys).size} 台）`" />
             <ElOption value="ALL" label="全量巡检 · 全部已授权设备" />
             <ElOption v-if="reusedPlan" value="PLAN" label="复用所选任务范围" />
           </ElSelect>
         </ElFormItem>
+        <ElFormItem v-if="scope === 'GROUPS'" label="视频分组">
+          <ElTreeSelect
+            v-model="selectedGroups"
+            :data="groupNodes"
+            :props="{ label: 'name', children: 'children' }"
+            node-key="groupId"
+            multiple
+            show-checkbox
+            check-strictly
+            :default-expand-all="false"
+            placeholder="选择分组（包含子分组）"
+            collapse-tags
+            collapse-tags-tooltip
+            @change="inspectTargets"
+          />
+        </ElFormItem>
         <div class="patrol-settings">
+          <ElFormItem label="检查内容"
+            ><ElSelect v-model="layer" @change="parallelism = 1">
+              <ElOption value="MEDIA" label="视频收帧 / 平台状态" /><ElOption
+                value="CONTROL"
+                label="RTSP连接 / 平台状态"
+              /> </ElSelect
+          ></ElFormItem>
+          <ElFormItem label="调度方式"
+            ><ElSelect v-model="dispatchMode" @change="parallelism = 1">
+              <ElOption value="POLLING" label="逐个轮询" /><ElOption
+                value="PARALLEL"
+                label="有界并行"
+              /> </ElSelect
+          ></ElFormItem>
+          <ElFormItem v-if="dispatchMode === 'PARALLEL'" label="最大并发">
+            <ElSelect v-model="parallelism" :disabled="layer === 'MEDIA'">
+              <ElOption
+                v-for="count in layer === 'MEDIA' ? [1] : [1, 2, 3, 4]"
+                :key="count"
+                :value="count"
+                :label="`${count} 路`"
+              />
+            </ElSelect>
+          </ElFormItem>
           <ElFormItem label="2. 检测间隔"
             ><ElSelect v-model="interval" aria-label="检测间隔">
               <ElOption
@@ -341,7 +444,11 @@ onDeactivated(() => {
     <article v-for="plan in plans" :key="plan.planId" class="patrol-row">
       <div>
         <div class="patrol-row-title">
-          <strong>{{ plan.targetCount }} 台设备 · 每 {{ plan.intervalMinutes }} 分钟</strong>
+          <strong
+            >{{ plan.targetCount }} 台设备 ·
+            {{ plan.layer === 'MEDIA' ? '收帧 / 平台状态' : '连接 / 平台状态' }} · 每
+            {{ plan.intervalMinutes }} 分钟</strong
+          >
           <span class="patrol-state" :class="{ 'is-active': planActive(plan) }">{{
             planActive(plan) ? '执行中' : plan.state === 'STOPPED' ? '已停止' : '已到期'
           }}</span>
@@ -365,7 +472,14 @@ onDeactivated(() => {
         @click="stop(plan)"
         >停止</ElButton
       >
-      <ElButton v-else :disabled="busy || !!pending" @click="reuse(plan)">重新启动</ElButton>
+      <ElButton
+        v-else-if="plan.state === 'STOPPED' && Date.parse(plan.endAt) > now"
+        :disabled="busy || !!pending"
+        type="primary"
+        @click="resume(plan)"
+        >恢复执行</ElButton
+      >
+      <ElButton v-else :disabled="busy || !!pending" @click="reuse(plan)">复用范围</ElButton>
     </article>
     <template #footer><ElButton :disabled="busy" @click="close">关闭</ElButton></template>
   </ElDialog>

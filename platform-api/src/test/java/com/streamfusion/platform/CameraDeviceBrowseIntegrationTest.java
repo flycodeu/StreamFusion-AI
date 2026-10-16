@@ -52,7 +52,11 @@ class CameraDeviceBrowseIntegrationTest extends CameraTestSupport {
                                 .get(0)
                                 .path("accessAddress"))
                 .isEqualTo(address);
-        assertThat(read("/camera-status", auth).path("items").get(0).path("accessAddress"))
+        assertThat(
+                        read("/camera-status?layer=MEDIA", auth)
+                                .path("items")
+                                .get(0)
+                                .path("accessAddress"))
                 .isEqualTo(address);
         jdbc.update(
                 "UPDATE camera_source SET connection_category='PLATFORM',adapter_type='HIK_PLATFORM' WHERE id=?",

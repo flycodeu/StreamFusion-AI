@@ -13,6 +13,8 @@ import { usePageScope } from '../../composables/usePageScope'
 import { sessionState } from '../../session/state'
 import { formError, isRequestRejected as rejected, useCreateRequest } from '../camera/form'
 import { connectionError, connectionInput, initialSelections, newConnection } from './form'
+import { createSource } from '../../api/camera-sources/api'
+import type { SourceCreate } from '../../api/camera-sources/types'
 
 export type AccessMode = 'device' | 'platform' | 'rtsp'
 export interface ExistingCameraTarget {
@@ -43,7 +45,11 @@ export function useAccessWizard(
     paused = ref(false)
   const creation = useCreateRequest<{ connection: AccessConnection }>()
   const importing = useCreateRequest<ImportInput & { confirmation: string }>()
-  const createFrozen = computed(() => !!creation.pending.value)
+  const saving = useCreateRequest<Omit<SourceCreate, 'clientRequestId'>>()
+  const platformConnection = ref<AccessConnection | null>(null)
+  const region = ref<{ indexCode: string; name: string } | null>(null)
+  const includeSubRegions = ref(false)
+  const createFrozen = computed(() => !!creation.pending.value || !!saving.pending.value)
   const importFrozen = computed(() => !!importing.pending.value)
   const running = computed(
     () =>
@@ -79,6 +85,7 @@ export function useAccessWizard(
     ]
     if (value.sourceId && value.sourceVersion)
       savedConnection = {
+        ...savedConnection,
         method: job.value!.method,
         sourceId: value.sourceId,
         sourceVersion: value.sourceVersion,
@@ -126,10 +133,11 @@ export function useAccessWizard(
     try {
       const value = await api.getAccessJob(jobId.value)
       if (!active() || current !== sequence) return
+      const received = !job.value || ['QUEUED', 'RUNNING'].includes(job.value.status)
       job.value = value
       if (value.result) acceptImport(value.result)
-      if (value.status === 'SUCCEEDED' || value.status === 'PARTIAL')
-        selections.value = target ? [] : initialSelections(value.candidates)
+      if (received && (value.status === 'SUCCEEDED' || value.status === 'PARTIAL'))
+        selections.value = target || mode === 'platform' ? [] : initialSelections(value.candidates)
       if (value.status === 'QUEUED' || value.status === 'RUNNING') {
         if (++reads < 180)
           timer = setTimeout(() => {
@@ -148,6 +156,10 @@ export function useAccessWizard(
   }
   async function start(page = 1) {
     if (busy.value || !options.value?.ready) return
+    if (mode === 'platform' && !region.value) {
+      await preparePlatform()
+      return
+    }
     error.value = null
     if (!options.value?.methods.includes(connection.value.method)) {
       error.value = formError('此平台预设尚未适配，暂不能读取目录。')
@@ -166,7 +178,14 @@ export function useAccessWizard(
       const base = savedConnection ?? connectionInput(connection.value, adapter)
       const command = {
         ...base,
-        ...(mode === 'platform' ? { pageNumber: page, pageSize: 100 } : {}),
+        ...(mode === 'platform'
+          ? {
+              pageNumber: page,
+              pageSize: 100,
+              regionIndexCode: region.value!.indexCode,
+              includeSubRegions: includeSubRegions.value,
+            }
+          : {}),
       }
       const captured = creation.capture({ connection: command })
       const created = await api.createAccessJob(captured)
@@ -213,6 +232,9 @@ export function useAccessWizard(
       result.value = null
       creation.reset()
       savedConnection = null
+      platformConnection.value = null
+      region.value = null
+      saving.reset()
       pageNumber.value = 1
       error.value = null
       paused.value = false
@@ -332,6 +354,79 @@ export function useAccessWizard(
     confirmedInput.value = null
     error.value = null
   }
+  async function preparePlatform() {
+    const adapter = options.value?.adapters.find((item) => item.type === connection.value.method)
+    const message = saving.pending.value ? '' : connectionError(connection.value, adapter)
+    if (message) {
+      error.value = formError(message)
+      return
+    }
+    const active = captureScope()
+    busy.value = true
+    error.value = null
+    try {
+      let saved: AccessConnection
+      if (connection.value.reuse) saved = connectionInput(connection.value, adapter)
+      else {
+        const draft = connection.value
+        const command = saving.capture({
+          name: draft.name.trim() || '海康平台',
+          adapterType: draft.method,
+          connectionCategory: 'PLATFORM',
+          networkPolicyKey: draft.networkPolicyKey || undefined,
+          enabled: true,
+          credentials: [
+            {
+              purpose: 'PLATFORM_HTTP',
+              username: { action: 'REPLACE', value: draft.username },
+              password: { action: 'REPLACE', value: draft.password },
+            },
+          ],
+          endpoints: [
+            {
+              purpose: 'PLATFORM_HTTP',
+              scheme: draft.scheme,
+              host: draft.host.trim(),
+              port: draft.port,
+              basePath: '/artemis',
+              authMode: 'DRIVER_NEGOTIATED',
+              credentialPurpose: 'PLATFORM_HTTP',
+              tlsPolicy: 'SYSTEM_CA',
+            },
+          ],
+        })
+        const source = await createSource(command)
+        saved = {
+          method: source.adapterType!,
+          sourceId: source.sourceId,
+          sourceVersion: source.version,
+        }
+      }
+      if (!active()) return
+      saving.reset()
+      savedConnection = saved
+      platformConnection.value = saved
+      Object.assign(connection.value, {
+        reuse: true,
+        sourceId: saved.sourceId,
+        sourceVersion: saved.sourceVersion,
+        username: '',
+        password: '',
+      })
+    } catch (cause) {
+      if (active()) {
+        error.value = cause
+        if (rejected(cause)) saving.reset()
+      }
+    } finally {
+      if (active()) busy.value = false
+    }
+  }
+  async function selectRegion(value: { indexCode: string; name: string }) {
+    if (busy.value || running.value || createFrozen.value || importFrozen.value) return
+    region.value = value
+    await changePage(1)
+  }
   function detachJob() {
     keepJobRunning = true
   }
@@ -347,7 +442,10 @@ export function useAccessWizard(
     selections.value = []
     creation.reset()
     importing.reset()
+    saving.reset()
     savedConnection = null
+    platformConnection.value = null
+    region.value = null
     groupId.value = value.bulk?.groupId ?? null
     Object.assign(connection.value, {
       method: value.method,
@@ -366,8 +464,10 @@ export function useAccessWizard(
     connection.value.username = ''
     connection.value.rtspUrls = ['']
     savedConnection = null
+    platformConnection.value = null
     creation.reset()
     importing.reset()
+    saving.reset()
     if (
       jobId.value &&
       !keepJobRunning &&
@@ -381,6 +481,10 @@ export function useAccessWizard(
   })
   return {
     pageNumber,
+    platformConnection,
+    region,
+    includeSubRegions,
+    selectRegion,
     accumulatedIds,
     changePage,
     options,

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.streamfusion.platform.monitor.audit.mapper.AuditRetentionMapper">
+    <select id="candidates" resultType="java.lang.Long" timeout="5">
+        SELECT id FROM sys_operation_log
+        WHERE NOT(action='BOOTSTRAP' AND result='SUCCESS') AND
+        (created_at &lt; #{cutoff}
+          <if test="boundaryId != null">OR (created_at=#{cutoff} AND id &lt; #{boundaryId})</if>)
+        ORDER BY created_at,id LIMIT #{limit}
+    </select>
+    <delete id="removeCandidates" timeout="5">
+        DELETE FROM sys_operation_log WHERE NOT(action='BOOTSTRAP' AND result='SUCCESS')
+        AND id IN <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </delete>
+</mapper>

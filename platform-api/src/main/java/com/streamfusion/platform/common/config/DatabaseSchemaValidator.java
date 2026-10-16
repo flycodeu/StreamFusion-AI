@@ -62,6 +62,33 @@ public class DatabaseSchemaValidator implements ApplicationRunner {
         required.put(
                 "camera_user_channel_grant",
                 Set.of("user_id", "channel_id", "created_at", "created_by"));
+        // Layer snapshots have a composite key and use explicit mapper statements.
+        required.put(
+                "camera_status_snapshot",
+                Set.of(
+                        "profile_id",
+                        "camera_id",
+                        "layer",
+                        "probe_kind",
+                        "observation_value",
+                        "reason_code",
+                        "observed_at",
+                        "state_since",
+                        "last_accessible_at",
+                        "last_failed_at",
+                        "read_at",
+                        "valid_until",
+                        "media_window_started_at",
+                        "media_window_ended_at",
+                        "media_first_frames",
+                        "media_last_frames",
+                        "media_sample_count",
+                        "media_max_gap_ms",
+                        "check_requested_at",
+                        "check_id",
+                        "connection_key_id",
+                        "connection_digest",
+                        "updated_at"));
     }
 
     @Override
@@ -72,7 +99,7 @@ public class DatabaseSchemaValidator implements ApplicationRunner {
     public void validate() {
         List<String> missing = new ArrayList<>();
         try (Connection connection = source.getConnection()) {
-            Set<String> tables = new LinkedHashSet<>();
+            Map<String, String> tables = new TreeMap<>();
             try (var rows =
                     connection
                             .getMetaData()
@@ -81,12 +108,14 @@ public class DatabaseSchemaValidator implements ApplicationRunner {
                                     connection.getSchema(),
                                     "%",
                                     new String[] {"TABLE", "BASE TABLE"})) {
-                while (rows.next())
-                    tables.add(rows.getString("TABLE_NAME").toLowerCase(Locale.ROOT));
+                while (rows.next()) {
+                    String tableName = rows.getString("TABLE_NAME");
+                    tables.put(tableName.toLowerCase(Locale.ROOT), tableName);
+                }
             }
             for (var entry : required.entrySet()) {
                 String table = entry.getKey();
-                if (!tables.contains(table)) {
+                if (!tables.containsKey(table)) {
                     missing.add(table);
                     continue;
                 }
@@ -105,6 +134,24 @@ public class DatabaseSchemaValidator implements ApplicationRunner {
                                 .sorted()
                                 .forEach(column -> missing.add(table + "." + column));
                     }
+                }
+                if ("camera_status_snapshot".equals(table)) {
+                    var keyColumns = new TreeMap<Short, String>();
+                    try (var keys =
+                            connection
+                                    .getMetaData()
+                                    .getPrimaryKeys(
+                                            connection.getCatalog(),
+                                            connection.getSchema(),
+                                            tables.get(table))) {
+                        while (keys.next())
+                            keyColumns.put(
+                                    keys.getShort("KEY_SEQ"),
+                                    keys.getString("COLUMN_NAME").toLowerCase(Locale.ROOT));
+                    }
+                    if (!List.of("profile_id", "layer")
+                            .equals(new ArrayList<>(keyColumns.values())))
+                        missing.add("camera_status_snapshot.PRIMARY KEY(profile_id,layer)");
                 }
             }
         } catch (SQLException exception) {

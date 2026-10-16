@@ -27,6 +27,7 @@ public class CameraStatusCheckEntity {
     private byte[] sessionDigest;
     private String connectionKeyId;
     private byte[] connectionDigest;
+    private String layer;
     private String probeKind;
     private String executionState;
     private String resultValue;
@@ -40,6 +41,12 @@ public class CameraStatusCheckEntity {
     private LocalDateTime observedAt;
     private LocalDateTime readAt;
     private LocalDateTime validUntil;
+    private LocalDateTime mediaWindowStartedAt;
+    private LocalDateTime mediaWindowEndedAt;
+    private Long mediaFirstFrames;
+    private Long mediaLastFrames;
+    private Integer mediaSampleCount;
+    private Long mediaMaxGapMs;
     private LocalDateTime updatedAt;
     private LocalDateTime retainUntil;
     private Long durationMs;

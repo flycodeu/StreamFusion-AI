@@ -18,7 +18,7 @@ import com.streamfusion.platform.camera.status.CameraStatusStreamResolver;
 import com.streamfusion.platform.camera.status.CameraStatusWorker;
 import com.streamfusion.platform.camera.status.RtspDescribeProbe;
 import com.streamfusion.platform.common.exception.BusinessException;
-import com.streamfusion.platform.preview.PreviewFailure;
+import com.streamfusion.platform.media.preview.PreviewFailure;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -40,6 +40,24 @@ public class CameraRtspTargetService {
     private final CameraSourceRules rules;
     private final CameraProperties properties;
     private final CameraStatusStreamResolver streams;
+
+    public com.streamfusion.platform.camera.status.CameraStatusLayer effectiveLayer(
+            long profileId, com.streamfusion.platform.camera.status.CameraStatusLayer requested) {
+        var locator = locators.selectById(profileId);
+        return locator != null && "HIK_PLATFORM".equals(locator.getLocatorKind())
+                ? com.streamfusion.platform.camera.status.CameraStatusLayer.UPSTREAM
+                : requested == com.streamfusion.platform.camera.status.CameraStatusLayer.UPSTREAM
+                        ? com.streamfusion.platform.camera.status.CameraStatusLayer.CONTROL
+                        : requested;
+    }
+
+    public java.util.Set<Long> platformProfiles(List<Long> profileIds) {
+        if (profileIds.isEmpty()) return java.util.Set.of();
+        return locators.selectByIds(profileIds).stream()
+                .filter(l -> "HIK_PLATFORM".equals(l.getLocatorKind()))
+                .map(com.streamfusion.platform.camera.pojo.entity.CameraLocatorEntity::getProfileId)
+                .collect(java.util.stream.Collectors.toSet());
+    }
 
     private CameraEndpointEntity endpoint(long sourceId, String purpose) {
         return endpoints.selectOne(
@@ -189,6 +207,7 @@ public class CameraRtspTargetService {
                             : "SOURCE_PROTOCOL_NOT_SUPPORTED");
         if (!profile.getSourceId().equals(locator.getSourceId())) return blocked("LOCATOR_INVALID");
         boolean direct = "RTSP".equals(locator.getLocatorKind());
+        boolean platform = "HIK_PLATFORM".equals(locator.getLocatorKind());
         if (!direct
                 && (!CameraStatusStreamResolver.supports(locator.getLocatorKind())
                         || !locator.getLocatorKind().equals(source.getAdapterType())))
@@ -304,17 +323,22 @@ public class CameraRtspTargetService {
                             || path.contains("#")
                             || query.startsWith("?")
                             || query.contains("#"))) return blocked("LOCATOR_INVALID");
+            if (platform)
+                com.streamfusion.platform.camera.access.adapter.HikPlatformApi.requireCode(
+                        config.path("channelKey").asText());
             URI uri =
-                    direct
-                            ? URI.create(
-                                    "rtsp://"
-                                            + (host.contains(":") ? "[" + host + "]" : host)
-                                            + ":"
-                                            + port
-                                            + path
-                                            + (query.isEmpty() ? "" : "?" + query))
-                            : streams.configuredUri(locator, config, context);
-            CameraStatusStreamResolver.validateRtsp(uri);
+                    platform
+                            ? null
+                            : direct
+                                    ? URI.create(
+                                            "rtsp://"
+                                                    + (host.contains(":") ? "[" + host + "]" : host)
+                                                    + ":"
+                                                    + port
+                                                    + path
+                                                    + (query.isEmpty() ? "" : "?" + query))
+                                    : streams.configuredUri(locator, config, context);
+            if (!platform) CameraStatusStreamResolver.validateRtsp(uri);
             if (direct
                     && (!path.equals(uri.getRawPath())
                             || !Objects.equals(query.isEmpty() ? null : query, uri.getRawQuery())
@@ -360,15 +384,19 @@ public class CameraRtspTargetService {
                                             ? "PROFILE_DISABLED"
                                             : null;
             return new Inspection(
-                    new RtspDescribeProbe.Target(
-                            uri,
-                            source.getNetworkPolicyKey(),
-                            username,
-                            password,
-                            authorizationCheck),
+                    platform
+                            ? null
+                            : new RtspDescribeProbe.Target(
+                                    uri,
+                                    source.getNetworkPolicyKey(),
+                                    username,
+                                    password,
+                                    authorizationCheck),
                     digest,
                     blocking,
-                    direct ? null : streams.deferred(locator, config, context));
+                    direct || platform ? null : streams.deferred(locator, config, context));
+        } catch (CameraAdapterException ex) {
+            return blocked(ex.reasonCode());
         } catch (PreviewFailure ex) {
             return blocked(ex.reason());
         } catch (BusinessException ex) {

@@ -81,7 +81,7 @@ class RtspDescribeProbeTest {
                         });
         var target = target(fixture, "/live%2Fopaque?token=%26", null, null);
         assertThat(execute(probe(LIMITS), target).outcome())
-                .isEqualTo(RtspDescribeProbe.Outcome.ACCESSIBLE);
+                .isEqualTo(CameraProbeResult.Outcome.ACCESSIBLE);
         assertThat(clientClosed.await(1, TimeUnit.SECONDS)).isTrue();
         assertThat(fixture.requests).hasSize(1);
         assertThat(fixture.requests.getFirst().line())
@@ -109,7 +109,7 @@ class RtspDescribeProbeTest {
                                         (index == 1 ? "challenge-body" : SDP)
                                                 .getBytes(StandardCharsets.UTF_8)));
         var result = execute(probe(LIMITS), target(fixture, "/live", "operator", "private"));
-        assertThat(result.outcome()).isEqualTo(RtspDescribeProbe.Outcome.ACCESSIBLE);
+        assertThat(result.outcome()).isEqualTo(CameraProbeResult.Outcome.ACCESSIBLE);
         assertThat(fixture.requests).hasSize(2);
         assertThat(fixture.requests.get(0).headers()).doesNotContainKey("authorization");
         assertThat(fixture.requests.get(1).headers())
@@ -141,7 +141,7 @@ class RtspDescribeProbeTest {
                                         (index == 1 ? "" : SDP).getBytes(StandardCharsets.UTF_8)));
         var target = target(fixture, "/live%2Fopaque?q=%26", "operator", "private");
         assertThat(execute(probe(LIMITS), target).outcome())
-                .isEqualTo(RtspDescribeProbe.Outcome.ACCESSIBLE);
+                .isEqualTo(CameraProbeResult.Outcome.ACCESSIBLE);
         String expected =
                 md5(md5("operator:fixture:private") + ":abc:" + md5("DESCRIBE:" + target.uri()));
         assertThat(fixture.requests.get(1).headers().get("authorization"))
@@ -171,7 +171,7 @@ class RtspDescribeProbeTest {
                                             Map.of(),
                                             body.getBytes(StandardCharsets.UTF_8)));
             assertThat(execute(probe, target(fixture, "/live", null, null)).outcome())
-                    .isEqualTo(RtspDescribeProbe.Outcome.ACCESSIBLE);
+                    .isEqualTo(CameraProbeResult.Outcome.ACCESSIBLE);
         }
         assertThat(resolverHosts).containsExactly("127.0.0.1", "127.0.0.1");
         verify(rules, never()).host(eq("origin.example.invalid"), anyString());
@@ -328,7 +328,7 @@ class RtspDescribeProbeTest {
                                                                 + "WWW-Authenticate: Digest realm=\"a\", nonce=\"b\"\r\nContent-Length: 0\r\n\r\n")
                                                         .getBytes(StandardCharsets.US_ASCII)));
         var result = execute(probe(LIMITS), target(fixture, "/live", "operator", "private"));
-        assertThat(result.outcome()).isEqualTo(RtspDescribeProbe.Outcome.UNSUPPORTED);
+        assertThat(result.outcome()).isEqualTo(CameraProbeResult.Outcome.UNSUPPORTED);
         assertThat(result.reasonCode()).isEqualTo("AUTH_UNSUPPORTED");
         assertThat(fixture.requests).hasSize(1);
     }
@@ -359,7 +359,7 @@ class RtspDescribeProbeTest {
                                     throw new CameraAdapterException("ACTOR_REVOKED");
                             });
             var result = execute(probe, guarded);
-            assertThat(result.outcome()).isEqualTo(RtspDescribeProbe.Outcome.NOT_EXECUTED);
+            assertThat(result.outcome()).isEqualTo(CameraProbeResult.Outcome.NOT_EXECUTED);
             assertThat(result.reasonCode()).isEqualTo("ACTOR_REVOKED");
             assertThat(dnsCalls.get()).isEqualTo(revokedAt - 1);
             assertThat(fixture.acceptCount.get()).isZero();
@@ -391,7 +391,7 @@ class RtspDescribeProbeTest {
                                 throw new CameraAdapterException("CONFIGURATION_CHANGED");
                         });
         var result = execute(probe(LIMITS), guarded);
-        assertThat(result.outcome()).isEqualTo(RtspDescribeProbe.Outcome.NOT_EXECUTED);
+        assertThat(result.outcome()).isEqualTo(CameraProbeResult.Outcome.NOT_EXECUTED);
         assertThat(result.reasonCode()).isEqualTo("CONFIGURATION_CHANGED");
         assertThat(fixture.requests).hasSize(1);
         assertThat(authorizationCalls.get()).isEqualTo(3);
@@ -456,7 +456,7 @@ class RtspDescribeProbeTest {
             release.countDown();
         }
         assertThat(first.get(2, TimeUnit.SECONDS).outcome())
-                .isEqualTo(RtspDescribeProbe.Outcome.ACCESSIBLE);
+                .isEqualTo(CameraProbeResult.Outcome.ACCESSIBLE);
     }
 
     @Test
@@ -485,7 +485,7 @@ class RtspDescribeProbeTest {
         assertThat(
                         probe.execute(target(fixture, "/live", null, null), deadline(1000), oneUse)
                                 .outcome())
-                .isEqualTo(RtspDescribeProbe.Outcome.ACCESSIBLE);
+                .isEqualTo(CameraProbeResult.Outcome.ACCESSIBLE);
         assertThat(
                         probe.execute(target(fixture, "/live", null, null), deadline(1000), oneUse)
                                 .reasonCode())
@@ -564,7 +564,7 @@ class RtspDescribeProbeTest {
         assertThat(resolved.await(1, TimeUnit.SECONDS)).isTrue();
         assertThat(fixture.accepted.await(100, TimeUnit.MILLISECONDS)).isFalse();
         assertThat(execute(probe, target(fixture, "/live", null, null)).outcome())
-                .isEqualTo(RtspDescribeProbe.Outcome.ACCESSIBLE);
+                .isEqualTo(CameraProbeResult.Outcome.ACCESSIBLE);
         assertThat(fixture.acceptCount.get()).isEqualTo(1);
     }
 
@@ -615,7 +615,7 @@ class RtspDescribeProbeTest {
                             return call.getArgument(0);
                         });
         var result = execute(probe, target(fixture, "/live", null, null));
-        assertThat(result.outcome()).isEqualTo(RtspDescribeProbe.Outcome.CANCELLED);
+        assertThat(result.outcome()).isEqualTo(CameraProbeResult.Outcome.CANCELLED);
         assertThat(result.reasonCode()).isEqualTo("CANCELLED");
         assertThat(resolverCalls.get()).isZero();
         assertThat(fixture.acceptCount.get()).isZero();
@@ -674,7 +674,7 @@ class RtspDescribeProbeTest {
                 password);
     }
 
-    private static RtspDescribeProbe.Result execute(
+    private static CameraProbeResult execute(
             RtspDescribeProbe probe, RtspDescribeProbe.Target target) {
         return probe.execute(target, deadline(1500), new RtspDescribeProbe.Cancellation());
     }

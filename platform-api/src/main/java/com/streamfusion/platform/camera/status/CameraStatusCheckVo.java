@@ -10,7 +10,9 @@ public record CameraStatusCheckVo(
         @Schema(description = "检查ID") String checkId,
         @Schema(description = "所属相机通道ID") String cameraId,
         @Schema(description = "本次选定的码流ID") String streamProfileId,
-        @Schema(description = "检查类型，本期固定RTSP_DESCRIBE") String probeKind,
+        @Schema(description = "CONTROL/MEDIA/UPSTREAM") CameraStatusLayer layer,
+        @Schema(description = "检查类型RTSP_DESCRIBE/ZLM_RTP_FRAMES/HIK_PLATFORM_ONLINE")
+                String probeKind,
         @Schema(description = "执行状态：QUEUED/RUNNING/COMPLETED/SKIPPED/CANCELLED/INTERRUPTED")
                 String executionState,
         @Schema(description = "服务器接受时间，UTC") Instant requestedAt,
@@ -28,21 +30,14 @@ public record CameraStatusCheckVo(
                 check.getId().toString(),
                 check.getCameraId().toString(),
                 check.getProfileId().toString(),
+                CameraStatusLayer.valueOf(check.getLayer()),
                 check.getProbeKind(),
                 check.getExecutionState(),
                 instant(check.getRequestedAt()),
                 instant(check.getStartedAt()),
                 instant(check.getFinishedAt()),
                 instant(check.getDeadlineAt()),
-                check.getResultValue() == null
-                        ? null
-                        : new CameraStatusObservationVo(
-                                check.getResultValue(),
-                                check.getReasonCode(),
-                                instant(check.getObservedAt()),
-                                instant(check.getReadAt()),
-                                instant(check.getValidUntil()),
-                                check.getId().toString()),
+                check.getResultValue() == null ? null : CameraStatusObservationVo.from(check),
                 check.getReasonCode(),
                 check.getDurationMs(),
                 check.getTraceId(),

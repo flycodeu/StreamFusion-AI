@@ -12,7 +12,33 @@ public record CameraAccessContext(
         Runnable checkAuthorization,
         long deadlineNanos,
         int pageNumber,
-        int pageSize) {
+        int pageSize,
+        String regionIndexCode,
+        boolean includeSubRegions) {
+    public CameraAccessContext(
+            URI endpoint,
+            String networkPolicyKey,
+            String username,
+            String password,
+            int rtspPort,
+            Runnable checkAuthorization,
+            long deadlineNanos,
+            int pageNumber,
+            int pageSize) {
+        this(
+                endpoint,
+                networkPolicyKey,
+                username,
+                password,
+                rtspPort,
+                checkAuthorization,
+                deadlineNanos,
+                pageNumber,
+                pageSize,
+                null,
+                false);
+    }
+
     public CameraAccessContext(
             URI endpoint,
             String networkPolicyKey,

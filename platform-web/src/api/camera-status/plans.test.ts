@@ -12,6 +12,9 @@ const plan = {
   blockedCount: 1,
   nextAt: '2026-10-13T02:00:00Z',
   lastReasonCode: 'CONFIGURATION_CHANGED',
+  layer: 'CONTROL',
+  dispatchMode: 'POLLING',
+  parallelism: 1,
 }
 describe('finite patrol contract', () => {
   it('retains target diagnostics and decimal identifiers', () => {
@@ -27,6 +30,11 @@ describe('finite patrol contract', () => {
     expect(() => parseStatusPlan({ ...plan, serverNow: 'invalid' })).toThrow()
   })
   it.each([
+    ['layer', 'INVALID'],
+    ['dispatchMode', 'UNLIMITED'],
+    ['parallelism', 0],
+    ['parallelism', 5],
+    ['parallelism', 2],
     ['blockedCount', -1],
     ['blockedCount', 3],
     ['nextAt', 'invalid'],

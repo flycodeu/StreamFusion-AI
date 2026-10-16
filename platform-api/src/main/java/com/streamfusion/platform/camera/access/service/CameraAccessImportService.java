@@ -2,8 +2,6 @@ package com.streamfusion.platform.camera.access.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
-import com.streamfusion.platform.audit.pojo.dto.AuditContextDto;
-import com.streamfusion.platform.audit.service.AuditService;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessAdapterRegistry;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessCatalog;
 import com.streamfusion.platform.camera.access.pojo.CameraConnection;
@@ -26,6 +24,8 @@ import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.validation.DecimalInput;
 import com.streamfusion.platform.common.validation.VersionCounter;
+import com.streamfusion.platform.monitor.audit.pojo.dto.AuditContextDto;
+import com.streamfusion.platform.monitor.audit.service.AuditService;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDateTime;
@@ -617,14 +617,17 @@ public class CameraAccessImportService {
         String usage = item.usageHint() == null ? "UNKNOWN" : item.usageHint();
         if (!Set.of("MAIN", "SUB", "THIRD", "CUSTOM", "UNKNOWN").contains(usage)) throw invalid();
         row.setUsageHint(usage);
-        row.setUsageOrigin("UNKNOWN".equals(usage) ? "UNKNOWN" : "DEVICE_REPORTED");
+        row.setUsageOrigin(
+                "HIK_PLATFORM".equals(adapterType) || "UNKNOWN".equals(usage)
+                        ? "UNKNOWN"
+                        : "DEVICE_REPORTED");
         row.setEnabled(true);
         row.setVideoCodec(optionalText(item.codec(), 32));
         row.setWidth(positive(item.width()));
         row.setHeight(positive(item.height()));
         row.setBitrateKbps(item.bitrateKbps() == null ? null : (long) positive(item.bitrateKbps()));
         row.setFrameRate(frameRate(item.frameRate()));
-        if (!"RTSP".equals(adapterType)) {
+        if (!"RTSP".equals(adapterType) && !"HIK_PLATFORM".equals(adapterType)) {
             row.setParametersOrigin("CATALOG");
             row.setParametersObservedAt(observedAt);
         }

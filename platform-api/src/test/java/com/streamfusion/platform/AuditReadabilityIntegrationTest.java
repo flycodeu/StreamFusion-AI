@@ -3,10 +3,10 @@ package com.streamfusion.platform;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.streamfusion.platform.audit.pojo.dto.AuditQueryDto;
-import com.streamfusion.platform.audit.service.AuditQueryService;
-import com.streamfusion.platform.audit.service.AuditService;
 import com.streamfusion.platform.common.exception.BusinessException;
+import com.streamfusion.platform.monitor.audit.pojo.dto.AuditQueryDto;
+import com.streamfusion.platform.monitor.audit.service.AuditQueryService;
+import com.streamfusion.platform.monitor.audit.service.AuditService;
 import com.streamfusion.platform.support.IdentitySchema;
 import java.util.HashMap;
 import java.util.List;

@@ -8,11 +8,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.streamfusion.platform.auth.service.BootstrapService;
-import com.streamfusion.platform.server.pojo.vo.ServerSnapshotVo;
-import com.streamfusion.platform.server.service.ServerCollector;
+import com.streamfusion.platform.monitor.server.pojo.vo.ServerSnapshotVo;
+import com.streamfusion.platform.monitor.server.service.ServerCollector;
 import com.streamfusion.platform.support.IdentitySchema;
 import com.streamfusion.platform.support.SecureLoginSupport;
+import com.streamfusion.platform.system.auth.service.BootstrapService;
 import java.time.Instant;
 import java.util.List;
 import javax.sql.DataSource;

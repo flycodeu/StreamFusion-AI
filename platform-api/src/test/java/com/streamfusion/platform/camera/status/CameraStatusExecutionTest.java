@@ -33,7 +33,9 @@ class CameraStatusExecutionTest {
                 var probe = new RtspDescribeProbe(rules, limits);
                 var worker =
                         new CameraStatusWorker(
-                                probe, new CameraStatusWorker.Limits(2, 1, Duration.ZERO))) {
+                                probe,
+                                mock(CameraMediaProbe.class),
+                                new CameraStatusWorker.Limits(2, 1, Duration.ZERO))) {
             listener.setSoTimeout(3000);
             var response =
                     server.submit(
@@ -64,11 +66,11 @@ class CameraStatusExecutionTest {
                 assertThat(received.await(2, TimeUnit.SECONDS)).isTrue();
                 var second = worker.trySubmit(request(2, 2, 2, port, "/sub"));
                 var blocked = second.completion().get(2, TimeUnit.SECONDS);
-                assertThat(blocked.outcome()).isEqualTo(RtspDescribeProbe.Outcome.NOT_EXECUTED);
+                assertThat(blocked.outcome()).isEqualTo(CameraProbeResult.Outcome.NOT_EXECUTED);
                 assertThat(blocked.reasonCode()).isEqualTo("ENDPOINT_BUSY");
                 reply.countDown();
                 assertThat(first.completion().get(2, TimeUnit.SECONDS).outcome())
-                        .isEqualTo(RtspDescribeProbe.Outcome.ACCESSIBLE);
+                        .isEqualTo(CameraProbeResult.Outcome.ACCESSIBLE);
                 assertThat(response.get(2, TimeUnit.SECONDS))
                         .startsWith("DESCRIBE rtsp://")
                         .contains("/main RTSP/1.0", "CSeq: 1", "Accept: application/sdp")

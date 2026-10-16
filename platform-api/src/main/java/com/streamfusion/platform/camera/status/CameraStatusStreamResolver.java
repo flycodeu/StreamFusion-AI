@@ -4,10 +4,10 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessContext;
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
 import com.streamfusion.platform.camera.pojo.entity.CameraLocatorEntity;
-import com.streamfusion.platform.preview.PreviewFailure;
-import com.streamfusion.platform.preview.source.DahuaStreamLocatorAdapter;
-import com.streamfusion.platform.preview.source.HikvisionStreamLocatorAdapter;
-import com.streamfusion.platform.preview.source.OnvifStreamLocatorAdapter;
+import com.streamfusion.platform.media.preview.PreviewFailure;
+import com.streamfusion.platform.media.preview.source.DahuaStreamLocatorAdapter;
+import com.streamfusion.platform.media.preview.source.HikvisionStreamLocatorAdapter;
+import com.streamfusion.platform.media.preview.source.OnvifStreamLocatorAdapter;
 import java.net.URI;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -21,7 +21,10 @@ public class CameraStatusStreamResolver {
     private final DahuaStreamLocatorAdapter dahua;
 
     public static boolean supports(String kind) {
-        return "ONVIF".equals(kind) || "HIKVISION".equals(kind) || "DAHUA".equals(kind);
+        return "ONVIF".equals(kind)
+                || "HIKVISION".equals(kind)
+                || "DAHUA".equals(kind)
+                || "HIK_PLATFORM".equals(kind);
     }
 
     public URI configuredUri(

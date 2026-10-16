@@ -73,4 +73,5 @@ export const actionNames: Record<string, string> = {
   CAMERA_SCOPE_UPDATE: '调整相机授权',
   CAMERA_STATUS_PLAN_CREATE: '启动巡检任务',
   CAMERA_STATUS_PLAN_STOP: '停止巡检任务',
+  CAMERA_STATUS_PLAN_RESUME: '恢复巡检任务',
 }

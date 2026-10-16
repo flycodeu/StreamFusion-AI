@@ -1,10 +1,10 @@
 package com.streamfusion.platform.common.security;
 
-import com.streamfusion.platform.auth.security.SessionGuardFilter;
-import com.streamfusion.platform.auth.service.CurrentUserService;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.web.ApiErrorWriter;
-import com.streamfusion.platform.loginrecord.service.LoginRecordService;
+import com.streamfusion.platform.monitor.loginrecord.service.LoginRecordService;
+import com.streamfusion.platform.system.auth.security.SessionGuardFilter;
+import com.streamfusion.platform.system.auth.service.CurrentUserService;
 import jakarta.servlet.DispatcherType;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;

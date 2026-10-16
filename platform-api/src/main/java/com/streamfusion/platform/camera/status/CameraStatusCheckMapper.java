@@ -18,14 +18,14 @@ public interface CameraStatusCheckMapper extends BaseMapper<CameraStatusCheckEnt
 
     @Select(
             "SELECT c.* FROM camera_status_check c WHERE c.camera_id=#{cameraId} AND NOT EXISTS "
-                    + "(SELECT 1 FROM camera_status_check n WHERE n.profile_id=c.profile_id "
+                    + "(SELECT 1 FROM camera_status_check n WHERE n.profile_id=c.profile_id AND n.probe_kind=c.probe_kind "
                     + "AND (n.requested_at>c.requested_at OR (n.requested_at=c.requested_at AND n.id>c.id)))")
     List<CameraStatusCheckEntity> latest(long cameraId);
 
     @Select(
             "<script>SELECT c.* FROM camera_status_check c WHERE c.profile_id IN "
                     + "<foreach collection='ids' item='id' open='(' separator=',' close=')'>#{id}</foreach> "
-                    + "AND NOT EXISTS (SELECT 1 FROM camera_status_check n WHERE n.profile_id=c.profile_id "
+                    + "AND NOT EXISTS (SELECT 1 FROM camera_status_check n WHERE n.profile_id=c.profile_id AND n.probe_kind=c.probe_kind "
                     + "AND (n.requested_at&gt;c.requested_at OR (n.requested_at=c.requested_at AND n.id&gt;c.id)))</script>")
     List<CameraStatusCheckEntity> latestForProfiles(@Param("ids") List<Long> ids);
 

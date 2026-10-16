@@ -17,7 +17,12 @@ import type {
 import { initialSelections } from './form'
 import { usageLabel, effectiveUsage } from '../camera/form'
 
-const props = defineProps<{ candidates: AccessCandidate[]; disabled: boolean; single?: boolean }>()
+const props = defineProps<{
+  candidates: AccessCandidate[]
+  disabled: boolean
+  single?: boolean
+  compact?: boolean
+}>()
 const model = defineModel<CandidateSelection[]>({ required: true })
 const page = ref(1)
 const visible = computed(() => props.candidates.slice((page.value - 1) * 12, page.value * 12))
@@ -52,7 +57,12 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
       </div>
     </div>
     <p v-if="!candidates.length" class="empty-state">本页无相机通道。</p>
-    <section v-for="candidate in visible" :key="candidate.candidateId" class="candidate-row">
+    <section
+      v-for="candidate in compact ? candidates : visible"
+      :key="candidate.candidateId"
+      class="candidate-row"
+      :class="{ compact }"
+    >
       <header>
         <ElCheckbox
           :model-value="!!selected(candidate.candidateId)"
@@ -61,9 +71,9 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
           >{{ candidate.name }}</ElCheckbox
         ><ElTag v-if="candidate.mappingRequired" type="warning">通道映射待确认，暂不能导入</ElTag
         ><ElTag v-else-if="!candidate.profiles.length" type="info">暂无码流资料</ElTag
-        ><span v-else>{{ candidate.profiles.length }} 路码流</span>
+        ><span v-else-if="!compact">{{ candidate.profiles.length }} 路码流</span>
       </header>
-      <template v-if="selected(candidate.candidateId)">
+      <template v-if="!compact && selected(candidate.candidateId)">
         <div v-for="profile in candidate.profiles" :key="profile.profileId" class="profile-row">
           <ElCheckbox
             :model-value="selected(candidate.candidateId)!.profileIds.includes(profile.profileId)"
@@ -102,7 +112,7 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
       </template>
     </section>
     <ElPagination
-      v-if="candidates.length > 12"
+      v-if="!compact && candidates.length > 12"
       v-model:current-page="page"
       :page-size="12"
       :total="candidates.length"
@@ -131,6 +141,17 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+.candidate-selection:has(.compact) {
+  max-height: 440px;
+  overflow-y: auto;
+}
+.candidate-row.compact {
+  padding: 6px 10px;
+  margin-bottom: 0;
+  border: 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-radius: 0;
 }
 .candidate-row header > span,
 .profile-parameters,

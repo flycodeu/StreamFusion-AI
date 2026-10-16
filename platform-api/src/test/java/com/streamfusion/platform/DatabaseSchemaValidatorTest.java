@@ -72,6 +72,35 @@ class DatabaseSchemaValidatorTest {
     }
 
     @Test
+    void mediaColumnsAndExplicitCompositeSnapshotMappingAreRequired() throws Exception {
+        try (var connection = source.getConnection();
+                var sql = connection.createStatement()) {
+            sql.execute(
+                    "ALTER TABLE camera_status_check DROP CONSTRAINT ck_camera_status_media_evidence");
+            sql.execute("ALTER TABLE camera_status_check DROP COLUMN media_max_gap_ms");
+            sql.execute(
+                    "ALTER TABLE camera_status_snapshot DROP CONSTRAINT ck_camera_status_snapshot_media_evidence");
+            sql.execute("ALTER TABLE camera_status_snapshot DROP COLUMN media_last_frames");
+        }
+        assertThatThrownBy(validator::validate)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("camera_status_check.media_max_gap_ms")
+                .hasMessageContaining("camera_status_snapshot.media_last_frames");
+    }
+
+    @Test
+    void oldSingleProfilePrimaryKeyIsRejectedEvenWhenEveryColumnExists() throws Exception {
+        try (var connection = source.getConnection();
+                var sql = connection.createStatement()) {
+            sql.execute("ALTER TABLE camera_status_snapshot DROP PRIMARY KEY");
+            sql.execute("ALTER TABLE camera_status_snapshot ADD PRIMARY KEY(profile_id)");
+        }
+        assertThatThrownBy(validator::validate)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("camera_status_snapshot.PRIMARY KEY(profile_id,layer)");
+    }
+
+    @Test
     void missingEntityAndRelationshipColumnsAreReportedTogether() throws Exception {
         try (var connection = source.getConnection();
                 var sql = connection.createStatement()) {

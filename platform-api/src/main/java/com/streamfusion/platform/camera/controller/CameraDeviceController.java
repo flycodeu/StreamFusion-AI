@@ -1,12 +1,12 @@
 package com.streamfusion.platform.camera.controller;
 
-import com.streamfusion.platform.audit.pojo.dto.AuditContextDto;
 import com.streamfusion.platform.camera.pojo.dto.CameraDeviceUpdateDto;
 import com.streamfusion.platform.camera.pojo.vo.CameraDeviceVo;
 import com.streamfusion.platform.camera.service.CameraAssetService;
 import com.streamfusion.platform.common.response.R;
 import com.streamfusion.platform.common.security.ModuleAccess;
 import com.streamfusion.platform.common.web.VersionHeader;
+import com.streamfusion.platform.monitor.audit.pojo.dto.AuditContextDto;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;

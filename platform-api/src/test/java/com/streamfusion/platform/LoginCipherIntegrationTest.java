@@ -8,13 +8,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.streamfusion.platform.auth.pojo.dto.EncryptedLoginDto;
-import com.streamfusion.platform.auth.service.BootstrapService;
-import com.streamfusion.platform.auth.service.LoginCipherService;
-import com.streamfusion.platform.auth.service.PasswordService;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.support.IdentitySchema;
 import com.streamfusion.platform.support.SecureLoginSupport;
+import com.streamfusion.platform.system.auth.pojo.dto.EncryptedLoginDto;
+import com.streamfusion.platform.system.auth.service.BootstrapService;
+import com.streamfusion.platform.system.auth.service.LoginCipherService;
+import com.streamfusion.platform.system.auth.service.PasswordService;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

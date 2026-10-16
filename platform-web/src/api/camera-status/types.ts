@@ -6,6 +6,11 @@ import { isTraceId, isUtcTimestamp } from '../../lib/http/error'
 
 export type ObservationValue = 'ACCESSIBLE' | 'FAILED' | 'UNSUPPORTED'
 export type Freshness = 'NEVER' | 'CURRENT' | 'STALE'
+export type StatusLayer = 'CONTROL' | 'MEDIA' | 'UPSTREAM'
+export type ProbeKind = 'RTSP_DESCRIBE' | 'ZLM_RTP_FRAMES' | 'HIK_PLATFORM_ONLINE'
+export function layerKey(layer: StatusLayer) {
+  return layer === 'UPSTREAM' ? 'upstream' : layer === 'MEDIA' ? 'media' : 'control'
+}
 export type ExecutionState =
   'QUEUED' | 'RUNNING' | 'COMPLETED' | 'SKIPPED' | 'CANCELLED' | 'INTERRUPTED'
 
@@ -16,12 +21,22 @@ export interface StatusObservation {
   readAt: string
   validUntil: string
   checkId: string
+  mediaEvidence: MediaEvidence | null
+}
+export interface MediaEvidence {
+  windowStartedAt: string
+  windowEndedAt: string
+  firstFrames: number
+  lastFrames: number
+  sampleCount: number
+  maxGapMs: number
 }
 export interface StatusCheck {
   checkId: string
   cameraId: string
   streamProfileId: string
-  probeKind: 'RTSP_DESCRIBE'
+  layer: StatusLayer
+  probeKind: ProbeKind
   executionState: ExecutionState
   requestedAt: string
   startedAt: string | null
@@ -35,15 +50,20 @@ export interface StatusCheck {
 }
 export interface ProfileStatus {
   streamProfileId: string
-  layer: 'CONTROL'
-  probeKind: 'RTSP_DESCRIBE'
+  control: LayerStatus
+  media: LayerStatus
+  upstream?: LayerStatus
+}
+export interface LayerStatus {
+  layer: StatusLayer
+  probeKind: ProbeKind
   observation: StatusObservation | null
   freshness: Freshness
   configurationCurrent: boolean
   latestCheck: StatusCheck | null
   canCheck: boolean
   blockingReasonCode: string | null
-  timeline?: StatusTimeline | null
+  timeline: StatusTimeline | null
 }
 export interface StatusTimeline {
   stateSince: string
@@ -56,6 +76,7 @@ export interface CameraStatus {
   profiles: ProfileStatus[]
 }
 export interface StatusCheckInput {
+  layer: StatusLayer
   streamProfileId: string
   clientRequestId: string
 }
@@ -89,6 +110,7 @@ export interface StatusSummary {
   disabled: number
 }
 export interface StatusSearch {
+  layer: StatusLayer
   page: number
   size: number
   name?: string
@@ -126,7 +148,29 @@ function observation(value: unknown): StatusObservation | null {
     readAt: instant(row.readAt),
     validUntil: instant(row.validUntil),
     checkId: entityId(row.checkId),
+    mediaEvidence: mediaEvidence(row.mediaEvidence),
   }
+}
+function mediaEvidence(value: unknown): MediaEvidence | null {
+  if (value === null) return null
+  const row = object(value)
+  const result = {
+    windowStartedAt: instant(row.windowStartedAt),
+    windowEndedAt: instant(row.windowEndedAt),
+    firstFrames: integer(row.firstFrames),
+    lastFrames: integer(row.lastFrames),
+    sampleCount: integer(row.sampleCount),
+    maxGapMs: integer(row.maxGapMs),
+  }
+  if (
+    Date.parse(result.windowEndedAt) - Date.parse(result.windowStartedAt) < 5000 ||
+    result.firstFrames < 0 ||
+    result.lastFrames < result.firstFrames ||
+    result.sampleCount < 3 ||
+    result.maxGapMs < 0
+  )
+    throw new Error('media evidence bounds')
+  return result
 }
 function timeline(value: unknown, fact: StatusObservation | null): StatusTimeline | null {
   if (value == null) return null
@@ -149,7 +193,8 @@ export function parseStatusCheck(value: unknown): StatusCheck {
     checkId: entityId(row.checkId),
     cameraId: entityId(row.cameraId),
     streamProfileId: entityId(row.streamProfileId),
-    probeKind: choice(row.probeKind, ['RTSP_DESCRIBE']),
+    layer: choice(row.layer, ['CONTROL', 'MEDIA', 'UPSTREAM']),
+    probeKind: choice(row.probeKind, ['RTSP_DESCRIBE', 'ZLM_RTP_FRAMES', 'HIK_PLATFORM_ONLINE']),
     executionState: choice(row.executionState, [
       'QUEUED',
       'RUNNING',
@@ -172,6 +217,55 @@ export function parseStatusCheck(value: unknown): StatusCheck {
     throw new Error('status check')
   if (result.observation && result.observation.checkId !== result.checkId)
     throw new Error('status observation identity')
+  validateLayer(result.layer, result.probeKind, result.observation)
+  return result
+}
+function validateLayer(layer: StatusLayer, probe: ProbeKind, fact: StatusObservation | null) {
+  if (
+    { CONTROL: 'RTSP_DESCRIBE', MEDIA: 'ZLM_RTP_FRAMES', UPSTREAM: 'HIK_PLATFORM_ONLINE' }[
+      layer
+    ] !== probe
+  )
+    throw new Error('status layer probe')
+  if (layer !== 'MEDIA' && fact?.mediaEvidence) throw new Error('control media evidence')
+  if (
+    layer === 'MEDIA' &&
+    fact &&
+    (!fact.mediaEvidence ||
+      fact.value === 'UNSUPPORTED' ||
+      Date.parse(fact.mediaEvidence.windowEndedAt) > Date.parse(fact.observedAt))
+  )
+    throw new Error('incomplete media observation')
+}
+function parseLayer(
+  value: unknown,
+  layer: StatusLayer,
+  cameraId: string,
+  profileId: string,
+): LayerStatus {
+  const row = object(value)
+  const fact = observation(row.observation)
+  const result: LayerStatus = {
+    layer: choice(row.layer, [layer]),
+    probeKind: choice(row.probeKind, ['RTSP_DESCRIBE', 'ZLM_RTP_FRAMES', 'HIK_PLATFORM_ONLINE']),
+    observation: fact,
+    freshness: choice(row.freshness, ['NEVER', 'CURRENT', 'STALE']),
+    configurationCurrent: boolean(row.configurationCurrent),
+    latestCheck: row.latestCheck === null ? null : parseStatusCheck(row.latestCheck),
+    canCheck: boolean(row.canCheck),
+    blockingReasonCode: nullableReason(row.blockingReasonCode),
+    timeline: timeline(row.timeline, fact),
+  }
+  validateLayer(result.layer, result.probeKind, fact)
+  if (
+    result.latestCheck &&
+    (result.latestCheck.cameraId !== cameraId ||
+      result.latestCheck.streamProfileId !== profileId ||
+      result.latestCheck.layer !== layer)
+  )
+    throw new Error('status profile identity')
+  if ((result.freshness === 'NEVER') !== (result.observation === null))
+    throw new Error('status freshness')
   return result
 }
 export function parseCameraStatus(value: unknown): CameraStatus {
@@ -179,28 +273,15 @@ export function parseCameraStatus(value: unknown): CameraStatus {
   const cameraId = entityId(row.cameraId)
   const profiles = list(row.profiles, (entry): ProfileStatus => {
     const profile = object(entry)
-    const fact = observation(profile.observation)
-    const result: ProfileStatus = {
-      streamProfileId: entityId(profile.streamProfileId),
-      layer: choice(profile.layer, ['CONTROL']),
-      probeKind: choice(profile.probeKind, ['RTSP_DESCRIBE']),
-      observation: fact,
-      freshness: choice(profile.freshness, ['NEVER', 'CURRENT', 'STALE']),
-      configurationCurrent: boolean(profile.configurationCurrent),
-      latestCheck: profile.latestCheck === null ? null : parseStatusCheck(profile.latestCheck),
-      canCheck: boolean(profile.canCheck),
-      blockingReasonCode: nullableReason(profile.blockingReasonCode),
-      ...(profile.timeline === undefined ? {} : { timeline: timeline(profile.timeline, fact) }),
+    const streamProfileId = entityId(profile.streamProfileId)
+    return {
+      streamProfileId,
+      control: parseLayer(profile.control, 'CONTROL', cameraId, streamProfileId),
+      media: parseLayer(profile.media, 'MEDIA', cameraId, streamProfileId),
+      ...(profile.upstream == null
+        ? {}
+        : { upstream: parseLayer(profile.upstream, 'UPSTREAM', cameraId, streamProfileId) }),
     }
-    if (
-      result.latestCheck &&
-      (result.latestCheck.cameraId !== cameraId ||
-        result.latestCheck.streamProfileId !== result.streamProfileId)
-    )
-      throw new Error('status profile identity')
-    if ((result.freshness === 'NEVER') !== (result.observation === null))
-      throw new Error('status freshness')
-    return result
   })
   if (new Set(profiles.map((profile) => profile.streamProfileId)).size !== profiles.length)
     throw new Error('duplicate status profile')

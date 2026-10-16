@@ -1,10 +1,10 @@
 package com.streamfusion.platform.camera.access.service;
 
-import com.streamfusion.platform.access.mapper.AccessMapper;
-import com.streamfusion.platform.auth.pojo.dto.SessionPrincipalDto;
-import com.streamfusion.platform.auth.service.CurrentUserService;
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
-import com.streamfusion.platform.user.service.UserService;
+import com.streamfusion.platform.system.access.mapper.AccessMapper;
+import com.streamfusion.platform.system.auth.pojo.dto.SessionPrincipalDto;
+import com.streamfusion.platform.system.auth.service.CurrentUserService;
+import com.streamfusion.platform.system.user.service.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.core.context.SecurityContext;

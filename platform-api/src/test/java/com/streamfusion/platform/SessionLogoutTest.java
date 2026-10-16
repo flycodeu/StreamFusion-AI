@@ -12,17 +12,17 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.streamfusion.platform.auth.config.AuthProperties;
-import com.streamfusion.platform.auth.controller.AuthController;
-import com.streamfusion.platform.auth.guard.LoginProtection;
-import com.streamfusion.platform.auth.pojo.dto.SessionPrincipalDto;
-import com.streamfusion.platform.auth.security.SessionDependencyFilter;
-import com.streamfusion.platform.auth.service.AuthenticationService;
-import com.streamfusion.platform.auth.service.CurrentUserService;
-import com.streamfusion.platform.auth.service.LoginCipherService;
-import com.streamfusion.platform.auth.service.ProfileService;
 import com.streamfusion.platform.common.web.ApiErrorWriter;
-import com.streamfusion.platform.loginrecord.service.LoginRecordService;
+import com.streamfusion.platform.monitor.loginrecord.service.LoginRecordService;
+import com.streamfusion.platform.system.auth.config.AuthProperties;
+import com.streamfusion.platform.system.auth.controller.AuthController;
+import com.streamfusion.platform.system.auth.guard.LoginProtection;
+import com.streamfusion.platform.system.auth.pojo.dto.SessionPrincipalDto;
+import com.streamfusion.platform.system.auth.security.SessionDependencyFilter;
+import com.streamfusion.platform.system.auth.service.AuthenticationService;
+import com.streamfusion.platform.system.auth.service.CurrentUserService;
+import com.streamfusion.platform.system.auth.service.LoginCipherService;
+import com.streamfusion.platform.system.auth.service.ProfileService;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -65,7 +65,7 @@ class SessionLogoutTest {
                     mock(LoginCipherService.class),
                     mock(LoginProtection.class),
                     mock(LoginRecordService.class),
-                    mock(com.streamfusion.platform.auth.captcha.CaptchaService.class));
+                    mock(com.streamfusion.platform.system.auth.captcha.CaptchaService.class));
     private final MapSessionRepository repository =
             spy(new MapSessionRepository(new ConcurrentHashMap<>()));
     private final SessionRepositoryFilter<MapSession> sessions =

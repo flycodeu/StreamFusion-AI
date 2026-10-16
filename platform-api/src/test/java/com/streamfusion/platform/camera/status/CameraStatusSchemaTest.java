@@ -65,6 +65,36 @@ class CameraStatusSchemaTest {
     }
 
     @Test
+    void mediaLayerRequiresCompleteMonotonicReceiptEvidenceAndDoesNotReplaceControl()
+            throws Exception {
+        insertSnapshot(2);
+        String copy =
+                "INSERT INTO camera_status_snapshot(profile_id,camera_id,layer,probe_kind,observation_value,reason_code,observed_at,read_at,valid_until,check_requested_at,updated_at,check_id,connection_key_id,connection_digest,media_window_started_at,media_window_ended_at,media_first_frames,media_last_frames,media_sample_count,media_max_gap_ms) SELECT profile_id,camera_id,'MEDIA','ZLM_RTP_FRAMES','ACCESSIBLE','MEDIA_RECEIVING',observed_at,read_at,valid_until,check_requested_at,updated_at,11,connection_key_id,connection_digest,DATEADD('SECOND',-5,observed_at),observed_at,10,100,3,2500 FROM camera_status_snapshot WHERE layer='CONTROL'";
+        execute(copy);
+        assertThat(count("camera_status_snapshot")).isEqualTo(2);
+        assertThatThrownBy(
+                        () ->
+                                execute(
+                                        "UPDATE camera_status_snapshot SET media_sample_count=2 WHERE layer='MEDIA'"))
+                .isInstanceOf(SQLException.class);
+        assertThatThrownBy(
+                        () ->
+                                execute(
+                                        "UPDATE camera_status_snapshot SET media_last_frames=9 WHERE layer='MEDIA'"))
+                .isInstanceOf(SQLException.class);
+        assertThatThrownBy(
+                        () ->
+                                execute(
+                                        "UPDATE camera_status_snapshot SET media_first_frames=1 WHERE layer='CONTROL'"))
+                .isInstanceOf(SQLException.class);
+        assertThatThrownBy(
+                        () ->
+                                execute(
+                                        "UPDATE camera_status_snapshot SET probe_kind='RTSP_DESCRIBE' WHERE layer='MEDIA'"))
+                .isInstanceOf(SQLException.class);
+    }
+
+    @Test
     void snapshotRequiresMatchingChannelAndSurvivesReceiptCleanupButNotProfileDeletion()
             throws Exception {
         insertCheck(10, 9, "key");

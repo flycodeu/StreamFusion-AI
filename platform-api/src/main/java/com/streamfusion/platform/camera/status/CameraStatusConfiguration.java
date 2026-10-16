@@ -25,9 +25,14 @@ public class CameraStatusConfiguration {
 
     @Bean(destroyMethod = "close")
     public CameraStatusWorker cameraStatusWorker(
-            RtspDescribeProbe probe, CameraStatusProperties properties) {
+            RtspDescribeProbe probe,
+            CameraMediaProbe mediaProbe,
+            CameraPlatformProbe platformProbe,
+            CameraStatusProperties properties) {
         return new CameraStatusWorker(
                 probe,
+                mediaProbe,
+                platformProbe,
                 new CameraStatusWorker.Limits(
                         properties.getWorkerThreads(),
                         properties.getQueueCapacity(),

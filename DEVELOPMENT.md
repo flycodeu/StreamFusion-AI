@@ -38,7 +38,7 @@ MySQL 驱动、Redis/Lettuce 和 Spring Security 版本由 Spring Boot 管理。
 
 标准覆盖入口为 Spring 配置；不使用 REDIS_URL，避免 URL 中数据库号覆盖单独的 database 配置。
 普通开发变量为上述 DB_* / REDIS_*；local 文件中可直接修改连接参数。
-表结构只维护 platform-api/sql/业务 中的24份逐表文件，platform-api/sql/streamfusion-mysql.sql 由 scripts/export-sql.ps1 自动生成，包含完整结构与种子。新安装只执行这一个文件；旧版库须核对真实缺项后定向升级，步骤见 [SQL 指南](platform-api/sql/README.md#已有库与菜单配置)。
+表结构只维护 platform-api/sql/业务 中的30份逐表文件，platform-api/sql/streamfusion-mysql.sql 由 scripts/export-sql.ps1 自动生成，包含完整结构与种子。新安装只执行这一个文件；保留已有数据的处理见 [SQL 指南](platform-api/sql/README.md#已有数据库)。
 首次运行前，按 [SQL 指南](platform-api/sql/README.md)手动初始化专用空库；应用不自动建库、建表或升级。
 脚本先 DROP 再 CREATE，会清空目标表；已有数据的库禁止用它升级。本地已经初始化的数据库无需重导。
 SQL 仅初始化内置角色、管理 PAGE 及可调整的示例组织，不包含默认用户或固定密码哈希。首次账号由下面的非 Web 引导创建。
@@ -52,6 +52,8 @@ SQL 仅初始化内置角色、管理 PAGE 及可调整的示例组织，不包�
 实际 local 文件不提交、不进入 JAR。公共示例不放真实 MySQL 账号密码。
 示例 JDBC 的关闭 TLS、公钥获取参数只供本机开发；生产使用最小权限数据库账号及经验证的 TLS。
 Redis 无密码仅适用于受控本机开发；不要将无认证 Redis 暴露到公网。
+
+会话使用 `streamfusion:<profile>:session:v2` 命名空间。升级至当前目录结构后，旧会话不再读取，用户需重新登录；无需清空 Redis，旧键按原期限过期。
 
 数据库连接池上限 10，连接等待 3 秒；Redis 连接/命令超时均 3 秒，
 MyBatis 默认语句超时 5 秒。spring.sql.init.mode=never，SQL 不打包到应用 JAR，无 Redis 启动写入。

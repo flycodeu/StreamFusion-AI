@@ -1,20 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import type { ProfileStatus, StatusCheck } from '../../api/camera-status/types'
+import type { LayerStatus, StatusCheck } from '../../api/camera-status/types'
 import { executionLabels, factPresentation, isTerminal, reasonLabel } from './model'
 
-const profile: ProfileStatus = {
-  streamProfileId: '1',
+const profile: LayerStatus = {
   layer: 'CONTROL',
   probeKind: 'RTSP_DESCRIBE',
   freshness: 'CURRENT',
   configurationCurrent: true,
   latestCheck: null,
+  timeline: null,
   canCheck: true,
   blockingReasonCode: null,
   observation: {
     value: 'ACCESSIBLE',
     reasonCode: 'RTSP_ACCESSIBLE',
     checkId: '2',
+    mediaEvidence: null,
     observedAt: '2026-10-13T01:00:00Z',
     readAt: '2026-10-13T01:00:00Z',
     validUntil: '2026-10-13T01:01:00Z',

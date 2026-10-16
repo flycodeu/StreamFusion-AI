@@ -13,9 +13,12 @@ public interface CameraStatusPlanTargetMapper extends BaseMapper<CameraStatusPla
     List<String> groupKeys(long planId);
 
     @Select(
-            "SELECT t.* FROM camera_status_plan_target t JOIN camera_status_plan p ON p.id=t.plan_id WHERE p.state='ACTIVE' AND p.end_at>#{now} AND t.blocked=0 AND t.next_at<=#{now} ORDER BY t.next_at,t.id LIMIT 1")
+            "SELECT t.* FROM camera_status_plan_target t JOIN camera_status_plan p ON p.id=t.plan_id WHERE p.state='ACTIVE' AND p.end_at>#{now} AND t.blocked=0 AND t.next_at<=#{now} ORDER BY t.next_at,t.id LIMIT 16")
     List<CameraStatusPlanTargetEntity> due(LocalDateTime now);
 
     @Select("SELECT * FROM camera_status_plan_target WHERE id=#{id} FOR UPDATE")
     CameraStatusPlanTargetEntity lock(long id);
+
+    @Select("SELECT * FROM camera_status_plan_target WHERE plan_id=#{planId} ORDER BY id")
+    List<CameraStatusPlanTargetEntity> forPlan(long planId);
 }

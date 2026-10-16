@@ -44,6 +44,27 @@ class CameraStatusPersistenceTest extends CameraTestSupport {
                                 String.class,
                                 profileId))
                 .isEqualTo("ACCESSIBLE");
-        assertThat(snapshots.selectById(profileId).getValue()).isEqualTo("ACCESSIBLE");
+        assertThat(snapshots.get(profileId, "CONTROL").getValue()).isEqualTo("ACCESSIBLE");
+        snapshot.setLayer("MEDIA");
+        snapshot.setProbeKind("ZLM_RTP_FRAMES");
+        snapshot.setValue("FAILED");
+        snapshot.setReasonCode("MEDIA_NO_FRAMES");
+        snapshot.setMediaWindowStartedAt(now.minusSeconds(5));
+        snapshot.setMediaWindowEndedAt(now);
+        snapshot.setMediaFirstFrames(5L);
+        snapshot.setMediaLastFrames(5L);
+        snapshot.setMediaSampleCount(3);
+        snapshot.setMediaMaxGapMs(5000L);
+        snapshots.insert(snapshot);
+        assertThat(snapshots.forCamera(cameraId)).hasSize(2);
+        var media = snapshots.get(profileId, "MEDIA");
+        assertThat(media.getValue()).isEqualTo("FAILED");
+        assertThat(media.getMediaLastFrames()).isEqualTo(5);
+        media.setLastAccessibleAt(now);
+        snapshots.update(media);
+        media.setLastAccessibleAt(null);
+        snapshots.update(media);
+        assertThat(snapshots.get(profileId, "MEDIA").getLastAccessibleAt()).isNull();
+        assertThat(snapshots.get(profileId, "CONTROL").getValue()).isEqualTo("ACCESSIBLE");
     }
 }

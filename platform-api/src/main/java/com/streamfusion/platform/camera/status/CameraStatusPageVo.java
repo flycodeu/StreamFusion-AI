@@ -5,7 +5,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import java.time.Instant;
 import java.util.List;
 
-@Schema(description = "按当前授权通道分页的控制层状态汇总，无网络检查")
+@Schema(description = "按当前授权通道分页的分层状态汇总，无网络检查")
 public record CameraStatusPageVo(
         @Schema(description = "当前页通道列表") List<Item> items,
         @Schema(description = "当前权限及筛选下的通道总数") long total,
@@ -16,8 +16,8 @@ public record CameraStatusPageVo(
     @Schema(name = "CameraStatusPageSummaryVo", description = "仅统计当前页各通道的代表码流")
     public record Summary(
             @Schema(description = "当前页通道数") int total,
-            @Schema(description = "代表码流具有有效连接可达事实的通道数") int accessible,
-            @Schema(description = "代表码流具有有效连接失败事实的通道数") int failed,
+            @Schema(description = "代表码流所选层具有有效通过事实的通道数") int accessible,
+            @Schema(description = "代表码流所选层具有有效失败事实的通道数") int failed,
             @Schema(description = "代表码流检查等待或执行中的通道数") int checking,
             @Schema(description = "代表码流事实过期或配置已变化的通道数") int stale,
             @Schema(description = "尚无可用代表码流事实的启用通道数") int unknown,
@@ -36,23 +36,14 @@ public record CameraStatusPageVo(
                     String defaultPreviewProfileId,
             @Schema(description = "当前通道全部Profile，允许为空") List<Profile> profiles) {}
 
-    @Schema(name = "CameraStatusPageProfileVo", description = "码流档案与CONTROL事实；不代表媒体可解码")
+    @Schema(name = "CameraStatusPageProfileVo", description = "码流档案与连接/收流事实")
     public record Profile(
             @Schema(description = "稳定码流ID") String streamProfileId,
             @Schema(description = "本地码流标签，未知为空", nullable = true) String name,
             @Schema(description = "声明的码流用途MAIN/SUB/THIRD/CUSTOM/UNKNOWN，未知可空", nullable = true)
                     String streamKind,
             @Schema(description = "是否允许新使用") boolean enabled,
-            @Schema(description = "固定CONTROL") String layer,
-            @Schema(description = "固定RTSP_DESCRIBE") String probeKind,
-            @Schema(description = "上次合法事实，未检查为空", nullable = true)
-                    CameraStatusObservationVo observation,
-            @Schema(description = "NEVER/CURRENT/STALE") String freshness,
-            @Schema(description = "事实是否仍匹配当前实际连接语义") boolean configurationCurrent,
-            @Schema(description = "本Profile最新保留检查回执，允许为空", nullable = true)
-                    CameraStatusCheckVo latestCheck,
-            @Schema(description = "当前配置是否允许新显式控制检查") boolean canCheck,
-            @Schema(description = "阻止检查的受控原因，可检查为空", nullable = true) String blockingReasonCode,
-            @Schema(description = "连接采样时间；配置变化或无事实时为空", nullable = true)
-                    CameraStatusTimelineVo timeline) {}
+            @Schema(description = "RTSP控制连接检查") CameraStatusLayerVo control,
+            @Schema(description = "媒体接收检查，不证明解码或画面正常") CameraStatusLayerVo media,
+            @Schema(description = "平台官方在线状态") CameraStatusLayerVo upstream) {}
 }

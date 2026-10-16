@@ -13,6 +13,14 @@ import org.apache.ibatis.annotations.Select;
 
 @Mapper
 public interface CameraChannelMapper extends BaseMapper<CameraChannelEntity> {
+    List<CameraStatusPageRow> statusSelectedChannels(
+            @Param("ids") List<Long> ids, @Param("visibility") Visibility visibility);
+
+    List<CameraStatusPageRow> statusGroupRepresentatives(
+            @Param("groupIds") List<Long> groupIds,
+            @Param("visibility") Visibility visibility,
+            @Param("limit") int limit);
+
     record Filter(
             String name, Long sourceId, String adapterType, String lifecycle, List<Long> groups) {}
 
@@ -36,6 +44,7 @@ public interface CameraChannelMapper extends BaseMapper<CameraChannelEntity> {
             Page<CameraStatusPageRow> page,
             @Param("name") String name,
             @Param("observation") String observation,
+            @Param("layer") String layer,
             @Param("visibility") Visibility visibility);
 
     CameraAssetRow visible(@Param("id") long id, @Param("visibility") Visibility visibility);

@@ -19,6 +19,67 @@ import org.junit.jupiter.api.Test;
 
 class CameraStatusWorkerTest {
     @Test
+    void mediaUsesTheSharedSourceGateUntilOwnedPullCleanupCompletes() throws Exception {
+        var control = mock(RtspDescribeProbe.class);
+        var media = mock(CameraMediaProbe.class);
+        var stopped = new java.util.concurrent.CompletableFuture<Void>();
+        var profile = new com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity();
+        profile.setId(1L);
+        profile.setSourceId(2L);
+        when(media.execute(anyLong(), anyString(), any(), any(), anyLong(), any()))
+                .thenAnswer(
+                        invocation -> {
+                            RtspDescribeProbe.Cancellation cancellation = invocation.getArgument(5);
+                            assertThat(cancellation.claimResources(stopped, () -> {})).isTrue();
+                            return new CameraProbeResult(
+                                    CameraProbeResult.Outcome.NOT_EXECUTED,
+                                    "MEDIA_EVIDENCE_INSUFFICIENT",
+                                    0,
+                                    0,
+                                    null);
+                        });
+        try (var worker =
+                new CameraStatusWorker(
+                        control, media, new CameraStatusWorker.Limits(2, 2, Duration.ZERO))) {
+            var result =
+                    worker.trySubmit(
+                                    CameraStatusWorker.Request.media(
+                                            1,
+                                            2,
+                                            1,
+                                            "trace1",
+                                            profile,
+                                            Duration.ofSeconds(18),
+                                            () -> {},
+                                            () -> {}))
+                            .completion()
+                            .get(2, TimeUnit.SECONDS);
+            assertThat(result.reasonCode()).isEqualTo("MEDIA_EVIDENCE_INSUFFICIENT");
+            assertThat(
+                            worker.trySubmit(request(2, 2, 3))
+                                    .completion()
+                                    .get(2, TimeUnit.SECONDS)
+                                    .reasonCode())
+                    .isEqualTo("SOURCE_BUSY");
+            assertThat(
+                            worker.trySubmit(request(3, 4, 1))
+                                    .completion()
+                                    .get(2, TimeUnit.SECONDS)
+                                    .reasonCode())
+                    .isEqualTo("PROFILE_BUSY");
+            stopped.complete(null);
+            when(control.execute(any(), anyLong(), any())).thenReturn(accessible());
+            assertThat(
+                            worker.trySubmit(request(4, 2, 1))
+                                    .completion()
+                                    .get(2, TimeUnit.SECONDS)
+                                    .reasonCode())
+                    .isEqualTo("RTSP_ACCESSIBLE");
+            verify(media).execute(eq(1L), eq("trace1"), same(profile), any(), anyLong(), any());
+        }
+    }
+
+    @Test
     void deferredResolutionSharesWorkerGateAndDeadlineAndCancellationPreventsDescribe()
             throws Exception {
         var entered = new CountDownLatch(1);
@@ -26,7 +87,10 @@ class CameraStatusWorkerTest {
         var probe = mock(RtspDescribeProbe.class);
         var base = request(1, 1, 1);
         try (var worker =
-                new CameraStatusWorker(probe, new CameraStatusWorker.Limits(2, 1, Duration.ZERO))) {
+                new CameraStatusWorker(
+                        probe,
+                        org.mockito.Mockito.mock(CameraMediaProbe.class),
+                        new CameraStatusWorker.Limits(2, 1, Duration.ZERO))) {
             try {
                 var submitted =
                         worker.trySubmit(
@@ -64,7 +128,7 @@ class CameraStatusWorkerTest {
                 worker.cancel(1);
                 release.countDown();
                 assertThat(submitted.completion().get(2, TimeUnit.SECONDS).outcome())
-                        .isEqualTo(RtspDescribeProbe.Outcome.CANCELLED);
+                        .isEqualTo(CameraProbeResult.Outcome.CANCELLED);
                 verifyNoInteractions(probe);
             } finally {
                 release.countDown();
@@ -77,7 +141,10 @@ class CameraStatusWorkerTest {
         var probe = mock(RtspDescribeProbe.class);
         var base = request(1, 1, 1);
         try (var worker =
-                new CameraStatusWorker(probe, new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
+                new CameraStatusWorker(
+                        probe,
+                        org.mockito.Mockito.mock(CameraMediaProbe.class),
+                        new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
             var submitted =
                     worker.trySubmit(
                             new CameraStatusWorker.Request(
@@ -93,7 +160,7 @@ class CameraStatusWorkerTest {
                                                 "STREAM_URI_AUTH_REJECTED");
                                     }));
             var result = submitted.completion().get(2, TimeUnit.SECONDS);
-            assertThat(result.outcome()).isEqualTo(RtspDescribeProbe.Outcome.NOT_EXECUTED);
+            assertThat(result.outcome()).isEqualTo(CameraProbeResult.Outcome.NOT_EXECUTED);
             assertThat(result.reasonCode()).isEqualTo("STREAM_URI_AUTH_REJECTED");
             verifyNoInteractions(probe);
         }
@@ -115,9 +182,9 @@ class CameraStatusWorkerTest {
                 timeout);
     }
 
-    private static RtspDescribeProbe.Result accessible() {
-        return new RtspDescribeProbe.Result(
-                RtspDescribeProbe.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 200, 1);
+    private static CameraProbeResult accessible() {
+        return new CameraProbeResult(
+                CameraProbeResult.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 200, 1, null);
     }
 
     private static RtspDescribeProbe blocking(
@@ -142,7 +209,10 @@ class CameraStatusWorkerTest {
         var thread = new AtomicReference<String>();
         var probe = blocking(entered, release, thread);
         try (var worker =
-                new CameraStatusWorker(probe, new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
+                new CameraStatusWorker(
+                        probe,
+                        org.mockito.Mockito.mock(CameraMediaProbe.class),
+                        new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
             try {
                 var first = worker.trySubmit(request(1, 1, 1));
                 assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
@@ -153,7 +223,7 @@ class CameraStatusWorkerTest {
                 assertThat(rejected.accepted()).isFalse();
                 assertThat(rejected.reasonCode()).isEqualTo("WORKER_BUSY");
                 assertThat(rejected.completion().get().outcome())
-                        .isEqualTo(RtspDescribeProbe.Outcome.NOT_EXECUTED);
+                        .isEqualTo(CameraProbeResult.Outcome.NOT_EXECUTED);
                 for (int i = 0; i < 1000; i++) {
                     var burst = worker.trySubmit(request(i + 4, i + 4, i + 4));
                     assertThat(burst.accepted()).isFalse();
@@ -163,7 +233,7 @@ class CameraStatusWorkerTest {
                 assertThat(thread.get()).isNotEqualTo(Thread.currentThread().getName());
                 release.countDown();
                 assertThat(first.completion().get(2, TimeUnit.SECONDS).outcome())
-                        .isEqualTo(RtspDescribeProbe.Outcome.ACCESSIBLE);
+                        .isEqualTo(CameraProbeResult.Outcome.ACCESSIBLE);
                 queued.completion().get(2, TimeUnit.SECONDS);
                 verify(probe, times(2)).execute(any(), anyLong(), any());
             } finally {
@@ -178,7 +248,10 @@ class CameraStatusWorkerTest {
         var release = new CountDownLatch(1);
         var probe = blocking(entered, release, null);
         try (var worker =
-                new CameraStatusWorker(probe, new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
+                new CameraStatusWorker(
+                        probe,
+                        org.mockito.Mockito.mock(CameraMediaProbe.class),
+                        new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
             try {
                 var input = request(1, 1, 1);
                 var first = worker.trySubmit(input);
@@ -205,7 +278,10 @@ class CameraStatusWorkerTest {
         var hookCalls = new AtomicInteger();
         var probe = blocking(entered, release, null);
         try (var worker =
-                new CameraStatusWorker(probe, new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
+                new CameraStatusWorker(
+                        probe,
+                        org.mockito.Mockito.mock(CameraMediaProbe.class),
+                        new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
             try {
                 var base = request(1, 1, 1);
                 var firstRequest =
@@ -249,7 +325,7 @@ class CameraStatusWorkerTest {
                         .isNotEqualTo(Thread.currentThread().getName());
                 release.countDown();
                 assertThat(first.completion().get(1, TimeUnit.SECONDS).outcome())
-                        .isEqualTo(RtspDescribeProbe.Outcome.ACCESSIBLE);
+                        .isEqualTo(CameraProbeResult.Outcome.ACCESSIBLE);
             } finally {
                 release.countDown();
             }
@@ -260,7 +336,10 @@ class CameraStatusWorkerTest {
     void lifecycleRevocationNeverInvokesProbeOrTurnsIntoDeviceFailure() throws Exception {
         var probe = mock(RtspDescribeProbe.class);
         try (var worker =
-                new CameraStatusWorker(probe, new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
+                new CameraStatusWorker(
+                        probe,
+                        org.mockito.Mockito.mock(CameraMediaProbe.class),
+                        new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
             var base = request(1, 1, 1);
             var input =
                     new CameraStatusWorker.Request(
@@ -274,7 +353,7 @@ class CameraStatusWorkerTest {
                                 throw new CameraAdapterException("ACTOR_REVOKED");
                             });
             var result = worker.trySubmit(input).completion().get(1, TimeUnit.SECONDS);
-            assertThat(result.outcome()).isEqualTo(RtspDescribeProbe.Outcome.NOT_EXECUTED);
+            assertThat(result.outcome()).isEqualTo(CameraProbeResult.Outcome.NOT_EXECUTED);
             assertThat(result.reasonCode()).isEqualTo("ACTOR_REVOKED");
             verifyNoInteractions(probe);
         }
@@ -286,7 +365,10 @@ class CameraStatusWorkerTest {
         var release = new CountDownLatch(1);
         var probe = blocking(entered, release, null);
         try (var worker =
-                new CameraStatusWorker(probe, new CameraStatusWorker.Limits(2, 1, Duration.ZERO))) {
+                new CameraStatusWorker(
+                        probe,
+                        org.mockito.Mockito.mock(CameraMediaProbe.class),
+                        new CameraStatusWorker.Limits(2, 1, Duration.ZERO))) {
             try {
                 var first = worker.trySubmit(request(1, 1, 1));
                 assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
@@ -298,7 +380,7 @@ class CameraStatusWorkerTest {
                 verify(probe, times(1)).execute(any(), anyLong(), any());
                 release.countDown();
                 assertThat(first.completion().get(2, TimeUnit.SECONDS).outcome())
-                        .isEqualTo(RtspDescribeProbe.Outcome.CANCELLED);
+                        .isEqualTo(CameraProbeResult.Outcome.CANCELLED);
                 worker.trySubmit(request(3, 1, 2)).completion().get(2, TimeUnit.SECONDS);
                 verify(probe, times(2)).execute(any(), anyLong(), any());
             } finally {
@@ -313,7 +395,10 @@ class CameraStatusWorkerTest {
         var release = new CountDownLatch(1);
         var probe = blocking(entered, release, null);
         try (var worker =
-                new CameraStatusWorker(probe, new CameraStatusWorker.Limits(2, 2, Duration.ZERO))) {
+                new CameraStatusWorker(
+                        probe,
+                        org.mockito.Mockito.mock(CameraMediaProbe.class),
+                        new CameraStatusWorker.Limits(2, 2, Duration.ZERO))) {
             try {
                 var first = worker.trySubmit(request(1, 1, 1));
                 assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
@@ -367,7 +452,10 @@ class CameraStatusWorkerTest {
                             throw new UnknownHostException("fixture-unavailable");
                         });
         var worker =
-                new CameraStatusWorker(probe, new CameraStatusWorker.Limits(2, 2, Duration.ZERO));
+                new CameraStatusWorker(
+                        probe,
+                        org.mockito.Mockito.mock(CameraMediaProbe.class),
+                        new CameraStatusWorker.Limits(2, 2, Duration.ZERO));
         try {
             var first = worker.trySubmit(request(1, 1, 1, Duration.ofMillis(cancel ? 1500 : 150)));
             assertThat(entered.await(1, TimeUnit.SECONDS)).isTrue();
@@ -394,7 +482,7 @@ class CameraStatusWorkerTest {
                     .isEqualTo("SOURCE_BUSY");
             assertThat(calls.get()).isEqualTo(1);
             release.countDown();
-            RtspDescribeProbe.Result afterRelease = null;
+            CameraProbeResult afterRelease = null;
             long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
             long check = 5;
             do {
@@ -422,14 +510,17 @@ class CameraStatusWorkerTest {
         var release = new CountDownLatch(1);
         var probe = blocking(entered, release, null);
         try (var worker =
-                new CameraStatusWorker(probe, new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
+                new CameraStatusWorker(
+                        probe,
+                        org.mockito.Mockito.mock(CameraMediaProbe.class),
+                        new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
             try {
                 var first = worker.trySubmit(request(1, 1, 1));
                 assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
                 var queued = worker.trySubmit(request(2, 2, 2));
                 assertThat(worker.cancel(2)).isTrue();
                 assertThat(queued.completion().get().outcome())
-                        .isEqualTo(RtspDescribeProbe.Outcome.CANCELLED);
+                        .isEqualTo(CameraProbeResult.Outcome.CANCELLED);
                 var replacement = worker.trySubmit(request(3, 3, 3));
                 assertThat(replacement.accepted()).isTrue();
                 release.countDown();
@@ -448,7 +539,10 @@ class CameraStatusWorkerTest {
         var release = new CountDownLatch(1);
         var probe = blocking(entered, release, null);
         try (var worker =
-                new CameraStatusWorker(probe, new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
+                new CameraStatusWorker(
+                        probe,
+                        org.mockito.Mockito.mock(CameraMediaProbe.class),
+                        new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
             try {
                 var first = worker.trySubmit(request(1, 1, 1));
                 assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
@@ -473,11 +567,13 @@ class CameraStatusWorkerTest {
         when(probe.execute(any(), anyLong(), any())).thenReturn(accessible());
         try (var worker =
                 new CameraStatusWorker(
-                        probe, new CameraStatusWorker.Limits(1, 1, Duration.ofSeconds(10)))) {
+                        probe,
+                        org.mockito.Mockito.mock(CameraMediaProbe.class),
+                        new CameraStatusWorker.Limits(1, 1, Duration.ofSeconds(10)))) {
             worker.trySubmit(request(1, 1, 1)).completion().get(2, TimeUnit.SECONDS);
             var result = worker.trySubmit(request(2, 2, 2)).completion().get(2, TimeUnit.SECONDS);
             assertThat(result.reasonCode()).isEqualTo("START_BUDGET_BUSY");
-            assertThat(result.outcome()).isEqualTo(RtspDescribeProbe.Outcome.NOT_EXECUTED);
+            assertThat(result.outcome()).isEqualTo(CameraProbeResult.Outcome.NOT_EXECUTED);
             verify(probe, times(1)).execute(any(), anyLong(), any());
         }
     }
@@ -488,9 +584,12 @@ class CameraStatusWorkerTest {
         when(probe.execute(any(), anyLong(), any()))
                 .thenThrow(new IllegalStateException("rtsp://user:secret@host/private"));
         try (var worker =
-                new CameraStatusWorker(probe, new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
+                new CameraStatusWorker(
+                        probe,
+                        org.mockito.Mockito.mock(CameraMediaProbe.class),
+                        new CameraStatusWorker.Limits(1, 1, Duration.ZERO))) {
             var result = worker.trySubmit(request(1, 1, 1)).completion().get(2, TimeUnit.SECONDS);
-            assertThat(result.outcome()).isEqualTo(RtspDescribeProbe.Outcome.NOT_EXECUTED);
+            assertThat(result.outcome()).isEqualTo(CameraProbeResult.Outcome.NOT_EXECUTED);
             assertThat(result.reasonCode()).isEqualTo("PROBE_UNAVAILABLE");
             assertThat(result.toString()).doesNotContain("secret", "private");
         }
@@ -513,16 +612,19 @@ class CameraStatusWorkerTest {
                             return accessible();
                         });
         var worker =
-                new CameraStatusWorker(probe, new CameraStatusWorker.Limits(1, 1, Duration.ZERO));
+                new CameraStatusWorker(
+                        probe,
+                        org.mockito.Mockito.mock(CameraMediaProbe.class),
+                        new CameraStatusWorker.Limits(1, 1, Duration.ZERO));
         try {
             var running = worker.trySubmit(request(1, 1, 1));
             assertThat(entered.await(2, TimeUnit.SECONDS)).isTrue();
             var queued = worker.trySubmit(request(2, 2, 2));
             worker.close();
             assertThat(queued.completion().get(2, TimeUnit.SECONDS).outcome())
-                    .isEqualTo(RtspDescribeProbe.Outcome.CANCELLED);
+                    .isEqualTo(CameraProbeResult.Outcome.CANCELLED);
             assertThat(running.completion().get(2, TimeUnit.SECONDS).outcome())
-                    .isEqualTo(RtspDescribeProbe.Outcome.CANCELLED);
+                    .isEqualTo(CameraProbeResult.Outcome.CANCELLED);
             assertThat(interrupted.get()).isEqualTo(1);
             assertThat(worker.trySubmit(request(3, 3, 3)).reasonCode()).isEqualTo("WORKER_STOPPED");
             assertThat(worker.awaitStopped(Duration.ofSeconds(2))).isTrue();
@@ -539,7 +641,9 @@ class CameraStatusWorkerTest {
         for (int i = 0; i < 100; i++) {
             var worker =
                     new CameraStatusWorker(
-                            probe, new CameraStatusWorker.Limits(1, 1, Duration.ZERO));
+                            probe,
+                            org.mockito.Mockito.mock(CameraMediaProbe.class),
+                            new CameraStatusWorker.Limits(1, 1, Duration.ZERO));
             var start = new CountDownLatch(1);
             var receipt = new AtomicReference<CameraStatusWorker.Submission>();
             var submitting =

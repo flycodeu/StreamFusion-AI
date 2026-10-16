@@ -75,7 +75,8 @@ class CameraStatusNetworkIntegrationTest extends CameraTestSupport {
                                 assertThat(checks.selectList(null)).hasSize(1);
                                 assertThat(checks.selectList(null).getFirst().getExecutionState())
                                         .isEqualTo("COMPLETED");
-                                assertThat(snapshots.selectList(null)).hasSize(1);
+                                assertThat(snapshots.forCamera(camera.path("cameraId").asLong()))
+                                        .hasSize(1);
                             });
             assertThat(fixture.requests).hasSize(1);
             assertThat(fixture.requests.getFirst())
@@ -83,7 +84,7 @@ class CameraStatusNetworkIntegrationTest extends CameraTestSupport {
                             "DESCRIBE rtsp://127.0.0.1:"
                                     + fixture.port()
                                     + "/private-main RTSP/1.0");
-            var fact = snapshots.selectList(null).getFirst();
+            var fact = snapshots.forCamera(camera.path("cameraId").asLong()).getFirst();
             assertThat(fact.getValue()).isEqualTo(value);
             assertThat(fact.getReasonCode()).isEqualTo(reason);
             assertThat(fact.getStateSince()).isNotNull();
@@ -104,9 +105,14 @@ class CameraStatusNetworkIntegrationTest extends CameraTestSupport {
                                                                     .asText()))
                             .findFirst()
                             .orElseThrow();
-            assertThat(selected.path("observation").path("reasonCode").asText()).isEqualTo(reason);
-            assertThat(selected.path("timeline").path("stateSince").asText()).isNotBlank();
-            assertThat(profiles.stream().filter(p -> !p.path("observation").isNull())).hasSize(1);
+            assertThat(selected.path("control").path("observation").path("reasonCode").asText())
+                    .isEqualTo(reason);
+            assertThat(selected.path("control").path("timeline").path("stateSince").asText())
+                    .isNotBlank();
+            assertThat(
+                            profiles.stream()
+                                    .filter(p -> !p.path("control").path("observation").isNull()))
+                    .hasSize(1);
             var listed = read("/camera-status/plans", renewed).get(0);
             assertThat(listed.path("progress").path(response == 200 ? "success" : "failed").asInt())
                     .isOne();
@@ -145,7 +151,7 @@ class CameraStatusNetworkIntegrationTest extends CameraTestSupport {
                                                             .getExecutionState())
                                             .isNotIn("QUEUED", "RUNNING"));
             assertThat(checks.selectList(null).getFirst().getSnapshotApplied()).isFalse();
-            assertThat(snapshots.selectList(null)).isEmpty();
+            assertThat(snapshots.forCamera(camera.path("cameraId").asLong())).isEmpty();
         }
     }
 
@@ -166,7 +172,8 @@ class CameraStatusNetworkIntegrationTest extends CameraTestSupport {
             var camera = simulatedCamera(auth, rtsp.port());
             installProtocol(camera, kind, mediaVersion, http.port(), rtsp.port());
             var status = read("/cameras/" + camera.path("cameraId").asText() + "/status", auth);
-            assertThat(status.path("profiles").get(0).path("canCheck").asBoolean()).isTrue();
+            assertThat(status.path("profiles").get(0).path("control").path("canCheck").asBoolean())
+                    .isTrue();
             var plan = start(auth, camera);
             assertThat(http.requests).isEmpty();
             assertThat(rtsp.requests).isEmpty();
@@ -175,11 +182,13 @@ class CameraStatusNetworkIntegrationTest extends CameraTestSupport {
             await().atMost(Duration.ofSeconds(5))
                     .untilAsserted(
                             () -> {
-                                assertThat(snapshots.selectList(null)).hasSize(1);
+                                assertThat(snapshots.forCamera(camera.path("cameraId").asLong()))
+                                        .hasSize(1);
                                 assertThat(checks.selectList(null).getFirst().getExecutionState())
                                         .isEqualTo("COMPLETED");
                             });
-            assertThat(snapshots.selectList(null).getFirst().getValue()).isEqualTo("ACCESSIBLE");
+            assertThat(snapshots.forCamera(camera.path("cameraId").asLong()).getFirst().getValue())
+                    .isEqualTo("ACCESSIBLE");
             assertThat(rtsp.requests)
                     .containsExactly(
                             "DESCRIBE rtsp://127.0.0.1:" + rtsp.port() + path + " RTSP/1.0");
@@ -222,7 +231,7 @@ class CameraStatusNetworkIntegrationTest extends CameraTestSupport {
                                         .isEqualTo("SKIPPED");
                             });
             assertThat(checks.selectList(null).getFirst().getReasonCode()).isEqualTo(reason);
-            assertThat(snapshots.selectList(null)).isEmpty();
+            assertThat(snapshots.forCamera(camera.path("cameraId").asLong())).isEmpty();
         }
     }
 
@@ -252,7 +261,7 @@ class CameraStatusNetworkIntegrationTest extends CameraTestSupport {
                                                             .getExecutionState())
                                             .isNotIn("QUEUED", "RUNNING"));
             assertThat(rtsp.requests).isEmpty();
-            assertThat(snapshots.selectList(null)).isEmpty();
+            assertThat(snapshots.forCamera(camera.path("cameraId").asLong())).isEmpty();
         }
     }
 

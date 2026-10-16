@@ -149,6 +149,26 @@ class MediaRuntimeServiceTest {
         assertThat(Files.readString(file)).isEqualTo("broken");
     }
 
+    @Test
+    void previewLookupsNeverStartDiscoveryEvenBeforeTheInitialInventory() {
+        var service = org.mockito.Mockito.spy(service(false));
+        assertThat(service.activeZlm()).isEmpty();
+        assertThat(service.activeFfmpeg()).isEmpty();
+        org.mockito.Mockito.verify(service, org.mockito.Mockito.never()).detect();
+        org.mockito.Mockito.verify(service, org.mockito.Mockito.never()).current();
+    }
+
+    @Test
+    void previewUsesTheDiscoveredSelectionWithoutAnExpiredCacheRescan() throws Exception {
+        new RuntimeSelectionStore(directory, new ObjectMapper())
+                .update("WINDOWS", new Selection(null, FFMPEG.id()), "0");
+        var service = org.mockito.Mockito.spy(service(false));
+        seed(service, List.of(FFMPEG), System.nanoTime() - Duration.ofMinutes(1).toNanos());
+        assertThat(service.activeFfmpeg()).isPresent();
+        org.mockito.Mockito.verify(service, org.mockito.Mockito.never()).detect();
+        org.mockito.Mockito.verify(service, org.mockito.Mockito.never()).current();
+    }
+
     private MediaRuntimeService service(boolean automatic) {
         var properties =
                 new MediaRuntimeProperties(
@@ -171,6 +191,12 @@ class MediaRuntimeServiceTest {
 
     private static void seed(MediaRuntimeService service, List<Candidate> candidates)
             throws Exception {
+        seed(service, candidates, System.nanoTime());
+    }
+
+    private static void seed(
+            MediaRuntimeService service, List<Candidate> candidates, long detectedAt)
+            throws Exception {
         var type = Class.forName(MediaRuntimeService.class.getName() + "$Inventory");
         var constructor = type.getDeclaredConstructors()[0];
         constructor.setAccessible(true);
@@ -178,7 +204,7 @@ class MediaRuntimeServiceTest {
                 service,
                 "inventory",
                 constructor.newInstance(
-                        candidates, Map.of(), Instant.now(), System.nanoTime(), List.of()));
+                        candidates, Map.of(), Instant.now(), detectedAt, List.of()));
     }
 
     private static Selection match(

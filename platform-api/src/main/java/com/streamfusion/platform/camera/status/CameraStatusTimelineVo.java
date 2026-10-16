@@ -5,11 +5,11 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 
-@Schema(description = "同一连接配置的CONTROL采样时间，不是设备真实上下线或连续离线时长")
+@Schema(description = "同一配置的本层采样时间，不是设备真实上下线或连续离线时长")
 public record CameraStatusTimelineVo(
         @Schema(description = "本轮相同结果首次检出时间；旧数据从已知观察时间起算") Instant stateSince,
-        @Schema(description = "最近一次连接成功的观察时间，未知为空") Instant lastAccessibleAt,
-        @Schema(description = "最近一次连接失败的观察时间，未知为空") Instant lastFailedAt) {
+        @Schema(description = "本层最近一次检查成功的观察时间，未知为空") Instant lastAccessibleAt,
+        @Schema(description = "本层最近一次检查失败的观察时间，未知为空") Instant lastFailedAt) {
     public static CameraStatusTimelineVo from(CameraStatusSnapshotEntity fact) {
         if (fact == null) return null;
         return new CameraStatusTimelineVo(

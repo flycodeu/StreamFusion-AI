@@ -1,9 +1,9 @@
 package com.streamfusion.platform.common.security;
 
-import com.streamfusion.platform.auth.controller.AuthController;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.web.ApiErrorWriter;
+import com.streamfusion.platform.system.auth.controller.AuthController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;

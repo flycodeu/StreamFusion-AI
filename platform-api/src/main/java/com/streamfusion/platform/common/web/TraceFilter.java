@@ -1,7 +1,7 @@
 package com.streamfusion.platform.common.web;
 
 import com.streamfusion.platform.common.security.ModuleRegistry;
-import com.streamfusion.platform.diagnostics.DiagnosticLog;
+import com.streamfusion.platform.monitor.diagnostics.DiagnosticLog;
 import jakarta.servlet.AsyncEvent;
 import jakarta.servlet.AsyncListener;
 import jakarta.servlet.FilterChain;

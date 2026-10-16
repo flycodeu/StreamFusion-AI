@@ -95,6 +95,25 @@
         <include refid="deviceFilters"/>
         ORDER BY c.id ASC
     </select>
+    <select id="statusSelectedChannels" resultType="com.streamfusion.platform.camera.status.CameraStatusPageRow">
+        SELECT c.* FROM camera_channel c JOIN camera_source s ON s.id=c.source_id
+        WHERE (<include refid="com.streamfusion.platform.camera.mapper.CameraScopeMapper.visibleCamera"/>)
+        AND c.lifecycle='ENABLED' AND c.id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY c.id
+    </select>
+    <select id="statusGroupRepresentatives" resultType="com.streamfusion.platform.camera.status.CameraStatusPageRow">
+        SELECT representative.* FROM (
+            SELECT c.*,ROW_NUMBER() OVER (
+                PARTITION BY <include refid="deviceGroupKey"/> ORDER BY c.id
+            ) AS representative_order
+            FROM camera_channel c JOIN camera_source s ON s.id=c.source_id
+            LEFT JOIN camera_device d ON d.id=c.device_id AND d.source_id=c.source_id
+            WHERE (<include refid="com.streamfusion.platform.camera.mapper.CameraScopeMapper.visibleCamera"/>)
+            AND c.lifecycle='ENABLED' AND c.group_id IN
+            <foreach collection="groupIds" item="groupId" open="(" separator="," close=")">#{groupId}</foreach>
+        ) representative WHERE representative.representative_order=1 ORDER BY representative.id LIMIT #{limit}
+    </select>
     <select id="statusDeviceRepresentatives" resultType="com.streamfusion.platform.camera.status.CameraStatusPageRow">
         SELECT representative.* FROM (
             SELECT c.*,ROW_NUMBER() OVER (
@@ -135,7 +154,7 @@
                     WHERE p.channel_id=c.id AND p.enabled=1
                     ORDER BY CASE WHEN p.id=c.default_preview_profile_id THEN 0
                         WHEN p.usage_hint='MAIN' THEN 1 ELSE 2 END,p.id LIMIT 1)
-                AND f.layer='CONTROL'
+                AND f.layer=CASE WHEN s.adapter_type='HIK_PLATFORM' THEN 'UPSTREAM' ELSE #{layer} END
                 <if test="observation != 'NEVER'">AND f.observation_value=#{observation}</if>)
         </if>
         ORDER BY c.created_at DESC,c.id DESC

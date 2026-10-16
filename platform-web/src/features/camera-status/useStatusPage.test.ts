@@ -44,31 +44,46 @@ function page(state: ExecutionState | null = null, cameraId = '1'): StatusPage {
             name: '主码流',
             streamKind: 'MAIN',
             enabled: true,
-            layer: 'CONTROL',
-            probeKind: 'RTSP_DESCRIBE',
-            observation: null,
-            freshness: 'NEVER',
-            configurationCurrent: true,
-            canCheck: true,
-            blockingReasonCode: null,
-            latestCheck: state
-              ? {
-                  checkId: '100',
-                  cameraId,
-                  streamProfileId: '10',
-                  probeKind: 'RTSP_DESCRIBE',
-                  executionState: state,
-                  requestedAt: now,
-                  startedAt: null,
-                  finishedAt: null,
-                  deadlineAt: now,
-                  observation: null,
-                  reasonCode: null,
-                  durationMs: null,
-                  traceId: 'a'.repeat(32),
-                  snapshotApplied: false,
-                }
-              : null,
+            control: {
+              layer: 'CONTROL',
+              probeKind: 'RTSP_DESCRIBE',
+              observation: null,
+              freshness: 'NEVER',
+              configurationCurrent: true,
+              canCheck: true,
+              blockingReasonCode: null,
+              latestCheck: state
+                ? {
+                    checkId: '100',
+                    cameraId,
+                    streamProfileId: '10',
+                    layer: 'CONTROL',
+                    probeKind: 'RTSP_DESCRIBE',
+                    executionState: state,
+                    requestedAt: now,
+                    startedAt: null,
+                    finishedAt: null,
+                    deadlineAt: now,
+                    observation: null,
+                    reasonCode: null,
+                    durationMs: null,
+                    traceId: 'a'.repeat(32),
+                    snapshotApplied: false,
+                  }
+                : null,
+              timeline: null,
+            },
+            media: {
+              layer: 'MEDIA',
+              probeKind: 'ZLM_RTP_FRAMES',
+              observation: null,
+              freshness: 'NEVER',
+              configurationCurrent: true,
+              latestCheck: null,
+              canCheck: true,
+              blockingReasonCode: null,
+              timeline: null,
+            },
           },
         ],
       },
@@ -92,7 +107,7 @@ beforeEach(async () => {
   documentState = Object.assign(new EventTarget(), { hidden: false })
   vi.stubGlobal('document', documentState)
   api.page.mockReset().mockResolvedValue(page())
-  query = shallowRef({ page: 1, size: 20 })
+  query = shallowRef({ page: 1, size: 20, layer: 'CONTROL' })
   active = ref(true)
   scope = effectScope()
   controls = scope.run(() => useStatusPage(query, active))!
@@ -106,9 +121,46 @@ afterEach(() => {
   vi.useRealTimers()
 })
 describe('aggregate camera status page read owner', () => {
+  it('expires MEDIA independently without changing CONTROL or starting a probe', async () => {
+    const response = page()
+    const profile = response.items[0]!.profiles[0]!
+    const fact = {
+      value: 'ACCESSIBLE' as const,
+      reasonCode: 'RTSP_ACCESSIBLE',
+      checkId: '100',
+      observedAt: now,
+      readAt: now,
+      validUntil: '2026-10-13T01:00:20Z',
+      mediaEvidence: null,
+    }
+    profile.control = { ...profile.control, freshness: 'CURRENT', observation: fact }
+    profile.media = {
+      ...profile.media,
+      freshness: 'CURRENT',
+      observation: {
+        ...fact,
+        reasonCode: 'MEDIA_RECEIVING',
+        validUntil: '2026-10-13T01:00:05Z',
+        mediaEvidence: {
+          windowStartedAt: '2026-10-13T00:59:55Z',
+          windowEndedAt: now,
+          firstFrames: 10,
+          lastFrames: 30,
+          sampleCount: 3,
+          maxGapMs: 2500,
+        },
+      },
+    }
+    api.page.mockResolvedValue(response)
+    await controls.refresh()
+    await vi.advanceTimersByTimeAsync(5001)
+    expect(controls.rows.value[0]?.profiles[0]?.media.freshness).toBe('STALE')
+    expect(controls.rows.value[0]?.profiles[0]?.control.freshness).toBe('CURRENT')
+    expect(api.page).toHaveBeenCalledTimes(2)
+  })
   it('opens and refreshes with aggregate GET only, with no per-channel request', async () => {
     expect(api.page).toHaveBeenCalledOnce()
-    expect(api.page.mock.calls[0]![0]).toEqual({ page: 1, size: 20 })
+    expect(api.page.mock.calls[0]![0]).toEqual({ page: 1, size: 20, layer: 'CONTROL' })
     await vi.advanceTimersByTimeAsync(20000)
     expect(api.page).toHaveBeenCalledOnce()
     await controls.refresh()
@@ -153,7 +205,7 @@ describe('aggregate camera status page read owner', () => {
     const reading = controls.refresh()
     const signal = api.page.mock.calls.at(-1)![1] as AbortSignal
     api.page.mockResolvedValue(page(null, '2'))
-    query.value = { page: 2, size: 20, name: '车间', observation: 'FAILED' }
+    query.value = { page: 2, size: 20, layer: 'CONTROL', name: '车间', observation: 'FAILED' }
     await flush()
     expect(signal.aborted).toBe(true)
     expect(api.page.mock.calls.at(-1)![0]).toEqual(query.value)
@@ -169,7 +221,7 @@ describe('aggregate camera status page read owner', () => {
     await controls.refresh()
     const pending = deferred<StatusPage>()
     api.page.mockReturnValueOnce(pending.promise)
-    query.value = { page: 2, size: 20 }
+    query.value = { page: 2, size: 20, layer: 'CONTROL' }
     expect(controls.result.value).toBeNull()
     expect(controls.total.value).toBe(21)
     expect(controls.loading.value).toBe(true)
@@ -205,8 +257,9 @@ describe('aggregate camera status page read owner', () => {
   it('expires multiple facts with one local timer and no network or timestamp refresh', async () => {
     const response = page()
     const profile = response.items[0]!.profiles[0]!
-    profile.freshness = 'CURRENT'
-    profile.observation = {
+    profile.control.freshness = 'CURRENT'
+    profile.control.observation = {
+      mediaEvidence: null,
       value: 'ACCESSIBLE',
       reasonCode: 'RTSP_ACCESSIBLE',
       checkId: '100',
@@ -217,23 +270,26 @@ describe('aggregate camera status page read owner', () => {
     response.items[0]!.profiles.push({
       ...profile,
       streamProfileId: '11',
-      observation: { ...profile.observation, validUntil: '2026-10-13T01:00:08Z' },
+      control: {
+        ...profile.control,
+        observation: { ...profile.control.observation!, validUntil: '2026-10-13T01:00:08Z' },
+      },
     })
     api.page.mockResolvedValue(response)
     await controls.refresh()
     expect(vi.getTimerCount()).toBe(2)
     await vi.advanceTimersByTimeAsync(5001)
-    expect(controls.rows.value[0]?.profiles.map((entry) => entry.freshness)).toEqual([
+    expect(controls.rows.value[0]?.profiles.map((entry) => entry.control.freshness)).toEqual([
       'STALE',
       'CURRENT',
     ])
     expect(vi.getTimerCount()).toBe(2)
     await vi.advanceTimersByTimeAsync(3000)
-    expect(controls.rows.value[0]?.profiles.map((entry) => entry.freshness)).toEqual([
+    expect(controls.rows.value[0]?.profiles.map((entry) => entry.control.freshness)).toEqual([
       'STALE',
       'STALE',
     ])
-    expect(controls.rows.value[0]?.profiles[0]?.observation?.observedAt).toBe(now)
+    expect(controls.rows.value[0]?.profiles[0]?.control.observation?.observedAt).toBe(now)
     expect(api.page).toHaveBeenCalledTimes(2)
     expect(vi.getTimerCount()).toBe(1)
   })

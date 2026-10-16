@@ -52,6 +52,16 @@ export interface SourceUpdate {
   credentialsUpsert?: SourceCredential[]
   credentialsRemove?: string[]
 }
+export interface SourceCreate {
+  clientRequestId: string
+  name: string
+  adapterType: string
+  connectionCategory: 'PLATFORM'
+  networkPolicyKey?: string
+  enabled: boolean
+  credentials: SourceCredential[]
+  endpoints: SourceEndpoint[]
+}
 export function parseSource(value: unknown): Source {
   const row = object(value)
   return {

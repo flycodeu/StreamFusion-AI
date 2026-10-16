@@ -7,9 +7,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.streamfusion.platform.access.mapper.AccessMapper;
-import com.streamfusion.platform.access.service.AccessService;
-import com.streamfusion.platform.auth.service.CurrentUserService;
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
 import com.streamfusion.platform.camera.mapper.CameraChannelMapper;
 import com.streamfusion.platform.camera.mapper.CameraProfileMapper;
@@ -17,7 +14,10 @@ import com.streamfusion.platform.camera.service.CameraAccessService;
 import com.streamfusion.platform.camera.service.CameraCryptoService;
 import com.streamfusion.platform.camera.service.CameraRtspTargetService;
 import com.streamfusion.platform.support.CameraTestSupport;
-import com.streamfusion.platform.user.service.UserService;
+import com.streamfusion.platform.system.access.mapper.AccessMapper;
+import com.streamfusion.platform.system.access.service.AccessService;
+import com.streamfusion.platform.system.auth.service.CurrentUserService;
+import com.streamfusion.platform.system.user.service.UserService;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -53,7 +53,7 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
     @Autowired private CameraProfileMapper profiles;
     @Autowired private CameraRtspTargetService targets;
     @Autowired private CameraCryptoService crypto;
-    private final Map<Long, CompletableFuture<RtspDescribeProbe.Result>> completions =
+    private final Map<Long, CompletableFuture<CameraProbeResult>> completions =
             new ConcurrentHashMap<>();
     private final Map<Long, CameraStatusWorker.Request> submissions = new ConcurrentHashMap<>();
     private MapSessionRepository sessions;
@@ -89,13 +89,13 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                         bean(PlatformTransactionManager.class),
                         clock,
                         bean(CameraStatusPlanMapper.class),
-                        bean(com.streamfusion.platform.diagnostics.DiagnosticLog.class));
+                        bean(com.streamfusion.platform.monitor.diagnostics.DiagnosticLog.class));
         when(worker.trySubmit(any()))
                 .thenAnswer(
                         call -> {
                             CameraStatusWorker.Request request = call.getArgument(0);
                             submissions.put(request.checkId(), request);
-                            var completion = new CompletableFuture<RtspDescribeProbe.Result>();
+                            var completion = new CompletableFuture<CameraProbeResult>();
                             completions.put(request.checkId(), completion);
                             return new CameraStatusWorker.Submission(true, null, completion);
                         });
@@ -108,11 +108,12 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 .forEach(
                         future ->
                                 future.complete(
-                                        new RtspDescribeProbe.Result(
-                                                RtspDescribeProbe.Outcome.NOT_EXECUTED,
+                                        new CameraProbeResult(
+                                                CameraProbeResult.Outcome.NOT_EXECUTED,
                                                 "WORKER_STOPPED",
                                                 0,
-                                                0)));
+                                                0,
+                                                null)));
     }
 
     @Test
@@ -121,17 +122,26 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
         var first = read("/cameras/" + f.cameraId + "/status", f.auth);
         var next = read("/cameras/" + f.cameraId + "/status", f.auth);
         assertThat(first.path("profiles")).hasSize(2);
-        assertThat(first.path("profiles").get(0).path("freshness").asText()).isEqualTo("NEVER");
-        assertThat(first.path("profiles").get(0).path("observation").isNull()).isTrue();
+        assertThat(first.path("profiles").get(0).path("control").path("freshness").asText())
+                .isEqualTo("NEVER");
+        assertThat(first.path("profiles").get(0).path("control").path("observation").isNull())
+                .isTrue();
         assertThat(next.path("profiles")).isEqualTo(first.path("profiles"));
         assertThat(countChecks()).isZero();
         verifyNoInteractions(worker);
     }
 
     @Test
-    void postIs202AndOnlyAcceptsProfileAndClientRequestId() throws Exception {
+    void postIs202AndRequiresExplicitLayerProfileAndClientRequestId() throws Exception {
         var f = fixture();
-        var input = Map.of("streamProfileId", f.profileId, "clientRequestId", requestId());
+        var input =
+                Map.of(
+                        "layer",
+                        "CONTROL",
+                        "streamProfileId",
+                        f.profileId,
+                        "clientRequestId",
+                        requestId());
         var receipt = write(post(path(f)), f.auth, input, 202);
         long id = receipt.path("checkId").asLong();
         assertThat(receipt.path("executionState").asText()).isEqualTo("QUEUED");
@@ -145,6 +155,8 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 post(path(f)),
                 f.auth,
                 Map.of(
+                        "layer",
+                        "CONTROL",
                         "streamProfileId",
                         f.profileId,
                         "clientRequestId",
@@ -152,7 +164,16 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                         "timeout",
                         1000),
                 400);
-        write(post(path(f)), f.auth, Map.of("streamProfileId", f.profileId), 400);
+        write(
+                post(path(f)),
+                f.auth,
+                Map.of("layer", "CONTROL", "streamProfileId", f.profileId),
+                400);
+        write(
+                post(path(f)),
+                f.auth,
+                Map.of("streamProfileId", f.profileId, "clientRequestId", requestId()),
+                400);
         assertThat(countChecks()).isOne();
     }
 
@@ -165,7 +186,13 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 write(
                         post(path(f)),
                         f.auth,
-                        Map.of("streamProfileId", f.profileId, "clientRequestId", key),
+                        Map.of(
+                                "layer",
+                                "CONTROL",
+                                "streamProfileId",
+                                f.profileId,
+                                "clientRequestId",
+                                key),
                         202);
         assertThat(replay).isEqualTo(first);
         String other =
@@ -174,7 +201,11 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                         .get(1)
                         .path("streamProfileId")
                         .asText();
-        write(post(path(f)), f.auth, Map.of("streamProfileId", other, "clientRequestId", key), 409);
+        write(
+                post(path(f)),
+                f.auth,
+                Map.of("layer", "CONTROL", "streamProfileId", other, "clientRequestId", key),
+                409);
         verify(worker, times(1)).trySubmit(any());
         assertThat(countChecks()).isOne();
     }
@@ -194,6 +225,7 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                         read("/cameras/" + f.cameraId + "/status", f.auth)
                                 .path("profiles")
                                 .get(0)
+                                .path("control")
                                 .path("canCheck")
                                 .asBoolean())
                 .isFalse();
@@ -202,7 +234,13 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
         write(
                 post(path(f)),
                 f.auth,
-                Map.of("streamProfileId", f.profileId, "clientRequestId", oldKey),
+                Map.of(
+                        "layer",
+                        "CONTROL",
+                        "streamProfileId",
+                        f.profileId,
+                        "clientRequestId",
+                        oldKey),
                 409);
         assertThat(countChecks()).isZero();
     }
@@ -220,7 +258,13 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 write(
                         post(path(f)),
                         otherSession,
-                        Map.of("streamProfileId", f.profileId, "clientRequestId", key),
+                        Map.of(
+                                "layer",
+                                "CONTROL",
+                                "streamProfileId",
+                                f.profileId,
+                                "clientRequestId",
+                                key),
                         202);
         assertThat(replay).isEqualTo(receipt);
         verify(worker, times(1)).trySubmit(any());
@@ -260,13 +304,20 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                         read("/cameras/" + f.cameraId + "/status", ordinary)
                                 .path("profiles")
                                 .get(0)
+                                .path("control")
                                 .path("latestCheck")
                                 .path("checkId"))
                 .isEqualTo(adminReceipt.path("checkId"));
         write(
                 post(path(f)),
                 ordinary,
-                Map.of("streamProfileId", f.profileId, "clientRequestId", requestId()),
+                Map.of(
+                        "layer",
+                        "CONTROL",
+                        "streamProfileId",
+                        f.profileId,
+                        "clientRequestId",
+                        requestId()),
                 202);
         write(
                 put("/camera-scopes/users/" + userId),
@@ -282,7 +333,13 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
         write(
                 post(path(f)),
                 ordinary,
-                Map.of("streamProfileId", f.profileId, "clientRequestId", requestId()),
+                Map.of(
+                        "layer",
+                        "CONTROL",
+                        "streamProfileId",
+                        f.profileId,
+                        "clientRequestId",
+                        requestId()),
                 404);
     }
 
@@ -297,15 +354,15 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 firstId,
                 claim,
                 f.auth.session().getId(),
-                result(RtspDescribeProbe.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 20));
-        var before = snapshots.selectById(Long.valueOf(f.profileId));
+                result(CameraProbeResult.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 20));
+        var before = snapshots.get(Long.valueOf(f.profileId), "CONTROL");
         assertThat(before.getValue()).isEqualTo("ACCESSIBLE");
         var firstStatus = read("/cameras/" + f.cameraId + "/status", f.auth);
         var secondStatus = read("/cameras/" + f.cameraId + "/status", f.auth);
         assertThat(secondStatus.path("profiles")).isEqualTo(firstStatus.path("profiles"));
-        assertThat(secondStatus.path("profiles").get(0).path("freshness").asText())
+        assertThat(secondStatus.path("profiles").get(0).path("control").path("freshness").asText())
                 .isEqualTo("CURRENT");
-        assertThat(snapshots.selectById(Long.valueOf(f.profileId)).getObservedAt())
+        assertThat(snapshots.get(Long.valueOf(f.profileId), "CONTROL").getObservedAt())
                 .isEqualTo(before.getObservedAt());
 
         long nextId = create(f, requestId()).path("checkId").asLong();
@@ -316,11 +373,188 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 nextId,
                 nextClaim,
                 f.auth.session().getId(),
-                result(RtspDescribeProbe.Outcome.FAILED, "RTSP_TIMEOUT", 10_000));
+                result(CameraProbeResult.Outcome.FAILED, "RTSP_TIMEOUT", 10_000));
         assertThat(checks.selectById(nextId).getExecutionState()).isEqualTo("COMPLETED");
         assertThat(checks.selectById(nextId).getResultValue()).isEqualTo("FAILED");
-        assertThat(snapshots.selectById(Long.valueOf(f.profileId)).getReasonCode())
+        assertThat(snapshots.get(Long.valueOf(f.profileId), "CONTROL").getReasonCode())
                 .isEqualTo("RTSP_TIMEOUT");
+    }
+
+    @Test
+    void
+            mediaChecksPersistIndependentEvidenceAndCannotOverwriteControlOrMisclassifyUnavailableWork()
+                    throws Exception {
+        var f = fixture();
+        String sessionId = f.auth.session().getId();
+        long controlId = create(f, requestId()).path("checkId").asLong();
+        clock.set(Instant.now());
+        background.complete(
+                controlId,
+                background.claim(controlId, sessionId),
+                sessionId,
+                result(CameraProbeResult.Outcome.FAILED, "RTSP_TIMEOUT", 10_000));
+        String mediaKey = requestId();
+        var mediaReceipt = create(f, mediaKey, CameraStatusLayer.MEDIA);
+        long mediaId = mediaReceipt.path("checkId").asLong();
+        assertThat(mediaReceipt.path("layer").asText()).isEqualTo("MEDIA");
+        assertThat(mediaReceipt.path("probeKind").asText()).isEqualTo("ZLM_RTP_FRAMES");
+        assertThat(submissions.get(mediaId).mediaProfile().getId())
+                .isEqualTo(Long.valueOf(f.profileId));
+        assertThat(submissions.get(mediaId).target()).isNull();
+        assertThat(submissions.get(mediaId).timeout()).isEqualTo(Duration.ofSeconds(18));
+        write(
+                post(path(f)),
+                f.auth,
+                Map.of(
+                        "layer",
+                        "CONTROL",
+                        "streamProfileId",
+                        f.profileId,
+                        "clientRequestId",
+                        mediaKey),
+                409);
+        clock.set(Instant.now());
+        String claim = background.claim(mediaId, sessionId);
+        clock.advance(Duration.ofSeconds(5));
+        Instant ended = clock.instant();
+        var evidence = new CameraMediaEvidence(ended.minusSeconds(5), ended, 15, 120, 3, 2500);
+        background.complete(
+                mediaId,
+                claim,
+                sessionId,
+                new CameraProbeResult(
+                        CameraProbeResult.Outcome.ACCESSIBLE,
+                        "MEDIA_RECEIVING",
+                        0,
+                        5000,
+                        evidence));
+
+        var control = snapshots.get(Long.valueOf(f.profileId), "CONTROL");
+        var media = snapshots.get(Long.valueOf(f.profileId), "MEDIA");
+        assertThat(control.getCheckId()).isEqualTo(controlId);
+        assertThat(control.getValue()).isEqualTo("FAILED");
+        assertThat(media.getCheckId()).isEqualTo(mediaId);
+        assertThat(media.getMediaFirstFrames()).isEqualTo(15);
+        assertThat(media.getMediaLastFrames()).isEqualTo(120);
+        var read = read("/cameras/" + f.cameraId + "/status", f.auth).path("profiles").get(0);
+        assertThat(read.has("observation")).isFalse();
+        assertThat(read.path("control").path("latestCheck").path("checkId").asLong())
+                .isEqualTo(controlId);
+        assertThat(read.path("media").path("latestCheck").path("checkId").asLong())
+                .isEqualTo(mediaId);
+        assertThat(read.path("control").path("observation").path("mediaEvidence").isNull())
+                .isTrue();
+        assertThat(
+                        read.path("media")
+                                .path("observation")
+                                .path("mediaEvidence")
+                                .path("lastFrames")
+                                .asLong())
+                .isEqualTo(120);
+        assertThat(
+                        read(path(f) + "/" + mediaId, f.auth)
+                                .path("observation")
+                                .path("mediaEvidence")
+                                .path("sampleCount")
+                                .asInt())
+                .isEqualTo(3);
+
+        for (String reason :
+                List.of("MEDIA_BUSY", "MEDIA_RUNTIME_UNAVAILABLE", "MEDIA_EVIDENCE_INSUFFICIENT")) {
+            long skipped = create(f, requestId(), CameraStatusLayer.MEDIA).path("checkId").asLong();
+            clock.set(Instant.now());
+            background.complete(
+                    skipped,
+                    background.claim(skipped, sessionId),
+                    sessionId,
+                    result(CameraProbeResult.Outcome.NOT_EXECUTED, reason, 0));
+            assertThat(checks.selectById(skipped).getExecutionState()).isEqualTo("SKIPPED");
+            assertThat(checks.selectById(skipped).getResultValue()).isNull();
+            assertThat(snapshots.get(Long.valueOf(f.profileId), "MEDIA").getCheckId())
+                    .isEqualTo(mediaId);
+        }
+        assertThat(
+                        read("/cameras/devices/page", f.auth)
+                                .path("items")
+                                .get(0)
+                                .path("statusSummary")
+                                .path("state")
+                                .asText())
+                .isEqualTo("FAILED");
+    }
+
+    @Test
+    void incompleteMediaEvidenceCannotBecomeCameraFailure() throws Exception {
+        var f = fixture();
+        long id = create(f, requestId(), CameraStatusLayer.MEDIA).path("checkId").asLong();
+        clock.set(Instant.now());
+        Instant end = clock.instant();
+        background.complete(
+                id,
+                background.claim(id, f.auth.session().getId()),
+                f.auth.session().getId(),
+                new CameraProbeResult(
+                        CameraProbeResult.Outcome.FAILED,
+                        "MEDIA_NO_FRAMES",
+                        0,
+                        1000,
+                        new CameraMediaEvidence(end.minusSeconds(1), end, 0, 0, 2, 1000)));
+        assertThat(checks.selectById(id).getExecutionState()).isEqualTo("SKIPPED");
+        assertThat(checks.selectById(id).getReasonCode()).isEqualTo("MEDIA_EVIDENCE_INSUFFICIENT");
+        assertThat(checks.selectById(id).getResultValue()).isNull();
+        assertThat(snapshots.get(Long.valueOf(f.profileId), "MEDIA")).isNull();
+    }
+
+    @Test
+    void inconsistentOrOutOfWindowMediaEvidenceCannotOverwriteAnExistingFact() throws Exception {
+        var f = fixture();
+        String sessionId = f.auth.session().getId();
+        long valid = create(f, requestId(), CameraStatusLayer.MEDIA).path("checkId").asLong();
+        clock.set(Instant.now());
+        String validClaim = background.claim(valid, sessionId);
+        Instant started = clock.instant();
+        clock.advance(Duration.ofSeconds(5));
+        background.complete(
+                valid,
+                validClaim,
+                sessionId,
+                new CameraProbeResult(
+                        CameraProbeResult.Outcome.ACCESSIBLE,
+                        "MEDIA_RECEIVING",
+                        0,
+                        5000,
+                        new CameraMediaEvidence(started, clock.instant(), 0, 50, 3, 2500)));
+        assertThat(snapshots.get(Long.valueOf(f.profileId), "MEDIA").getCheckId()).isEqualTo(valid);
+        for (int variant = 0; variant < 5; variant++) {
+            long id = create(f, requestId(), CameraStatusLayer.MEDIA).path("checkId").asLong();
+            clock.set(Instant.now());
+            String claim = background.claim(id, sessionId);
+            started = clock.instant();
+            clock.advance(Duration.ofSeconds(5));
+            var outcome =
+                    variant == 1
+                            ? CameraProbeResult.Outcome.FAILED
+                            : CameraProbeResult.Outcome.ACCESSIBLE;
+            var reason = variant == 1 || variant == 2 ? "MEDIA_NO_FRAMES" : "MEDIA_RECEIVING";
+            var evidence =
+                    new CameraMediaEvidence(
+                            variant == 3 ? started.minusMillis(1) : started,
+                            variant == 4 ? clock.instant().plusMillis(1) : clock.instant(),
+                            0,
+                            variant == 0 ? 0 : 50,
+                            3,
+                            2500);
+            background.complete(
+                    id,
+                    claim,
+                    sessionId,
+                    new CameraProbeResult(outcome, reason, 0, 5000, evidence));
+            assertThat(checks.selectById(id).getExecutionState()).isEqualTo("SKIPPED");
+            assertThat(checks.selectById(id).getReasonCode())
+                    .isEqualTo("MEDIA_EVIDENCE_INSUFFICIENT");
+            assertThat(snapshots.get(Long.valueOf(f.profileId), "MEDIA").getCheckId())
+                    .isEqualTo(valid);
+        }
     }
 
     @Test
@@ -329,11 +563,11 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
         var f = fixture();
         var outcomes =
                 List.of(
-                        RtspDescribeProbe.Outcome.FAILED,
-                        RtspDescribeProbe.Outcome.FAILED,
-                        RtspDescribeProbe.Outcome.NOT_EXECUTED,
-                        RtspDescribeProbe.Outcome.ACCESSIBLE,
-                        RtspDescribeProbe.Outcome.FAILED);
+                        CameraProbeResult.Outcome.FAILED,
+                        CameraProbeResult.Outcome.FAILED,
+                        CameraProbeResult.Outcome.NOT_EXECUTED,
+                        CameraProbeResult.Outcome.ACCESSIBLE,
+                        CameraProbeResult.Outcome.FAILED);
         LocalDateTime firstFailure = null;
         LocalDateTime lastFailure = null;
         for (int index = 0; index < outcomes.size(); index++) {
@@ -352,13 +586,13 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                     f.auth.session().getId(),
                     result(
                             outcome,
-                            outcome == RtspDescribeProbe.Outcome.NOT_EXECUTED
+                            outcome == CameraProbeResult.Outcome.NOT_EXECUTED
                                     ? "WORKER_BUSY"
-                                    : outcome == RtspDescribeProbe.Outcome.FAILED
+                                    : outcome == CameraProbeResult.Outcome.FAILED
                                             ? "RTSP_TIMEOUT"
                                             : "RTSP_ACCESSIBLE",
                             10));
-            var snapshot = snapshots.selectById(Long.valueOf(f.profileId));
+            var snapshot = snapshots.get(Long.valueOf(f.profileId), "CONTROL");
             if (index == 0) {
                 firstFailure = snapshot.getStateSince();
                 assertThat(firstFailure).isEqualTo(snapshot.getObservedAt());
@@ -383,6 +617,7 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 read("/cameras/" + f.cameraId + "/status", f.auth)
                         .path("profiles")
                         .get(0)
+                        .path("control")
                         .path("timeline");
         jdbc.update(
                 "DELETE FROM camera_status_check WHERE profile_id=?", Long.valueOf(f.profileId));
@@ -390,6 +625,7 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                         read("/cameras/" + f.cameraId + "/status", f.auth)
                                 .path("profiles")
                                 .get(0)
+                                .path("control")
                                 .path("timeline"))
                 .isEqualTo(beforePruning);
     }
@@ -404,9 +640,9 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 id,
                 "old-claim",
                 f.auth.session().getId(),
-                result(RtspDescribeProbe.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 10));
+                result(CameraProbeResult.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 10));
         assertThat(checks.selectById(id).getExecutionState()).isEqualTo("RUNNING");
-        assertThat(snapshots.selectById(Long.valueOf(f.profileId))).isNull();
+        assertThat(snapshots.get(Long.valueOf(f.profileId), "CONTROL")).isNull();
         jdbc.update(
                 "UPDATE camera_source_endpoint SET port=8554 WHERE source_id=? AND purpose='RTSP'",
                 Long.valueOf(f.sourceId));
@@ -414,10 +650,10 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 id,
                 claim,
                 f.auth.session().getId(),
-                result(RtspDescribeProbe.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 20));
+                result(CameraProbeResult.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 20));
         assertThat(checks.selectById(id).getExecutionState()).isEqualTo("SKIPPED");
         assertThat(checks.selectById(id).getReasonCode()).isEqualTo("CONFIGURATION_CHANGED");
-        assertThat(snapshots.selectById(Long.valueOf(f.profileId))).isNull();
+        assertThat(snapshots.get(Long.valueOf(f.profileId), "CONTROL")).isNull();
 
         long expired = create(f, requestId()).path("checkId").asLong();
         clock.set(Instant.now());
@@ -427,10 +663,10 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 expired,
                 expiredClaim,
                 f.auth.session().getId(),
-                result(RtspDescribeProbe.Outcome.FAILED, "RTSP_TIMEOUT", 10_000));
+                result(CameraProbeResult.Outcome.FAILED, "RTSP_TIMEOUT", 10_000));
         assertThat(checks.selectById(expired).getReasonCode()).isEqualTo("CHECK_EXPIRED");
         assertThat(checks.selectById(expired).getResultValue()).isNull();
-        assertThat(snapshots.selectById(Long.valueOf(f.profileId))).isNull();
+        assertThat(snapshots.get(Long.valueOf(f.profileId), "CONTROL")).isNull();
     }
 
     @Test
@@ -450,13 +686,13 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 id,
                 claim,
                 f.auth.session().getId(),
-                result(RtspDescribeProbe.Outcome.NOT_EXECUTED, "SESSION_STORE_UNAVAILABLE", 0));
+                result(CameraProbeResult.Outcome.NOT_EXECUTED, "SESSION_STORE_UNAVAILABLE", 0));
         var completed = checks.selectById(id);
         assertThat(completed.getExecutionState()).isEqualTo("SKIPPED");
         assertThat(completed.getReasonCode()).isEqualTo("SESSION_STORE_UNAVAILABLE");
         assertThat(completed.getResultValue()).isNull();
         assertThat(completed.getSnapshotApplied()).isFalse();
-        assertThat(snapshots.selectById(Long.valueOf(f.profileId))).isNull();
+        assertThat(snapshots.get(Long.valueOf(f.profileId), "CONTROL")).isNull();
     }
 
     @Test
@@ -472,7 +708,7 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 id,
                 claim,
                 f.auth.session().getId(),
-                result(RtspDescribeProbe.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 20));
+                result(CameraProbeResult.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 20));
         assertThat(checks.selectById(id).getExecutionState()).isEqualTo("CANCELLED");
         assertThat(checks.selectById(id).getReasonCode()).isEqualTo("ACTOR_REVOKED");
         jdbc.update(
@@ -491,10 +727,10 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 deleted,
                 deletedClaim,
                 f.auth.session().getId(),
-                result(RtspDescribeProbe.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 20));
+                result(CameraProbeResult.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 20));
         assertThat(checks.selectById(deleted).getExecutionState()).isEqualTo("INTERRUPTED");
         assertThat(checks.selectById(deleted).getReasonCode()).isEqualTo("TARGET_DELETED");
-        assertThat(snapshots.selectById(Long.valueOf(f.profileId))).isNull();
+        assertThat(snapshots.get(Long.valueOf(f.profileId), "CONTROL")).isNull();
     }
 
     @Test
@@ -509,18 +745,19 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 newer,
                 newerClaim,
                 f.auth.session().getId(),
-                result(RtspDescribeProbe.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 20));
+                result(CameraProbeResult.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 20));
         background.complete(
                 older,
                 olderClaim,
                 f.auth.session().getId(),
-                result(RtspDescribeProbe.Outcome.FAILED, "RTSP_TIMEOUT", 10));
+                result(CameraProbeResult.Outcome.FAILED, "RTSP_TIMEOUT", 10));
         assertThat(checks.selectById(older).getSnapshotApplied()).isFalse();
-        assertThat(snapshots.selectById(Long.valueOf(f.profileId)).getCheckId()).isEqualTo(newer);
+        assertThat(snapshots.get(Long.valueOf(f.profileId), "CONTROL").getCheckId())
+                .isEqualTo(newer);
         clock.advance(Duration.ofDays(8));
         background.maintenance();
         assertThat(countChecks()).isZero();
-        assertThat(snapshots.selectById(Long.valueOf(f.profileId)).getValue())
+        assertThat(snapshots.get(Long.valueOf(f.profileId), "CONTROL").getValue())
                 .isEqualTo("ACCESSIBLE");
     }
 
@@ -539,8 +776,8 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                 running,
                 claim,
                 f.auth.session().getId(),
-                result(RtspDescribeProbe.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 20));
-        assertThat(snapshots.selectById(Long.valueOf(f.profileId))).isNull();
+                result(CameraProbeResult.Outcome.ACCESSIBLE, "RTSP_ACCESSIBLE", 20));
+        assertThat(snapshots.get(Long.valueOf(f.profileId), "CONTROL")).isNull();
         verifyNoInteractions(worker);
     }
 
@@ -627,10 +864,20 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
     }
 
     private JsonNode create(Fixture f, String key) throws Exception {
+        return create(f, key, CameraStatusLayer.CONTROL);
+    }
+
+    private JsonNode create(Fixture f, String key, CameraStatusLayer layer) throws Exception {
         return write(
                 post(path(f)),
                 f.auth,
-                Map.of("streamProfileId", f.profileId, "clientRequestId", key),
+                Map.of(
+                        "layer",
+                        layer.name(),
+                        "streamProfileId",
+                        f.profileId,
+                        "clientRequestId",
+                        key),
                 202);
     }
 
@@ -646,9 +893,9 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
         return context.getBean(type);
     }
 
-    private static RtspDescribeProbe.Result result(
-            RtspDescribeProbe.Outcome outcome, String reason, long ms) {
-        return new RtspDescribeProbe.Result(outcome, reason, 0, ms);
+    private static CameraProbeResult result(
+            CameraProbeResult.Outcome outcome, String reason, long ms) {
+        return new CameraProbeResult(outcome, reason, 0, ms, null);
     }
 
     private record Fixture(Csrf auth, String cameraId, String profileId, String sourceId) {}

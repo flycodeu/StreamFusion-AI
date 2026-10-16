@@ -1,8 +1,8 @@
 package com.streamfusion.platform.camera.status;
 
-import com.streamfusion.platform.audit.pojo.dto.AuditContextDto;
 import com.streamfusion.platform.common.response.R;
 import com.streamfusion.platform.common.security.ModuleAccess;
+import com.streamfusion.platform.monitor.audit.pojo.dto.AuditContextDto;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -45,6 +45,17 @@ public class CameraStatusPlanController {
     }
 
     public record StopCommand(@Schema(description = "任务当前版本，用于并发校验") String version) {}
+
+    @PostMapping("/{id}/resume")
+    @Operation(summary = "恢复尚未到期的巡检任务")
+    public R<CameraStatusPlanVo> resume(
+            @PathVariable String id, @RequestBody StopCommand command, HttpServletRequest request) {
+        return R.success(
+                service.resume(
+                        id,
+                        command == null ? null : command.version(),
+                        AuditContextDto.from(request)));
+    }
 
     @PostMapping("/{id}/stop")
     @Operation(summary = "停止指定巡检任务")

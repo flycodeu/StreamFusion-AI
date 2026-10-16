@@ -2,6 +2,17 @@ import { request } from '../client'
 import { empty } from '../parse'
 import { parseAnswer, parseLease, parsePreviewCatalog, parseStats } from './types'
 import type { PreviewUsage } from './types'
+import { ApiRequestError } from '../../lib/http/error'
+
+export function isUnknownPreviewReceipt(cause: unknown): boolean {
+  return (
+    cause instanceof ApiRequestError &&
+    (cause.status === undefined || (cause.status >= 200 && cause.status < 300)) &&
+    (cause.code === 'NETWORK_ERROR' ||
+      cause.code === 'REQUEST_TIMEOUT' ||
+      (cause.code === 'INVALID_RESPONSE' && cause.status === 201))
+  )
+}
 
 export async function getPreviewCatalog(query: {
   page: number
@@ -21,21 +32,28 @@ export async function getPreviewCatalog(query: {
   ).data
 }
 export async function createPreviewLease(input: {
+  clientRequestId: string
   cameraId: string
   streamProfileId?: string
   usage: PreviewUsage
   videoCodecs: string[]
 }) {
-  return (
-    await request({
+  const body = { ...input, videoCodecs: [...input.videoCodecs] }
+  const create = () =>
+    request({
       path: '/preview/leases',
       method: 'POST',
-      body: { clientRequestId: crypto.randomUUID(), ...input },
+      body,
       successStatus: 201,
-      timeoutMs: 20000,
+      timeoutMs: 25000,
       decode: parseLease,
     })
-  ).data
+  try {
+    return (await create()).data
+  } catch (cause) {
+    if (!isUnknownPreviewReceipt(cause)) throw cause
+    return (await create()).data
+  }
 }
 export async function exchangeWebRtc(leaseId: string, sdp: string) {
   return (
@@ -44,7 +62,7 @@ export async function exchangeWebRtc(leaseId: string, sdp: string) {
       method: 'POST',
       body: { sdp },
       successStatus: 200,
-      timeoutMs: 20000,
+      timeoutMs: 15000,
       decode: parseAnswer,
     })
   ).data
@@ -76,6 +94,7 @@ export async function deletePreviewLease(leaseId: string) {
     path: `/preview/leases/${encodeURIComponent(leaseId)}`,
     method: 'DELETE',
     successStatus: 200,
+    timeoutMs: 15000,
     decode: empty,
   })
 }

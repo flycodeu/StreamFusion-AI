@@ -110,7 +110,9 @@ public class CameraAccessWorker {
                                                     : connection.pageNumber(),
                                             connection.pageSize() == null
                                                     ? 100
-                                                    : connection.pageSize()));
+                                                    : connection.pageSize(),
+                                            connection.regionIndexCode(),
+                                            Boolean.TRUE.equals(connection.includeSubRegions())));
             jobs.complete(work, catalog);
         } catch (CameraAdapterException ex) {
             if (work == null) jobs.failQueued(id, ex.reasonCode());
@@ -152,7 +154,9 @@ public class CameraAccessWorker {
                                         () -> bulk.checkWork(current.get()),
                                         System.nanoTime() + TimeUnit.SECONDS.toNanos(60),
                                         pageNumber,
-                                        CameraBulkImportService.PAGE_SIZE));
+                                        CameraBulkImportService.PAGE_SIZE,
+                                        connection.regionIndexCode(),
+                                        Boolean.TRUE.equals(connection.includeSubRegions())));
                 current.set(bulk.beginPage(current.get(), page));
                 for (int index = 0; index < page.channels().size(); index++) {
                     try {

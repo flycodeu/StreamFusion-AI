@@ -8,14 +8,28 @@ const profile = {
   name: null,
   streamKind: 'SUB',
   enabled: false,
-  layer: 'CONTROL',
-  probeKind: 'RTSP_DESCRIBE',
-  observation: null,
-  freshness: 'NEVER',
-  configurationCurrent: true,
-  latestCheck: null,
-  canCheck: false,
-  blockingReasonCode: 'PROFILE_DISABLED',
+  control: {
+    layer: 'CONTROL',
+    probeKind: 'RTSP_DESCRIBE',
+    observation: null,
+    freshness: 'NEVER',
+    configurationCurrent: true,
+    latestCheck: null,
+    canCheck: false,
+    blockingReasonCode: 'PROFILE_DISABLED',
+    timeline: null,
+  },
+  media: {
+    layer: 'MEDIA',
+    probeKind: 'ZLM_RTP_FRAMES',
+    observation: null,
+    freshness: 'NEVER',
+    configurationCurrent: true,
+    latestCheck: null,
+    canCheck: false,
+    blockingReasonCode: 'PROFILE_DISABLED',
+    timeline: null,
+  },
 }
 const channel = {
   cameraId: '1',
@@ -54,7 +68,11 @@ describe('camera status page response and read API', () => {
     { items: [channel, channel] },
     { items: [{ ...channel, lifecycle: 'ONLINE' }] },
     { items: [{ ...channel, profiles: [{ ...profile, enabled: null }] }] },
-    { items: [{ ...channel, profiles: [{ ...profile, layer: 'MEDIA' }] }] },
+    {
+      items: [
+        { ...channel, profiles: [{ ...profile, control: { ...profile.control, layer: 'MEDIA' } }] },
+      ],
+    },
     { page: 0 },
     { summary: undefined },
     { summary: { ...summary, total: 23 } },
@@ -85,13 +103,14 @@ describe('camera status page response and read API', () => {
     vi.stubGlobal('fetch', fetchMock)
     const controller = new AbortController()
     const response = await getStatusPage(
-      { page: 2, size: 20, name: '通道', observation: 'FAILED' },
+      { page: 2, size: 20, layer: 'MEDIA', name: '通道', observation: 'FAILED' },
       controller.signal,
     )
     const [path, options] = fetchMock.mock.calls[0]!
     const url = new URL(path, 'http://localhost')
     expect(url.pathname).toBe('/api/camera-status')
     expect(Object.fromEntries(url.searchParams)).toEqual({
+      layer: 'MEDIA',
       page: '2',
       size: '20',
       name: '通道',

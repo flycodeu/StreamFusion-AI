@@ -7,7 +7,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.streamfusion.platform.auth.service.BootstrapService;
+import com.streamfusion.platform.system.auth.service.BootstrapService;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;

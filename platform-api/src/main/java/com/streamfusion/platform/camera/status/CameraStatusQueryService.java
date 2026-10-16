@@ -1,6 +1,5 @@
 package com.streamfusion.platform.camera.status;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.streamfusion.platform.camera.mapper.CameraChannelMapper;
 import com.streamfusion.platform.camera.mapper.CameraProfileMapper;
 import com.streamfusion.platform.camera.pojo.entity.CameraChannelEntity;
@@ -33,7 +32,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class CameraStatusQueryService {
     private static final int MAX_PAGE_PROFILES = 3200;
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
-    private static final String PROBE = "RTSP_DESCRIBE";
     private final CameraStatusCheckMapper checks;
     private final CameraStatusSnapshotMapper snapshots;
     private final CameraChannelMapper channels;
@@ -50,62 +48,17 @@ public class CameraStatusQueryService {
         cameras.requireVisible(id, actor);
         var camera = channels.selectById(id);
         if (camera == null) throw error(ErrorCode.NOT_FOUND);
-        var selected =
-                profiles.selectList(
-                        new LambdaQueryWrapper<CameraProfileEntity>()
-                                .eq(CameraProfileEntity::getChannelId, id)
-                                .orderByAsc(CameraProfileEntity::getId));
-        var facts = new HashMap<Long, CameraStatusSnapshotEntity>();
-        for (var fact :
-                snapshots.selectList(
-                        new LambdaQueryWrapper<CameraStatusSnapshotEntity>()
-                                .eq(CameraStatusSnapshotEntity::getCameraId, id)))
-            facts.put(fact.getProfileId(), fact);
-        var latest = new HashMap<Long, CameraStatusCheckEntity>();
-        for (var check : checks.latest(id)) latest.put(check.getProfileId(), check);
-        var result = new ArrayList<CameraStatusSnapshotVo.Profile>();
-        Instant now = nowInstant();
-        for (var profile : selected) {
-            var fact = facts.get(profile.getId());
-            CameraRtspTargetService.Inspection inspection;
-            try {
-                inspection = targets.inspect(camera, profile, crypto.activeKeyId(), () -> {});
-            } catch (BusinessException ex) {
-                inspection =
-                        new CameraRtspTargetService.Inspection(
-                                null, null, "CONFIGURATION_UNAVAILABLE");
-            }
-            boolean configurationCurrent = false;
-            if (fact != null) {
-                var original =
-                        targets.inspect(camera, profile, fact.getConnectionKeyId(), () -> {});
-                configurationCurrent =
-                        original.connectionDigest() != null
-                                && MessageDigest.isEqual(
-                                        fact.getConnectionDigest(), original.connectionDigest());
-            }
-            String freshness =
-                    fact == null
-                            ? "NEVER"
-                            : configurationCurrent && now.isBefore(instant(fact.getValidUntil()))
-                                    ? "CURRENT"
-                                    : "STALE";
-            result.add(
-                    new CameraStatusSnapshotVo.Profile(
-                            profile.getId().toString(),
-                            "CONTROL",
-                            PROBE,
-                            fact == null ? null : CameraStatusObservationVo.from(fact),
-                            freshness,
-                            configurationCurrent,
-                            latest.containsKey(profile.getId())
-                                    ? CameraStatusCheckVo.from(latest.get(profile.getId()))
-                                    : null,
-                            inspection.blockingReasonCode() == null,
-                            inspection.blockingReasonCode(),
-                            configurationCurrent ? CameraStatusTimelineVo.from(fact) : null));
-        }
-        return new CameraStatusSnapshotVo(Long.toString(id), now, result);
+        var result =
+                profileStatuses(List.of(camera), false).getOrDefault(id, List.of()).stream()
+                        .map(
+                                profile ->
+                                        new CameraStatusSnapshotVo.Profile(
+                                                profile.streamProfileId(),
+                                                profile.control(),
+                                                profile.media(),
+                                                profile.upstream()))
+                        .toList();
+        return new CameraStatusSnapshotVo(Long.toString(id), nowInstant(), result);
     }
 
     @Transactional(readOnly = true)
@@ -119,7 +72,7 @@ public class CameraStatusQueryService {
 
     @Transactional(readOnly = true)
     public CameraStatusPageVo page(CameraStatusPageQuery query) {
-        if (query == null) throw error(ErrorCode.VALIDATION_ERROR);
+        if (query == null || query.getLayer() == null) throw error(ErrorCode.VALIDATION_ERROR);
         var actor = cameras.readActor();
         String name = query.getName() == null ? null : query.getName().strip();
         if (name != null) {
@@ -136,7 +89,12 @@ public class CameraStatusQueryService {
                 && !Set.of("NEVER", "ACCESSIBLE", "FAILED", "UNSUPPORTED").contains(observation))
             throw error(ErrorCode.VALIDATION_ERROR);
         var page =
-                channels.pageStatus(query.toPage(), name, observation, cameras.visibility(actor));
+                channels.pageStatus(
+                        query.toPage(),
+                        name,
+                        observation,
+                        query.getLayer().name(),
+                        cameras.visibility(actor));
         var rows = page.getRecords();
         var profilesByCamera = profileStatuses(rows, false);
         var items = new ArrayList<CameraStatusPageVo.Item>();
@@ -162,17 +120,29 @@ public class CameraStatusQueryService {
                 query.getPage(),
                 query.getSize(),
                 nowInstant(),
-                summary(items));
+                summary(items, query.getLayer()));
     }
 
-    private static CameraStatusPageVo.Summary summary(List<CameraStatusPageVo.Item> items) {
+    private static CameraStatusPageVo.Summary summary(
+            List<CameraStatusPageVo.Item> items, CameraStatusLayer layer) {
         int accessible = 0, failed = 0, checking = 0, stale = 0, unknown = 0, disabled = 0;
         for (var item : items) {
             if (!"ENABLED".equals(item.lifecycle())) {
                 disabled++;
                 continue;
             }
-            var profile = representativeProfile(item);
+            var representative = representativeProfile(item);
+            var profile =
+                    representative == null
+                            ? null
+                            : representative.upstream().canCheck()
+                                            || representative.upstream().observation() != null
+                                    ? representative.upstream()
+                                    : layer == CameraStatusLayer.UPSTREAM
+                                            ? representative.upstream()
+                                            : layer == CameraStatusLayer.CONTROL
+                                                    ? representative.control()
+                                                    : representative.media();
             if (profile == null) unknown++;
             else if (profile.latestCheck() != null
                     && Set.of("QUEUED", "RUNNING").contains(profile.latestCheck().executionState()))
@@ -214,13 +184,19 @@ public class CameraStatusQueryService {
                         groups.stream().map(row -> row.getGroupKey()).toList(), visibility, 3201);
         if (rows.size() > 3200) throw error(ErrorCode.CONFLICT);
         var facts = profileStatuses(rows, true);
-        var grouped = new HashMap<String, CameraStatusPageVo.Profile>();
+        var grouped = new HashMap<String, CameraStatusLayerVo>();
         for (var row : rows) {
             if (!"ENABLED".equals(row.getLifecycle())) continue;
             String key = row.getDeviceId() == null ? "c" + row.getId() : "d" + row.getDeviceId();
             var candidates = facts.getOrDefault(row.getId(), List.of());
             var profile = candidates.isEmpty() ? null : candidates.getFirst();
-            grouped.put(key, profile);
+            grouped.put(
+                    key,
+                    profile == null
+                            ? null
+                            : profile.upstream().canCheck()
+                                    ? profile.upstream()
+                                    : profile.control());
         }
         var result = new HashMap<String, CameraDeviceStatusVo>();
         for (var group : groups) {
@@ -280,64 +256,75 @@ public class CameraStatusQueryService {
         var facts =
                 profileIds.isEmpty()
                         ? List.<CameraStatusSnapshotEntity>of()
-                        : snapshots.selectBatchIds(profileIds);
+                        : snapshots.forProfiles(profileIds);
         var latestRows =
                 profileIds.isEmpty()
                         ? List.<CameraStatusCheckEntity>of()
                         : checks.latestForProfiles(profileIds);
-        var factByProfile = new HashMap<Long, CameraStatusSnapshotEntity>();
-        for (var fact : facts) factByProfile.put(fact.getProfileId(), fact);
-        var latestByProfile = new HashMap<Long, CameraStatusCheckEntity>();
+        var factByProfile = new HashMap<LayerKey, CameraStatusSnapshotEntity>();
+        for (var fact : facts)
+            factByProfile.put(new LayerKey(fact.getProfileId(), fact.getLayer()), fact);
+        var latestByProfile = new HashMap<LayerKey, CameraStatusCheckEntity>();
         for (var latestCheck : latestRows)
-            latestByProfile.put(latestCheck.getProfileId(), latestCheck);
-        var observedKeys = new HashMap<Long, String>();
-        for (var fact : facts) observedKeys.put(fact.getProfileId(), fact.getConnectionKeyId());
+            latestByProfile.put(
+                    new LayerKey(latestCheck.getProfileId(), latestCheck.getLayer()), latestCheck);
         String activeKey = null;
         try {
             activeKey = crypto.activeKeyId();
         } catch (BusinessException ex) {
             /* Existing facts still use their own retained key below. */
         }
-        var inspections = targets.inspectBatch(rows, profileRows, activeKey, observedKeys);
-        var profilesByCamera = new HashMap<Long, List<CameraStatusPageVo.Profile>>();
+        var layers = new HashMap<LayerKey, CameraStatusLayerVo>();
+        var platformProfiles = targets.platformProfiles(profileIds);
         Instant serverNow = nowInstant();
+        for (var layer : CameraStatusLayer.values()) {
+            var observedKeys = new HashMap<Long, String>();
+            for (var fact : facts)
+                if (layer.name().equals(fact.getLayer()))
+                    observedKeys.put(fact.getProfileId(), fact.getConnectionKeyId());
+            var applicableProfiles =
+                    profileRows.stream()
+                            .filter(
+                                    profile ->
+                                            (layer == CameraStatusLayer.UPSTREAM)
+                                                    == platformProfiles.contains(profile.getId()))
+                            .toList();
+            var inspections =
+                    targets.inspectBatch(rows, applicableProfiles, activeKey, observedKeys);
+            for (var profile : profileRows) {
+                var key = new LayerKey(profile.getId(), layer.name());
+                layers.put(
+                        key,
+                        layerStatus(
+                                layer,
+                                factByProfile.get(key),
+                                latestByProfile.get(key),
+                                inspections.current().get(profile.getId()),
+                                inspections.observed().get(profile.getId()),
+                                serverNow,
+                                platformProfiles.contains(profile.getId())
+                                        ? CameraStatusLayer.UPSTREAM
+                                        : layer == CameraStatusLayer.UPSTREAM
+                                                ? CameraStatusLayer.CONTROL
+                                                : layer));
+            }
+        }
+        var profilesByCamera = new HashMap<Long, List<CameraStatusPageVo.Profile>>();
         for (var profile : profileRows) {
-            var fact = factByProfile.get(profile.getId());
-            var currentInspection = inspections.current().get(profile.getId());
-            var observedInspection = inspections.observed().get(profile.getId());
-            boolean current =
-                    fact != null
-                            && observedInspection != null
-                            && observedInspection.connectionDigest() != null
-                            && MessageDigest.isEqual(
-                                    fact.getConnectionDigest(),
-                                    observedInspection.connectionDigest());
-            String freshness =
-                    fact == null
-                            ? "NEVER"
-                            : current && serverNow.isBefore(instant(fact.getValidUntil()))
-                                    ? "CURRENT"
-                                    : "STALE";
             var item =
                     new CameraStatusPageVo.Profile(
                             profile.getId().toString(),
                             profile.getLabel(),
                             profile.getUsageHint(),
                             Boolean.TRUE.equals(profile.getEnabled()),
-                            "CONTROL",
-                            PROBE,
-                            fact == null ? null : CameraStatusObservationVo.from(fact),
-                            freshness,
-                            current,
-                            latestByProfile.containsKey(profile.getId())
-                                    ? CameraStatusCheckVo.from(latestByProfile.get(profile.getId()))
-                                    : null,
-                            currentInspection != null
-                                    && currentInspection.blockingReasonCode() == null,
-                            currentInspection == null
-                                    ? "CONFIGURATION_UNAVAILABLE"
-                                    : currentInspection.blockingReasonCode(),
-                            current ? CameraStatusTimelineVo.from(fact) : null);
+                            layers.get(
+                                    new LayerKey(
+                                            profile.getId(), CameraStatusLayer.CONTROL.name())),
+                            layers.get(
+                                    new LayerKey(profile.getId(), CameraStatusLayer.MEDIA.name())),
+                            layers.get(
+                                    new LayerKey(
+                                            profile.getId(), CameraStatusLayer.UPSTREAM.name())));
             profilesByCamera
                     .computeIfAbsent(profile.getChannelId(), ignored -> new ArrayList<>())
                     .add(item);
@@ -345,12 +332,50 @@ public class CameraStatusQueryService {
         return profilesByCamera;
     }
 
-    private Instant nowInstant() {
-        return clock.instant().truncatedTo(ChronoUnit.MILLIS);
+    private static CameraStatusLayerVo layerStatus(
+            CameraStatusLayer layer,
+            CameraStatusSnapshotEntity fact,
+            CameraStatusCheckEntity latest,
+            CameraRtspTargetService.Inspection currentInspection,
+            CameraRtspTargetService.Inspection observedInspection,
+            Instant serverNow,
+            CameraStatusLayer effectiveLayer) {
+        boolean current =
+                fact != null
+                        && observedInspection != null
+                        && observedInspection.connectionDigest() != null
+                        && MessageDigest.isEqual(
+                                fact.getConnectionDigest(), observedInspection.connectionDigest());
+        String freshness =
+                fact == null
+                        ? "NEVER"
+                        : current && serverNow.isBefore(instant(fact.getValidUntil()))
+                                ? "CURRENT"
+                                : "STALE";
+        String blocking =
+                currentInspection == null
+                        ? "CONFIGURATION_UNAVAILABLE"
+                        : currentInspection.blockingReasonCode();
+        if (effectiveLayer != layer
+                || layer == CameraStatusLayer.UPSTREAM
+                        && effectiveLayer != CameraStatusLayer.UPSTREAM)
+            blocking = "STATUS_LAYER_NOT_APPLICABLE";
+        return new CameraStatusLayerVo(
+                layer,
+                layer.probeKind(),
+                fact == null ? null : CameraStatusObservationVo.from(fact),
+                freshness,
+                current,
+                latest == null ? null : CameraStatusCheckVo.from(latest),
+                blocking == null,
+                blocking,
+                current ? CameraStatusTimelineVo.from(fact) : null);
     }
 
-    private LocalDateTime now() {
-        return LocalDateTime.ofInstant(nowInstant(), ZONE);
+    private record LayerKey(long profileId, String layer) {}
+
+    private Instant nowInstant() {
+        return clock.instant().truncatedTo(ChronoUnit.MILLIS);
     }
 
     private static Instant instant(LocalDateTime value) {

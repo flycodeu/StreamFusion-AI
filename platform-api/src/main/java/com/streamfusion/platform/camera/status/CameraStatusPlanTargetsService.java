@@ -30,11 +30,13 @@ public class CameraStatusPlanTargetsService {
     private final CameraAccessService access;
     private final CameraCryptoService crypto;
     private final CameraRtspTargetService rtsp;
+    private final com.streamfusion.platform.camera.service.CameraGroupService groups;
 
     public record Query(
-            @Schema(description = "核对范围：ALL为当前授权全量，PAGE为指定设备，PLAN为已有任务") String scope,
+            @Schema(description = "核对范围：ALL为当前授权全量，GROUPS为视频分组，PAGE为指定设备，PLAN为已有任务") String scope,
             @Schema(description = "指定设备的分组键，仅PAGE范围填写") List<String> groupKeys,
-            @Schema(description = "已有任务编号，仅PLAN范围填写") String planId) {}
+            @Schema(description = "已有任务编号，仅PLAN范围填写") String planId,
+            @Schema(description = "视频分组ID，仅GROUPS范围填写，包含子分组") List<String> groupIds) {}
 
     public record Target(
             @Schema(description = "设备或独立通道的分组键") String groupKey,
@@ -50,7 +52,25 @@ public class CameraStatusPlanTargetsService {
         if (query == null || query.scope() == null) throw invalid();
         var actor = access.readActor();
         List<String> keys;
+        List<Long> selectedGroups = null;
+        List<Long> fixedChannels = null;
+        if (!"GROUPS".equals(query.scope()) && query.groupIds() != null) throw invalid();
         switch (query.scope()) {
+            case "GROUPS" -> {
+                if (query.groupKeys() != null
+                        || query.planId() != null
+                        || query.groupIds() == null
+                        || query.groupIds().isEmpty()
+                        || query.groupIds().size() > 100) throw invalid();
+                selectedGroups =
+                        query.groupIds().stream()
+                                .map(id -> DecimalInput.id(id, "groupId"))
+                                .flatMap(id -> groups.queryGroupIds(id, true).stream())
+                                .distinct()
+                                .toList();
+                if (selectedGroups.isEmpty()) return new Preview(List.of(), false);
+                keys = null;
+            }
             case "ALL" -> {
                 if (query.groupKeys() != null || query.planId() != null) throw invalid();
                 keys = null;
@@ -71,13 +91,24 @@ public class CameraStatusPlanTargetsService {
                 if (plan == null || plan.getActorUserId() != actor.userId())
                     throw BusinessException.error(ErrorCode.NOT_FOUND);
                 keys = targets.groupKeys(plan.getId());
+                fixedChannels =
+                        targets.forPlan(plan.getId()).stream()
+                                .map(CameraStatusPlanTargetEntity::getCameraId)
+                                .toList();
                 if (keys.size() != plan.getTargetCount())
                     throw BusinessException.error(ErrorCode.CONFLICT);
             }
             default -> throw invalid();
         }
         if (keys != null && keys.isEmpty()) return new Preview(List.of(), false);
-        var rows = channels.statusDeviceRepresentatives(keys, access.visibility(actor), 2001);
+        var rows =
+                fixedChannels != null
+                        ? channels.statusSelectedChannels(fixedChannels, access.visibility(actor))
+                        : selectedGroups == null
+                                ? channels.statusDeviceRepresentatives(
+                                        keys, access.visibility(actor), 2001)
+                                : channels.statusGroupRepresentatives(
+                                        selectedGroups, access.visibility(actor), 2001);
         // Never silently present a truncated all-device scope as a complete patrol.
         if (rows.size() > 2000) return new Preview(List.of(), true);
         var chosen =

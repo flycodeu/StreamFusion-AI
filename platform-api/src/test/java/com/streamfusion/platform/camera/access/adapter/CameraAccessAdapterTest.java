@@ -376,13 +376,85 @@ class CameraAccessAdapterTest {
         assertThat(result.channels())
                 .extracting(CameraAccessCatalog.Channel::externalKey)
                 .containsExactly("opaque-A", "opaque-B");
-        assertThat(result.channels()).allMatch(channel -> channel.profiles().isEmpty());
+        assertThat(result.channels())
+                .allSatisfy(
+                        channel -> {
+                            assertThat(channel.profiles()).hasSize(1);
+                            var profile = channel.profiles().getFirst();
+                            assertThat(profile.locator().kind()).isEqualTo("HIK_PLATFORM");
+                            assertThat(profile.locator().profileToken())
+                                    .isEqualTo(channel.externalKey());
+                            assertThat(profile.locator().uri()).isNull();
+                            assertThat(profile.codec()).isNull();
+                        });
         assertThat(result.deviceFor(result.channels().getFirst()).externalKey())
                 .isEqualTo("device-A");
         assertThat(result.deviceFor(result.channels().getLast())).isNull();
         assertThat(result.warnings()).isEmpty();
         assertThat(result.page().hasMore()).isFalse();
         assertThat(calls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void platformOnlineStrictlyMatchesTheRequestedCodeAndDoesNotTurnUnknownIntoOffline() {
+        var reply =
+                new AtomicReference<>(
+                        "{\"code\":\"0\",\"data\":{\"total\":1,\"list\":[{\"indexCode\":\"camera-A\",\"online\":\"1\"}]}}");
+        server.createContext(
+                "/artemis/api/nms/v1/online/camera/get",
+                exchange -> {
+                    var body = json.readTree(exchange.getRequestBody());
+                    assertThat(body.path("indexCodes").get(0).asText()).isEqualTo("camera-A");
+                    assertThat(exchange.getRequestHeaders().getFirst("Authorization")).isNull();
+                    reply(exchange, 200, reply.get());
+                });
+        var api = new HikPlatformApi(transport, json);
+        assertThat(api.online(context, "camera-A")).isEqualTo(1);
+        reply.set(
+                "{\"code\":\"0\",\"data\":{\"total\":1,\"list\":[{\"indexCode\":\"camera-A\",\"online\":0}]}}");
+        assertThat(api.online(context, "camera-A")).isZero();
+        reply.set(
+                "{\"code\":\"0\",\"data\":{\"total\":1,\"list\":[{\"indexCode\":\"camera-B\",\"online\":0}]}}");
+        assertThatThrownBy(() -> api.online(context, "camera-A"))
+                .hasMessage("PLATFORM_STATUS_MISSING");
+        reply.set(
+                "{\"code\":\"0\",\"data\":{\"total\":1,\"list\":[{\"indexCode\":\"camera-A\",\"online\":2}]}}");
+        assertThatThrownBy(() -> api.online(context, "camera-A"))
+                .hasMessage("PLATFORM_STATUS_UNKNOWN");
+        for (String online :
+                List.of("4294967296", "4294967297", "-4294967296", "18446744073709551617")) {
+            reply.set(
+                    "{\"code\":\"0\",\"data\":{\"total\":1,\"list\":[{\"indexCode\":\"camera-A\",\"online\":"
+                            + online
+                            + "}]}}");
+            assertThatThrownBy(() -> api.online(context, "camera-A"))
+                    .hasMessage("PLATFORM_STATUS_UNKNOWN");
+        }
+        reply.set("{\"code\":\"0\",\"data\":{\"total\":18446744073709551616,\"list\":[]}}");
+        assertThatThrownBy(() -> api.online(context, "camera-A"))
+                .hasMessage("INVALID_PROTOCOL_RESPONSE");
+        reply.set("{\"code\":\"forbidden\"}");
+        assertThatThrownBy(() -> api.online(context, "camera-A"))
+                .hasMessage("PLATFORM_API_REJECTED");
+    }
+
+    @Test
+    void platformRegionChildrenArePagedWithoutRecursiveExpansion() {
+        server.createContext(
+                "/artemis/api/irds/v2/region/nodesByParams",
+                exchange -> {
+                    var body = json.readTree(exchange.getRequestBody());
+                    assertThat(body.path("parentIndexCodes").get(0).asText()).isEqualTo("root-A");
+                    assertThat(body.path("isSubRegion").asBoolean()).isFalse();
+                    assertThat(body.path("pageNo").asInt()).isEqualTo(2);
+                    assertThat(body.path("pageSize").asInt()).isEqualTo(100);
+                    reply(
+                            exchange,
+                            200,
+                            "{\"code\":\"0\",\"data\":{\"total\":201,\"list\":[{\"indexCode\":\"region-B\",\"name\":\"B\"}]}}");
+                });
+        var api = new HikPlatformApi(transport, json);
+        assertThat(api.regions(context, "root-A", 2, 100).path("list")).hasSize(1);
     }
 
     @Test

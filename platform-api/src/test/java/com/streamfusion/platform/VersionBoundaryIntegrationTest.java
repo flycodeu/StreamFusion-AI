@@ -7,9 +7,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.streamfusion.platform.auth.service.BootstrapService;
 import com.streamfusion.platform.support.IdentitySchema;
 import com.streamfusion.platform.support.SecureLoginSupport;
+import com.streamfusion.platform.system.auth.service.BootstrapService;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

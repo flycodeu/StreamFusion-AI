@@ -43,6 +43,8 @@ export interface AccessConnection {
   rtspUrls?: string[]
   pageNumber?: number
   pageSize?: number
+  regionIndexCode?: string
+  includeSubRegions?: boolean
 }
 export interface CandidateProfile {
   classification?: StreamClassification

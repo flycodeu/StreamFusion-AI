@@ -10,7 +10,7 @@ import {
 } from 'vue'
 import type { Ref } from 'vue'
 import { getStatusPage } from '../../api/camera-status/api'
-import type { StatusPage, StatusSearch } from '../../api/camera-status/types'
+import type { LayerStatus, StatusPage, StatusSearch } from '../../api/camera-status/types'
 import { isTerminal } from './model'
 
 export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
@@ -28,15 +28,20 @@ export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
     const now = Date.parse(result.value.serverNow) + elapsed.value
     return result.value.items.map((channel) => ({
       ...channel,
-      profiles: channel.profiles.map((profile) =>
-        profile.freshness === 'CURRENT' &&
-        profile.observation &&
-        Date.parse(profile.observation.validUntil) <= now
-          ? { ...profile, freshness: 'STALE' as const }
-          : profile,
-      ),
+      profiles: channel.profiles.map((profile) => ({
+        ...profile,
+        control: expire(profile.control, now),
+        media: expire(profile.media, now),
+      })),
     }))
   })
+  function expire(layer: LayerStatus, now: number): LayerStatus {
+    return layer.freshness === 'CURRENT' &&
+      layer.observation &&
+      Date.parse(layer.observation.validUntil) <= now
+      ? { ...layer, freshness: 'STALE' }
+      : layer
+  }
   let disposed = false,
     epoch = 0,
     reads = 0,
@@ -64,9 +69,11 @@ export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
     const now = Date.parse(result.value.serverNow) + elapsed.value
     const deadlines = result.value.items.flatMap((channel) =>
       channel.profiles.flatMap((profile) =>
-        profile.freshness === 'CURRENT' && profile.observation
-          ? [Date.parse(profile.observation.validUntil)]
-          : [],
+        [profile.control, profile.media].flatMap((layer) =>
+          layer.freshness === 'CURRENT' && layer.observation
+            ? [Date.parse(layer.observation.validUntil)]
+            : [],
+        ),
       ),
     )
     const next = Math.min(...deadlines.filter((deadline) => deadline > now))
@@ -81,7 +88,11 @@ export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
     if (!current(generation)) return
     const progressing =
       result.value?.items.some((channel) =>
-        channel.profiles.some((profile) => profile.latestCheck && !isTerminal(profile.latestCheck)),
+        channel.profiles.some((profile) =>
+          [profile.control, profile.media].some(
+            (layer) => layer.latestCheck && !isTerminal(layer.latestCheck),
+          ),
+        ),
       ) ?? false
     if ((progressing && reads >= 30) || failures >= 3) {
       paused.value = true

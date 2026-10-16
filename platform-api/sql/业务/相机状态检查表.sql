@@ -4,7 +4,7 @@ SET FOREIGN_KEY_CHECKS = 1;
 
 DROP TABLE IF EXISTS `camera_status_check`;
 CREATE TABLE camera_status_check (
-    id BIGINT NOT NULL COMMENT '手动检查雪花ID',
+    id BIGINT NOT NULL COMMENT '状态检查ID',
     actor_user_id BIGINT NOT NULL COMMENT '发起用户历史ID，不建立用户外键',
     plan_id BIGINT NULL COMMENT '有限期计划ID；NULL为原会话约束手动检查',
     camera_id BIGINT NOT NULL COMMENT '发起时的通道ID，不阻止资产硬删除',
@@ -17,7 +17,8 @@ CREATE TABLE camera_status_check (
     request_fingerprint BINARY(32) NOT NULL COMMENT '请求语义HMAC，不含原始请求或凭据',
     session_digest BINARY(32) NOT NULL COMMENT '会话HMAC，不保存原始Session ID',
     connection_digest BINARY(32) NOT NULL COMMENT '解密后连接配置HMAC，仅内部比较',
-    probe_kind VARCHAR(32) NOT NULL DEFAULT 'RTSP_DESCRIBE' COMMENT '本期固定RTSP_DESCRIBE',
+    layer VARCHAR(16) NOT NULL DEFAULT 'CONTROL' COMMENT 'CONTROL控制连接、MEDIA媒体收帧、UPSTREAM平台状态',
+    probe_kind VARCHAR(32) NOT NULL DEFAULT 'RTSP_DESCRIBE' COMMENT 'RTSP_DESCRIBE/ZLM_RTP_FRAMES/HIK_PLATFORM_ONLINE',
     execution_state VARCHAR(20) NOT NULL COMMENT 'QUEUED/RUNNING/COMPLETED/SKIPPED/CANCELLED/INTERRUPTED',
     result_value VARCHAR(16) NULL COMMENT '观察事实ACCESSIBLE/FAILED/UNSUPPORTED，无事实为NULL',
     reason_code VARCHAR(64) NULL COMMENT '受控原因码，不存异常原文',
@@ -30,6 +31,12 @@ CREATE TABLE camera_status_check (
     observed_at DATETIME(3) NULL COMMENT '事实观测时间，非GET时间',
     read_at DATETIME(3) NULL COMMENT '采集器读取事实时间，非GET时间',
     valid_until DATETIME(3) NULL COMMENT '本次事实有效截止，Asia/Shanghai',
+    media_window_started_at DATETIME(3) NULL COMMENT '媒体接收采样窗口开始，Asia/Shanghai',
+    media_window_ended_at DATETIME(3) NULL COMMENT '媒体接收采样窗口结束，Asia/Shanghai',
+    media_first_frames BIGINT NULL COMMENT '窗口首个视频帧接收累计计数，不代表解码',
+    media_last_frames BIGINT NULL COMMENT '窗口末个视频帧接收累计计数，不代表解码',
+    media_sample_count INT NULL COMMENT '有效接收计数采样次数',
+    media_max_gap_ms BIGINT NULL COMMENT '采样中未确认帧增长的最大间隔毫秒',
     updated_at DATETIME(3) NOT NULL COMMENT '检查回执更新时间，Asia/Shanghai',
     retain_until DATETIME(3) NOT NULL COMMENT '终态回执有界保留截止，Asia/Shanghai',
     duration_ms BIGINT NULL COMMENT '探测耗时毫秒，未执行为空',
@@ -37,14 +44,18 @@ CREATE TABLE camera_status_check (
     version BIGINT NOT NULL DEFAULT 0 COMMENT '执行条件更新并发版本',
     PRIMARY KEY (id),
     UNIQUE KEY uk_camera_status_request (actor_user_id,client_request_id),
-    KEY ix_camera_status_profile (profile_id,requested_at,id),
+    KEY ix_camera_status_profile (profile_id,probe_kind,requested_at,id),
     KEY ix_camera_status_deadline (execution_state,deadline_at,id),
     KEY ix_camera_status_retain (execution_state,retain_until,id),
-    CONSTRAINT ck_camera_status_probe CHECK (probe_kind='RTSP_DESCRIBE'),
+    KEY ix_camera_status_plan (plan_id,execution_state,deadline_at),
+    CONSTRAINT ck_camera_status_probe CHECK ((layer='CONTROL' AND probe_kind='RTSP_DESCRIBE') OR (layer='MEDIA' AND probe_kind='ZLM_RTP_FRAMES') OR (layer='UPSTREAM' AND probe_kind='HIK_PLATFORM_ONLINE')),
     CONSTRAINT ck_camera_status_execution CHECK (execution_state IN ('QUEUED','RUNNING','COMPLETED','SKIPPED','CANCELLED','INTERRUPTED')),
     CONSTRAINT ck_camera_status_result CHECK (result_value IS NULL OR result_value IN ('ACCESSIBLE','FAILED','UNSUPPORTED')),
     CONSTRAINT ck_camera_status_version CHECK (version>=0),
     CONSTRAINT ck_camera_status_applied CHECK (snapshot_applied IN (0,1)),
     CONSTRAINT ck_camera_status_duration CHECK (duration_ms IS NULL OR duration_ms>=0),
-    CONSTRAINT ck_camera_status_observation CHECK ((result_value IS NULL AND observed_at IS NULL AND read_at IS NULL AND valid_until IS NULL) OR (result_value IS NOT NULL AND observed_at IS NOT NULL AND read_at IS NOT NULL AND valid_until IS NOT NULL))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='有界相机手动检查回执，与观察事实分离';
+    CONSTRAINT ck_camera_status_observation CHECK ((result_value IS NULL AND observed_at IS NULL AND read_at IS NULL AND valid_until IS NULL) OR (result_value IS NOT NULL AND observed_at IS NOT NULL AND read_at IS NOT NULL AND valid_until IS NOT NULL)),
+    CONSTRAINT ck_camera_status_media_evidence CHECK (
+        ((layer IN ('CONTROL','UPSTREAM') OR result_value IS NULL) AND media_window_started_at IS NULL AND media_window_ended_at IS NULL AND media_first_frames IS NULL AND media_last_frames IS NULL AND media_sample_count IS NULL AND media_max_gap_ms IS NULL)
+        OR (layer='MEDIA' AND result_value IS NOT NULL AND media_window_started_at IS NOT NULL AND media_window_ended_at IS NOT NULL AND media_first_frames IS NOT NULL AND media_last_frames IS NOT NULL AND media_sample_count IS NOT NULL AND media_max_gap_ms IS NOT NULL AND media_window_ended_at>=media_window_started_at AND media_first_frames>=0 AND media_last_frames>=media_first_frames AND media_sample_count>=3 AND media_max_gap_ms>=0))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='相机状态检查记录';

@@ -10,9 +10,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.streamfusion.platform.auth.captcha.CaptchaImageGenerator;
-import com.streamfusion.platform.auth.captcha.CaptchaStore;
-import com.streamfusion.platform.auth.guard.LoginGuardStore;
+import com.streamfusion.platform.system.auth.captcha.CaptchaImageGenerator;
+import com.streamfusion.platform.system.auth.captcha.CaptchaStore;
+import com.streamfusion.platform.system.auth.guard.LoginGuardStore;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.KeyPairGenerator;

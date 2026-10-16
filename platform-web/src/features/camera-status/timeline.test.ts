@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { observationSpan } from './timeline'
-import type { ProfileStatus } from '../../api/camera-status/types'
+import type { LayerStatus } from '../../api/camera-status/types'
 
-const failed: ProfileStatus = {
-  streamProfileId: '1',
+const failed: LayerStatus = {
   layer: 'CONTROL',
   probeKind: 'RTSP_DESCRIBE',
   freshness: 'CURRENT',
@@ -18,6 +17,7 @@ const failed: ProfileStatus = {
     readAt: '2026-10-14T03:00:00Z',
     validUntil: '2026-10-14T03:05:00Z',
     checkId: '1',
+    mediaEvidence: null,
   },
   timeline: {
     stateSince: '2026-10-14T01:00:00Z',

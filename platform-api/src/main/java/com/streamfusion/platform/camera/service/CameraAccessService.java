@@ -1,11 +1,11 @@
 package com.streamfusion.platform.camera.service;
 
-import com.streamfusion.platform.access.mapper.AccessMapper;
-import com.streamfusion.platform.access.service.AccessService;
-import com.streamfusion.platform.auth.service.CurrentUserService;
 import com.streamfusion.platform.camera.mapper.*;
 import com.streamfusion.platform.common.exception.*;
 import com.streamfusion.platform.common.security.ModuleAuthorizationService;
+import com.streamfusion.platform.system.access.mapper.AccessMapper;
+import com.streamfusion.platform.system.access.service.AccessService;
+import com.streamfusion.platform.system.auth.service.CurrentUserService;
 import java.util.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;

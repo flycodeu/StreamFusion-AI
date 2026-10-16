@@ -20,6 +20,7 @@ import ScanDialog from '../../src/features/camera-access/ScanDialog.vue'
 import SourceEditor from '../../src/features/camera-sources/SourceEditor.vue'
 import BulkImportPanel from '../../src/features/camera-access/BulkImportPanel.vue'
 import ImportTasksDialog from '../../src/features/camera-access/ImportTasksDialog.vue'
+import PlatformDirectory from '../../src/features/camera-access/PlatformDirectory.vue'
 import { ApiRequestError } from '../../src/lib/http/error'
 
 const api = vi.hoisted(() => ({
@@ -51,6 +52,8 @@ const api = vi.hoisted(() => ({
   getSources: vi.fn(),
   getSource: vi.fn(),
   updateSource: vi.fn(),
+  createSource: vi.fn(),
+  getPlatformRegions: vi.fn(),
   getScopeUsers: vi.fn(),
   getCameraScope: vi.fn(),
   updateCameraScope: vi.fn(),
@@ -70,6 +73,7 @@ const api = vi.hoisted(() => ({
   getStatusPlans: vi.fn(),
   createStatusPlan: vi.fn(),
   stopStatusPlan: vi.fn(),
+  resumeStatusPlan: vi.fn(),
   inspectPlanTargets: vi.fn(),
 }))
 vi.mock('../../src/api/camera/api', () => api)
@@ -352,6 +356,24 @@ const setField = async (root: Host, label: string, value: unknown, kind = 'ElInp
   ;(field(root, label, kind).props['onUpdate:modelValue'] as (value: unknown) => void)(value)
   await nextTick()
 }
+async function selectPlatformRegion(root: Host) {
+  const tree = nodes(root).find((item) => item.type === 'ElTree')!
+  await (tree.props.onNodeClick as (data: unknown, node: unknown) => Promise<void>)(
+    { indexCode: 'region-A', parentIndexCode: null, name: '平台区域A' },
+    {},
+  )
+  await settle()
+}
+async function openPlatformRegion(root: Host, reused = true) {
+  await click(root, reused ? '打开平台目录' : '保存密钥并打开目录')
+  expect(api.createAccessJob).not.toHaveBeenCalled()
+  await selectPlatformRegion(root)
+}
+async function choosePatrolPage(root: Host) {
+  await setField(root, '1. 检测范围', 'PAGE', 'ElSelect')
+  await (field(root, '1. 检测范围', 'ElSelect').props.onChange as () => Promise<void>)()
+  await settle()
+}
 let app: App | null = null
 async function mount(component: Component, props = {}) {
   const root = node('root')
@@ -364,7 +386,19 @@ async function settle() {
   for (let i = 0; i < 8; i++) await nextTick()
 }
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
+  api.createSource.mockResolvedValue({
+    ...source,
+    sourceId: '70',
+    version: '9',
+    adapterType: 'HIK_PLATFORM',
+  })
+  api.getPlatformRegions.mockResolvedValue({
+    items: [{ indexCode: 'region-A', parentIndexCode: null, name: '平台区域A' }],
+    total: 1,
+    page: 1,
+    size: 100,
+  })
   api.inspectPlanTargets.mockResolvedValue({ targets: [], limitExceeded: false })
   clearIdentity()
   api.getCameraOptions.mockResolvedValue({ canManageShared: true, manualStorageReady: true })
@@ -496,6 +530,116 @@ afterEach(() => {
 })
 
 describe('camera management interaction boundaries', () => {
+  it('loads only expanded platform region pages and keeps every level initially collapsed', async () => {
+    const connection = { method: 'HIK_PLATFORM', sourceId: '70', sourceVersion: '9' }
+    const root = await mount(PlatformDirectory, { connection, disabled: false })
+    expect(api.getPlatformRegions).not.toHaveBeenCalled()
+    const tree = nodes(root).find((item) => item.type === 'ElTree')!
+    expect(tree.props['default-expand-all']).toBe(false)
+    const resolve = vi.fn(),
+      reject = vi.fn()
+    const load = tree.props.load as (
+      node: unknown,
+      resolve: typeof vi.fn,
+      reject: typeof vi.fn,
+    ) => Promise<void>
+    await load({ level: 0 }, resolve, reject)
+    expect(api.getPlatformRegions).toHaveBeenCalledWith({
+      connection,
+      parentCode: undefined,
+      page: 1,
+      size: 100,
+    })
+    api.getPlatformRegions.mockResolvedValueOnce({
+      items: [{ indexCode: 'child', name: '子区域' }],
+      total: 201,
+      size: 100,
+    })
+    await load({ level: 1, data: { indexCode: 'region-A' } }, resolve, reject)
+    expect(api.getPlatformRegions).toHaveBeenLastCalledWith({
+      connection,
+      parentCode: 'region-A',
+      page: 1,
+      size: 100,
+    })
+    expect(resolve.mock.calls[1]![0]).toEqual([
+      { indexCode: 'child', name: '子区域' },
+      expect.objectContaining({ more: true, nextPage: 2, parentIndexCode: 'region-A', leaf: true }),
+    ])
+    expect(api.createAccessJob).not.toHaveBeenCalled()
+    expect(reject).not.toHaveBeenCalled()
+  })
+  it('ignores a late platform tree response after refreshing the directory', async () => {
+    let finish!: (value: unknown) => void
+    api.getPlatformRegions.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    const root = await mount(PlatformDirectory, {
+      connection: { method: 'HIK_PLATFORM', sourceId: '70', sourceVersion: '9' },
+      disabled: false,
+    })
+    const tree = nodes(root).find((item) => item.type === 'ElTree')!
+    const resolve = vi.fn(),
+      reject = vi.fn()
+    const pending = (
+      tree.props.load as (n: unknown, r: typeof vi.fn, e: typeof vi.fn) => Promise<void>
+    )({ level: 0 }, resolve, reject)
+    await click(root, '刷新目录')
+    finish({ items: [{ indexCode: 'old', name: '旧区域' }], total: 1, size: 100 })
+    await pending
+    expect(resolve).not.toHaveBeenCalled()
+    expect(reject).not.toHaveBeenCalled()
+  })
+  it('defaults patrol to video groups and sends explicit parallel CONTROL settings', async () => {
+    api.getStatusPlans.mockResolvedValue([])
+    api.inspectPlanTargets.mockResolvedValue({
+      targets: [{ groupKey: 'c10', name: '组内相机', reasonCode: null }],
+      limitExceeded: false,
+    })
+    api.createStatusPlan.mockResolvedValue({ planId: '1' })
+    const root = await mount(PlanDialog, { groupKeys: ['c20'] })
+    expect(field(root, '1. 检测范围', 'ElSelect').props.modelValue).toBe('GROUPS')
+    expect(api.inspectPlanTargets).not.toHaveBeenCalled()
+    await setField(root, '视频分组', ['3'], 'ElTreeSelect')
+    await (field(root, '视频分组', 'ElTreeSelect').props.onChange as () => Promise<void>)()
+    await setField(root, '检查内容', 'CONTROL', 'ElSelect')
+    await setField(root, '调度方式', 'PARALLEL', 'ElSelect')
+    await setField(root, '最大并发', 2, 'ElSelect')
+    await click(root, '启动巡检')
+    expect(api.inspectPlanTargets).toHaveBeenCalledWith({ scope: 'GROUPS', groupIds: ['3'] })
+    expect(api.createStatusPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groupIds: ['3'],
+        groupKeys: ['c10'],
+        layer: 'CONTROL',
+        dispatchMode: 'PARALLEL',
+        parallelism: 2,
+      }),
+    )
+  })
+  it('resumes an unexpired stopped patrol without creating another plan', async () => {
+    const plan = {
+      planId: '1',
+      state: 'STOPPED',
+      targetCount: 1,
+      intervalMinutes: 60,
+      layer: 'MEDIA',
+      dispatchMode: 'POLLING',
+      parallelism: 1,
+      version: '3',
+      startAt: new Date().toISOString(),
+      endAt: new Date(Date.now() + 3600000).toISOString(),
+    }
+    api.getStatusPlans.mockResolvedValue([plan])
+    api.resumeStatusPlan.mockResolvedValue({ ...plan, state: 'ACTIVE' })
+    const root = await mount(PlanDialog, { groupKeys: [] })
+    await click(root, '恢复执行')
+    expect(api.resumeStatusPlan).toHaveBeenCalledWith(plan)
+    expect(api.createStatusPlan).not.toHaveBeenCalled()
+  })
   it('keeps the complete tree while selecting a group and can return from pending to all', async () => {
     const rootGroup = {
       groupId: '30',
@@ -817,8 +961,8 @@ describe('camera management interaction boundaries', () => {
           initialConnection: { sourceId: '70', sourceVersion: '9', method: 'HIK_PLATFORM' },
           onSaved: saved,
         })
-      await click(root, '查询平台目录')
-      await click(root, '整批导入')
+      await openPlatformRegion(root)
+      await click(root, '导入当前区域全部相机')
       await settle()
       expect(nodes(root).filter((item) => item.type === 'ElDialog')).toHaveLength(1)
       await click(root, '确认整批导入')
@@ -868,21 +1012,24 @@ describe('camera management interaction boundaries', () => {
       initialConnection: { sourceId: '70', sourceVersion: '9', method: 'HIK_PLATFORM' },
       initialGroupId: '30',
     })
-    await click(root, '查询平台目录')
-    await click(root, '整批导入')
+    await openPlatformRegion(root)
+    await click(root, '导入当前区域全部相机')
     await settle()
     await click(root, '确认整批导入')
     expect(text(root)).toContain('导入中断')
     await click(root, '重新读取并重试')
     await settle()
+    await selectPlatformRegion(root)
     expect(api.createAccessJob.mock.calls[1]![0].connection).toEqual({
       method: 'HIK_PLATFORM',
       sourceId: '70',
       sourceVersion: '9',
       pageNumber: 1,
       pageSize: 100,
+      regionIndexCode: 'region-A',
+      includeSubRegions: false,
     })
-    await click(root, '整批导入')
+    await click(root, '导入当前区域全部相机')
     await settle()
     expect(api.previewBulkImport).toHaveBeenLastCalledWith('902', { version: '2', groupId: '30' })
   })
@@ -1190,10 +1337,10 @@ describe('camera management interaction boundaries', () => {
       .mockResolvedValueOnce({ jobId: '902' })
     api.getAccessOptions.mockResolvedValue({
       ready: true,
-      methods: ['CUSTOM_PLATFORM'],
+      methods: ['HIK_PLATFORM'],
       adapters: [
         {
-          type: 'CUSTOM_PLATFORM',
+          type: 'HIK_PLATFORM',
           label: '已注册平台',
           category: 'PLATFORM',
           inputKind: 'PLATFORM_APPKEY',
@@ -1207,14 +1354,14 @@ describe('camera management interaction boundaries', () => {
     api.getAccessJob
       .mockResolvedValueOnce({
         ...accessJob,
-        method: 'CUSTOM_PLATFORM',
+        method: 'HIK_PLATFORM',
         candidates: [{ candidateId: 'p1', name: '平台相机', mappingRequired: false, profiles: [] }],
         page: { pageNumber: 1, pageSize: 100, total: 101, hasMore: true },
       })
       .mockResolvedValueOnce({
         ...accessJob,
         jobId: '902',
-        method: 'CUSTOM_PLATFORM',
+        method: 'HIK_PLATFORM',
         candidates: [],
         page: { pageNumber: 2, pageSize: 100, total: 101, hasMore: false },
       })
@@ -1229,7 +1376,8 @@ describe('camera management interaction boundaries', () => {
     await setField(root, '平台地址', 'platform.test')
     await setField(root, 'AppKey', 'test-key')
     await setField(root, 'AppSecret', 'test-secret')
-    await click(root, '查询平台目录')
+    await openPlatformRegion(root, false)
+    await click(root, '选择可导入通道')
     await click(root, '查看导入影响')
     await click(root, '确认导入')
     await click(root, '下一页')
@@ -1237,11 +1385,13 @@ describe('camera management interaction boundaries', () => {
     await click(root, '重试本页读取请求')
     expect(api.createAccessJob.mock.calls[2]).toEqual(api.createAccessJob.mock.calls[1])
     expect(api.createAccessJob.mock.calls[1]![0].connection).toEqual({
-      method: 'CUSTOM_PLATFORM',
+      method: 'HIK_PLATFORM',
       sourceId: '70',
       sourceVersion: '9',
       pageNumber: 2,
       pageSize: 100,
+      regionIndexCode: 'region-A',
+      includeSubRegions: false,
     })
     expect(text(root)).toContain('已选 0 个')
     expect(api.createAccessJob.mock.calls[1]![0]).not.toHaveProperty('password')
@@ -1384,13 +1534,13 @@ describe('camera management interaction boundaries', () => {
     await (selector.props.onChange as (value: string) => void)('DAHUA_ICC')
     await settle()
     expect(text(root)).toContain('尚未适配')
-    expect(button(root, '查询平台目录').props.disabled).toBe(true)
+    expect(button(root, '保存密钥并打开目录').props.disabled).toBe(true)
     expect(
       nodes(root).some(
         (item) => item.type === 'ElInput' && item.props.autocomplete === 'new-password',
       ),
     ).toBe(false)
-    await click(root, '查询平台目录')
+    await click(root, '保存密钥并打开目录')
     expect(api.createAccessJob).not.toHaveBeenCalled()
   })
   it('shows inferred roles without turning a label edit into a manual role override', async () => {
@@ -1539,6 +1689,7 @@ describe('camera management interaction boundaries', () => {
     api.getStatusPlans.mockResolvedValue([])
     api.createStatusPlan.mockRejectedValueOnce(new Error('lost')).mockResolvedValue({ planId: '1' })
     const root = await mount(PlanDialog, { groupKeys: ['d100'] })
+    await choosePatrolPage(root)
     expect(api.createStatusPlan).not.toHaveBeenCalled()
     await click(root, '启动巡检')
     expect(text(root)).toContain('响应未确认')
@@ -1580,6 +1731,7 @@ describe('camera management interaction boundaries', () => {
       new ApiRequestError('RATE_LIMITED', '繁忙', { status: 429 }),
     )
     const root = await mount(PlanDialog, { groupKeys: ['d100'] })
+    await choosePatrolPage(root)
     await click(root, '停止')
     expect(api.stopStatusPlan).toHaveBeenCalledWith(plan)
     await click(root, '启动巡检')
@@ -1666,6 +1818,7 @@ describe('camera management interaction boundaries', () => {
       limitExceeded: false,
     })
     const root = await mount(PlanDialog, { groupKeys: ['d100', 'd100'] })
+    await choosePatrolPage(root)
     expect(api.inspectPlanTargets).toHaveBeenCalledTimes(1)
     expect(text(root).replace(/\s+/g, ' ')).toContain('0 台可检测 / 1 台 · 1 台跳过')
     expect(text(root)).toContain('此接入方式的连接检测尚未适配')
@@ -1685,6 +1838,7 @@ describe('camera management interaction boundaries', () => {
     })
     api.createStatusPlan.mockResolvedValue({ planId: '1' })
     const root = await mount(PlanDialog, { groupKeys: ['d100', 'd200'] })
+    await choosePatrolPage(root)
     expect(text(root).replace(/\s+/g, ' ')).toContain('1 台可检测 / 2 台 · 1 台跳过')
     expect(text(root)).toContain('d200：未配置 RTSP 地址')
     await click(root, '启动巡检')
@@ -1694,6 +1848,7 @@ describe('camera management interaction boundaries', () => {
     api.getStatusPlans.mockResolvedValue([])
     api.inspectPlanTargets.mockRejectedValue(new ApiRequestError('REQUEST_TIMEOUT', '核对超时'))
     const root = await mount(PlanDialog, { groupKeys: ['d100'] })
+    await choosePatrolPage(root)
     expect(button(root, '启动巡检').props.disabled).toBe(true)
     expect(text(root)).not.toContain('离线')
     expect(button(root, '重新核对目标')).toBeDefined()
@@ -1719,6 +1874,9 @@ describe('camera management interaction boundaries', () => {
       startAt: '2026-10-14T08:00:00Z',
       endAt: '2026-10-14T14:00:00Z',
       version: '1',
+      layer: 'MEDIA',
+      dispatchMode: 'POLLING',
+      parallelism: 1,
     }
     api.getStatusPlans.mockResolvedValue([plan])
     api.createStatusPlan.mockResolvedValue({ planId: '10' })
@@ -1727,7 +1885,7 @@ describe('camera management interaction boundaries', () => {
       targets: [{ groupKey: 'd900', name: '模拟设备', reasonCode: null }],
       limitExceeded: false,
     })
-    await click(root, '重新启动')
+    await click(root, '复用范围')
     await settle()
     expect(api.inspectPlanTargets).toHaveBeenLastCalledWith({ scope: 'PLAN', planId: '9' })
     expect(text(root)).toContain('确认后启动新任务')
@@ -1746,6 +1904,8 @@ describe('camera management interaction boundaries', () => {
     )
     api.getStatusPlans.mockResolvedValue([])
     const root = await mount(PlanDialog, { groupKeys: ['d100'] })
+    await setField(root, '1. 检测范围', 'PAGE', 'ElSelect')
+    const old = (field(root, '1. 检测范围', 'ElSelect').props.onChange as () => Promise<void>)()
     api.inspectPlanTargets.mockResolvedValue({
       targets: [{ groupKey: 'd200', name: '全量目标', reasonCode: null }],
       limitExceeded: false,
@@ -1756,6 +1916,7 @@ describe('camera management interaction boundaries', () => {
       targets: [{ groupKey: 'd100', name: '旧目标', reasonCode: null }],
       limitExceeded: false,
     })
+    await old
     await settle()
     await click(root, '启动巡检')
     expect(api.createStatusPlan).toHaveBeenCalledWith(

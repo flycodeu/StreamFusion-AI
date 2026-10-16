@@ -1,8 +1,8 @@
 package com.streamfusion.platform.common.security;
 
-import com.streamfusion.platform.auth.service.CurrentUserService;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
+import com.streamfusion.platform.system.auth.service.CurrentUserService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;

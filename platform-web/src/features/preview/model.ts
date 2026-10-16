@@ -95,6 +95,15 @@ export function previewReason(code: string | null): string {
     CONNECT_TIMEOUT: '连接超时，请重连',
     LEASE_EXPIRED: '预览已过期，请重连',
     CONNECTION_FAILED: '视频连接中断，请重连',
+    VIDEO_CODEC_NEGOTIATION_FAILED: '视频编码协商失败，请切换码流或检查转码配置',
+    VIDEO_DECODE_FAILED: '视频解码失败，请切换码流或检查转码配置',
+    VIDEO_PLAYBACK_FAILED: '视频播放中断，请重连或检查网络',
+    LEASE_RELEASE_FAILED: '预览资源释放未确认，请重试关闭后再打开',
+    PREVIEW_TIMEOUT: '媒体准备超时，请重连或检查媒体服务',
+    PREVIEW_BUSY: '预览资源繁忙，请稍后重试',
+    TRANSCODE_RECOVERY_REQUIRED: '转码登记待核对，请管理员检查工作目录和媒体进程',
+    CLEANUP_PENDING: '预览资源释放未确认，请稍后重试关闭',
+    CANCELLED: '预览已取消',
   }
   return reasons[code || ''] || '暂时无法预览，请检查相机和媒体服务'
 }

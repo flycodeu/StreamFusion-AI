@@ -2,8 +2,6 @@ package com.streamfusion.platform.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
-import com.streamfusion.platform.audit.pojo.dto.AuditContextDto;
-import com.streamfusion.platform.audit.service.AuditService;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessAdapterRegistry;
 import com.streamfusion.platform.camera.access.pojo.CameraConnection;
 import com.streamfusion.platform.camera.config.CameraProperties;
@@ -15,6 +13,8 @@ import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.pojo.vo.PageResultVo;
 import com.streamfusion.platform.common.validation.DecimalInput;
 import com.streamfusion.platform.common.validation.VersionCounter;
+import com.streamfusion.platform.monitor.audit.pojo.dto.AuditContextDto;
+import com.streamfusion.platform.monitor.audit.service.AuditService;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -523,7 +523,9 @@ public class CameraSourceService {
                 input.sourceVersion(),
                 rtsp ? input.rtspUrls() : null,
                 input.pageNumber(),
-                input.pageSize());
+                input.pageSize(),
+                input.regionIndexCode(),
+                input.includeSubRegions());
     }
 
     private static void sameOptional(Object input, Object saved) {

@@ -15,6 +15,9 @@ export interface StatusPlan {
   lastReasonCode?: string | null
   progress?: PlanProgress | null
   serverNow?: string
+  layer: 'CONTROL' | 'MEDIA'
+  dispatchMode: 'POLLING' | 'PARALLEL'
+  parallelism: number
 }
 export interface PlanProgress {
   success: number
@@ -28,6 +31,11 @@ export interface StatusPlanInput {
   groupKeys: string[]
   intervalMinutes: number
   durationHours: number
+  layer?: 'CONTROL' | 'MEDIA'
+  dispatchMode?: 'POLLING' | 'PARALLEL'
+  parallelism?: number
+  groupIds?: string[]
+  planId?: string
 }
 export function parseStatusPlan(value: unknown): StatusPlan {
   const row = object(value),
@@ -54,6 +62,17 @@ export function parseStatusPlan(value: unknown): StatusPlan {
   )
     throw new Error('plan progress bounds')
   if (row.serverNow != null && !isUtcTimestamp(row.serverNow)) throw new Error('plan server time')
+  const layer = row.layer == null ? 'CONTROL' : string(row.layer)
+  const dispatchMode = row.dispatchMode == null ? 'POLLING' : string(row.dispatchMode)
+  const parallelism = row.parallelism == null ? 1 : integer(row.parallelism)
+  if (
+    !['CONTROL', 'MEDIA'].includes(layer) ||
+    !['POLLING', 'PARALLEL'].includes(dispatchMode) ||
+    parallelism < 1 ||
+    parallelism > 4 ||
+    ((layer === 'MEDIA' || dispatchMode === 'POLLING') && parallelism !== 1)
+  )
+    throw new Error('plan dispatch bounds')
   if (
     intervalMinutes < 5 ||
     intervalMinutes > 1440 ||
@@ -75,6 +94,9 @@ export function parseStatusPlan(value: unknown): StatusPlan {
     startAt,
     endAt,
     version: id(row.version),
+    layer: layer as StatusPlan['layer'],
+    dispatchMode: dispatchMode as StatusPlan['dispatchMode'],
+    parallelism,
     blockedCount,
     nextAt,
     lastReasonCode: row.lastReasonCode == null ? null : string(row.lastReasonCode),
@@ -107,6 +129,18 @@ export async function stopStatusPlan(plan: StatusPlan) {
   return (
     await request({
       path: `/camera-status/plans/${id(plan.planId)}/stop`,
+      method: 'POST',
+      successStatus: 200,
+      body: { version: id(plan.version) },
+      decode: parseStatusPlan,
+    })
+  ).data
+}
+
+export async function resumeStatusPlan(plan: StatusPlan) {
+  return (
+    await request({
+      path: `/camera-status/plans/${id(plan.planId)}/resume`,
       method: 'POST',
       successStatus: 200,
       body: { version: id(plan.version) },

@@ -21,6 +21,14 @@ public interface CameraStatusPlanMapper extends BaseMapper<CameraStatusPlanEntit
     double targetsPerMinute(LocalDateTime now);
 
     @Select(
+            "SELECT COALESCE(SUM(media_target_count * 1.0 / interval_minutes),0) FROM camera_status_plan WHERE state='ACTIVE' AND layer='MEDIA' AND end_at>#{now}")
+    double mediaTargetsPerMinute(LocalDateTime now);
+
+    @Select(
+            "SELECT COUNT(*) FROM camera_status_check WHERE plan_id=#{planId} AND execution_state IN ('QUEUED','RUNNING') AND deadline_at>#{now}")
+    int pending(@Param("planId") long planId, @Param("now") LocalDateTime now);
+
+    @Select(
             """
             SELECT p.*,
               (SELECT COUNT(*) FROM camera_status_plan_target t WHERE t.plan_id=p.id AND t.blocked=1) blocked_count,

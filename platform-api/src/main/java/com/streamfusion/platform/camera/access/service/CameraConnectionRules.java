@@ -37,6 +37,11 @@ public class CameraConnectionRules {
                 || size < 1
                 || size > 100
                 || (!paged && (page != 1 || size != 100))) throw CameraSourceRules.invalid();
+        if (input.regionIndexCode() != null) {
+            if (!platform) throw CameraSourceRules.invalid();
+            com.streamfusion.platform.camera.access.adapter.HikPlatformApi.requireCode(
+                    input.regionIndexCode());
+        }
         String policy = properties.defaultNetworkPolicyKey(input.networkPolicyKey());
         rules.policy(policy);
         String username = secret(input.username(), 128), password = secret(input.password(), 512);
@@ -123,7 +128,9 @@ public class CameraConnectionRules {
                 input.sourceVersion(),
                 null,
                 page,
-                size);
+                size,
+                input.regionIndexCode(),
+                input.includeSubRegions());
     }
 
     public URI endpoint(CameraConnection connection) {

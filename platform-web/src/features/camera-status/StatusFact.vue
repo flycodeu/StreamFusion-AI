@@ -1,19 +1,25 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { ElTag } from 'element-plus'
-import type { ProfileStatus } from '../../api/camera-status/types'
+import type { LayerStatus } from '../../api/camera-status/types'
 import { formatDateTime } from '../../utils/dateTime'
 import { factPresentation, reasonLabel } from './model'
 import { observationSpan, stateSinceLabel } from './timeline'
 
-const props = defineProps<{ profile: ProfileStatus | null }>()
+const props = defineProps<{ profile: LayerStatus | null }>()
 const display = computed(() => factPresentation(props.profile))
 </script>
 
 <template>
   <div class="status-fact" aria-live="polite">
     <div class="fact-heading">
-      <span>连接检查结果</span>
+      <span>{{
+        profile?.layer === 'UPSTREAM'
+          ? '平台状态'
+          : profile?.layer === 'MEDIA'
+            ? '视频收帧结果'
+            : '连接检查结果'
+      }}</span>
       <ElTag :type="display.tone" size="small">{{ display.label }}</ElTag>
     </div>
     <template v-if="profile?.observation">
@@ -33,6 +39,35 @@ const display = computed(() => factPresentation(props.profile))
           <dt>有效至</dt>
           <dd>{{ formatDateTime(profile.observation.validUntil) }}</dd>
         </div>
+        <template v-if="profile.observation.mediaEvidence">
+          <div>
+            <dt>采样窗口</dt>
+            <dd>
+              {{
+                (
+                  (Date.parse(profile.observation.mediaEvidence.windowEndedAt) -
+                    Date.parse(profile.observation.mediaEvidence.windowStartedAt)) /
+                  1000
+                ).toFixed(1)
+              }}
+              秒
+            </dd>
+          </div>
+          <div>
+            <dt>接收帧增量</dt>
+            <dd>
+              {{
+                profile.observation.mediaEvidence.lastFrames -
+                profile.observation.mediaEvidence.firstFrames
+              }}
+              帧
+            </dd>
+          </div>
+          <div>
+            <dt>采样次数</dt>
+            <dd>{{ profile.observation.mediaEvidence.sampleCount }} 次</dd>
+          </div>
+        </template>
         <template v-if="profile.configurationCurrent && profile.timeline">
           <div>
             <dt>{{ stateSinceLabel(profile) }}</dt>
@@ -64,9 +99,6 @@ const display = computed(() => factPresentation(props.profile))
           </div>
         </template>
       </dl>
-      <p v-if="profile.timeline && profile.configurationCurrent" class="fact-reason">
-        按检查记录统计，截止本次观察；不代表精确离线时间或连续离线时长。
-      </p>
     </template>
   </div>
 </template>

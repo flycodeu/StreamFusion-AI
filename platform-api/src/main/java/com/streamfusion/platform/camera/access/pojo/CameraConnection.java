@@ -25,7 +25,43 @@ public record CameraConnection(
         @Schema(description = "平台目录每页条数，1到100；非分页驱动使用100")
                 @com.fasterxml.jackson.annotation.JsonInclude(
                         com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-                Integer pageSize) {
+                Integer pageSize,
+        String regionIndexCode,
+        Boolean includeSubRegions) {
+    public CameraConnection(
+            String method,
+            String name,
+            String host,
+            Integer port,
+            String scheme,
+            String username,
+            String password,
+            Integer rtspPort,
+            String networkPolicyKey,
+            String sourceId,
+            String sourceVersion,
+            List<String> rtspUrls,
+            Integer pageNumber,
+            Integer pageSize) {
+        this(
+                method,
+                name,
+                host,
+                port,
+                scheme,
+                username,
+                password,
+                rtspPort,
+                networkPolicyKey,
+                sourceId,
+                sourceVersion,
+                rtspUrls,
+                pageNumber,
+                pageSize,
+                null,
+                null);
+    }
+
     public CameraConnection(
             String method,
             String name,

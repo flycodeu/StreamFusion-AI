@@ -259,10 +259,14 @@ public class MediaRuntimeService {
                 && value.candidates().stream().noneMatch(candidate -> candidate.id().equals(id));
     }
 
-    /** Backend-only endpoint; API secrets must not be returned by controllers or placed in logs. */
+    /**
+     * Reads the last discovered selection without starting discovery in a preview request. Startup
+     * matching and the runtime-management page own refreshes; the gateway checks actual readiness.
+     * API secrets must not be returned by controllers or placed in logs.
+     */
     public Optional<ActiveZlm> activeZlm() {
-        current();
         Inventory value = inventory;
+        if (value == null) return Optional.empty();
         MediaRuntimeSnapshot snapshot = snapshot(value);
         return snapshot.candidates().stream()
                 .filter(candidate -> candidate.id().equals(snapshot.selected().zlmId()))
@@ -288,7 +292,9 @@ public class MediaRuntimeService {
     }
 
     public Optional<ActiveFfmpeg> activeFfmpeg() {
-        MediaRuntimeSnapshot snapshot = current();
+        Inventory value = inventory;
+        if (value == null) return Optional.empty();
+        MediaRuntimeSnapshot snapshot = snapshot(value);
         return snapshot.candidates().stream()
                 .filter(candidate -> candidate.id().equals(snapshot.selected().ffmpegId()))
                 .filter(

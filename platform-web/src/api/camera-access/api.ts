@@ -1,5 +1,5 @@
 import { request } from '../client'
-import { id, object, page } from '../parse'
+import { id, object, page, list, string, integer, optionalString } from '../parse'
 import {
   parseAccessJob,
   parseAccessOptions,
@@ -9,6 +9,51 @@ import {
   parseImportItem,
 } from './types'
 import type { AccessConnection, ImportInput, ScanInput, BulkImportInput } from './types'
+
+export interface PlatformRegion {
+  indexCode: string
+  parentIndexCode: string | null
+  name: string
+}
+export async function getPlatformRegions(input: {
+  connection: AccessConnection
+  parentCode?: string
+  page: number
+  size: number
+}) {
+  return (
+    await request({
+      path: '/camera-access/platform-regions',
+      method: 'POST',
+      body: input,
+      successStatus: 200,
+      decode: (value) => {
+        const row = object(value)
+        const result = {
+          items: list(row.items, (value): PlatformRegion => {
+            const item = object(value)
+            return {
+              indexCode: string(item.indexCode),
+              parentIndexCode: optionalString(item.parentIndexCode),
+              name: string(item.name),
+            }
+          }),
+          total: integer(row.total),
+          page: integer(row.page),
+          size: integer(row.size),
+        }
+        if (
+          result.total < 0 ||
+          result.items.length > input.size ||
+          result.page !== input.page ||
+          result.size !== input.size
+        )
+          throw new Error('platform regions')
+        return result
+      },
+    })
+  ).data
+}
 
 export async function getImportJobs(query: { page: number; size: number }) {
   return (

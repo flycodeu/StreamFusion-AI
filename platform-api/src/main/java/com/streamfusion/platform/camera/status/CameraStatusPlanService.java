@@ -3,9 +3,6 @@ package com.streamfusion.platform.camera.status;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
-import com.streamfusion.platform.access.mapper.AccessMapper;
-import com.streamfusion.platform.audit.pojo.dto.AuditContextDto;
-import com.streamfusion.platform.audit.service.AuditService;
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
 import com.streamfusion.platform.camera.mapper.CameraChannelMapper;
 import com.streamfusion.platform.camera.mapper.CameraProfileMapper;
@@ -16,6 +13,9 @@ import com.streamfusion.platform.camera.service.CameraRtspTargetService;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.validation.DecimalInput;
+import com.streamfusion.platform.monitor.audit.pojo.dto.AuditContextDto;
+import com.streamfusion.platform.monitor.audit.service.AuditService;
+import com.streamfusion.platform.system.access.mapper.AccessMapper;
 import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
@@ -49,6 +49,7 @@ public class CameraStatusPlanService {
     private final PlatformTransactionManager manager;
     private final Clock clock;
     private final AuditService audit;
+    private final com.streamfusion.platform.camera.service.CameraGroupService groups;
 
     @Transactional
     public CameraStatusPlanVo create(CameraStatusPlanCommand command, AuditContextDto context) {
@@ -62,8 +63,31 @@ public class CameraStatusPlanService {
                 || command.durationHours() == null
                 || command.durationHours() < 1
                 || command.durationHours() > 168
-                || command.durationHours() * 60 < command.intervalMinutes())
+                || command.durationHours() * 60 < command.intervalMinutes()
+                || !List.of("POLLING", "PARALLEL").contains(command.effectiveMode())
+                || command.effectiveParallelism() < 1
+                || command.effectiveParallelism() > 4
+                || "POLLING".equals(command.effectiveMode()) && command.effectiveParallelism() != 1
+                || command.effectiveLayer() == CameraStatusLayer.MEDIA
+                        && command.effectiveParallelism() != 1)
             throw error(ErrorCode.VALIDATION_ERROR);
+        if (command.effectiveLayer() == CameraStatusLayer.UPSTREAM)
+            throw error(ErrorCode.VALIDATION_ERROR);
+        if (command.groupIds() != null
+                && (command.groupIds().isEmpty() || command.groupIds().size() > 100))
+            throw error(ErrorCode.VALIDATION_ERROR);
+        if (command.planId() != null && command.groupIds() != null)
+            throw error(ErrorCode.VALIDATION_ERROR);
+        var reusedPlanId =
+                command.planId() == null ? 0L : DecimalInput.id(command.planId(), "planId");
+        var groupIds =
+                command.groupIds() == null
+                        ? List.<Long>of()
+                        : command.groupIds().stream()
+                                .map(id -> DecimalInput.id(id, "groupId"))
+                                .distinct()
+                                .sorted()
+                                .toList();
         if (command.groupKeys().stream().anyMatch(Objects::isNull))
             throw error(ErrorCode.VALIDATION_ERROR);
         var keys = command.groupKeys().stream().distinct().sorted().toList();
@@ -81,7 +105,17 @@ public class CameraStatusPlanService {
                         "interval",
                         command.intervalMinutes(),
                         "hours",
-                        command.durationHours());
+                        command.durationHours(),
+                        "layer",
+                        command.effectiveLayer().name(),
+                        "dispatchMode",
+                        command.effectiveMode(),
+                        "parallelism",
+                        command.effectiveParallelism(),
+                        "groupIds",
+                        groupIds,
+                        "planId",
+                        reusedPlanId);
         var prior = plans.byRequest(actor.userId(), command.clientRequestId());
         if (prior != null) {
             if (!MessageDigest.isEqual(
@@ -91,13 +125,51 @@ public class CameraStatusPlanService {
             return view(prior);
         }
         CameraRequestKey.requireFresh(requested, clock.instant());
+        List<Long> fixedChannels = null;
+        if (reusedPlanId != 0) {
+            var reused = plans.selectById(reusedPlanId);
+            if (reused == null || reused.getActorUserId() != actor.userId())
+                throw error(ErrorCode.NOT_FOUND);
+            fixedChannels =
+                    targets.forPlan(reusedPlanId).stream()
+                            .map(CameraStatusPlanTargetEntity::getCameraId)
+                            .toList();
+            if (fixedChannels.size() != reused.getTargetCount())
+                throw error(ErrorCode.CONFLICT).diagnosed("PLAN_TARGET_UNAVAILABLE");
+        }
         if (plans.selectCount(
                         new LambdaQueryWrapper<CameraStatusPlanEntity>()
                                 .eq(CameraStatusPlanEntity::getActorUserId, actor.userId())
                                 .eq(CameraStatusPlanEntity::getState, "ACTIVE")
                                 .gt(CameraStatusPlanEntity::getEndAt, now()))
                 >= 10) throw error(ErrorCode.RATE_LIMITED).diagnosed("PLAN_ACTIVE_LIMIT");
-        var rows = channels.statusDeviceRepresentatives(keys, access.visibility(actor), 2001);
+        var selectedGroups =
+                groupIds.stream()
+                        .flatMap(id -> groups.queryGroupIds(id, true).stream())
+                        .distinct()
+                        .toList();
+        if (!groupIds.isEmpty() && selectedGroups.isEmpty())
+            throw error(ErrorCode.CONFLICT).diagnosed("PLAN_TARGET_UNAVAILABLE");
+        var candidates =
+                fixedChannels != null
+                        ? channels.statusSelectedChannels(fixedChannels, access.visibility(actor))
+                        : groupIds.isEmpty()
+                                ? channels.statusDeviceRepresentatives(
+                                        keys, access.visibility(actor), 2001)
+                                : channels.statusGroupRepresentatives(
+                                        selectedGroups, access.visibility(actor), 2001);
+        if (candidates.size() > 2000)
+            throw error(ErrorCode.CONFLICT).diagnosed("PLAN_TARGET_RANGE_INVALID");
+        var keySet = new java.util.HashSet<>(keys);
+        var rows =
+                candidates.stream()
+                        .filter(
+                                row ->
+                                        keySet.contains(
+                                                row.getDeviceId() == null
+                                                        ? "c" + row.getId()
+                                                        : "d" + row.getDeviceId()))
+                        .toList();
         if (rows.isEmpty() || rows.size() > 2000)
             throw error(ErrorCode.CONFLICT).diagnosed("PLAN_TARGET_RANGE_INVALID");
         var present =
@@ -116,6 +188,13 @@ public class CameraStatusPlanService {
         if (chosen.size() != rows.size())
             throw error(ErrorCode.CONFLICT).diagnosed("PLAN_PROFILE_MISSING");
         String keyId = crypto.activeKeyId();
+        int mediaTargetCount =
+                command.effectiveLayer() == CameraStatusLayer.MEDIA
+                        ? chosen.size()
+                                - rtsp.platformProfiles(
+                                                chosen.stream().map(p -> p.getId()).toList())
+                                        .size()
+                        : 0;
         var inspections = rtsp.inspectBatch(rows, chosen, keyId, Map.of()).current();
         if (chosen.stream()
                 .anyMatch(
@@ -134,6 +213,11 @@ public class CameraStatusPlanService {
         if (plans.targetsPerMinute(now()) + rows.size() * 1.0 / command.intervalMinutes()
                 > perMinute)
             throw error(ErrorCode.RATE_LIMITED).diagnosed("PLAN_CAPACITY_EXCEEDED");
+        if (command.effectiveLayer() == CameraStatusLayer.MEDIA
+                && plans.mediaTargetsPerMinute(now())
+                                + mediaTargetCount * 1.0 / command.intervalMinutes()
+                        > 60.0 / 21)
+            throw error(ErrorCode.RATE_LIMITED).diagnosed("MEDIA_PLAN_CAPACITY_EXCEEDED");
         var plan = new CameraStatusPlanEntity();
         plan.setId(DefaultIdentifierGenerator.getInstance().nextId(plan).longValue());
         plan.setActorUserId(actor.userId());
@@ -141,6 +225,10 @@ public class CameraStatusPlanService {
         plan.setRequestKeyId(keyId);
         plan.setRequestFingerprint(crypto.digest(keyId, "camera-status-plan-request", input));
         plan.setState("ACTIVE");
+        plan.setLayer(command.effectiveLayer().name());
+        plan.setDispatchMode(command.effectiveMode());
+        plan.setParallelism(command.effectiveParallelism());
+        plan.setMediaTargetCount(mediaTargetCount);
         plan.setIntervalMinutes(command.intervalMinutes());
         plan.setTargetCount(chosen.size());
         plan.setStartAt(now().plusSeconds(1));
@@ -247,6 +335,8 @@ public class CameraStatusPlanService {
                                                 || target.getBlocked()
                                                 || !now().isBefore(plan.getEndAt())
                                                 || now().isBefore(target.getNextAt())) return null;
+                                        if (plans.pending(plan.getId(), now())
+                                                >= plan.getParallelism()) return null;
                                         var slot = target.getNextAt();
                                         long interval = plan.getIntervalMinutes() * 60_000L;
                                         long slots =
@@ -333,7 +423,73 @@ public class CameraStatusPlanService {
                                 plan.getPendingCount(),
                                 plan.getSkippedCount(),
                                 plan.getUnknownCount()),
-                clock.instant());
+                clock.instant(),
+                CameraStatusLayer.valueOf(plan.getLayer()),
+                plan.getDispatchMode(),
+                plan.getParallelism());
+    }
+
+    @Transactional
+    public CameraStatusPlanVo resume(String id, String version, AuditContextDto context) {
+        var actor = access.lockActor();
+        var plan = plans.lock(DecimalInput.id(id, "planId"));
+        if (plan == null || plan.getActorUserId() != actor.userId())
+            throw error(ErrorCode.NOT_FOUND);
+        if (plan.getVersion() != DecimalInput.version(version, "version"))
+            throw error(ErrorCode.CONFLICT).diagnosed("PLAN_VERSION_CHANGED");
+        if ("ACTIVE".equals(plan.getState())) return view(plan);
+        if (!"STOPPED".equals(plan.getState()) || !now().isBefore(plan.getEndAt()))
+            throw error(ErrorCode.CONFLICT).diagnosed("PLAN_EXPIRED");
+        if (plans.selectCount(
+                        new LambdaQueryWrapper<CameraStatusPlanEntity>()
+                                .eq(CameraStatusPlanEntity::getActorUserId, actor.userId())
+                                .eq(CameraStatusPlanEntity::getState, "ACTIVE")
+                                .gt(CameraStatusPlanEntity::getEndAt, now()))
+                >= 10) throw error(ErrorCode.RATE_LIMITED).diagnosed("PLAN_ACTIVE_LIMIT");
+        double capacity =
+                Math.min(
+                        60.0,
+                        Math.min(
+                                60_000.0 / properties.getStartIntervalMs(),
+                                properties.getWorkerThreads()
+                                        * 60_000.0
+                                        / properties.getProbeTimeoutMs()));
+        double rate = plan.getTargetCount() * 1.0 / plan.getIntervalMinutes();
+        if (plans.targetsPerMinute(now()) + rate > capacity
+                || "MEDIA".equals(plan.getLayer())
+                        && plans.mediaTargetsPerMinute(now())
+                                        + plan.getMediaTargetCount()
+                                                * 1.0
+                                                / plan.getIntervalMinutes()
+                                > 60.0 / 21)
+            throw error(ErrorCode.RATE_LIMITED).diagnosed("PLAN_CAPACITY_EXCEEDED");
+        var items = targets.forPlan(plan.getId());
+        long intervalMs = plan.getIntervalMinutes() * 60_000L;
+        var start = now().plusSeconds(1);
+        for (int index = 0; index < items.size(); index++) {
+            var target = items.get(index);
+            if (Boolean.TRUE.equals(target.getBlocked()))
+                throw error(ErrorCode.CONFLICT).diagnosed("PLAN_TARGET_NOT_CHECKABLE");
+            if (!status.planActorAllowed(actor.userId(), target.getCameraId()))
+                throw error(ErrorCode.CONFLICT).diagnosed("ACTOR_REVOKED");
+            target.setNextAt(
+                    start.plusNanos(index * intervalMs / Math.max(1, items.size()) * 1_000_000));
+            targets.updateById(target);
+        }
+        plan.setState("ACTIVE");
+        plan.setVersion(plan.getVersion() + 1);
+        plan.setUpdatedAt(now());
+        plans.updateById(plan);
+        audit.record(
+                actor.userId(),
+                "CAMERA_STATUS_PLAN",
+                plan.getId(),
+                "CAMERA_STATUS_PLAN_RESUME",
+                "SUCCESS",
+                null,
+                context,
+                Map.of("beforeState", "STOPPED", "afterState", "ACTIVE"));
+        return view(plan);
     }
 
     private static BusinessException error(ErrorCode code) {

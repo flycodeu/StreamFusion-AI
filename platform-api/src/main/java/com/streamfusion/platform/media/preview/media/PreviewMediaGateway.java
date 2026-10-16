@@ -1,0 +1,66 @@
+package com.streamfusion.platform.media.preview.media;
+
+import com.streamfusion.platform.media.preview.PreviewDeadline;
+import com.streamfusion.platform.media.preview.PreviewModels;
+import com.streamfusion.platform.media.runtime.service.MediaRuntimeService.ActiveZlm;
+import java.net.URI;
+import java.time.Instant;
+
+/** Preview control plane. Media remains in ZLM; no frames pass through the platform. */
+public interface PreviewMediaGateway {
+    record Stream(ActiveZlm runtime, String app, String id, String proxyKey) {
+        @Override
+        public String toString() {
+            return "Stream[app=" + app + ",id=" + id + "]";
+        }
+    }
+
+    record Transcode(String id, String key) {}
+
+    record RawVideo(String instanceId, String trackIdentity, long frames, Instant observedAt) {}
+
+    default RawVideo observeRawVideo(Stream source, PreviewDeadline deadline) {
+        throw new com.streamfusion.platform.media.preview.PreviewFailure(
+                "MEDIA_EVIDENCE_INSUFFICIENT");
+    }
+
+    Stream open(ActiveZlm runtime, String app, String id, URI source);
+
+    Stream openObservation(
+            ActiveZlm runtime, String app, String id, URI source, PreviewDeadline deadline);
+
+    default Stream open(
+            ActiveZlm runtime, String app, String id, URI source, PreviewDeadline deadline) {
+        deadline.check();
+        return open(runtime, app, id, source);
+    }
+
+    Transcode transcode(Stream source, String outputId);
+
+    default Transcode transcode(Stream source, String outputId, PreviewDeadline deadline) {
+        deadline.check();
+        return transcode(source, outputId);
+    }
+
+    PreviewModels.Stats stats(Stream source, String outputId);
+
+    default PreviewModels.Stats stats(Stream source, String outputId, PreviewDeadline deadline) {
+        deadline.check();
+        return stats(source, outputId);
+    }
+
+    PreviewModels.Answer answer(Stream source, String outputId, String sdp);
+
+    default PreviewModels.Answer answer(
+            Stream source, String outputId, String sdp, PreviewDeadline deadline) {
+        deadline.check();
+        return answer(source, outputId, sdp);
+    }
+
+    void close(Stream source, Transcode output);
+
+    default void close(Stream source, Transcode output, PreviewDeadline deadline) {
+        deadline.check();
+        close(source, output);
+    }
+}

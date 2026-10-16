@@ -8,7 +8,10 @@ export interface PlanTarget {
 }
 
 export type TargetScope =
-  { scope: 'PAGE'; groupKeys: string[] } | { scope: 'ALL' } | { scope: 'PLAN'; planId: string }
+  | { scope: 'PAGE'; groupKeys: string[] }
+  | { scope: 'ALL' }
+  | { scope: 'PLAN'; planId: string }
+  | { scope: 'GROUPS'; groupIds: string[] }
 
 export function parsePlanTargets(value: unknown) {
   const row = object(value)

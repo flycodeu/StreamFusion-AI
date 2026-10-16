@@ -1,4 +1,4 @@
-import type { ExecutionState, ProfileStatus, StatusCheck } from '../../api/camera-status/types'
+import type { ExecutionState, LayerStatus, StatusCheck } from '../../api/camera-status/types'
 
 export const executionLabels: Record<ExecutionState, string> = {
   QUEUED: '等待执行',
@@ -55,6 +55,18 @@ const reasons: Record<string, string> = {
   TARGET_DELETED: '检查目标已删除',
   LOCATOR_INVALID: 'RTSP 地址配置无效',
   SOURCE_PROTOCOL_NOT_SUPPORTED: '此接入方式的连接检测尚未适配',
+  STATUS_LAYER_NOT_APPLICABLE: '此来源使用对应平台的状态',
+  PLATFORM_ONLINE: '平台报告在线',
+  PLATFORM_OFFLINE: '平台报告离线',
+  PLATFORM_STATUS_UNKNOWN: '平台返回未知状态',
+  PLATFORM_STATUS_MISSING: '平台未返回此相机的状态',
+  PLATFORM_STATUS_TIMEOUT: '平台状态查询超时',
+  PLATFORM_STATUS_UNAVAILABLE: '平台状态暂不可获取',
+  PLATFORM_API_REJECTED: '平台拒绝请求，请核对密钥和接口权限',
+  PLAN_CAPACITY_EXCEEDED: '巡检容量不足，请增加检查间隔或减少目标',
+  MEDIA_PLAN_CAPACITY_EXCEEDED: '视频采样容量不足，请增加检查间隔或减少目标',
+  PLAN_TARGET_NOT_CHECKABLE: '原目标配置已变化，请重新创建任务',
+  PLAN_EXPIRED: '任务已经到期',
   CONFIGURATION_UNAVAILABLE: '连接配置暂不可用',
   CHANNEL_DISABLED: '通道未启用',
   ACTOR_REVOKED: '检查资格已失效',
@@ -64,20 +76,45 @@ const reasons: Record<string, string> = {
   SERVICE_RESTARTED: '服务重启，检查已中断',
   PLAN_NO_LONGER_ACTIVE: '巡检计划已停止或到期',
   MISSED_SLOT: '错过检测时间，等待下一轮',
+  MEDIA_RECEIVING: '采样窗口内收到视频帧',
+  MEDIA_NO_FRAMES: '采样窗口内未收到视频帧',
+  MEDIA_EVIDENCE_INSUFFICIENT: '视频收帧证据不足',
+  MEDIA_INSTANCE_CHANGED: '媒体实例已变化，请重新检查',
+  MEDIA_COUNTER_RESET: '接收帧计数已重置，请重新检查',
+  MEDIA_BUSY: '视频检查繁忙',
+  MEDIA_RECOVERY_REQUIRED: '上次视频检查资源尚未确认回收',
+  MEDIA_TIMEOUT: '视频检查超时，未取得有效结果',
+  MEDIA_RUNTIME_UNAVAILABLE: '媒体服务暂不可用',
 }
 export function reasonLabel(reasonCode: string | null): string {
   return reasonCode ? (reasons[reasonCode] ?? reasonCode) : ''
 }
-export function factPresentation(profile: ProfileStatus | null) {
+export function factPresentation(profile: LayerStatus | null) {
   if (!profile) return { label: '状态未读取', tone: 'info' as const, historical: false }
   if (!profile.observation) return { label: '尚未检查', tone: 'info' as const, historical: false }
   if (!profile.configurationCurrent)
-    return { label: '配置已变化', tone: 'info' as const, historical: true }
+    return { label: '待刷新', tone: 'info' as const, historical: true }
   if (profile.freshness !== 'CURRENT')
-    return { label: '结果已过期', tone: 'info' as const, historical: true }
+    return { label: '待刷新', tone: 'info' as const, historical: true }
   const values = {
-    ACCESSIBLE: { label: '连接检查通过', tone: 'success' as const },
-    FAILED: { label: '连接检查异常', tone: 'warning' as const },
+    ACCESSIBLE: {
+      label:
+        profile.layer === 'UPSTREAM'
+          ? '平台在线'
+          : profile.layer === 'MEDIA'
+            ? '采样收帧正常'
+            : '连接检查通过',
+      tone: 'success' as const,
+    },
+    FAILED: {
+      label:
+        profile.layer === 'UPSTREAM'
+          ? '平台离线'
+          : profile.layer === 'MEDIA'
+            ? '采样收帧异常'
+            : '连接检查异常',
+      tone: 'warning' as const,
+    },
     UNSUPPORTED: { label: '检测待适配', tone: 'info' as const },
   }
   return { ...values[profile.observation.value], historical: false }

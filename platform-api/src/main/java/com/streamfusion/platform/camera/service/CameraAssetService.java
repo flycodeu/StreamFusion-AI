@@ -4,8 +4,6 @@ import static com.streamfusion.platform.camera.service.CameraAssetRules.invalid;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
-import com.streamfusion.platform.audit.pojo.dto.AuditContextDto;
-import com.streamfusion.platform.audit.service.AuditService;
 import com.streamfusion.platform.camera.mapper.CameraAssetRow;
 import com.streamfusion.platform.camera.mapper.CameraChannelMapper;
 import com.streamfusion.platform.camera.mapper.CameraDeviceMapper;
@@ -33,6 +31,8 @@ import com.streamfusion.platform.common.exception.details.CameraReferenceDetails
 import com.streamfusion.platform.common.pojo.vo.PageResultVo;
 import com.streamfusion.platform.common.validation.DecimalInput;
 import com.streamfusion.platform.common.validation.VersionCounter;
+import com.streamfusion.platform.monitor.audit.pojo.dto.AuditContextDto;
+import com.streamfusion.platform.monitor.audit.service.AuditService;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDateTime;

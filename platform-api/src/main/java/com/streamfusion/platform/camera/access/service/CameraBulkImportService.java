@@ -1,8 +1,6 @@
 package com.streamfusion.platform.camera.access.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.streamfusion.platform.access.mapper.AccessMapper;
-import com.streamfusion.platform.audit.pojo.dto.AuditContextDto;
 import com.streamfusion.platform.camera.access.adapter.*;
 import com.streamfusion.platform.camera.access.mapper.CameraAccessImportItemMapper;
 import com.streamfusion.platform.camera.access.pojo.*;
@@ -11,6 +9,8 @@ import com.streamfusion.platform.camera.service.*;
 import com.streamfusion.platform.common.exception.*;
 import com.streamfusion.platform.common.pojo.vo.PageResultVo;
 import com.streamfusion.platform.common.validation.DecimalInput;
+import com.streamfusion.platform.monitor.audit.pojo.dto.AuditContextDto;
+import com.streamfusion.platform.system.access.mapper.AccessMapper;
 import java.security.MessageDigest;
 import java.time.*;
 import java.util.*;
@@ -125,7 +125,9 @@ public class CameraBulkImportService {
                         source.getVersion().toString(),
                         c.rtspUrls(),
                         1,
-                        PAGE_SIZE);
+                        PAGE_SIZE,
+                        c.regionIndexCode(),
+                        c.includeSubRegions());
         var control =
                 new CameraAccessJobsService.BulkControl(
                         group,

@@ -65,20 +65,35 @@ function channel(): StatusChannel {
         name: null,
         streamKind: 'SUB',
         enabled: true,
-        layer: 'CONTROL',
-        probeKind: 'RTSP_DESCRIBE',
-        freshness: 'STALE',
-        configurationCurrent: true,
-        canCheck: true,
-        blockingReasonCode: null,
-        latestCheck: null,
-        observation: {
-          value: 'ACCESSIBLE',
-          reasonCode: 'RTSP_ACCESSIBLE',
-          observedAt: '2026-10-13T01:00:00Z',
-          readAt: '2026-10-13T01:00:00Z',
-          validUntil: '2026-10-13T01:05:00Z',
-          checkId: '100',
+        control: {
+          layer: 'CONTROL',
+          probeKind: 'RTSP_DESCRIBE',
+          freshness: 'STALE',
+          configurationCurrent: true,
+          canCheck: true,
+          blockingReasonCode: null,
+          latestCheck: null,
+          observation: {
+            value: 'ACCESSIBLE',
+            reasonCode: 'RTSP_ACCESSIBLE',
+            observedAt: '2026-10-13T01:00:00Z',
+            readAt: '2026-10-13T01:00:00Z',
+            validUntil: '2026-10-13T01:05:00Z',
+            checkId: '100',
+            mediaEvidence: null,
+          },
+          timeline: null,
+        },
+        media: {
+          layer: 'MEDIA',
+          probeKind: 'ZLM_RTP_FRAMES',
+          observation: null,
+          freshness: 'NEVER',
+          configurationCurrent: true,
+          latestCheck: null,
+          canCheck: true,
+          blockingReasonCode: null,
+          timeline: null,
         },
       },
     ],
@@ -90,10 +105,55 @@ async function renderPage() {
   return renderToString(app)
 }
 describe('independent camera status page presentation', () => {
+  it('shows official upstream facts without implying media reception or displaying RTSP state', async () => {
+    const row = channel(),
+      profile = row.profiles[0]!
+    profile.control = {
+      ...profile.control,
+      canCheck: false,
+      blockingReasonCode: 'STATUS_LAYER_NOT_APPLICABLE',
+    }
+    profile.media = {
+      ...profile.media,
+      canCheck: false,
+      blockingReasonCode: 'STATUS_LAYER_NOT_APPLICABLE',
+    }
+    profile.upstream = {
+      ...profile.control,
+      layer: 'UPSTREAM',
+      probeKind: 'HIK_PLATFORM_ONLINE',
+      freshness: 'CURRENT',
+      canCheck: true,
+      blockingReasonCode: null,
+      observation: { ...profile.control.observation!, reasonCode: 'PLATFORM_ONLINE' },
+    }
+    mock.rows = [row]
+    const html = await renderPage(),
+      card = html.slice(html.indexOf('<article'), html.indexOf('</article>'))
+    expect(card).toContain('平台在线')
+    expect(card).not.toContain('采样收帧正常')
+    expect(card).not.toContain('代表流可达')
+    expect(card).not.toContain('connection-state')
+  })
+  it('uses backend summary for the selected layer instead of recalculating counts from cards', async () => {
+    const row = channel()
+    row.profiles[0]!.media = {
+      ...row.profiles[0]!.media,
+      freshness: 'CURRENT',
+      observation: { ...row.profiles[0]!.control.observation!, reasonCode: 'MEDIA_RECEIVING' },
+    }
+    mock.rows = [row]
+    const html = await renderPage()
+    expect(html).toContain('采样收帧正常')
+    expect(html).toContain('检查通过 0')
+    expect(html).toContain('结果过期 1')
+    expect(html).toContain('相机检查总览')
+    expect(mock.query?.layer).toBe('MEDIA')
+  })
   it('shows failure observation time without extending sampled duration to the present', async () => {
     const row = channel()
-    const profile = row.profiles[0]!
-    profile.observation = { ...profile.observation!, value: 'FAILED' }
+    const profile = row.profiles[0]!.media
+    profile.observation = { ...row.profiles[0]!.control.observation!, value: 'FAILED' }
     profile.timeline = {
       stateSince: '2026-10-12T23:00:00Z',
       lastAccessibleAt: '2026-10-12T22:00:00Z',
@@ -114,8 +174,8 @@ describe('independent camera status page presentation', () => {
     expect(html).toContain('当前页 1 个通道')
     expect(html).toContain('status-distribution')
     expect(html).toContain('role="img"')
-    expect(html).toContain('结果已过期 1')
-    expect(html).toContain('代表流可达 0')
+    expect(html).toContain('结果过期 1')
+    expect(html).toContain('检查通过 0')
     expect(html).toContain('创建 / 管理任务')
     expect(html).not.toContain('定时检查 · 全量范围 · 启停管理')
     expect(html).not.toContain('<h2>相机状态</h2>')
@@ -126,19 +186,31 @@ describe('independent camera status page presentation', () => {
     const base = row.profiles[0]!
     row.defaultPreviewProfileId = '5'
     row.profiles = [
-      { ...base, streamProfileId: '2', streamKind: 'MAIN', freshness: 'CURRENT' },
+      {
+        ...base,
+        streamProfileId: '2',
+        streamKind: 'MAIN',
+        media: {
+          ...base.media,
+          freshness: 'CURRENT',
+          observation: { ...base.control.observation! },
+        },
+      },
       {
         ...base,
         streamProfileId: '5',
         streamKind: 'SUB',
-        freshness: 'CURRENT',
-        observation: { ...base.observation!, value: 'FAILED' },
+        media: {
+          ...base.media,
+          freshness: 'CURRENT',
+          observation: { ...base.control.observation!, value: 'FAILED' },
+        },
       },
     ]
     mock.rows = [row]
     const html = await renderPage()
-    expect(html).toContain('连接异常 1')
-    expect(html).toContain('代表流可达 0')
+    expect(html).toContain('采样收帧异常')
+    expect(html).toContain('检查通过 0')
     expect(html).toContain('state-dot')
     expect(html).not.toContain('stream-row')
   })
@@ -158,10 +230,10 @@ describe('independent camera status page presentation', () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
     const html = await renderPage()
     expect(html).toContain('17 个通道')
-    expect(html).toContain('视频流')
-    expect(html).toContain('未检测')
+    expect(html).toContain('视频收帧')
+    expect(html).toContain('尚未检查')
     expect(html).toContain('最近检查结果')
-    expect(html).toContain('结果已过期')
+    expect(html).toContain('结果过期')
     expect(html).not.toContain('辅码流')
     expect(html).not.toContain('el-tag--success')
     expect(html).not.toContain('在线状态')
@@ -189,10 +261,13 @@ describe('independent camera status page presentation', () => {
       streamProfileId: String(index + 2),
       name: `${kind.toLowerCase()}Stream`,
       streamKind: kind,
-      observation: null,
-      freshness: 'NEVER',
-      canCheck: false,
-      blockingReasonCode: 'UNSUPPORTED_LOCATOR',
+      control: {
+        ...base.control,
+        observation: null,
+        freshness: 'NEVER',
+        canCheck: false,
+        blockingReasonCode: 'UNSUPPORTED_LOCATOR',
+      },
     }))
     mock.rows = [row]
     const html = await renderPage()
@@ -200,16 +275,16 @@ describe('independent camera status page presentation', () => {
     expect(html.match(/>详情</g)).toHaveLength(1)
     expect(html).not.toMatch(/mainStream|subStream|thirdStream|stream-row/)
     const card = html.slice(html.indexOf('<article'), html.indexOf('</article>'))
-    expect(card).toContain('未检测')
+    expect(card).toContain('尚未检查')
     expect(card).not.toContain('检测待适配')
   })
   it('does not claim video normality from a current accessible CONTROL observation', async () => {
     const row = channel()
-    row.profiles[0]!.freshness = 'CURRENT'
+    row.profiles[0]!.control.freshness = 'CURRENT'
     mock.rows = [row]
     const html = await renderPage()
-    expect(html).toContain('上次连接通过')
-    expect(html).toContain('未检测')
+    expect(html).toContain('代表流可达')
+    expect(html).toContain('尚未检查')
     expect(html).not.toMatch(/>在线<|>正常<|>离线</)
   })
   it('keeps disabled configuration separate from offline state', async () => {
@@ -225,6 +300,7 @@ describe('independent camera status page presentation', () => {
     mock.route.query = { name: '北门相机' }
     await renderPage()
     expect(mock.query?.name).toBe('北门相机')
+    expect(mock.query?.layer).toBe('MEDIA')
   })
   it('distinguishes a failed page read from an empty filtered page', async () => {
     mock.error = new ApiRequestError('CONFLICT', '状态页码流数量超过限制', {

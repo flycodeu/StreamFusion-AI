@@ -3,7 +3,7 @@ package com.streamfusion.platform.camera.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.streamfusion.platform.camera.pojo.entity.*;
 import com.streamfusion.platform.camera.service.CameraAccessService.Visibility;
-import com.streamfusion.platform.user.pojo.entity.UserEntity;
+import com.streamfusion.platform.system.user.pojo.entity.UserEntity;
 import java.time.LocalDateTime;
 import java.util.List;
 import org.apache.ibatis.annotations.*;

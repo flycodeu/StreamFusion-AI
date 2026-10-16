@@ -19,12 +19,12 @@ import type {
   StatusChannel,
   StatusProfile,
   StatusSearch,
+  StatusLayer,
 } from '../../api/camera-status/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { ApiRequestError } from '../../lib/http/error'
 import TablePanel from '../../components/table/TablePanel.vue'
 import { usageLabel } from '../../features/camera/form'
-import { connectionLabels, summarizeChannels } from '../../features/camera-status/health'
 import type { ConnectionState } from '../../features/camera-status/health'
 import StatusCard from '../../features/camera-status/StatusCard.vue'
 import StatusPanel from '../../features/camera-status/StatusPanel.vue'
@@ -36,7 +36,8 @@ defineOptions({ name: 'CameraStatus' })
 const route = useRoute()
 const name = ref(''),
   observation = ref<ObservationFilter | null>(null)
-const query = shallowRef<StatusSearch>({ page: 1, size: 20 })
+const layer = ref<StatusLayer>('MEDIA')
+const query = shallowRef<StatusSearch>({ page: 1, size: 20, layer: 'MEDIA' })
 const drawerOpen = ref(false)
 const plansOpen = ref(false)
 const target = shallowRef<{ channel: StatusChannel; profileId: string } | null>(null)
@@ -53,7 +54,15 @@ const { rows, result, total, loading, error, paused, refresh } = useStatusPage(
   query,
   computed(() => !drawerOpen.value && !plansOpen.value),
 )
-const summary = computed(() => (result.value ? summarizeChannels(rows.value) : null))
+const summary = computed(() => result.value?.summary ?? null)
+const stateLabels = computed(() => ({
+  accessible: '检查通过',
+  failed: '检查异常',
+  checking: '检测中',
+  stale: '结果过期',
+  unknown: '尚未检查',
+  disabled: '未启用',
+}))
 const stateIcons = {
   accessible: CircleCheck,
   failed: Warning,
@@ -72,7 +81,7 @@ const stateOrder: ConnectionState[] = [
 ]
 const summaryLabel = computed(() =>
   summary.value
-    ? stateOrder.map((state) => `${connectionLabels[state]} ${summary.value![state]}`).join('，')
+    ? stateOrder.map((state) => `${stateLabels.value[state]} ${summary.value![state]}`).join('，')
     : '状态尚未读取',
 )
 const planGroups = computed(() => [
@@ -82,12 +91,12 @@ const planGroups = computed(() => [
       .flatMap((row) => (row.groupKey ? [row.groupKey] : [])),
   ),
 ])
-const observationLabels: Record<ObservationFilter, string> = {
-  NEVER: '代表流尚未检查',
-  ACCESSIBLE: '最近连接通过',
-  FAILED: '最近连接异常',
+const observationLabels = computed<Record<ObservationFilter, string>>(() => ({
+  NEVER: '尚未检查',
+  ACCESSIBLE: '最近检查通过',
+  FAILED: '最近检查异常',
   UNSUPPORTED: '检测待适配',
-}
+}))
 function profileName(profile: StatusProfile) {
   return (
     profile.name ||
@@ -115,6 +124,7 @@ function search() {
   query.value = {
     page: 1,
     size: 20,
+    layer: layer.value,
     name: name.value.trim() || undefined,
     observation: observation.value || undefined,
   }
@@ -122,6 +132,7 @@ function search() {
 function reset() {
   name.value = ''
   observation.value = null
+  layer.value = 'MEDIA'
   search()
 }
 function changePage(page: number) {
@@ -143,6 +154,12 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
       <ElFormItem label="设备 / 通道">
         <ElInput v-model="name" placeholder="搜索设备或通道名称" clearable maxlength="128" />
       </ElFormItem>
+      <ElFormItem label="检查类型">
+        <ElSelect v-model="layer" @change="observation = null">
+          <ElOption value="MEDIA" label="视频收帧 / 平台状态" />
+          <ElOption value="CONTROL" label="连接 / 平台状态" />
+        </ElSelect>
+      </ElFormItem>
       <ElFormItem label="最近检查结果">
         <ElSelect v-model="observation" clearable placeholder="全部结果（含历史）">
           <ElOption
@@ -160,10 +177,10 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
     </ElForm>
     <RequestError :error="error" />
     <p v-if="capacityHint" class="capacity-hint" role="alert">{{ capacityHint }}</p>
-    <section class="status-overview" aria-label="当前页连接状态总览">
+    <section class="status-overview" aria-label="当前页相机检查总览">
       <header class="overview-heading">
         <div>
-          <h3>连接状态总览</h3>
+          <h3>相机检查总览</h3>
           <span>当前页 {{ summary?.total ?? '—' }} 个通道</span>
         </div>
         <div class="overview-actions">
@@ -182,7 +199,7 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
           /></ElIcon>
           <div>
             <strong>{{ summary?.[state] ?? '—' }}</strong
-            ><span>{{ connectionLabels[state] }}</span>
+            ><span>{{ stateLabels[state] }}</span>
           </div>
         </div>
       </div>
@@ -246,6 +263,7 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
         <StatusPanel
           :camera="diagnosticTarget"
           :initial-profile-id="target.profileId"
+          :initial-layer="query.layer"
           :active="drawerOpen"
       /></template>
     </ElDrawer>

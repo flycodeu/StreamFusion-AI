@@ -1,7 +1,18 @@
 import { request } from '../client'
 import { id, page } from '../parse'
 import { parseSource, parseSourceOptions } from './types'
-import type { SourceUpdate } from './types'
+import type { SourceUpdate, SourceCreate } from './types'
+export async function createSource(input: SourceCreate) {
+  return (
+    await request({
+      path: '/camera-sources',
+      method: 'POST',
+      body: input,
+      successStatus: 201,
+      decode: parseSource,
+    })
+  ).data
+}
 export async function getSourceOptions() {
   return (
     await request({

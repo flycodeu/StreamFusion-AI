@@ -11,12 +11,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.streamfusion.platform.access.service.AccessService;
-import com.streamfusion.platform.auth.service.BootstrapService;
 import com.streamfusion.platform.common.response.R;
 import com.streamfusion.platform.common.security.ModuleAccess;
 import com.streamfusion.platform.support.IdentitySchema;
 import com.streamfusion.platform.support.SecureLoginSupport;
+import com.streamfusion.platform.system.access.service.AccessService;
+import com.streamfusion.platform.system.auth.service.BootstrapService;
 import java.util.List;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
@@ -332,13 +332,13 @@ class MenuIntegrationTest extends SecureLoginSupport {
     void statusPageKeepsCameraModuleGrantAndDisabledAncestorRevokesIt() throws Exception {
         Csrf auth = admin();
         jdbc.update("DELETE FROM sys_role_menu WHERE menu_id IN (1101,1103,1105)");
-        mvc.perform(get("/camera-status").session(auth.session()))
+        mvc.perform(get("/camera-status").param("layer", "MEDIA").session(auth.session()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.total").value(0));
         mvc.perform(get("/camera-sources/options").session(auth.session()))
                 .andExpect(status().isOk());
         jdbc.update("UPDATE sys_menu SET enabled=FALSE WHERE id=1100");
-        mvc.perform(get("/camera-status").session(auth.session()))
+        mvc.perform(get("/camera-status").param("layer", "MEDIA").session(auth.session()))
                 .andExpect(status().isForbidden());
         mvc.perform(get("/camera-sources/options").session(auth.session()))
                 .andExpect(status().isForbidden());

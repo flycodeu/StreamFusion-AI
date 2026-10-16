@@ -24,7 +24,7 @@
       WHERE ud.user_id=u.id AND d.name LIKE CONCAT('%',#{name},'%') ESCAPE '!'))
   </if>
  </sql>
- <select id="userOptions" resultType="com.streamfusion.platform.user.pojo.entity.UserEntity">SELECT u.id,u.username,u.nickname,u.status FROM sys_user u <include refid="userFilter"/> ORDER BY u.id LIMIT #{size} OFFSET #{offset}</select>
+ <select id="userOptions" resultType="com.streamfusion.platform.system.user.pojo.entity.UserEntity">SELECT u.id,u.username,u.nickname,u.status FROM sys_user u <include refid="userFilter"/> ORDER BY u.id LIMIT #{size} OFFSET #{offset}</select>
  <select id="userOptionCount" resultType="java.lang.Long">SELECT COUNT(*) FROM sys_user u <include refid="userFilter"/></select>
  <sql id="cameraFilter">WHERE lifecycle='ENABLED'<if test="name != null"> AND name LIKE CONCAT('%',#{name},'%') ESCAPE '!'</if><if test="groupIds != null"><choose><when test="!groupIds.isEmpty()"> AND group_id IN <foreach collection="groupIds" item="gid" open="(" separator="," close=")">#{gid}</foreach></when><otherwise> AND 1=0</otherwise></choose></if></sql>
  <select id="cameraOptions" resultType="com.streamfusion.platform.camera.mapper.CameraChannelScopeRow">SELECT id,group_id,version,lifecycle,name FROM camera_channel <include refid="cameraFilter"/> ORDER BY id LIMIT #{size} OFFSET #{offset}</select>

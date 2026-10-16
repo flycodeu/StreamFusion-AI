@@ -1,6 +1,6 @@
-import type { ProfileStatus } from '../../api/camera-status/types'
+import type { LayerStatus } from '../../api/camera-status/types'
 
-export function observationSpan(profile: ProfileStatus | null): string | null {
+export function observationSpan(profile: LayerStatus | null): string | null {
   if (
     !profile?.configurationCurrent ||
     profile.observation?.value !== 'FAILED' ||
@@ -18,10 +18,12 @@ export function observationSpan(profile: ProfileStatus | null): string | null {
   return `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`
 }
 
-export function stateSinceLabel(profile: ProfileStatus): string {
+export function stateSinceLabel(profile: LayerStatus): string {
   return profile.observation?.value === 'FAILED'
     ? '异常首次检出'
     : profile.observation?.value === 'ACCESSIBLE'
-      ? '本轮可达始于'
+      ? profile.layer === 'MEDIA'
+        ? '本轮收帧始于'
+        : '本轮可达始于'
       : '本轮结果始于'
 }

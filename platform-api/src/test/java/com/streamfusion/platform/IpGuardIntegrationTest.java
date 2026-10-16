@@ -11,12 +11,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.streamfusion.platform.audit.pojo.dto.AuditContextDto;
-import com.streamfusion.platform.auth.guard.IpBlockService;
-import com.streamfusion.platform.auth.guard.LoginGuardStore;
-import com.streamfusion.platform.auth.guard.mapper.IpBlockMapper;
-import com.streamfusion.platform.auth.service.BootstrapService;
+import com.streamfusion.platform.monitor.audit.pojo.dto.AuditContextDto;
 import com.streamfusion.platform.support.IdentitySchema;
+import com.streamfusion.platform.system.auth.guard.IpBlockService;
+import com.streamfusion.platform.system.auth.guard.LoginGuardStore;
+import com.streamfusion.platform.system.auth.guard.mapper.IpBlockMapper;
+import com.streamfusion.platform.system.auth.service.BootstrapService;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.sql.DataSource;
@@ -50,8 +50,8 @@ class IpGuardIntegrationTest {
     @Autowired BootstrapService bootstrap;
     @Autowired IpBlockService blocks;
     @MockitoBean LoginGuardStore store;
-    @MockitoBean com.streamfusion.platform.auth.captcha.CaptchaStore captchaStore;
-    @MockitoBean com.streamfusion.platform.auth.captcha.CaptchaImageGenerator captchaImages;
+    @MockitoBean com.streamfusion.platform.system.auth.captcha.CaptchaStore captchaStore;
+    @MockitoBean com.streamfusion.platform.system.auth.captcha.CaptchaImageGenerator captchaImages;
     @MockitoSpyBean IpBlockMapper mapper;
     private JdbcTemplate jdbc;
     private MockHttpSession admin;

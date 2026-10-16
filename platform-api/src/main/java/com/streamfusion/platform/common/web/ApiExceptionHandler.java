@@ -3,7 +3,7 @@ package com.streamfusion.platform.common.web;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.exception.details.ValidationDetails;
-import com.streamfusion.platform.diagnostics.DiagnosticLog;
+import com.streamfusion.platform.monitor.diagnostics.DiagnosticLog;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import org.slf4j.Logger;

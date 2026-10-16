@@ -55,7 +55,15 @@ public class HikPlatformCameraAccessAdapter implements CameraAccessAdapter {
         int page = context.pageNumber(), size = context.pageSize();
         byte[] request;
         try {
-            request = json.writeValueAsBytes(Map.of("pageNo", page, "pageSize", size));
+            var body = new java.util.LinkedHashMap<String, Object>();
+            body.put("pageNo", page);
+            body.put("pageSize", size);
+            if (context.regionIndexCode() != null) {
+                HikPlatformApi.requireCode(context.regionIndexCode());
+                body.put("regionIndexCodes", List.of(context.regionIndexCode()));
+                body.put("isSubRegion", context.includeSubRegions());
+            }
+            request = json.writeValueAsBytes(body);
         } catch (java.io.IOException ex) {
             throw new IllegalStateException("Cannot encode platform query");
         }
@@ -93,7 +101,7 @@ public class HikPlatformCameraAccessAdapter implements CameraAccessAdapter {
                 throw new CameraAdapterException("INVALID_CHANNEL_IDENTITY");
             String name = text(entry, "cameraName");
             if (name == null) name = text(entry, "name");
-            // A directory entry proves a channel identity, not an available stream Profile.
+            // Declare one preview target; no codec or availability is inferred from the directory.
             String deviceKey = text(entry, "encodeDevIndexCode");
             if (deviceKey == null) deviceKey = text(entry, "encodeDeviceIndexCode");
             if (deviceKey != null && deviceKey.length() > 512)
@@ -108,7 +116,19 @@ public class HikPlatformCameraAccessAdapter implements CameraAccessAdapter {
                                     null,
                                     null,
                                     null);
-            channels.add(new CameraAccessCatalog.Channel(id, name, List.of(), false, device));
+            var profile =
+                    new CameraAccessCatalog.Profile(
+                            "platform-main",
+                            "平台主码流",
+                            "MAIN",
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            new CameraAccessCatalog.Locator(type(), null, id, 0));
+            channels.add(
+                    new CameraAccessCatalog.Channel(id, name, List.of(profile), false, device));
         }
         boolean hasMore = (long) page * size < total;
         if (hasMore && entries.isEmpty()) warnings.add("DIRECTORY_INCOMPLETE");

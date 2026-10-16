@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, ref } from 'vue'
 import type { EffectScope, Ref } from 'vue'
-import type { CameraStatus, StatusCheck } from '../../api/camera-status/types'
+import type { CameraStatus, StatusCheck, StatusLayer } from '../../api/camera-status/types'
 import { ApiRequestError } from '../../lib/http/error'
 import { useStatusChecks } from './useStatusChecks'
 
@@ -31,6 +31,7 @@ function check(
     checkId: '100',
     cameraId,
     streamProfileId,
+    layer: 'CONTROL',
     probeKind: 'RTSP_DESCRIBE',
     executionState: state,
     requestedAt: now,
@@ -50,14 +51,28 @@ function status(cameraId = '1', latestCheck: StatusCheck | null = null): CameraS
     serverNow: now,
     profiles: ['10', '11'].map((streamProfileId) => ({
       streamProfileId,
-      layer: 'CONTROL',
-      probeKind: 'RTSP_DESCRIBE',
-      observation: null,
-      freshness: 'NEVER',
-      configurationCurrent: true,
-      latestCheck: latestCheck?.streamProfileId === streamProfileId ? latestCheck : null,
-      canCheck: true,
-      blockingReasonCode: null,
+      control: {
+        layer: 'CONTROL',
+        probeKind: 'RTSP_DESCRIBE',
+        observation: null,
+        freshness: 'NEVER',
+        configurationCurrent: true,
+        latestCheck: latestCheck?.streamProfileId === streamProfileId ? latestCheck : null,
+        canCheck: true,
+        blockingReasonCode: null,
+        timeline: null,
+      },
+      media: {
+        layer: 'MEDIA',
+        probeKind: 'ZLM_RTP_FRAMES',
+        observation: null,
+        freshness: 'NEVER',
+        configurationCurrent: true,
+        latestCheck: null,
+        canCheck: true,
+        blockingReasonCode: null,
+        timeline: null,
+      },
     })),
   }
 }
@@ -73,7 +88,7 @@ async function flush() {
 }
 let scope: EffectScope, controls: ReturnType<typeof useStatusChecks>
 let cameraId: Ref<string | null>, profileId: Ref<string | null>
-let active: Ref<boolean>
+let active: Ref<boolean>, layer: Ref<StatusLayer>
 let page: EventTarget & { hidden: boolean }
 beforeEach(async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] })
@@ -86,8 +101,9 @@ beforeEach(async () => {
   cameraId = ref('1')
   profileId = ref('10')
   active = ref(true)
+  layer = ref('CONTROL')
   scope = effectScope()
-  controls = scope.run(() => useStatusChecks(cameraId, profileId, active))!
+  controls = scope.run(() => useStatusChecks(cameraId, profileId, active, layer))!
   await flush()
 })
 afterEach(() => {
@@ -99,20 +115,72 @@ afterEach(() => {
 })
 
 describe('manual CONTROL check read owner', () => {
+  it('sends the selected layer and isolates unknown commands from the other layer', async () => {
+    api.create.mockRejectedValueOnce(new ApiRequestError('REQUEST_TIMEOUT', '请求超时'))
+    layer.value = 'MEDIA'
+    await flush()
+    await controls.submit()
+    const original = api.create.mock.calls[0]![1]
+    expect(original.layer).toBe('MEDIA')
+    layer.value = 'CONTROL'
+    await flush()
+    expect(controls.pendingHere.value).toBe(false)
+    await controls.submit()
+    expect(api.create).toHaveBeenCalledOnce()
+    layer.value = 'MEDIA'
+    await flush()
+    api.create.mockResolvedValue({ ...check(), layer: 'MEDIA', probeKind: 'ZLM_RTP_FRAMES' })
+    await controls.submit()
+    expect(api.create.mock.calls[1]![1]).toEqual(original)
+    expect(controls.check.value?.layer).toBe('MEDIA')
+  })
+  it('ignores late CONTROL progress when the view switches to MEDIA', async () => {
+    await controls.submit()
+    const late = deferred<StatusCheck>()
+    api.check.mockReturnValueOnce(late.promise)
+    await vi.advanceTimersByTimeAsync(2000)
+    const signal = api.check.mock.calls[0]![2] as AbortSignal
+    layer.value = 'MEDIA'
+    await flush()
+    expect(signal.aborted).toBe(true)
+    late.resolve(check('COMPLETED'))
+    await flush()
+    expect(controls.selected.value?.layer).toBe('MEDIA')
+    expect(controls.check.value).toBeNull()
+    expect(api.create).toHaveBeenCalledOnce()
+  })
+  it('keeps an unexecuted MEDIA receipt separate from a failed observation', async () => {
+    const receipt: StatusCheck = {
+      ...check('SKIPPED'),
+      layer: 'MEDIA',
+      probeKind: 'ZLM_RTP_FRAMES',
+      reasonCode: 'MEDIA_BUSY',
+    }
+    const result = status()
+    result.profiles[0]!.media.latestCheck = receipt
+    api.status.mockResolvedValue(result)
+    api.create.mockResolvedValue(receipt)
+    layer.value = 'MEDIA'
+    await flush()
+    await controls.submit()
+    expect(controls.check.value?.executionState).toBe('SKIPPED')
+    expect(controls.selected.value?.observation).toBeNull()
+    expect(controls.selected.value?.freshness).toBe('NEVER')
+  })
   it('opens and selects a Profile with GET only, without assuming the default Profile', async () => {
     expect(api.status).toHaveBeenCalledOnce()
     profileId.value = '11'
     await flush()
     expect(api.create).not.toHaveBeenCalled()
-    expect(controls.selected.value?.streamProfileId).toBe('11')
+    expect(controls.selectedProfile.value?.streamProfileId).toBe('11')
     profileId.value = null
     await flush()
     expect(controls.canSubmit.value).toBe(false)
   })
   it('obeys backend eligibility instead of inferring it from local asset fields', async () => {
     const blocked = status()
-    blocked.profiles[0]!.canCheck = false
-    blocked.profiles[0]!.blockingReasonCode = 'FORBIDDEN'
+    blocked.profiles[0]!.control.canCheck = false
+    blocked.profiles[0]!.control.blockingReasonCode = 'FORBIDDEN'
     api.status.mockResolvedValue(blocked)
     await controls.refresh()
     await controls.submit()
@@ -281,13 +349,14 @@ describe('manual CONTROL check read owner', () => {
     await Promise.all([posting, reading])
     expect(controls.snapshot.value?.cameraId).toBe('2')
     expect(controls.check.value).toBeNull()
-    expect(controls.selected.value?.streamProfileId).toBe('11')
+    expect(controls.selectedProfile.value?.streamProfileId).toBe('11')
   })
   it('expires a CURRENT fact locally without probing or extending its observation times', async () => {
     const result = status()
-    result.profiles[0]!.freshness = 'CURRENT'
-    result.profiles[0]!.observation = {
+    result.profiles[0]!.control.freshness = 'CURRENT'
+    result.profiles[0]!.control.observation = {
       checkId: '100',
+      mediaEvidence: null,
       value: 'ACCESSIBLE',
       reasonCode: 'RTSP_ACCESSIBLE',
       observedAt: now,

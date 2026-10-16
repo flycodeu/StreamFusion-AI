@@ -9,15 +9,15 @@ import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.streamfusion.platform.auth.controller.AuthController;
-import com.streamfusion.platform.auth.service.CurrentUserService;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.security.ModuleAccess;
 import com.streamfusion.platform.common.security.ModuleAuthorizationInterceptor;
 import com.streamfusion.platform.common.security.ModuleAuthorizationService;
 import com.streamfusion.platform.common.web.ApiErrorWriter;
-import com.streamfusion.platform.user.pojo.entity.UserEntity;
+import com.streamfusion.platform.system.auth.controller.AuthController;
+import com.streamfusion.platform.system.auth.service.CurrentUserService;
+import com.streamfusion.platform.system.user.pojo.entity.UserEntity;
 import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;

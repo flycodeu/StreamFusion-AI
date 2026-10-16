@@ -3,6 +3,7 @@ package com.streamfusion.platform.camera.status;
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
 import com.streamfusion.platform.camera.access.adapter.CameraRequestAuthentication;
 import com.streamfusion.platform.camera.service.CameraSourceRules;
+import com.streamfusion.platform.camera.status.CameraProbeResult.Outcome;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -90,16 +91,6 @@ public final class RtspDescribeProbe implements AutoCloseable {
         }
     }
 
-    public enum Outcome {
-        ACCESSIBLE,
-        FAILED,
-        UNSUPPORTED,
-        NOT_EXECUTED,
-        CANCELLED
-    }
-
-    public record Result(Outcome outcome, String reasonCode, int statusCode, long durationMs) {}
-
     /** One execution's cancellation handle. Socket registration and cancellation share a lock. */
     public static final class Cancellation {
         private volatile boolean cancelled;
@@ -108,10 +99,12 @@ public final class RtspDescribeProbe implements AutoCloseable {
         private volatile CompletableFuture<Void> resourcesStopped =
                 CompletableFuture.completedFuture(null);
         private Socket socket;
+        private Runnable cancelAction = () -> {};
 
         public synchronized void cancel() {
             cancelled = true;
             closeSocket();
+            cancelAction.run();
         }
 
         public boolean isCancelled() {
@@ -121,6 +114,13 @@ public final class RtspDescribeProbe implements AutoCloseable {
         /** Result completion is not DNS/resource completion; a target gate waits for the latter. */
         void afterResourcesStopped(Runnable action) {
             resourcesStopped.thenRun(action);
+        }
+
+        synchronized boolean claimResources(CompletableFuture<Void> stopped, Runnable onCancel) {
+            if (cancelled || !claimed.compareAndSet(false, true)) return false;
+            resourcesStopped = java.util.Objects.requireNonNull(stopped);
+            cancelAction = java.util.Objects.requireNonNull(onCancel);
+            return true;
         }
 
         private synchronized void timeout() {
@@ -205,7 +205,7 @@ public final class RtspDescribeProbe implements AutoCloseable {
         deadlines.setRemoveOnCancelPolicy(true);
     }
 
-    public Result execute(Target target, long deadlineNanos, Cancellation cancellation) {
+    public CameraProbeResult execute(Target target, long deadlineNanos, Cancellation cancellation) {
         long started = System.nanoTime();
         java.util.Objects.requireNonNull(cancellation);
         if (cancellation.isCancelled()) return result(Outcome.CANCELLED, "CANCELLED", 0, started);
@@ -646,12 +646,14 @@ public final class RtspDescribeProbe implements AutoCloseable {
         return number >= minimum && number <= maximum;
     }
 
-    private static Result result(Outcome outcome, String reason, int status, long started) {
-        return new Result(
+    private static CameraProbeResult result(
+            Outcome outcome, String reason, int status, long started) {
+        return new CameraProbeResult(
                 outcome,
                 reason,
                 status,
-                Math.max(0, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)));
+                Math.max(0, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)),
+                null);
     }
 
     @Override

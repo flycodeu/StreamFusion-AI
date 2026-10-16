@@ -18,7 +18,7 @@ public class CameraStatusPageController {
     private final CameraStatusQueryService service;
 
     @GetMapping("/camera-status")
-    @Operation(summary = "按当前授权通道分页读取CONTROL状态，不触发网络或媒体检查")
+    @Operation(summary = "按当前授权通道与所选层分页读取状态，不触发网络或媒体检查")
     public R<CameraStatusPageVo> page(
             @ParameterObject @ModelAttribute CameraStatusPageQuery query) {
         return R.success(service.page(query));

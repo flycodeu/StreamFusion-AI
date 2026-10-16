@@ -7,9 +7,9 @@ import static org.mockito.Mockito.doThrow;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.streamfusion.platform.auth.service.BootstrapService;
 import com.streamfusion.platform.support.IdentitySchema;
 import com.streamfusion.platform.support.SecureLoginSupport;
+import com.streamfusion.platform.system.auth.service.BootstrapService;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
 import java.net.URI;
@@ -20,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.Map;
+import java.util.UUID;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,6 +29,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.session.Session;
 import org.springframework.session.SessionRepository;
@@ -40,7 +42,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
         properties = {
             "spring.autoconfigure.exclude=",
             "spring.datasource.url=jdbc:h2:mem:redis_identity;MODE=MySQL;DB_CLOSE_DELAY=-1",
-            "spring.session.redis.namespace=streamfusion:isolated-identity-test:session",
+            "spring.session.redis.namespace=streamfusion:isolated-identity-test:session:v2",
             "platform.auth.initial-password=Initial1!"
         })
 @ActiveProfiles("test")
@@ -54,10 +56,11 @@ class RedisSessionIntegrationTest {
     @Autowired DataSource source;
     @Autowired BootstrapService bootstrap;
     @Autowired ObjectMapper json;
+    @Autowired StringRedisTemplate redis;
     @MockitoSpyBean RedisSessionRepository repository;
 
     @org.springframework.test.context.bean.override.mockito.MockitoBean
-    com.streamfusion.platform.auth.captcha.CaptchaImageGenerator captchaImages;
+    com.streamfusion.platform.system.auth.captcha.CaptchaImageGenerator captchaImages;
 
     private CookieManager cookies;
     private HttpClient client;
@@ -66,9 +69,11 @@ class RedisSessionIntegrationTest {
     void prepare() throws Exception {
         org.mockito.Mockito.when(captchaImages.generate())
                 .thenReturn(
-                        new com.streamfusion.platform.auth.captcha.CaptchaImageGenerator.Generated(
+                        new com.streamfusion.platform.system.auth.captcha.CaptchaImageGenerator
+                                .Generated(
                                 SecureLoginSupport.CAPTCHA_ANSWER,
-                                new com.streamfusion.platform.auth.captcha.CaptchaImageGenerator()
+                                new com.streamfusion.platform.system.auth.captcha
+                                                .CaptchaImageGenerator()
                                         .generate()
                                         .image()));
         IdentitySchema.initialize(source);
@@ -79,6 +84,28 @@ class RedisSessionIntegrationTest {
                         .cookieHandler(cookies)
                         .connectTimeout(Duration.ofSeconds(3))
                         .build();
+    }
+
+    @Test
+    void previousNamespaceIsNotDeserializedAndTheBrowserCanLogInAgain() throws Exception {
+        String sessionId = UUID.randomUUID().toString();
+        String legacyKey = "streamfusion:isolated-identity-test:session:sessions:" + sessionId;
+        var legacy = Map.of("sessionAttr:principal", "unreadable-legacy-java-session");
+        redis.opsForHash().putAll(legacyKey, legacy);
+        redis.expire(legacyKey, Duration.ofMinutes(1));
+        try {
+            String oldCookie =
+                    "SF_SESSION="
+                            + Base64.getEncoder()
+                                    .encodeToString(sessionId.getBytes(StandardCharsets.UTF_8));
+            assertThat(withCookie(oldCookie, "/auth/session").statusCode()).isEqualTo(401);
+            assertThat(redis.opsForHash().entries(legacyKey)).containsAllEntriesOf(legacy);
+            login(client);
+            assertThat(send("GET", "/auth/me", null, null).statusCode()).isEqualTo(200);
+            assertThat(redis.opsForHash().entries(legacyKey)).containsAllEntriesOf(legacy);
+        } finally {
+            redis.delete(legacyKey);
+        }
     }
 
     @Test

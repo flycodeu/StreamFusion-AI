@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElButton, ElOption, ElSelect } from 'element-plus'
+import type { StatusLayer } from '../../api/camera-status/types'
+import { layerKey } from '../../api/camera-status/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { streamLabel } from '../camera/form'
 import { formatDateTime } from '../../utils/dateTime'
-import { executionLabels, reasonLabel } from './model'
+import { executionLabels, isTerminal, reasonLabel } from './model'
 import StatusFact from './StatusFact.vue'
+import StatusHistory from './StatusHistory.vue'
 import { useStatusChecks } from './useStatusChecks'
 
 const props = defineProps<{
@@ -20,21 +23,28 @@ const props = defineProps<{
   } | null
   active: boolean
   initialProfileId?: string | null
+  initialLayer?: StatusLayer
 }>()
 const profileId = ref<string | null>(null)
+const layer = ref<StatusLayer>(props.initialLayer ?? 'MEDIA')
+const historyOpen = ref(false)
 const cameraId = computed(() => props.camera?.cameraId ?? null)
 const active = computed(() => props.active)
 watch(
   [cameraId, () => props.initialProfileId],
   () => {
     profileId.value = props.initialProfileId ?? null
+    layer.value = props.initialLayer ?? 'MEDIA'
   },
   { immediate: true, flush: 'sync' },
 )
 watch(
   () => props.active,
   (active) => {
-    if (active && props.initialProfileId) profileId.value = props.initialProfileId
+    if (active) {
+      if (props.initialProfileId) profileId.value = props.initialProfileId
+      layer.value = props.initialLayer ?? 'MEDIA'
+    }
   },
   { flush: 'sync' },
 )
@@ -47,18 +57,45 @@ watch(
   { flush: 'sync' },
 )
 const {
+  selectedProfile,
   selected,
   check,
   pending,
   pendingHere,
-  canSubmit,
   reading,
   posting,
   readPaused,
   error,
   refresh,
   submit,
-} = useStatusChecks(cameraId, profileId, active)
+} = useStatusChecks(cameraId, profileId, active, layer)
+const availableLayers = computed<StatusLayer[]>(() => {
+  const upstream = selectedProfile.value?.upstream
+  return upstream && upstream.blockingReasonCode !== 'STATUS_LAYER_NOT_APPLICABLE'
+    ? ['UPSTREAM']
+    : ['MEDIA', 'CONTROL']
+})
+watch(availableLayers, (values) => {
+  if (!values.includes(layer.value)) layer.value = values[0]!
+})
+watch(
+  () => props.initialLayer,
+  (value) => {
+    if (value) layer.value = value
+  },
+)
+function canCheck(target: StatusLayer) {
+  if (!props.active || posting.value || !profileId.value) return false
+  if (pending.value) return pendingHere.value && pending.value.input.layer === target
+  const state = selectedProfile.value?.[layerKey(target)]
+  const latest = layer.value === target ? check.value : state?.latestCheck
+  return !!state?.canCheck && (!latest || isTerminal(latest))
+}
+async function inspect(target: StatusLayer) {
+  if (!canCheck(target)) return
+  layer.value = target
+  await submit()
+}
 const targetError = computed(() =>
   pendingHere.value ? (pending.value?.error ?? error.value) : error.value,
 )
@@ -71,9 +108,9 @@ const executionReason = computed(() => {
 </script>
 
 <template>
-  <section v-if="camera" class="camera-status-panel" aria-label="连接检查">
+  <section v-if="camera" class="camera-status-panel" aria-label="相机状态检查">
     <div class="status-heading">
-      <h3>连接检查</h3>
+      <h3>状态检查</h3>
       <ElButton link :loading="reading" :disabled="!active || reading" @click="refresh"
         >刷新结果</ElButton
       >
@@ -92,14 +129,25 @@ const executionReason = computed(() => {
           :value="profile.streamProfileId"
         />
       </ElSelect>
+    </div>
+    <div class="check-buttons">
       <ElButton
-        type="primary"
-        plain
-        :loading="posting && pendingHere"
-        :disabled="pendingHere ? !active || posting : !canSubmit"
-        @click="submit"
+        v-for="target in availableLayers"
+        :key="target"
+        :type="target === 'MEDIA' ? 'primary' : 'default'"
+        :loading="posting && pending?.input.layer === target"
+        :disabled="!canCheck(target)"
+        @click="inspect(target)"
       >
-        {{ pendingHere && pending?.uncertain ? '重试原检查' : '检查 RTSP' }}
+        {{
+          pending?.uncertain && pending.input.layer === target
+            ? '重试原检查'
+            : target === 'UPSTREAM'
+              ? '查询平台状态'
+              : target === 'MEDIA'
+                ? '检查视频'
+                : '检查连接'
+        }}
       </ElButton>
     </div>
     <p v-if="pending?.uncertain" class="status-note" role="status">
@@ -113,6 +161,19 @@ const executionReason = computed(() => {
       {{ reasonLabel(selected.blockingReasonCode) || '当前不能执行手动检查' }}
     </p>
     <template v-if="profileId">
+      <div class="layer-switcher" role="group" aria-label="检查结果层级">
+        <ElButton
+          v-for="target in availableLayers"
+          :key="target"
+          link
+          :type="layer === target ? 'primary' : 'default'"
+          :aria-pressed="layer === target"
+          @click="layer = target"
+          >{{
+            target === 'UPSTREAM' ? '平台状态' : target === 'MEDIA' ? '视频收帧' : '连接检查'
+          }}</ElButton
+        >
+      </div>
       <StatusFact :profile="selected" />
       <div v-if="check" class="check-execution" aria-live="polite">
         <div class="execution-heading">
@@ -146,10 +207,16 @@ const executionReason = computed(() => {
       已暂停读取，请点击“刷新结果”查询进度。
     </p>
     <RequestError :error="targetError" />
-    <details class="check-diagnostics">
-      <summary>检查范围</summary>
-      <p>RTSP DESCRIBE 验证控制连接和视频描述，不获取视频首帧或媒体质量。</p>
-    </details>
+    <ElButton v-if="profileId" link type="primary" @click="historyOpen = !historyOpen">{{
+      historyOpen ? '收起检测记录' : '检测记录'
+    }}</ElButton>
+    <StatusHistory
+      v-if="historyOpen && profileId"
+      :camera-id="camera.cameraId"
+      :profile-id="profileId"
+      :layer="layer"
+      :active="active"
+    />
   </section>
 </template>
 
@@ -184,6 +251,20 @@ h3 {
 .status-actions .el-button {
   flex-shrink: 0;
   margin: 0;
+}
+.check-buttons,
+.layer-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.check-buttons .el-button,
+.layer-switcher .el-button {
+  margin-left: 0;
+}
+.layer-switcher {
+  padding-top: 4px;
 }
 .status-note {
   margin: 8px 0;

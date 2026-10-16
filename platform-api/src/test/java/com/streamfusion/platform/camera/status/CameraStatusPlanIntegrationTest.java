@@ -5,13 +5,13 @@ import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.streamfusion.platform.access.mapper.AccessMapper;
-import com.streamfusion.platform.access.service.AccessService;
-import com.streamfusion.platform.auth.service.CurrentUserService;
 import com.streamfusion.platform.camera.mapper.*;
 import com.streamfusion.platform.camera.service.*;
 import com.streamfusion.platform.support.CameraTestSupport;
-import com.streamfusion.platform.user.service.UserService;
+import com.streamfusion.platform.system.access.mapper.AccessMapper;
+import com.streamfusion.platform.system.access.service.AccessService;
+import com.streamfusion.platform.system.auth.service.CurrentUserService;
+import com.streamfusion.platform.system.user.service.UserService;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -23,13 +23,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /** Real HTTP/SQL/auth with a controlled worker; not real camera or thousand-stream acceptance. */
 class CameraStatusPlanIntegrationTest extends CameraTestSupport {
     @Autowired ApplicationContext context;
     @MockitoBean CameraStatusWorker worker;
+    @MockitoBean com.streamfusion.platform.camera.access.adapter.HikPlatformApi platformApi;
     final Map<Long, CameraStatusWorker.Request> submitted = new HashMap<>();
-    final Map<Long, CompletableFuture<RtspDescribeProbe.Result>> futures = new HashMap<>();
+    final Map<Long, CompletableFuture<CameraProbeResult>> futures = new HashMap<>();
     MutableClock clock;
     CameraStatusService background;
     CameraStatusPlanService scheduler;
@@ -58,7 +60,7 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                         bean(PlatformTransactionManager.class),
                         clock,
                         bean(CameraStatusPlanMapper.class),
-                        bean(com.streamfusion.platform.diagnostics.DiagnosticLog.class));
+                        bean(com.streamfusion.platform.monitor.diagnostics.DiagnosticLog.class));
         scheduler =
                 new CameraStatusPlanService(
                         bean(CameraStatusPlanMapper.class),
@@ -73,13 +75,14 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                         bean(CameraStatusProperties.class),
                         bean(PlatformTransactionManager.class),
                         clock,
-                        bean(com.streamfusion.platform.audit.service.AuditService.class));
+                        bean(com.streamfusion.platform.monitor.audit.service.AuditService.class),
+                        bean(CameraGroupService.class));
         when(worker.trySubmit(any()))
                 .thenAnswer(
                         call -> {
                             CameraStatusWorker.Request request = call.getArgument(0);
                             submitted.put(request.checkId(), request);
-                            var future = new CompletableFuture<RtspDescribeProbe.Result>();
+                            var future = new CompletableFuture<CameraProbeResult>();
                             futures.put(request.checkId(), future);
                             return new CameraStatusWorker.Submission(true, null, future);
                         });
@@ -91,11 +94,12 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                 .forEach(
                         future ->
                                 future.complete(
-                                        new RtspDescribeProbe.Result(
-                                                RtspDescribeProbe.Outcome.NOT_EXECUTED,
+                                        new CameraProbeResult(
+                                                CameraProbeResult.Outcome.NOT_EXECUTED,
                                                 "WORKER_STOPPED",
                                                 0,
-                                                0)));
+                                                0,
+                                                null)));
     }
 
     @Test
@@ -149,9 +153,13 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
         request.beforeProbe().run();
         futures.get(request.checkId())
                 .complete(
-                        new RtspDescribeProbe.Result(
-                                RtspDescribeProbe.Outcome.ACCESSIBLE, "RTSP_DESCRIBE_OK", 200, 5));
-        assertThat(bean(CameraStatusSnapshotMapper.class).selectList(null)).hasSize(1);
+                        new CameraProbeResult(
+                                CameraProbeResult.Outcome.ACCESSIBLE,
+                                "RTSP_DESCRIBE_OK",
+                                200,
+                                5,
+                                null));
+        assertThat(jdbc.queryForList("SELECT profile_id FROM camera_status_snapshot")).hasSize(1);
         assertThat(bean(CameraStatusCheckMapper.class).selectById(request.checkId()).getPlanId())
                 .isEqualTo(plan.path("planId").asLong());
         var signedIn = login("CameraAdmin", "AdminPass1!");
@@ -195,9 +203,13 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                 200);
         futures.get(request.checkId())
                 .complete(
-                        new RtspDescribeProbe.Result(
-                                RtspDescribeProbe.Outcome.ACCESSIBLE, "RTSP_DESCRIBE_OK", 200, 5));
-        assertThat(bean(CameraStatusSnapshotMapper.class).selectList(null)).isEmpty();
+                        new CameraProbeResult(
+                                CameraProbeResult.Outcome.ACCESSIBLE,
+                                "RTSP_DESCRIBE_OK",
+                                200,
+                                5,
+                                null));
+        assertThat(jdbc.queryForList("SELECT profile_id FROM camera_status_snapshot")).isEmpty();
         assertThat(
                         bean(CameraStatusCheckMapper.class)
                                 .selectById(request.checkId())
@@ -221,6 +233,54 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
     }
 
     @Test
+    void stoppedRunningCheckCannotPublishAfterThePlanResumes() throws Exception {
+        assertStoppedCheckCannotResume(true);
+    }
+
+    @Test
+    void stoppedQueuedCheckCannotStartAfterThePlanResumes() throws Exception {
+        assertStoppedCheckCannotResume(false);
+    }
+
+    private void assertStoppedCheckCannotResume(boolean running) throws Exception {
+        var auth = admin();
+        var camera = enabled(auth);
+        var plan = create(auth, camera, 60, 24);
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        scheduler.tick();
+        var request = submitted.values().iterator().next();
+        if (running) request.beforeProbe().run();
+        var stopped =
+                write(
+                        post("/camera-status/plans/" + plan.path("planId").asText() + "/stop"),
+                        auth,
+                        Map.of("version", "0"),
+                        200);
+        write(
+                post("/camera-status/plans/" + plan.path("planId").asText() + "/resume"),
+                auth,
+                Map.of("version", stopped.path("version").asText()),
+                200);
+        if (!running)
+            assertThatThrownBy(() -> request.beforeProbe().run())
+                    .hasMessage("CHECK_NO_LONGER_ACTIVE");
+        futures.get(request.checkId())
+                .complete(
+                        new CameraProbeResult(
+                                CameraProbeResult.Outcome.ACCESSIBLE,
+                                "RTSP_DESCRIBE_OK",
+                                200,
+                                5,
+                                null));
+        assertThat(jdbc.queryForList("SELECT profile_id FROM camera_status_snapshot")).isEmpty();
+        assertThat(
+                        bean(CameraStatusCheckMapper.class)
+                                .selectById(request.checkId())
+                                .getResultValue())
+                .isNull();
+    }
+
+    @Test
     void elapsedPlanFencesResultEvenBeforeExpiryMaintenance() throws Exception {
         var auth = admin();
         var camera = enabled(auth);
@@ -237,9 +297,13 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
         clock.value = clock.value.plusSeconds(2);
         futures.get(request.checkId())
                 .complete(
-                        new RtspDescribeProbe.Result(
-                                RtspDescribeProbe.Outcome.ACCESSIBLE, "RTSP_DESCRIBE_OK", 200, 5));
-        assertThat(bean(CameraStatusSnapshotMapper.class).selectList(null)).isEmpty();
+                        new CameraProbeResult(
+                                CameraProbeResult.Outcome.ACCESSIBLE,
+                                "RTSP_DESCRIBE_OK",
+                                200,
+                                5,
+                                null));
+        assertThat(jdbc.queryForList("SELECT profile_id FROM camera_status_snapshot")).isEmpty();
         assertThat(
                         bean(CameraStatusCheckMapper.class)
                                 .selectById(request.checkId())
@@ -274,7 +338,7 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
         assertThat(bean(CameraStatusPlanTargetMapper.class).selectList(null))
                 .allMatch(target -> target.getBlocked());
         verifyNoInteractions(worker);
-        assertThat(bean(CameraStatusSnapshotMapper.class).selectList(null)).isEmpty();
+        assertThat(jdbc.queryForList("SELECT profile_id FROM camera_status_snapshot")).isEmpty();
     }
 
     @Test
@@ -296,14 +360,14 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
         var request = submitted.values().iterator().next();
         futures.get(request.checkId())
                 .complete(
-                        new RtspDescribeProbe.Result(
-                                RtspDescribeProbe.Outcome.NOT_EXECUTED, "WORKER_BUSY", 0, 0));
+                        new CameraProbeResult(
+                                CameraProbeResult.Outcome.NOT_EXECUTED, "WORKER_BUSY", 0, 0, null));
         assertThat(
                         bean(CameraStatusCheckMapper.class)
                                 .selectById(request.checkId())
                                 .getExecutionState())
                 .isEqualTo("SKIPPED");
-        assertThat(bean(CameraStatusSnapshotMapper.class).selectList(null)).isEmpty();
+        assertThat(jdbc.queryForList("SELECT profile_id FROM camera_status_snapshot")).isEmpty();
         var listed = read("/camera-status/plans", auth).get(0);
         assertThat(listed.path("lastReasonCode").asText()).isEqualTo("WORKER_BUSY");
         assertThat(listed.path("progress").path("skipped").asInt()).isOne();
@@ -581,14 +645,18 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                 200);
         futures.get(request.checkId())
                 .complete(
-                        new RtspDescribeProbe.Result(
-                                RtspDescribeProbe.Outcome.ACCESSIBLE, "RTSP_DESCRIBE_OK", 200, 5));
+                        new CameraProbeResult(
+                                CameraProbeResult.Outcome.ACCESSIBLE,
+                                "RTSP_DESCRIBE_OK",
+                                200,
+                                5,
+                                null));
         assertThat(
                         bean(CameraStatusCheckMapper.class)
                                 .selectById(request.checkId())
                                 .getSnapshotApplied())
                 .isFalse();
-        assertThat(bean(CameraStatusSnapshotMapper.class).selectList(null)).isEmpty();
+        assertThat(jdbc.queryForList("SELECT profile_id FROM camera_status_snapshot")).isEmpty();
     }
 
     private JsonNode enabled(Csrf auth) throws Exception {
@@ -711,6 +779,292 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                 400);
         write(post("/camera-status/plans/targets/preview"), auth, Map.of("scope", "INVALID"), 400);
         verifyNoInteractions(worker);
+    }
+
+    @Test
+    void mixedMediaPlanUsesOfficialPlatformOnlineAndNeverCreatesAnRtspTarget() throws Exception {
+        var auth = admin();
+        var direct = enabled(auth);
+        var platformSource =
+                write(
+                        post("/camera-sources"),
+                        auth,
+                        Map.of(
+                                "clientRequestId",
+                                requestId(),
+                                "name",
+                                "海康平台",
+                                "adapterType",
+                                "HIK_PLATFORM",
+                                "networkPolicyKey",
+                                "test",
+                                "enabled",
+                                true,
+                                "credentials",
+                                List.of(
+                                        Map.of(
+                                                "purpose",
+                                                "PLATFORM_HTTP",
+                                                "username",
+                                                Map.of("action", "REPLACE", "value", "fixture-key"),
+                                                "password",
+                                                Map.of(
+                                                        "action",
+                                                        "REPLACE",
+                                                        "value",
+                                                        "fixture-secret"))),
+                                "endpoints",
+                                List.of(
+                                        Map.of(
+                                                "purpose",
+                                                "PLATFORM_HTTP",
+                                                "scheme",
+                                                "https",
+                                                "host",
+                                                "10.0.1.8",
+                                                "port",
+                                                442,
+                                                "basePath",
+                                                "/artemis",
+                                                "authMode",
+                                                "DRIVER_NEGOTIATED",
+                                                "credentialPurpose",
+                                                "PLATFORM_HTTP",
+                                                "tlsPolicy",
+                                                "SYSTEM_CA"))),
+                        201);
+        long source = platformSource.path("sourceId").asLong();
+        jdbc.update(
+                "INSERT INTO camera_channel(id,source_id,external_channel_key,group_id,name,lifecycle,mapping_origin) VALUES(7001,?,'camera-A',?,'平台相机','ENABLED','ADAPTER')",
+                source,
+                direct.path("groupId").asLong());
+        jdbc.update(
+                "INSERT INTO camera_stream_profile(id,source_id,channel_id,external_profile_key,label,usage_hint,usage_origin,enabled) VALUES(7002,?,7001,'platform-main','平台主码流','MAIN','UNKNOWN',1)",
+                source);
+        new TransactionTemplate(bean(PlatformTransactionManager.class))
+                .executeWithoutResult(
+                        transaction ->
+                                bean(CameraLocatorService.class)
+                                        .createImported(
+                                                source,
+                                                7002,
+                                                "camera-A",
+                                                "platform-main",
+                                                new com.streamfusion.platform.camera.access.adapter
+                                                        .CameraAccessCatalog.Locator(
+                                                        "HIK_PLATFORM", null, "camera-A", 0),
+                                                554));
+        var command =
+                new HashMap<>(
+                        input(List.of("c7001", "c" + direct.path("cameraId").asText()), 60, 24));
+        command.put("layer", "MEDIA");
+        var plan = write(post("/camera-status/plans"), auth, command, 201);
+        var inspected =
+                bean(CameraRtspTargetService.class)
+                        .inspect(
+                                bean(CameraChannelMapper.class).selectById(7001L),
+                                bean(CameraProfileMapper.class).selectById(7002L),
+                                bean(CameraCryptoService.class).activeKeyId(),
+                                () -> {});
+        assertThat(inspected.target()).isNull();
+        assertThat(inspected.blockingReasonCode()).isNull();
+        write(
+                post("/cameras/7001/status-checks"),
+                auth,
+                Map.of("clientRequestId", requestId(), "streamProfileId", "7002", "layer", "MEDIA"),
+                409);
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        scheduler.tick();
+        var request = submitted.values().iterator().next();
+        assertThat(request.layer()).isEqualTo(CameraStatusLayer.UPSTREAM);
+        request.beforeProbe().run();
+        when(platformApi.online(any(), eq("camera-A"))).thenReturn(1);
+        var result =
+                bean(CameraPlatformProbe.class)
+                        .execute(
+                                request.mediaProfile(),
+                                request.authorization(),
+                                System.nanoTime()
+                                        + java.util.concurrent.TimeUnit.SECONDS.toNanos(5),
+                                new RtspDescribeProbe.Cancellation());
+        assertThat(result.reasonCode()).isEqualTo("PLATFORM_ONLINE");
+        futures.get(request.checkId()).complete(result);
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT observation_value FROM camera_status_snapshot WHERE profile_id=7002 AND layer='UPSTREAM'",
+                                String.class))
+                .isEqualTo("ACCESSIBLE");
+        var history = read("/cameras/7001/status-checks?streamProfileId=7002&layer=UPSTREAM", auth);
+        assertThat(history.path("accessible").asInt()).isEqualTo(1);
+        verify(platformApi).online(any(), eq("camera-A"));
+        clock.value = clock.value.plusSeconds(1800);
+        scheduler.tick();
+        assertThat(submitted.values()).anyMatch(value -> value.layer() == CameraStatusLayer.MEDIA);
+    }
+
+    @Test
+    void mediaPlansDispatchMediaAndResumeWithoutReplayingStoppedSlots() throws Exception {
+        var auth = admin();
+        var camera = enabled(auth);
+        var command = new HashMap<>(input(List.of("c" + camera.path("cameraId").asText()), 60, 24));
+        command.put("layer", "MEDIA");
+        command.put("dispatchMode", "POLLING");
+        command.put("parallelism", 1);
+        var plan = write(post("/camera-status/plans"), auth, command, 201);
+        assertThat(plan.path("layer").asText()).isEqualTo("MEDIA");
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        scheduler.tick();
+        var request = submitted.values().iterator().next();
+        assertThat(request.layer()).isEqualTo(CameraStatusLayer.MEDIA);
+        assertThat(request.target()).isNull();
+        request.beforeProbe().run();
+        var stopped =
+                write(
+                        post("/camera-status/plans/" + plan.path("planId").asText() + "/stop"),
+                        auth,
+                        Map.of("version", "0"),
+                        200);
+        futures.get(request.checkId())
+                .complete(
+                        new CameraProbeResult(
+                                CameraProbeResult.Outcome.ACCESSIBLE,
+                                "MEDIA_RECEIVING",
+                                0,
+                                1,
+                                null));
+        assertThat(
+                        bean(CameraStatusCheckMapper.class)
+                                .selectById(request.checkId())
+                                .getResultValue())
+                .isNull();
+        // HTTP commands use the application's real clock; align the controlled dispatcher with it.
+        clock.value = Instant.now();
+        var resumed =
+                write(
+                        post("/camera-status/plans/" + plan.path("planId").asText() + "/resume"),
+                        auth,
+                        Map.of("version", stopped.path("version").asText()),
+                        200);
+        assertThat(resumed.path("endAt")).isEqualTo(plan.path("endAt"));
+        var target =
+                bean(CameraStatusPlanTargetMapper.class)
+                        .forPlan(plan.path("planId").asLong())
+                        .getFirst();
+        assertThat(target.getNextAt())
+                .isAfter(LocalDateTime.ofInstant(clock.value, ZoneId.of("Asia/Shanghai")));
+        scheduler.tick();
+        assertThat(submitted).hasSize(1);
+    }
+
+    @Test
+    void perPlanConcurrencyIncludesQueuedChecks() throws Exception {
+        var auth = admin();
+        var first = enabled(auth);
+        var second = camera(auth, first.path("sourceId").asText(), "second");
+        jdbc.update(
+                "UPDATE camera_channel SET group_id=?,lifecycle='ENABLED' WHERE id=?",
+                first.path("groupId").asLong(),
+                second.path("cameraId").asLong());
+        var command =
+                new HashMap<>(
+                        input(
+                                List.of(
+                                        "c" + first.path("cameraId").asText(),
+                                        "c" + second.path("cameraId").asText()),
+                                60,
+                                24));
+        command.put("dispatchMode", "PARALLEL");
+        command.put("parallelism", 2);
+        var plan = write(post("/camera-status/plans"), auth, command, 201);
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        jdbc.update(
+                "UPDATE camera_status_plan_target SET next_at=?",
+                LocalDateTime.ofInstant(clock.value, ZoneId.of("Asia/Shanghai")));
+        scheduler.tick();
+        scheduler.tick();
+        assertThat(submitted).hasSize(2);
+        assertThat(
+                        bean(CameraStatusPlanMapper.class)
+                                .pending(
+                                        plan.path("planId").asLong(),
+                                        LocalDateTime.ofInstant(
+                                                clock.value, ZoneId.of("Asia/Shanghai"))))
+                .isEqualTo(2);
+    }
+
+    @Test
+    void groupScopeAndReusedPlanKeepTheChannelInsideItsSelectedVideoGroup() throws Exception {
+        var auth = admin();
+        var first = enabled(auth);
+        var second = camera(auth, first.path("sourceId").asText(), "同设备另一组通道");
+        var secondGroup = write(post("/camera-groups"), auth, Map.of("name", "另外一组"), 201);
+        long source = first.path("sourceId").asLong();
+        jdbc.update(
+                "INSERT INTO camera_device(id,source_id,external_device_key,device_type) VALUES(7000,?,'nvr','NVR')",
+                source);
+        jdbc.update(
+                "UPDATE camera_channel SET device_id=7000 WHERE id=?",
+                first.path("cameraId").asLong());
+        jdbc.update(
+                "UPDATE camera_channel SET device_id=7000,group_id=?,lifecycle='ENABLED' WHERE id=?",
+                secondGroup.path("groupId").asLong(),
+                second.path("cameraId").asLong());
+        var preview =
+                write(
+                        post("/camera-status/plans/targets/preview"),
+                        auth,
+                        Map.of(
+                                "scope",
+                                "GROUPS",
+                                "groupIds",
+                                List.of(secondGroup.path("groupId").asText())),
+                        200);
+        assertThat(preview.path("targets").get(0).path("name").asText()).isEqualTo("同设备另一组通道");
+        var command = new HashMap<>(input(List.of("d7000"), 60, 24));
+        command.put("groupIds", List.of(secondGroup.path("groupId").asText()));
+        var plan = write(post("/camera-status/plans"), auth, command, 201);
+        var reuse = new HashMap<>(input(List.of("d7000"), 60, 24));
+        reuse.put("planId", plan.path("planId").asText());
+        var next = write(post("/camera-status/plans"), auth, reuse, 201);
+        assertThat(
+                        bean(CameraStatusPlanTargetMapper.class)
+                                .forPlan(next.path("planId").asLong())
+                                .getFirst()
+                                .getCameraId())
+                .isEqualTo(second.path("cameraId").asLong());
+    }
+
+    @Test
+    void historyIsLayeredAndValidatesTheTimeWindowWithoutCallingAProbe() throws Exception {
+        var auth = admin();
+        var camera = enabled(auth);
+        var plan = create(auth, camera, 60, 24);
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        scheduler.tick();
+        var request = submitted.values().iterator().next();
+        request.beforeProbe().run();
+        futures.get(request.checkId())
+                .complete(
+                        new CameraProbeResult(
+                                CameraProbeResult.Outcome.ACCESSIBLE,
+                                "RTSP_DESCRIBE_OK",
+                                200,
+                                5,
+                                null));
+        var url =
+                "/cameras/"
+                        + camera.path("cameraId").asText()
+                        + "/status-checks?streamProfileId="
+                        + request.streamProfileId();
+        var history = read(url + "&layer=CONTROL", auth);
+        assertThat(history.path("accessible").asInt()).isEqualTo(1);
+        assertThat(history.path("items")).hasSize(1);
+        assertThat(read(url + "&layer=MEDIA", auth).path("total").asInt()).isZero();
+        mvc.perform(get(url + "&days=31").session(auth.session()))
+                .andExpect(
+                        org.springframework.test.web.servlet.result.MockMvcResultMatchers.status()
+                                .isBadRequest());
+        assertThat(submitted).hasSize(1);
     }
 
     private Map<String, Object> input(List<String> keys, int interval, int hours) {

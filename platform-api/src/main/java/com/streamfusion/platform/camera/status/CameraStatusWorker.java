@@ -1,6 +1,8 @@
 package com.streamfusion.platform.camera.status;
 
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
+import com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity;
+import com.streamfusion.platform.camera.status.CameraProbeResult.Outcome;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +25,8 @@ import org.slf4j.MDC;
 public final class CameraStatusWorker implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(CameraStatusWorker.class);
     private final RtspDescribeProbe probe;
+    private final CameraMediaProbe mediaProbe;
+    private final CameraPlatformProbe platformProbe;
     private final ThreadPoolExecutor executor;
     private final Semaphore capacity;
     private final long startIntervalNanos;
@@ -58,7 +62,79 @@ public final class CameraStatusWorker implements AutoCloseable {
             RtspDescribeProbe.Target target,
             Duration timeout,
             Runnable beforeProbe,
-            TargetResolver targetResolver) {
+            TargetResolver targetResolver,
+            CameraStatusLayer layer,
+            CameraProfileEntity mediaProfile,
+            Runnable authorization) {
+        public static Request media(
+                long checkId,
+                long sourceId,
+                long streamProfileId,
+                String traceId,
+                CameraProfileEntity profile,
+                Duration timeout,
+                Runnable beforeProbe,
+                Runnable authorization) {
+            return new Request(
+                    checkId,
+                    sourceId,
+                    streamProfileId,
+                    traceId,
+                    null,
+                    timeout,
+                    beforeProbe,
+                    null,
+                    CameraStatusLayer.MEDIA,
+                    Objects.requireNonNull(profile),
+                    Objects.requireNonNull(authorization));
+        }
+
+        public static Request upstream(
+                long checkId,
+                long sourceId,
+                long profileId,
+                String traceId,
+                CameraProfileEntity profile,
+                Duration timeout,
+                Runnable beforeProbe,
+                Runnable authorization) {
+            return new Request(
+                    checkId,
+                    sourceId,
+                    profileId,
+                    traceId,
+                    null,
+                    timeout,
+                    beforeProbe,
+                    null,
+                    CameraStatusLayer.UPSTREAM,
+                    profile,
+                    authorization);
+        }
+
+        public Request(
+                long checkId,
+                long sourceId,
+                long streamProfileId,
+                String traceId,
+                RtspDescribeProbe.Target target,
+                Duration timeout,
+                Runnable beforeProbe,
+                TargetResolver targetResolver) {
+            this(
+                    checkId,
+                    sourceId,
+                    streamProfileId,
+                    traceId,
+                    target,
+                    timeout,
+                    beforeProbe,
+                    targetResolver,
+                    CameraStatusLayer.CONTROL,
+                    null,
+                    target.authorizationCheck());
+        }
+
         public Request(
                 long checkId,
                 long sourceId,
@@ -81,7 +157,15 @@ public final class CameraStatusWorker implements AutoCloseable {
         }
 
         public Request {
-            Objects.requireNonNull(target);
+            Objects.requireNonNull(layer);
+            if (layer == CameraStatusLayer.CONTROL) Objects.requireNonNull(target);
+            else if (mediaProfile == null
+                    || target != null
+                    || targetResolver != null
+                    || !Objects.equals(mediaProfile.getId(), streamProfileId)
+                    || !Objects.equals(mediaProfile.getSourceId(), sourceId))
+                throw new IllegalArgumentException("Invalid media target");
+            Objects.requireNonNull(authorization);
             Objects.requireNonNull(timeout);
             Objects.requireNonNull(beforeProbe);
             if (checkId < 1
@@ -101,7 +185,14 @@ public final class CameraStatusWorker implements AutoCloseable {
                     && streamProfileId == other.streamProfileId
                     && traceId.equals(other.traceId)
                     && timeout.equals(other.timeout)
-                    && target.sameConnection(other.target)
+                    && layer.equals(other.layer)
+                    && (target == null ? other.target == null : target.sameConnection(other.target))
+                    && (mediaProfile == null
+                            ? other.mediaProfile == null
+                            : other.mediaProfile != null
+                                    && Objects.equals(
+                                            mediaProfile.getVersion(),
+                                            other.mediaProfile.getVersion()))
                     && Objects.equals(targetResolver, other.targetResolver);
         }
 
@@ -122,12 +213,20 @@ public final class CameraStatusWorker implements AutoCloseable {
     }
 
     public record Submission(
-            boolean accepted,
-            String reasonCode,
-            CompletableFuture<RtspDescribeProbe.Result> completion) {}
+            boolean accepted, String reasonCode, CompletableFuture<CameraProbeResult> completion) {}
 
-    public CameraStatusWorker(RtspDescribeProbe probe, Limits limits) {
+    public CameraStatusWorker(RtspDescribeProbe probe, CameraMediaProbe mediaProbe, Limits limits) {
+        this(probe, mediaProbe, null, limits);
+    }
+
+    public CameraStatusWorker(
+            RtspDescribeProbe probe,
+            CameraMediaProbe mediaProbe,
+            CameraPlatformProbe platformProbe,
+            Limits limits) {
         this.probe = Objects.requireNonNull(probe);
+        this.mediaProbe = Objects.requireNonNull(mediaProbe);
+        this.platformProbe = platformProbe;
         Objects.requireNonNull(limits);
         startIntervalNanos = limits.startInterval().toNanos();
         nextStart.set(System.nanoTime());
@@ -150,6 +249,7 @@ public final class CameraStatusWorker implements AutoCloseable {
     public synchronized Submission trySubmit(Request request) {
         Objects.requireNonNull(request);
         if (closed) return rejected("WORKER_STOPPED");
+        if (request.layer() == CameraStatusLayer.MEDIA) mediaProbe.requestRecovery();
         Work previous = submitted.get(request.checkId());
         if (previous != null) return replay(previous, request);
         if (!capacity.tryAcquire()) return rejected("WORKER_BUSY");
@@ -182,12 +282,12 @@ public final class CameraStatusWorker implements AutoCloseable {
         return new Submission(false, reason, CompletableFuture.completedFuture(local(reason)));
     }
 
-    private static RtspDescribeProbe.Result local(String reason) {
-        return new RtspDescribeProbe.Result(RtspDescribeProbe.Outcome.NOT_EXECUTED, reason, 0, 0);
+    private static CameraProbeResult local(String reason) {
+        return new CameraProbeResult(Outcome.NOT_EXECUTED, reason, 0, 0, null);
     }
 
-    private static RtspDescribeProbe.Result cancelled() {
-        return new RtspDescribeProbe.Result(RtspDescribeProbe.Outcome.CANCELLED, "CANCELLED", 0, 0);
+    private static CameraProbeResult cancelled() {
+        return new CameraProbeResult(Outcome.CANCELLED, "CANCELLED", 0, 0, null);
     }
 
     private boolean reserveStart() {
@@ -223,8 +323,7 @@ public final class CameraStatusWorker implements AutoCloseable {
         private final long deadline;
         private final RtspDescribeProbe.Cancellation cancellation =
                 new RtspDescribeProbe.Cancellation();
-        private final CompletableFuture<RtspDescribeProbe.Result> completion =
-                new CompletableFuture<>();
+        private final CompletableFuture<CameraProbeResult> completion = new CompletableFuture<>();
         private boolean finished;
 
         private Work(Request request) {
@@ -235,7 +334,7 @@ public final class CameraStatusWorker implements AutoCloseable {
         @Override
         public void run() {
             Map<String, String> previousMdc = MDC.getCopyOfContextMap();
-            RtspDescribeProbe.Result result = local("PROBE_UNAVAILABLE");
+            CameraProbeResult result = local("PROBE_UNAVAILABLE");
             try {
                 MDC.put("traceId", request.traceId());
                 MDC.put("checkId", Long.toString(request.checkId()));
@@ -255,7 +354,7 @@ public final class CameraStatusWorker implements AutoCloseable {
             }
         }
 
-        private RtspDescribeProbe.Result execute() {
+        private CameraProbeResult execute() {
             if (cancellation.isCancelled()) return cancelled();
             if (System.nanoTime() - deadline >= 0) return local("QUEUE_DEADLINE_EXCEEDED");
             if (profiles.putIfAbsent(request.streamProfileId(), this) != null)
@@ -266,6 +365,22 @@ public final class CameraStatusWorker implements AutoCloseable {
             request.beforeProbe().run();
             if (cancellation.isCancelled()) return cancelled();
             if (System.nanoTime() - deadline >= 0) return local("QUEUE_DEADLINE_EXCEEDED");
+            if (request.layer() == CameraStatusLayer.MEDIA)
+                return mediaProbe.execute(
+                        request.checkId(),
+                        request.traceId(),
+                        request.mediaProfile(),
+                        request.authorization(),
+                        deadline,
+                        cancellation);
+            if (request.layer() == CameraStatusLayer.UPSTREAM)
+                return platformProbe == null
+                        ? local("PLATFORM_STATUS_UNAVAILABLE")
+                        : platformProbe.execute(
+                                request.mediaProfile(),
+                                request.authorization(),
+                                deadline,
+                                cancellation);
             var target = request.target();
             if (request.targetResolver() != null) {
                 try {
@@ -292,7 +407,7 @@ public final class CameraStatusWorker implements AutoCloseable {
             return true;
         }
 
-        private void finish(RtspDescribeProbe.Result result) {
+        private void finish(CameraProbeResult result) {
             synchronized (this) {
                 if (finished) return;
                 finished = true;

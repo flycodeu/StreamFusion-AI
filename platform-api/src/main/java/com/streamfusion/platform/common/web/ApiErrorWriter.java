@@ -3,7 +3,7 @@ package com.streamfusion.platform.common.web;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.response.R;
-import com.streamfusion.platform.diagnostics.DiagnosticLog;
+import com.streamfusion.platform.monitor.diagnostics.DiagnosticLog;
 import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;

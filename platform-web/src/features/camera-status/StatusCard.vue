@@ -5,13 +5,28 @@ import { VideoCamera } from '@element-plus/icons-vue'
 import type { StatusChannel, StatusProfile } from '../../api/camera-status/types'
 import { addressLabel, addressText } from '../camera/address'
 import { formatDateTime } from '../../utils/dateTime'
-import { connectionLabels, representativeConnection, representativeProfile } from './health'
+import {
+  connectionLabels,
+  mediaLabels,
+  representativeConnection,
+  representativeProfile,
+  upstreamLabels,
+} from './health'
 import { observationSpan } from './timeline'
 
 const props = defineProps<{ channel: StatusChannel }>()
 const emit = defineEmits<{ details: [channel: StatusChannel, profile: StatusProfile] }>()
 const profile = computed(() => representativeProfile(props.channel))
-const state = computed(() => representativeConnection(props.channel))
+const state = computed(() => representativeConnection(props.channel, 'MEDIA'))
+const platform = computed(
+  () =>
+    !!profile.value?.upstream &&
+    profile.value.upstream.blockingReasonCode !== 'STATUS_LAYER_NOT_APPLICABLE',
+)
+const media = computed(() =>
+  platform.value ? (profile.value?.upstream ?? null) : (profile.value?.media ?? null),
+)
+const labels = computed(() => (platform.value ? upstreamLabels : mediaLabels))
 const connection = computed(() =>
   props.channel.lifecycle === 'DISABLED'
     ? '已停用'
@@ -19,17 +34,18 @@ const connection = computed(() =>
       ? '待归档'
       : !profile.value
         ? '无可用码流'
-        : connectionLabels[state.value],
+        : connectionLabels[representativeConnection(props.channel)],
 )
 const failureSince = computed(() =>
-  profile.value?.configurationCurrent && profile.value.observation?.value === 'FAILED'
-    ? profile.value.timeline?.stateSince
+  media.value?.configurationCurrent && media.value.observation?.value === 'FAILED'
+    ? media.value.timeline?.stateSince
     : null,
 )
 const lastResult = computed(() => {
-  const fact = profile.value?.observation
+  const fact = media.value?.observation
   if (!fact) return '暂无检测记录'
-  return `上次${fact.value === 'ACCESSIBLE' ? '连接通过' : fact.value === 'FAILED' ? '连接异常' : '检测待适配'}`
+  if (platform.value) return fact.value === 'ACCESSIBLE' ? '平台报告在线' : '平台报告离线'
+  return `上次${fact.value === 'ACCESSIBLE' ? '采样收到视频帧' : fact.value === 'FAILED' ? '采样收帧异常' : '检测待适配'}`
 })
 </script>
 
@@ -54,19 +70,20 @@ const lastResult = computed(() => {
       <ElIcon class="camera-symbol" aria-hidden="true"><VideoCamera /></ElIcon>
     </header>
     <div class="card-states">
-      <div class="connection-state">
-        <span>连接</span><strong><i class="state-dot" aria-hidden="true" />{{ connection }}</strong>
-      </div>
       <div class="video-state">
-        <span>视频流</span><span>{{ channel.lifecycle !== 'ENABLED' ? '未启用' : '未检测' }}</span>
+        <span>{{ platform ? '平台状态' : '视频收帧' }}</span
+        ><strong><i class="state-dot" aria-hidden="true" />{{ labels[state] }}</strong>
+      </div>
+      <div v-if="!platform" class="connection-state">
+        <span>连接</span><strong><i class="state-dot" aria-hidden="true" />{{ connection }}</strong>
       </div>
     </div>
     <dl class="card-times">
       <div>
         <dt>最近检查</dt>
         <dd>
-          <time v-if="profile?.observation" :datetime="profile.observation.observedAt">{{
-            formatDateTime(profile.observation.observedAt)
+          <time v-if="media?.observation" :datetime="media.observation.observedAt">{{
+            formatDateTime(media.observation.observedAt)
           }}</time
           ><span v-else>暂无记录</span>
         </dd>
@@ -79,11 +96,11 @@ const lastResult = computed(() => {
       </div>
       <div v-if="failureSince">
         <dt>观测跨度</dt>
-        <dd :title="'截止最近检查，不是连续离线时长'">{{ observationSpan(profile) }}</dd>
+        <dd :title="'截止最近检查，不是连续离线时长'">{{ observationSpan(media) }}</dd>
       </div>
     </dl>
     <footer class="camera-card-footer">
-      <span v-if="profile?.observation" class="last-check">{{ lastResult }}</span>
+      <span v-if="media?.observation" class="last-check">{{ lastResult }}</span>
       <ElButton v-if="profile" link type="primary" @click="emit('details', channel, profile)"
         >详情</ElButton
       >
@@ -152,13 +169,21 @@ const lastResult = computed(() => {
 .card-states span {
   color: var(--text-secondary);
 }
-.connection-state strong {
+.video-state strong {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   color: var(--state-color);
   font-size: 13px;
   font-weight: 600;
+}
+.connection-state strong {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+.connection-state .state-dot {
+  display: none;
 }
 .state-dot {
   width: 6px;

@@ -3,10 +3,6 @@ package com.streamfusion.platform.camera.status;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.incrementer.DefaultIdentifierGenerator;
-import com.streamfusion.platform.access.mapper.AccessMapper;
-import com.streamfusion.platform.access.service.AccessService;
-import com.streamfusion.platform.auth.pojo.dto.SessionPrincipalDto;
-import com.streamfusion.platform.auth.service.CurrentUserService;
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
 import com.streamfusion.platform.camera.mapper.CameraChannelMapper;
 import com.streamfusion.platform.camera.mapper.CameraProfileMapper;
@@ -19,8 +15,12 @@ import com.streamfusion.platform.camera.service.CameraRtspTargetService;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.validation.DecimalInput;
-import com.streamfusion.platform.diagnostics.DiagnosticLog;
-import com.streamfusion.platform.user.service.UserService;
+import com.streamfusion.platform.monitor.diagnostics.DiagnosticLog;
+import com.streamfusion.platform.system.access.mapper.AccessMapper;
+import com.streamfusion.platform.system.access.service.AccessService;
+import com.streamfusion.platform.system.auth.pojo.dto.SessionPrincipalDto;
+import com.streamfusion.platform.system.auth.service.CurrentUserService;
+import com.streamfusion.platform.system.user.service.UserService;
 import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
@@ -48,13 +48,12 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
-/** Manual control checks. No user session secret or plaintext connection is stored. */
+/** Explicit checks; no user session secret or plaintext connection is stored. */
 @Service
 @RequiredArgsConstructor
 public class CameraStatusService {
     private static final Logger LOG = LoggerFactory.getLogger(CameraStatusService.class);
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
-    private static final String PROBE = "RTSP_DESCRIBE";
     private final CameraStatusCheckMapper checks;
     private final CameraStatusSnapshotMapper snapshots;
     private final CameraChannelMapper channels;
@@ -77,7 +76,7 @@ public class CameraStatusService {
 
     public CameraStatusCheckVo createManual(
             String cameraId, CameraStatusCheckCommand command, String sessionId) {
-        if (command == null || sessionId == null || sessionId.isEmpty())
+        if (command == null || command.layer() == null || sessionId == null || sessionId.isEmpty())
             throw error(ErrorCode.VALIDATION_ERROR);
         long id = DecimalInput.id(cameraId, "cameraId");
         long profileId = DecimalInput.id(command.streamProfileId(), "streamProfileId");
@@ -88,7 +87,7 @@ public class CameraStatusService {
                     cameras.requireVisible(id, actor);
                     var camera = lockCamera(id);
                     if (camera == null) throw error(ErrorCode.NOT_FOUND);
-                    var input = requestInput(id, profileId);
+                    var input = requestInput(id, profileId, command.layer());
                     var existing = checks.byRequest(actor.userId(), command.clientRequestId());
                     if (existing != null) {
                         if (!MessageDigest.isEqual(
@@ -102,6 +101,11 @@ public class CameraStatusService {
                     CameraRequestKey.requireFresh(requested, nowInstant());
                     var profile = lockProfile(id, profileId);
                     if (profile == null) throw error(ErrorCode.NOT_FOUND);
+                    if (targets.effectiveLayer(profileId, command.layer()) != command.layer()
+                            || command.layer() == CameraStatusLayer.UPSTREAM
+                                    && targets.effectiveLayer(profileId, CameraStatusLayer.CONTROL)
+                                            != CameraStatusLayer.UPSTREAM)
+                        throw error(ErrorCode.CONFLICT).diagnosed("STATUS_LAYER_NOT_APPLICABLE");
                     String keyId = crypto.activeKeyId();
                     var target = targets.inspect(camera, profile, keyId, () -> {});
                     if (target.blockingReasonCode() != null)
@@ -141,7 +145,8 @@ public class CameraStatusService {
                             crypto.digest(keyId, "camera-status-session", sessionId));
                     check.setConnectionKeyId(keyId);
                     check.setConnectionDigest(target.connectionDigest());
-                    check.setProbeKind(PROBE);
+                    check.setLayer(command.layer().name());
+                    check.setProbeKind(command.layer().probeKind());
                     check.setExecutionState("QUEUED");
                     String trace = MDC.get("traceId");
                     check.setTraceId(
@@ -179,25 +184,48 @@ public class CameraStatusService {
                 submitted.remove(id, execution);
                 return;
             }
+            var profile = profiles.selectById(check.getProfileId());
             var inspection =
                     targets.inspect(
                             channels.selectById(check.getCameraId()),
-                            profiles.selectById(check.getProfileId()),
+                            profile,
                             check.getConnectionKeyId(),
                             () -> checkWork(id, execution.claim.get(), sessionId));
             CameraRtspTargetService.requireRunnable(inspection);
-            var submission =
-                    worker.trySubmit(
-                            new CameraStatusWorker.Request(
+            var request =
+                    "UPSTREAM".equals(check.getLayer())
+                            ? CameraStatusWorker.Request.upstream(
                                     id,
                                     check.getSourceId(),
                                     check.getProfileId(),
                                     check.getTraceId(),
-                                    inspection.target(),
-                                    Duration.ofMillis(
-                                            Math.min(properties.getProbeTimeoutMs(), remaining)),
+                                    profile,
+                                    Duration.ofMillis(Math.min(10_000, remaining)),
                                     () -> execution.claim.set(claim(id, sessionId)),
-                                    inspection.targetResolver()));
+                                    () -> checkWork(id, execution.claim.get(), sessionId))
+                            : "MEDIA".equals(check.getLayer())
+                                    ? CameraStatusWorker.Request.media(
+                                            id,
+                                            check.getSourceId(),
+                                            check.getProfileId(),
+                                            check.getTraceId(),
+                                            profile,
+                                            Duration.ofMillis(Math.min(18_000, remaining)),
+                                            () -> execution.claim.set(claim(id, sessionId)),
+                                            () -> checkWork(id, execution.claim.get(), sessionId))
+                                    : new CameraStatusWorker.Request(
+                                            id,
+                                            check.getSourceId(),
+                                            check.getProfileId(),
+                                            check.getTraceId(),
+                                            inspection.target(),
+                                            Duration.ofMillis(
+                                                    Math.min(
+                                                            properties.getProbeTimeoutMs(),
+                                                            remaining)),
+                                            () -> execution.claim.set(claim(id, sessionId)),
+                                            inspection.targetResolver());
+            var submission = worker.trySubmit(request);
             submission
                     .completion()
                     .whenComplete(
@@ -209,11 +237,12 @@ public class CameraStatusService {
                                             sessionId,
                                             failure == null && result != null
                                                     ? result
-                                                    : new RtspDescribeProbe.Result(
-                                                            RtspDescribeProbe.Outcome.NOT_EXECUTED,
+                                                    : new CameraProbeResult(
+                                                            CameraProbeResult.Outcome.NOT_EXECUTED,
                                                             "PROBE_UNAVAILABLE",
                                                             0,
-                                                            0));
+                                                            0,
+                                                            null));
                                 } catch (RuntimeException ex) {
                                     LOG.warn(
                                             "Camera status completion unavailable traceId={} checkId={}",
@@ -306,7 +335,7 @@ public class CameraStatusService {
         if (reason != null) throw new CameraAdapterException(reason);
     }
 
-    public void complete(long id, String claim, String sessionId, RtspDescribeProbe.Result result) {
+    public void complete(long id, String claim, String sessionId, CameraProbeResult result) {
         transaction(
                 () -> {
                     coordination.lockSuperAdminRole();
@@ -337,18 +366,22 @@ public class CameraStatusService {
                                 result);
                         return null;
                     }
-                    if (result.outcome() == RtspDescribeProbe.Outcome.CANCELLED) {
+                    if (result.outcome() == CameraProbeResult.Outcome.CANCELLED) {
                         finish(check, "CANCELLED", safeReason(result.reasonCode()), result);
-                    } else if (result.outcome() == RtspDescribeProbe.Outcome.NOT_EXECUTED) {
+                    } else if (result.outcome() == CameraProbeResult.Outcome.NOT_EXECUTED) {
                         finish(check, "SKIPPED", safeReason(result.reasonCode()), result);
+                    } else if ("MEDIA".equals(check.getLayer()) && !validMediaFact(check, result)) {
+                        finish(check, "SKIPPED", "MEDIA_EVIDENCE_INSUFFICIENT", result);
                     } else {
                         check.setResultValue(result.outcome().name());
                         check.setObservedAt(now());
                         check.setReadAt(check.getObservedAt());
+                        if ("MEDIA".equals(check.getLayer()))
+                            setMediaEvidence(check, result.evidence());
                         check.setValidUntil(
                                 check.getObservedAt()
                                         .plusNanos(properties.getFreshnessMs() * 1_000_000));
-                        var previous = snapshots.selectById(check.getProfileId());
+                        var previous = snapshots.get(check.getProfileId(), check.getLayer());
                         boolean applies =
                                 previous == null
                                         || previous.getCheckRequestedAt()
@@ -362,13 +395,19 @@ public class CameraStatusService {
                             var snapshot = new CameraStatusSnapshotEntity();
                             snapshot.setProfileId(check.getProfileId());
                             snapshot.setCameraId(check.getCameraId());
-                            snapshot.setLayer("CONTROL");
-                            snapshot.setProbeKind(PROBE);
+                            snapshot.setLayer(check.getLayer());
+                            snapshot.setProbeKind(check.getProbeKind());
                             snapshot.setValue(check.getResultValue());
                             snapshot.setReasonCode(check.getReasonCode());
                             snapshot.setObservedAt(check.getObservedAt());
                             snapshot.setReadAt(check.getReadAt());
                             snapshot.setValidUntil(check.getValidUntil());
+                            snapshot.setMediaWindowStartedAt(check.getMediaWindowStartedAt());
+                            snapshot.setMediaWindowEndedAt(check.getMediaWindowEndedAt());
+                            snapshot.setMediaFirstFrames(check.getMediaFirstFrames());
+                            snapshot.setMediaLastFrames(check.getMediaLastFrames());
+                            snapshot.setMediaSampleCount(check.getMediaSampleCount());
+                            snapshot.setMediaMaxGapMs(check.getMediaMaxGapMs());
                             snapshot.setCheckRequestedAt(check.getRequestedAt());
                             snapshot.setCheckId(check.getId());
                             snapshot.setConnectionKeyId(check.getConnectionKeyId());
@@ -376,7 +415,7 @@ public class CameraStatusService {
                             recordTimeline(snapshot, previous, camera, profile);
                             snapshot.setUpdatedAt(now());
                             if (previous == null) snapshots.insert(snapshot);
-                            else snapshots.updateById(snapshot);
+                            else snapshots.update(snapshot);
                         }
                     }
                     return null;
@@ -504,6 +543,8 @@ public class CameraStatusService {
         return plan != null
                 && "ACTIVE".equals(plan.getState())
                 && Objects.equals(plan.getActorUserId(), check.getActorUserId())
+                && MessageDigest.isEqual(
+                        check.getSessionDigest(), planDigest(check.getSessionKeyId(), plan))
                 && !now().isBefore(plan.getStartAt())
                 && now().isBefore(plan.getEndAt())
                 && planActorAllowed(check.getActorUserId(), check.getCameraId());
@@ -514,6 +555,9 @@ public class CameraStatusService {
             CameraStatusPlanEntity plan, CameraStatusPlanTargetEntity target, LocalDateTime slot) {
         var camera = lockCamera(target.getCameraId());
         var profile = lockProfile(target.getCameraId(), target.getProfileId());
+        if (camera == null || profile == null) throw new CameraAdapterException("TARGET_DELETED");
+        var layer =
+                targets.effectiveLayer(profile.getId(), CameraStatusLayer.valueOf(plan.getLayer()));
         var inspected = targets.inspect(camera, profile, target.getConnectionKeyId(), () -> {});
         if (inspected.blockingReasonCode() != null
                 || inspected.connectionDigest() == null
@@ -546,12 +590,13 @@ public class CameraStatusService {
                 crypto.digest(
                         keyId,
                         "camera-status-request",
-                        requestInput(check.getCameraId(), check.getProfileId())));
+                        requestInput(check.getCameraId(), check.getProfileId(), layer)));
         check.setSessionKeyId(keyId);
-        check.setSessionDigest(crypto.digest(keyId, "camera-status-plan", plan.getId().toString()));
+        check.setSessionDigest(planDigest(keyId, plan));
         check.setConnectionKeyId(target.getConnectionKeyId());
         check.setConnectionDigest(target.getConnectionDigest());
-        check.setProbeKind(PROBE);
+        check.setLayer(layer.name());
+        check.setProbeKind(layer.probeKind());
         check.setExecutionState("QUEUED");
         check.setTraceId(UUID.randomUUID().toString().replace("-", ""));
         check.setRequestedAt(now());
@@ -563,6 +608,10 @@ public class CameraStatusService {
         checks.insert(check);
         logCheck(check, "QUEUED", null);
         return CameraStatusCheckVo.from(check);
+    }
+
+    private byte[] planDigest(String keyId, CameraStatusPlanEntity plan) {
+        return crypto.digest(keyId, "camera-status-plan", plan.getId() + "/" + plan.getVersion());
     }
 
     private boolean sameSession(CameraStatusCheckEntity check, String sessionId) {
@@ -588,10 +637,7 @@ public class CameraStatusService {
     }
 
     private boolean finish(
-            CameraStatusCheckEntity check,
-            String state,
-            String reason,
-            RtspDescribeProbe.Result result) {
+            CameraStatusCheckEntity check, String state, String reason, CameraProbeResult result) {
         check.setReasonCode(reason);
         LocalDateTime finished = now();
         boolean updated =
@@ -623,6 +669,24 @@ public class CameraStatusService {
                                         .set(
                                                 CameraStatusCheckEntity::getValidUntil,
                                                 check.getValidUntil())
+                                        .set(
+                                                CameraStatusCheckEntity::getMediaWindowStartedAt,
+                                                check.getMediaWindowStartedAt())
+                                        .set(
+                                                CameraStatusCheckEntity::getMediaWindowEndedAt,
+                                                check.getMediaWindowEndedAt())
+                                        .set(
+                                                CameraStatusCheckEntity::getMediaFirstFrames,
+                                                check.getMediaFirstFrames())
+                                        .set(
+                                                CameraStatusCheckEntity::getMediaLastFrames,
+                                                check.getMediaLastFrames())
+                                        .set(
+                                                CameraStatusCheckEntity::getMediaSampleCount,
+                                                check.getMediaSampleCount())
+                                        .set(
+                                                CameraStatusCheckEntity::getMediaMaxGapMs,
+                                                check.getMediaMaxGapMs())
                                         .set(
                                                 CameraStatusCheckEntity::getSnapshotApplied,
                                                 Boolean.TRUE.equals(check.getSnapshotApplied()))
@@ -742,9 +806,51 @@ public class CameraStatusService {
         return template.execute(status -> action.get());
     }
 
-    private static Map<String, String> requestInput(long cameraId, long profileId) {
+    private static Map<String, String> requestInput(
+            long cameraId, long profileId, CameraStatusLayer layer) {
         return Map.of(
-                "cameraId", Long.toString(cameraId), "streamProfileId", Long.toString(profileId));
+                "cameraId",
+                Long.toString(cameraId),
+                "streamProfileId",
+                Long.toString(profileId),
+                "layer",
+                layer.name());
+    }
+
+    private static void setMediaEvidence(
+            CameraStatusCheckEntity check, CameraMediaEvidence evidence) {
+        if (evidence == null) return;
+        check.setMediaWindowStartedAt(LocalDateTime.ofInstant(evidence.windowStartedAt(), ZONE));
+        check.setMediaWindowEndedAt(LocalDateTime.ofInstant(evidence.windowEndedAt(), ZONE));
+        check.setMediaFirstFrames(evidence.firstFrames());
+        check.setMediaLastFrames(evidence.lastFrames());
+        check.setMediaSampleCount(evidence.sampleCount());
+        check.setMediaMaxGapMs(evidence.maxGapMs());
+    }
+
+    private boolean validMediaFact(CameraStatusCheckEntity check, CameraProbeResult result) {
+        var evidence = result.evidence();
+        if (evidence == null
+                || evidence.windowStartedAt() == null
+                || evidence.windowEndedAt() == null) return false;
+        boolean consistentResult =
+                result.outcome() == CameraProbeResult.Outcome.ACCESSIBLE
+                                && "MEDIA_RECEIVING".equals(result.reasonCode())
+                                && evidence.lastFrames() > evidence.firstFrames()
+                        || result.outcome() == CameraProbeResult.Outcome.FAILED
+                                && "MEDIA_NO_FRAMES".equals(result.reasonCode())
+                                && evidence.lastFrames() == evidence.firstFrames();
+        return consistentResult
+                && Duration.between(evidence.windowStartedAt(), evidence.windowEndedAt()).toMillis()
+                        >= 5_000
+                && !evidence.windowStartedAt()
+                        .truncatedTo(ChronoUnit.MILLIS)
+                        .isBefore(instant(check.getStartedAt()))
+                && !evidence.windowEndedAt().truncatedTo(ChronoUnit.MILLIS).isAfter(nowInstant())
+                && evidence.firstFrames() >= 0
+                && evidence.lastFrames() >= evidence.firstFrames()
+                && evidence.sampleCount() >= 3
+                && evidence.maxGapMs() >= 0;
     }
 
     private Instant nowInstant() {

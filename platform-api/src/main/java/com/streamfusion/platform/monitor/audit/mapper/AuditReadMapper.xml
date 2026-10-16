@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.streamfusion.platform.monitor.audit.mapper.AuditReadMapper">
+    <sql id="summaryColumns">
+        l.id, l.actor_id, u.username, u.nickname, l.target_type, l.target_id,
+        l.action, l.result, l.reason_code, l.trace_id, l.created_at
+    </sql>
+    <sql id="filters">
+            <if test="q.userPattern != null">
+                AND (u.username LIKE #{q.userPattern} ESCAPE '!' OR u.nickname LIKE #{q.userPattern} ESCAPE '!'
+                <if test="q.actorId != null">OR l.actor_id = #{q.actorId}</if>)
+            </if>
+            <if test="q.action != null">AND l.action = #{q.action}</if>
+            <if test="q.module != null">AND l.target_type = #{q.module}</if>
+            <if test="q.result != null">AND l.result = #{q.result}</if>
+            <if test="q.traceId != null">AND l.trace_id = #{q.traceId}</if>
+            <if test="q.startTime != null">AND l.created_at &gt;= #{q.startTime}</if>
+            <if test="q.endTime != null">AND l.created_at &lt;= #{q.endTime}</if>
+    </sql>
+    <select id="page" resultType="com.streamfusion.platform.monitor.audit.pojo.dto.AuditRow">
+        SELECT <include refid="summaryColumns"/>, l.changes
+        FROM sys_operation_log l LEFT JOIN sys_user u ON u.id = l.actor_id
+        <where><include refid="filters"/></where>
+        ORDER BY l.created_at DESC, l.id DESC
+    </select>
+    <select id="exportBatch" resultType="com.streamfusion.platform.monitor.audit.pojo.dto.AuditRow" timeout="5">
+        SELECT <include refid="summaryColumns"/>,
+          CASE WHEN LENGTH(l.changes) &lt;= 65536 THEN l.changes ELSE NULL END AS changes,
+          CASE WHEN LENGTH(l.changes) &gt; 65536 THEN TRUE ELSE FALSE END AS export_oversize
+        FROM sys_operation_log l LEFT JOIN sys_user u ON u.id=l.actor_id
+        <where>
+            <include refid="filters"/>
+            <if test="upperTime != null">AND (l.created_at &lt; #{upperTime} OR (l.created_at=#{upperTime} AND l.id &lt;= #{upperId}))</if>
+            <if test="afterTime != null">AND (l.created_at &lt; #{afterTime} OR (l.created_at=#{afterTime} AND l.id &lt; #{afterId}))</if>
+        </where>
+        ORDER BY l.created_at DESC,l.id DESC LIMIT 100
+    </select>
+    <select id="detail" resultType="com.streamfusion.platform.monitor.audit.pojo.dto.AuditRow">
+        SELECT <include refid="summaryColumns"/>, l.source_ip, l.changes
+        FROM sys_operation_log l LEFT JOIN sys_user u ON u.id = l.actor_id
+        WHERE l.id = #{id}
+    </select>
+    <select id="latestIpReleases" resultType="com.streamfusion.platform.monitor.audit.pojo.dto.AuditRow">
+        SELECT l.target_id, l.actor_id, l.changes
+        FROM sys_ip_block b
+        JOIN sys_operation_log l ON l.id = (
+            SELECT latest.id FROM sys_operation_log latest
+            WHERE latest.target_type = 'IP_BLOCK' AND latest.target_id = b.id
+              AND latest.action = 'IP_BLOCK_RELEASE' AND latest.result = 'SUCCESS'
+            ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+        )
+        WHERE
+        <choose>
+            <when test="ids != null and !ids.isEmpty()">
+                b.id IN <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+            </when>
+            <otherwise>1=0</otherwise>
+        </choose>
+    </select>
+</mapper>

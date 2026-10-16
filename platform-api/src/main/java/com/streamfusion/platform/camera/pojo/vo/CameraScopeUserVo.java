@@ -1,6 +1,6 @@
 package com.streamfusion.platform.camera.pojo.vo;
 
-import com.streamfusion.platform.user.pojo.vo.DepartmentVo;
+import com.streamfusion.platform.system.user.pojo.vo.DepartmentVo;
 import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.List;
 
