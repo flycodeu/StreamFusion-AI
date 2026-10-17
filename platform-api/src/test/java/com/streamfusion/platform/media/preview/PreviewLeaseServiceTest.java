@@ -627,22 +627,29 @@ class PreviewLeaseServiceTest {
                 .when(media)
                 .openViewer(any(), anyString(), anyString(), any());
         var tasks = new java.util.ArrayList<CompletableFuture<PreviewModels.LeaseView>>();
-        for (int index = 0; index < 5; index++)
-            tasks.add(CompletableFuture.supplyAsync(() -> service.create(input("MAIN"))));
-        try {
-            await(started);
-            org.awaitility.Awaitility.await()
-                    .atMost(java.time.Duration.ofSeconds(1))
-                    .untilAsserted(
-                            () -> assertThat(service.capacity().occupiedSessions()).isEqualTo(5));
-            verify(media, times(4)).openViewer(any(), anyString(), anyString(), any());
-        } finally {
-            proceed.countDown();
-        }
-        for (var task : tasks) {
-            var view = task.get(3, TimeUnit.SECONDS);
-            assertThat(view.state()).isEqualTo("READY");
-            service.delete(view.leaseId());
+        // Five callers must run independently of the machine's common-pool parallelism.
+        try (var callers = java.util.concurrent.Executors.newFixedThreadPool(5)) {
+            for (int index = 0; index < 5; index++)
+                tasks.add(
+                        CompletableFuture.supplyAsync(
+                                () -> service.create(input("MAIN")), callers));
+            try {
+                await(started);
+                org.awaitility.Awaitility.await()
+                        .atMost(java.time.Duration.ofSeconds(1))
+                        .untilAsserted(
+                                () ->
+                                        assertThat(service.capacity().occupiedSessions())
+                                                .isEqualTo(5));
+                verify(media, times(4)).openViewer(any(), anyString(), anyString(), any());
+            } finally {
+                proceed.countDown();
+            }
+            for (var task : tasks) {
+                var view = task.get(3, TimeUnit.SECONDS);
+                assertThat(view.state()).isEqualTo("READY");
+                service.delete(view.leaseId());
+            }
         }
     }
 
