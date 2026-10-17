@@ -46,9 +46,11 @@ streamfusion:
   work-dir: ${SF_API_WORK_DIR:.run}
   shutdown-grace: ${SF_API_SHUTDOWN_GRACE:15s}
 platform:
+  preview-node:
+    connection-file: ${SF_PREVIEW_NODE_CONNECTION_FILE:}
   preview:
-    max-sessions: ${SF_PREVIEW_MAX_SESSIONS:36}
-    max-transcodes: ${SF_PREVIEW_MAX_TRANSCODES:2}
+    max-sessions: ${SF_PREVIEW_MAX_SESSIONS:64}
+    max-transcodes: ${SF_PREVIEW_MAX_TRANSCODES:64}
   login-record:
     activity-interval: ${SF_LOGIN_ACTIVITY_INTERVAL:60s}
     ipv4-database: ${SF_IP_REGION_V4_DB:.run/ip-region/ip2region_v4.xdb}

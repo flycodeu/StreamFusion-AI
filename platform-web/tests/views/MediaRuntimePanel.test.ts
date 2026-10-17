@@ -18,7 +18,7 @@ vi.mock('element-plus', async () => {
   const { defineComponent, h } = await import('vue')
   return {
     ...Object.fromEntries(
-      ['ElButton', 'ElEmpty', 'ElOption', 'ElSelect', 'ElTag'].map((name) => [
+      ['ElDialog', 'ElButton', 'ElEmpty', 'ElOption', 'ElSelect', 'ElTag'].map((name) => [
         name,
         defineComponent({
           inheritAttrs: false,

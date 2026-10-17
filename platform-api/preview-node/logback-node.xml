@@ -1,0 +1,8 @@
+<configuration>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder><pattern>%date{ISO8601,UTC} level=%level service=preview-node traceId=%X{traceId:-} %msg%n</pattern></encoder>
+    </appender>
+    <root level="WARN"><appender-ref ref="CONSOLE"/></root>
+    <logger name="com.streamfusion.previewnode" level="INFO"/>
+    <logger name="com.streamfusion.platform.media.preview" level="INFO"/>
+</configuration>

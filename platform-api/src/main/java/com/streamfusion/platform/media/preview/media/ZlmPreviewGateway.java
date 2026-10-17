@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.streamfusion.platform.media.preview.PreviewDeadline;
 import com.streamfusion.platform.media.preview.PreviewFailure;
 import com.streamfusion.platform.media.preview.PreviewModels;
-import com.streamfusion.platform.media.runtime.service.MediaRuntimeService;
 import com.streamfusion.platform.media.runtime.service.MediaRuntimeService.ActiveZlm;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
@@ -42,7 +41,7 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
                     .followRedirects(HttpClient.Redirect.NEVER)
                     .build();
     private final ObjectMapper json;
-    private final MediaRuntimeService runtimes;
+    private final com.streamfusion.platform.media.preview.execution.PreviewRuntimeProvider runtimes;
     private final PreviewTranscodeRegistry registry;
     private final PreviewProcessInspector processes;
     private final java.util.concurrent.ConcurrentMap<String, Long> uncertainOpens =
@@ -50,7 +49,7 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
 
     public ZlmPreviewGateway(
             ObjectMapper json,
-            MediaRuntimeService runtimes,
+            com.streamfusion.platform.media.preview.execution.PreviewRuntimeProvider runtimes,
             PreviewTranscodeRegistry registry,
             PreviewProcessInspector processes) {
         this.json = json;
@@ -84,7 +83,7 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
     public Stream openViewer(Stream upstream, String app, String id, PreviewDeadline deadline) {
         if (!upstream.app().equals(app)
                 || !app.matches("sf_preview_[a-f0-9]{12}")
-                || !upstream.id().matches("[a-f0-9]{32}")
+                || !upstream.id().matches("[a-f0-9]{32}(?:h264)?")
                 || !upstream.proxyKey().equals(VHOST + "/" + app + "/" + upstream.id())
                 || !id.matches("[a-f0-9]{32}")
                 || upstream.id().equals(id))
@@ -114,6 +113,27 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
                         && configs.get(0).path("general.streamNoneReaderDelayMS").asLong(0) < 20000)
             throw new PreviewFailure("ZLM_RTC_NOT_CONFIGURED");
         return configs.get(0);
+    }
+
+    /** Dedicated-node preflight; reads configuration without pulling any camera. */
+    public void checkNodeRuntime(
+            ActiveZlm runtime,
+            java.nio.file.Path ffmpeg,
+            String mediaAddress,
+            PreviewDeadline deadline) {
+        var config = proxyConfig(runtime, deadline, false);
+        if (!mediaAddress.equals(config.path("rtc.externIP").asText())
+                || config.path("rtc.port").asInt() < 1
+                || config.path("rtc.tcpPort").asInt() < 1
+                || !"0".equals(config.path("api.apiDebug").asText())
+                || !java.util.Set.of("127.0.0.1", "127.0.0.1,::1")
+                        .contains(config.path("http.allow_ip_range").asText())
+                || !ffmpeg.toAbsolutePath()
+                        .normalize()
+                        .toString()
+                        .replace('\\', '/')
+                        .equals(config.path("ffmpeg.bin").asText().replace('\\', '/')))
+            throw new PreviewFailure("NODE_MEDIA_CONFIGURATION_INVALID");
     }
 
     private Stream addProxy(
@@ -158,15 +178,53 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
 
     @Override
     public Transcode transcode(Stream source, String outputId, PreviewDeadline deadline) {
-        if (!source.app().matches("sf_preview_[a-f0-9]{12}")
-                || !source.id().matches("[a-f0-9]{32}")
-                || !(source.id() + "h264").equals(outputId))
-            throw new PreviewFailure("TRANSCODE_NOT_CONFIGURED");
+        return transcode(source, outputId, null, deadline);
+    }
+
+    @Override
+    public String transcodeConfiguration(Stream source, PreviewDeadline deadline) {
+        return encodingFingerprint(encodingConfig(source, deadline));
+    }
+
+    private JsonNode encodingConfig(Stream source, PreviewDeadline deadline) {
         JsonNode configs =
                 call(source.runtime(), "getServerConfig", Map.of(), deadline).path("data");
         if (!configs.isArray() || configs.isEmpty())
             throw new PreviewFailure("TRANSCODE_NOT_CONFIGURED");
-        JsonNode config = configs.get(0);
+        return configs.get(0);
+    }
+
+    private String encodingFingerprint(JsonNode config) {
+        try {
+            String value =
+                    config.path("ffmpeg.bin").asText()
+                            + "\n"
+                            + config.path("ffmpeg.cmd").asText()
+                            + "\n"
+                            + config.path("rtsp.port").asText()
+                            + "\n"
+                            + config.path("rtmp.port").asText()
+                            + "\n"
+                            + runtimes.activeFfmpeg().map(Object::toString).orElse("");
+            return java.util.HexFormat.of()
+                    .formatHex(
+                            java.security.MessageDigest.getInstance("SHA-256")
+                                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 unavailable", ex);
+        }
+    }
+
+    @Override
+    public Transcode transcode(
+            Stream source, String outputId, String configuration, PreviewDeadline deadline) {
+        if (!source.app().matches("sf_preview_[a-f0-9]{12}")
+                || !source.id().matches("[a-f0-9]{32}")
+                || !(source.id() + "h264").equals(outputId))
+            throw new PreviewFailure("TRANSCODE_NOT_CONFIGURED");
+        JsonNode config = encodingConfig(source, deadline);
+        if (configuration != null && !configuration.equals(encodingFingerprint(config)))
+            throw new PreviewFailure("CONFIGURATION_CHANGED");
         String command = config.path("ffmpeg.cmd").asText();
         String binary = config.path("ffmpeg.bin").asText();
         var selected = runtimes.activeFfmpeg();
@@ -174,7 +232,8 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
                 || binary.isBlank()
                 || !command.startsWith("%s ")
                 || binary.chars().anyMatch(Character::isWhitespace)
-                || !command.matches("(?s).*-(?:c:v|vcodec)\\s+libx264(?:\\s.*|$)"))
+                || !command.matches(
+                        "(?s).*-(?:c:v|vcodec)\\s+(?:libx264|h264_nvenc|h264_qsv|h264_amf)(?:\\s.*|$)"))
             throw new PreviewFailure("TRANSCODE_NOT_CONFIGURED");
         try {
             Path configured = Path.of(binary);

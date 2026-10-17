@@ -1,0 +1,30 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>S3 本机与 A/B 预览验证</title>
+<style>body{font:15px system-ui;background:#f4f6f9;color:#203047;max-width:1200px;margin:30px auto;padding:16px}button{padding:12px 20px;background:#126e8e;color:white;border:0;border-radius:6px}#videos{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}video{width:100%;background:#14212a}pre{white-space:pre-wrap;background:white;padding:16px}</style>
+<h1>S3 本机与 A/B 预览验证</h1><p>三个独立 ZLM，两个独立节点 JVM；第 4 个观看复用 A 的源与转码。</p><button id="run">开始四路验证</button><div id="videos"></div><pre id="result">等待开始</pre>
+<script>
+const out=document.getElementById('result'),active=[],cases=[];
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+async function call(path,body=''){const r=await fetch(path,{method:'POST',body});const v=await r.json();if(!r.ok)throw Error(v.error);return v;}
+document.getElementById('run').onclick=async()=>{
+ document.getElementById('run').disabled=true;
+ try {
+  for(let slot=1;slot<=4;slot++){
+   const lease=await call('/start/'+slot),pc=new RTCPeerConnection({iceServers:[]}),video=document.createElement('video');video.autoplay=true;video.muted=true;video.playsInline=true;
+   const card=document.createElement('div');card.append(document.createTextNode('观看 '+slot+' → '+lease.nodeId+(lease.transcoded?' · H.265 → H.264':' · H.264 直出')),video);document.getElementById('videos').append(card);
+   const entry={lease,pc,video,frames:0};active.push(entry);const frame=()=>{entry.frames++;if(entry.pc.connectionState!=='closed')video.requestVideoFrameCallback(frame)};video.requestVideoFrameCallback(frame);
+   pc.ontrack=e=>{video.srcObject=e.streams[0]||new MediaStream([e.track]);video.play().catch(()=>{})};
+   const t=pc.addTransceiver('video',{direction:'recvonly'});t.setCodecPreferences(RTCRtpReceiver.getCapabilities('video').codecs.filter(c=>/H264|rtx/i.test(c.mimeType)));
+   await pc.setLocalDescription(await pc.createOffer());for(let i=0;i<50&&pc.iceGatheringState!=='complete';i++)await wait(100);
+   await pc.setRemoteDescription(await call('/offer/'+lease.id,pc.localDescription.sdp));
+   for(let i=0;i<150&&entry.frames<15;i++)await wait(100);
+   for(const item of active)await call('/renew/'+item.lease.id);
+   let bytesReceived=0,framesDecoded=0;(await pc.getStats()).forEach(s=>{if(s.type==='inbound-rtp'&&s.kind==='video'){bytesReceived+=s.bytesReceived||0;framesDecoded+=s.framesDecoded||0}});
+   cases.push({slot,nodeId:lease.nodeId,source:lease.transcoded?'h265':'h264',transcoded:lease.transcoded,width:video.videoWidth,height:video.videoHeight,frames:entry.frames,framesDecoded,bytesReceived});out.textContent=JSON.stringify({cases},null,2);
+  }
+  const usage=await call('/state');out.textContent=JSON.stringify({cases,usage},null,2);
+  await wait(3000);
+  for(const item of active){item.pc.close();item.video.srcObject=null;for(let i=0;;i++){try{await call('/stop/'+item.lease.id);break}catch(e){if(e.message!=='CLEANUP_PENDING'||i>=30)throw e;await wait(1000)}}}
+  await call('/result',JSON.stringify({cases,usage}));out.textContent='验证完成，资源已确认回收。\n'+JSON.stringify({cases,usage},null,2);
+ } catch(e){out.textContent='失败：'+e.message;for(const item of active)item.pc.close();await call('/result',JSON.stringify({error:e.message,cases}));}
+};
+</script></html>

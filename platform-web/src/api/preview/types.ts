@@ -67,13 +67,13 @@ export function parsePreviewCapacity(value: unknown): PreviewCapacity {
     observedAt: string(row.observedAt),
   }
   if (
-    result.maxSessions < 1 ||
-    result.maxSessions > 64 ||
+    result.maxSessions < 0 ||
+    result.maxSessions > 1088 ||
     result.occupiedSessions < 0 ||
     result.closingSessions < 0 ||
     result.closingSessions > result.occupiedSessions ||
     result.maxTranscodes < 0 ||
-    result.maxTranscodes > 8 ||
+    result.maxTranscodes > 1088 ||
     (result.occupiedTranscodes !== null && result.occupiedTranscodes < 0) ||
     result.transcodesAvailable !== (result.occupiedTranscodes !== null) ||
     !Number.isFinite(Date.parse(result.observedAt))

@@ -11,6 +11,9 @@ import com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity;
 import com.streamfusion.platform.camera.service.CameraAccessService;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
+import com.streamfusion.platform.media.preview.execution.LocalPreviewExecutor;
+import com.streamfusion.platform.media.preview.execution.PreviewExecutor;
+import com.streamfusion.platform.media.preview.execution.PreviewRecoveryCoordinator;
 import com.streamfusion.platform.media.preview.media.PreviewMediaGateway;
 import com.streamfusion.platform.media.preview.media.PreviewPullRegistry;
 import com.streamfusion.platform.media.preview.media.PreviewTranscodeRegistry;
@@ -95,6 +98,14 @@ class PreviewLeaseServiceTest {
                                                 + invocation.getArgument(2)));
         when(media.stats(any(), anyString(), any())).thenReturn(stats("H264"));
         when(media.exists(any(), any())).thenReturn(true);
+        when(media.transcodeConfiguration(any(), any())).thenReturn("encoding-1");
+        when(media.transcode(any(), anyString(), anyString(), any()))
+                .thenAnswer(
+                        call ->
+                                media.transcode(
+                                        call.getArgument(0),
+                                        call.getArgument(1),
+                                        call.getArgument(3)));
         // Preserve the simple close fixture while exercising the service's shared cleanup budget.
         doAnswer(
                         call -> {
@@ -119,19 +130,73 @@ class PreviewLeaseServiceTest {
                 new PreviewLeaseService(
                         authorization,
                         new PreviewProfileSelector(channels, profiles),
-                        new PreviewRecoveryCoordinator(pulls, media, runtimes),
                         locators,
-                        media,
-                        runtimes,
+                        new LocalPreviewExecutor(
+                                media,
+                                runtimes,
+                                pulls,
+                                transcodes,
+                                new PreviewRecoveryCoordinator(pulls, media, runtimes)),
                         clock,
-                        new PreviewProperties(36, 2),
-                        transcodes,
-                        pulls);
+                        new PreviewProperties(36, 2));
     }
 
     @AfterEach
     void close() {
         service.close();
+    }
+
+    @Test
+    void leaseLifecycleWorksThroughExecutorWithoutLocalRuntimeDependencies() {
+        service.close();
+        var executor = mock(PreviewExecutor.class);
+        when(executor.sessionLimit(anyInt())).thenAnswer(call -> call.getArgument(0));
+        when(executor.transcodeLimit(anyInt())).thenAnswer(call -> call.getArgument(0));
+        service =
+                new PreviewLeaseService(
+                        authorization,
+                        new PreviewProfileSelector(channels, profiles),
+                        locators,
+                        executor,
+                        clock,
+                        new PreviewProperties(64, 64));
+        when(executor.start(anyString(), anyList(), any(), any()))
+                .thenReturn(new PreviewExecutor.Playback("H264", false));
+        var expectedAnswer = new PreviewModels.Answer("v=0\r\n", "answer");
+        when(executor.answer(anyString(), anyString(), any())).thenReturn(expectedAnswer);
+        when(executor.stats(anyString(), any())).thenReturn(stats("H264"));
+        clearInvocations(media, runtimes, pulls, transcodes);
+
+        var request = input("MAIN");
+        var created = service.create(request);
+        assertThat(created.state()).isEqualTo("READY");
+        assertThat(service.create(request).leaseId()).isEqualTo(created.leaseId());
+        assertThat(service.answer(created.leaseId(), new PreviewModels.Offer("v=0\r\n")))
+                .isEqualTo(expectedAnswer);
+        assertThat(service.stats(created.leaseId()).state()).isEqualTo("READY");
+        assertThat(service.renew(created.leaseId()).leaseId()).isEqualTo(created.leaseId());
+        assertThat(service.capacity().occupiedSessions()).isOne();
+        service.delete(created.leaseId());
+        service.delete(created.leaseId());
+        assertThat(service.capacity().occupiedSessions()).isZero();
+
+        verify(executor)
+                .prepare(
+                        eq(created.leaseId()),
+                        eq(new PreviewExecutor.SourceKey(20L, "connection-1")),
+                        eq(request.videoCodecs()),
+                        any());
+        verify(executor)
+                .attachSource(
+                        eq(created.leaseId()),
+                        eq(new PreviewExecutor.SourceKey(20L, "connection-1")),
+                        any(),
+                        any(),
+                        any());
+        verify(executor).start(eq(created.leaseId()), eq(request.videoCodecs()), any(), any());
+        verify(executor).confirmReady(eq(created.leaseId()), any(PreviewDeadline.class));
+        verify(executor).close(eq(created.leaseId()), any());
+        verifyNoInteractions(media, runtimes, pulls, transcodes);
     }
 
     @Test
@@ -197,14 +262,15 @@ class PreviewLeaseServiceTest {
                     new PreviewLeaseService(
                             authorization,
                             new PreviewProfileSelector(channels, profiles),
-                            new PreviewRecoveryCoordinator(restarted, media, runtimes),
                             locators,
-                            media,
-                            runtimes,
+                            new LocalPreviewExecutor(
+                                    media,
+                                    runtimes,
+                                    restarted,
+                                    transcodes,
+                                    new PreviewRecoveryCoordinator(restarted, media, runtimes)),
                             clock,
-                            new PreviewProperties(36, 2),
-                            transcodes,
-                            restarted);
+                            new PreviewProperties(36, 2));
             assertThat(service.create(input("MAIN")).reasonCode())
                     .isEqualTo("PREVIEW_RECOVERY_REQUIRED");
             verify(media, never()).open(any(), any(), any(), any(), any());
@@ -430,11 +496,26 @@ class PreviewLeaseServiceTest {
 
     @Test
     void browsersWithDifferentCodecSupportShareOnlyTheRemotePull() {
+        var converted = new java.util.HashSet<String>();
+        doAnswer(
+                        call -> {
+                            PreviewMediaGateway.Stream source = call.getArgument(0);
+                            String app = call.getArgument(1), id = call.getArgument(2);
+                            if (source.id().endsWith("h264")) converted.add(id);
+                            return new PreviewMediaGateway.Stream(
+                                    source.runtime(),
+                                    app,
+                                    id,
+                                    "__defaultVhost__/" + app + "/" + id);
+                        })
+                .when(media)
+                .openViewer(any(), anyString(), anyString(), any());
         when(media.stats(any(), anyString(), any()))
                 .thenAnswer(
                         call ->
                                 stats(
                                         ((String) call.getArgument(1)).endsWith("h264")
+                                                        || converted.contains(call.getArgument(1))
                                                 ? "H264"
                                                 : "H265"));
         when(media.transcode(any(), any(), any()))
@@ -452,6 +533,117 @@ class PreviewLeaseServiceTest {
         verify(media).transcode(any(), any(), any());
         service.delete(nativeViewer.leaseId());
         assertThat(service.renew(convertedViewer.leaseId()).state()).isEqualTo("READY");
+    }
+
+    @Test
+    void sixtyFourH264ViewersRemainDirectAndHaveIndependentExits() {
+        useLimits(64, 64);
+        var viewers = new java.util.ArrayList<PreviewModels.LeaseView>();
+        for (int index = 0; index < 64; index++) {
+            var view = service.create(input("MAIN"));
+            assertThat(view.state()).isEqualTo("READY");
+            assertThat(view.transcoded()).isFalse();
+            viewers.add(view);
+        }
+        assertThat(service.capacity().occupiedSessions()).isEqualTo(64);
+        assertThatThrownBy(() -> service.create(input("MAIN")))
+                .isInstanceOf(BusinessException.class);
+        verify(media).open(any(), any(), any(), any(), any());
+        verify(media, times(64)).openViewer(any(), any(), any(), any());
+        verify(media, never()).transcodeConfiguration(any(), any());
+        for (var view : viewers) service.delete(view.leaseId());
+        assertThat(service.capacity().occupiedSessions()).isZero();
+    }
+
+    @Test
+    void convertedViewersShareTheEncoderButClosingOneNeverClosesTheOtherExit() {
+        assertSharedViewerRelease(false);
+    }
+
+    @Test
+    void revokingOneViewerNeverClosesAnotherViewersSharedEncoder() {
+        assertSharedViewerRelease(true);
+    }
+
+    private void assertSharedViewerRelease(boolean revoked) {
+        var converted = new java.util.HashSet<String>();
+        doAnswer(
+                        call -> {
+                            PreviewMediaGateway.Stream source = call.getArgument(0);
+                            String app = call.getArgument(1), id = call.getArgument(2);
+                            if (source.id().endsWith("h264")) converted.add(id);
+                            return new PreviewMediaGateway.Stream(
+                                    source.runtime(),
+                                    app,
+                                    id,
+                                    "__defaultVhost__/" + app + "/" + id);
+                        })
+                .when(media)
+                .openViewer(any(), anyString(), anyString(), any());
+        when(media.stats(any(), anyString(), any()))
+                .thenAnswer(
+                        call ->
+                                stats(
+                                        ((String) call.getArgument(1)).endsWith("h264")
+                                                        || converted.contains(call.getArgument(1))
+                                                ? "H264"
+                                                : "H265"));
+        when(media.transcode(any(), any(), any()))
+                .thenAnswer(call -> new PreviewMediaGateway.Transcode(call.getArgument(1), "key"));
+        var first = service.create(input("MAIN"));
+        when(authorization.principal(10L))
+                .thenReturn(new SessionPrincipalDto(2L, 0L, clock.instant()));
+        var second = service.create(input("MAIN"));
+        assertThat(first.state()).isEqualTo("READY");
+        assertThat(second.state()).isEqualTo("READY");
+        verify(media).transcode(any(), any(), any());
+        if (revoked) {
+            when(authorization.stillAllowed(eq(principal), anyLong())).thenReturn(false);
+            service.reap();
+        } else service.delete(first.leaseId());
+        verify(media, never()).close(any(), notNull(PreviewMediaGateway.Transcode.class));
+        assertThat(service.renew(second.leaseId()).state()).isEqualTo("READY");
+        service.delete(second.leaseId());
+        verify(media).close(any(), notNull(PreviewMediaGateway.Transcode.class));
+        assertThat(service.capacity().occupiedSessions()).isZero();
+    }
+
+    @Test
+    void creationConcurrencyIsBoundedAcrossRequests() throws Exception {
+        var started = new CountDownLatch(4);
+        var proceed = new CountDownLatch(1);
+        doAnswer(
+                        call -> {
+                            started.countDown();
+                            await(proceed);
+                            PreviewMediaGateway.Stream source = call.getArgument(0);
+                            String app = call.getArgument(1), id = call.getArgument(2);
+                            return new PreviewMediaGateway.Stream(
+                                    source.runtime(),
+                                    app,
+                                    id,
+                                    "__defaultVhost__/" + app + "/" + id);
+                        })
+                .when(media)
+                .openViewer(any(), anyString(), anyString(), any());
+        var tasks = new java.util.ArrayList<CompletableFuture<PreviewModels.LeaseView>>();
+        for (int index = 0; index < 5; index++)
+            tasks.add(CompletableFuture.supplyAsync(() -> service.create(input("MAIN"))));
+        try {
+            await(started);
+            org.awaitility.Awaitility.await()
+                    .atMost(java.time.Duration.ofSeconds(1))
+                    .untilAsserted(
+                            () -> assertThat(service.capacity().occupiedSessions()).isEqualTo(5));
+            verify(media, times(4)).openViewer(any(), anyString(), anyString(), any());
+        } finally {
+            proceed.countDown();
+        }
+        for (var task : tasks) {
+            var view = task.get(3, TimeUnit.SECONDS);
+            assertThat(view.state()).isEqualTo("READY");
+            service.delete(view.leaseId());
+        }
     }
 
     @Test
@@ -578,14 +770,15 @@ class PreviewLeaseServiceTest {
                 new PreviewLeaseService(
                         authorization,
                         new PreviewProfileSelector(channels, profiles),
-                        new PreviewRecoveryCoordinator(pulls, media, runtimes),
                         locators,
-                        media,
-                        runtimes,
+                        new LocalPreviewExecutor(
+                                media,
+                                runtimes,
+                                pulls,
+                                transcodes,
+                                new PreviewRecoveryCoordinator(pulls, media, runtimes)),
                         clock,
-                        new PreviewProperties(sessions, transcodeLimit),
-                        transcodes,
-                        pulls);
+                        new PreviewProperties(sessions, transcodeLimit));
     }
 
     @Test
@@ -764,7 +957,7 @@ class PreviewLeaseServiceTest {
                 .thenReturn(new PreviewMediaGateway.Transcode("out", "key"));
         assertThat(service.create(input("MAIN")).state()).isEqualTo("READY");
         verify(media).open(any(), any(), any(), any(), same(deadline.get()));
-        verify(media, times(2)).stats(any(), any(), same(deadline.get()));
+        verify(media, times(3)).stats(any(), any(), same(deadline.get()));
         verify(media).transcode(any(), any(), same(deadline.get()));
         assertThat(deadline.get().remaining()).isLessThan(java.time.Duration.ofSeconds(18));
     }
@@ -900,14 +1093,15 @@ class PreviewLeaseServiceTest {
                 new PreviewLeaseService(
                         actualAuthorization,
                         new PreviewProfileSelector(channels, profiles),
-                        new PreviewRecoveryCoordinator(pulls, media, runtimes),
                         locators,
-                        media,
-                        runtimes,
+                        new LocalPreviewExecutor(
+                                media,
+                                runtimes,
+                                pulls,
+                                transcodes,
+                                new PreviewRecoveryCoordinator(pulls, media, runtimes)),
                         clock,
-                        new PreviewProperties(36, 2),
-                        transcodes,
-                        pulls);
+                        new PreviewProperties(36, 2));
         var created = service.create(input("MAIN"));
         when(current.principal()).thenReturn(new SessionPrincipalDto(2L, 0L, clock.instant()));
         when(cameraAccess.readActor()).thenThrow(BusinessException.error(ErrorCode.FORBIDDEN));

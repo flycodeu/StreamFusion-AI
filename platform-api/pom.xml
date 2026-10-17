@@ -133,6 +133,7 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
+                    <mainClass>com.streamfusion.platform.PlatformApplication</mainClass>
                     <excludes>
                         <exclude>
                             <groupId>org.projectlombok</groupId>
@@ -140,6 +141,16 @@
                         </exclude>
                     </excludes>
                 </configuration>
+                <executions>
+                    <execution>
+                        <id>preview-node</id>
+                        <goals><goal>repackage</goal></goals>
+                        <configuration>
+                            <classifier>preview-node</classifier>
+                            <mainClass>com.streamfusion.previewnode.PreviewNodeApplication</mainClass>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

@@ -91,24 +91,26 @@ class PreviewTranscodeRegistryTest {
 
     @Test
     void concurrentDistinctResourcesAreRegisteredWithinAnExplicitBudget() throws Exception {
-        var registry = new PreviewTranscodeRegistry(directory, json, 32);
+        var registry = new PreviewTranscodeRegistry(directory, json);
         try (var workers = Executors.newFixedThreadPool(8)) {
             var work = new ArrayList<java.util.concurrent.Future<?>>();
-            for (int index = 0; index < 32; index++) {
+            for (int index = 0; index < 64; index++) {
                 int target = index;
                 work.add(workers.submit(() -> registry.register(stream(target), output(target))));
             }
             for (var result : work) result.get();
-            assertThat(registry.keys()).hasSize(32);
+            assertThat(registry.keys()).hasSize(64);
+            assertThatThrownBy(() -> registry.register(stream(64), output(64)))
+                    .hasMessage("TRANSCODE_CAPACITY_EXCEEDED");
             assertThat(Files.readString(journal()))
                     .doesNotContain("never-persist-this-secret", "password", "rtsp://");
         } finally {
             registry.close();
         }
-        var restarted = new PreviewTranscodeRegistry(directory, json, 32);
+        var restarted = new PreviewTranscodeRegistry(directory, json);
         try {
-            assertThat(restarted.keys()).hasSize(32);
-            assertThat(restarted.recoverable(runtime)).hasSize(32);
+            assertThat(restarted.keys()).hasSize(64);
+            assertThat(restarted.recoverable(runtime)).hasSize(64);
         } finally {
             restarted.close();
         }

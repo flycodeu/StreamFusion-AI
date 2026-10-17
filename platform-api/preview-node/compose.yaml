@@ -1,0 +1,30 @@
+services:
+  preview:
+    image: ${PREVIEW_IMAGE:?Run package preflight and use its .env file}
+    pull_policy: never
+    init: true
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, SETUID, SETGID, CHOWN, DAC_OVERRIDE, SETPCAP]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 1024
+    mem_limit: ${PREVIEW_MEMORY_LIMIT:-8g}
+    cpus: ${PREVIEW_CPU_LIMIT:-8}
+    ports:
+      - "${PREVIEW_BIND_IP:?Set the node interface address}:9443:9443/tcp"
+      - "${PREVIEW_BIND_IP}:18000:18000/tcp"
+      - "${PREVIEW_BIND_IP}:18000:18000/udp"
+    volumes:
+      - ./config:/config:ro
+      - ./state:/state
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    stop_grace_period: 25s
+    networks: [preview]
+networks:
+  preview:
+    driver: bridge

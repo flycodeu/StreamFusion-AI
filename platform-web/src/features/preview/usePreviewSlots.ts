@@ -43,9 +43,39 @@ export function usePreviewSlots() {
   const frameTimers = new Map<number, ReturnType<typeof setTimeout>>()
   const videoErrors = new Map<number, { video: HTMLVideoElement; listener: () => void }>()
   const recovering = new Map<number, number>()
+  const waitingStarts = new Map<
+    number,
+    { revision: number; resolve: (release: (() => void) | null) => void }
+  >()
+  let starting = 0
   let active = true,
     statsBusy = false
   const current = (index: number, revision: number) => active && revisions.get(index) === revision
+  function drainStarts() {
+    while (starting < 4 && waitingStarts.size) {
+      const [index, pending] = waitingStarts.entries().next().value!
+      waitingStarts.delete(index)
+      if (!current(index, pending.revision)) {
+        pending.resolve(null)
+        continue
+      }
+      starting++
+      let released = false
+      pending.resolve(() => {
+        if (released) return
+        released = true
+        starting--
+        drainStarts()
+      })
+    }
+  }
+  function startWhenReady(index: number, revision: number) {
+    return new Promise<(() => void) | null>((resolve) => {
+      waitingStarts.get(index)?.resolve(null)
+      waitingStarts.set(index, { revision, resolve })
+      drainStarts()
+    })
+  }
   function fail(index: number, revision: number, cause: unknown, code?: string) {
     if (!current(index, revision)) return
     const slot = slots[index]!
@@ -85,6 +115,8 @@ export function usePreviewSlots() {
     if (!slot) return -1
     const revision = (revisions.get(index) || 0) + 1
     revisions.set(index, revision)
+    waitingStarts.get(index)?.resolve(null)
+    waitingStarts.delete(index)
     clearTimeout(frameTimers.get(index))
     frameTimers.delete(index)
     const player = slot.player
@@ -144,7 +176,10 @@ export function usePreviewSlots() {
     slot.stats = null
     slot.state = 'CONNECTING'
     slot.error = null
+    let releaseStart: (() => void) | null = null
     try {
+      releaseStart = await startWhenReady(index, revision)
+      if (!releaseStart || !current(index, revision)) return
       const lease = await player.recoverVideoError(errorCode)
       if (!current(index, revision)) return
       if (!lease) throw new Error(errorCode === 3 ? 'VIDEO_DECODE_FAILED' : 'VIDEO_PLAYBACK_FAILED')
@@ -159,6 +194,7 @@ export function usePreviewSlots() {
       }
       fail(index, revision, failure)
     } finally {
+      releaseStart?.()
       if (recovering.get(index) === revision) recovering.delete(index)
     }
   }
@@ -199,7 +235,10 @@ export function usePreviewSlots() {
       }),
     )
     slot.player = player
+    let releaseStart: (() => void) | null = null
     try {
+      releaseStart = await startWhenReady(index, revision)
+      if (!releaseStart || !current(index, revision)) return
       const lease = await player.connect({
         cameraId: slot.channel.cameraId,
         profileId: slot.profile.streamProfileId,
@@ -217,6 +256,8 @@ export function usePreviewSlots() {
       }
       if (!current(index, revision)) return
       fail(index, revision, failure)
+    } finally {
+      releaseStart?.()
     }
   }
   function firstFrame(index: number) {

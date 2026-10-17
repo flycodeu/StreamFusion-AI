@@ -102,7 +102,7 @@ func TestResultCommitOnlyOnceAndProtectsNewDraft(t *testing.T) {
 	p := plan{ID: pid, ExpectedGeneration: "0", Candidate: rel}
 	req := deploy.Request{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: s.controllerID(), TargetID: tid, JobID: jid, InputHash: hashToken("input"), Candidate: &rel}
 	raw, _ := json.Marshal(req)
-	_, e := s.DB.Exec("INSERT INTO artifacts VALUES(?, 'a', ?,1,?,?)", aid, hashToken("archive"), rel.ImageID, Now())
+	_, e := s.DB.Exec("INSERT INTO artifacts(id,name,archive_sha256,byte_size,image_id,created_at) VALUES(?, 'a', ?,1,?,?)", aid, hashToken("archive"), rel.ImageID, Now())
 	if e == nil {
 		_, e = s.DB.Exec("INSERT INTO releases VALUES(?,?,?,?,?)", rid, iid, aid, jsonText(rel), Now())
 	}

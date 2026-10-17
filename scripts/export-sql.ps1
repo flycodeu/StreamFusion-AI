@@ -10,7 +10,8 @@ $names = @('部门表.sql', '用户表.sql', '角色表.sql', '菜单表.sql',
     '相机设备表.sql', '相机通道表.sql', '相机码流表.sql', '相机码流定位表.sql', '相机创建回执表.sql',
     '相机状态检查表.sql', '相机状态快照表.sql',
     '相机巡检计划表.sql', '相机巡检目标表.sql',
-    '账户相机范围表.sql', '账户视频组授权表.sql', '账户相机授权表.sql', '相机接入任务表.sql', '相机导入明细表.sql')
+    '账户相机范围表.sql', '账户视频组授权表.sql', '账户相机授权表.sql', '相机接入任务表.sql', '相机导入明细表.sql',
+    '预览节点表.sql', '预览源归属表.sql', '预览输出预占表.sql', '预览远程观看表.sql', '预览远程操作表.sql')
 $actual = @(Get-ChildItem -LiteralPath $businessDirectory -Filter '*.sql' |
     Select-Object -ExpandProperty Name)
 if (Compare-Object $names $actual) { throw 'Register every table file in dependency order before exporting.' }

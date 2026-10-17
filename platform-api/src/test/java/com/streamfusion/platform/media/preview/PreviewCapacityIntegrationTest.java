@@ -33,7 +33,8 @@ class PreviewCapacityIntegrationTest extends CameraTestSupport {
                         "occupiedTranscodes",
                         "transcodesAvailable",
                         "observedAt");
-        assertThat(result.path("maxSessions").asInt()).isEqualTo(36);
+        assertThat(result.path("maxSessions").asInt()).isEqualTo(64);
+        assertThat(result.path("maxTranscodes").asInt()).isEqualTo(64);
         assertThat(result.path("occupiedSessions").asInt()).isZero();
         assertThat(result.path("occupiedTranscodes").asInt()).isEqualTo(2);
         assertThat(result.path("transcodesAvailable").asBoolean()).isTrue();
@@ -62,7 +63,7 @@ class PreviewCapacityIntegrationTest extends CameraTestSupport {
         jdbc.update("INSERT INTO sys_user_role(user_id,role_id) VALUES(?,8901)", user);
         jdbc.update(
                 "INSERT INTO sys_role_menu(role_id,menu_id) SELECT 8901,id FROM sys_menu WHERE type='PAGE' AND module_key='camera'");
-        assertThat(read("/preview/capacity", worker).path("maxSessions").asInt()).isEqualTo(36);
+        assertThat(read("/preview/capacity", worker).path("maxSessions").asInt()).isEqualTo(64);
         jdbc.update("DELETE FROM sys_role_menu WHERE role_id=8901");
         mvc.perform(get("/preview/capacity").session(worker.session()))
                 .andExpect(status().isForbidden());

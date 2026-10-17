@@ -1,9 +1,10 @@
-package com.streamfusion.platform.media.preview;
+package com.streamfusion.platform.media.preview.execution;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
+import com.streamfusion.platform.media.preview.PreviewFailure;
 import com.streamfusion.platform.media.preview.media.PreviewMediaGateway;
 import com.streamfusion.platform.media.preview.media.PreviewPullRegistry;
 import com.streamfusion.platform.media.runtime.service.MediaRuntimeService;

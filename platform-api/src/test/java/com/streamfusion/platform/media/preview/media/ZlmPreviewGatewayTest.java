@@ -206,7 +206,7 @@ class ZlmPreviewGatewayTest {
                         Path.of("D:/ZLM/MediaServer.exe"),
                         Path.of("D:/ZLM/config.ini"),
                         "1");
-        registry = new PreviewTranscodeRegistry(directory, json);
+        registry = new PreviewTranscodeRegistry(directory, json, 2);
         inspector = mock(PreviewProcessInspector.class);
         when(inspector.exited(any(), anyString(), anyString(), anyString(), any()))
                 .thenReturn(true);
@@ -412,6 +412,43 @@ class ZlmPreviewGatewayTest {
         gateway.close(stream(), output);
         assertThat(registry.keys()).isEmpty();
         assertThat(jobs).isEmpty();
+    }
+
+    @Test
+    void hardwareEncodersUseTheSameReservationAndConfirmedCleanup() throws Exception {
+        configureFfmpeg();
+        for (String encoder : List.of("h264_nvenc", "h264_qsv", "h264_amf")) {
+            ffmpegCommand = "%s -i %s -c:v " + encoder + " -bf 0 -f flv %s";
+            var output =
+                    gateway.transcode(
+                            stream(),
+                            ID + "h264",
+                            gateway.transcodeConfiguration(
+                                    stream(), PreviewDeadline.after(Duration.ofSeconds(5))),
+                            PreviewDeadline.after(Duration.ofSeconds(18)));
+            assertThat(registry.keys()).containsExactly(output.key());
+            gateway.close(stream(), output);
+            assertThat(registry.keys()).isEmpty();
+        }
+    }
+
+    @Test
+    void encodingConfigurationChangeCannotStartUsingAnOldSharedKey() throws Exception {
+        configureFfmpeg();
+        String configuration =
+                gateway.transcodeConfiguration(
+                        stream(), PreviewDeadline.after(Duration.ofSeconds(5)));
+        ffmpegCommand = "%s -i %s -c:v h264_nvenc -f flv %s";
+        assertThatThrownBy(
+                        () ->
+                                gateway.transcode(
+                                        stream(),
+                                        ID + "h264",
+                                        configuration,
+                                        PreviewDeadline.after(Duration.ofSeconds(18))))
+                .hasMessage("CONFIGURATION_CHANGED");
+        assertThat(registry.keys()).isEmpty();
+        assertThat(requests).extracting(Request::api).doesNotContain("addFFmpegSource");
     }
 
     @Test

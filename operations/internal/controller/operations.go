@@ -33,6 +33,7 @@ type instance struct {
 	ObservedAt    string          `json:"observedAt"`
 }
 type plan struct {
+	MaintenancePermit  string          `json:"maintenancePermit,omitempty"`
 	ID                 string          `json:"id"`
 	Kind               string          `json:"kind"`
 	TargetID           string          `json:"targetId"`
@@ -45,6 +46,7 @@ type plan struct {
 	InputHash          string          `json:"inputHash"`
 }
 type importInput struct {
+	Recipe         string `json:"recipe,omitempty"`
 	Name           string `json:"name"`
 	SHA            string `json:"archiveSha256"`
 	Size           int64  `json:"byteSize"`
@@ -224,6 +226,9 @@ func (h *HTTP) operationsRoute(w http.ResponseWriter, r *http.Request, s *sessio
 			return true
 		case "GET instances logs":
 			h.instanceLogs(w, r, p[1])
+			return true
+		case "GET instances preview-registration":
+			h.previewRegistration(w, r, p[1])
 			return true
 		case "POST instances observations":
 			h.observeInstance(w, r, p[1])

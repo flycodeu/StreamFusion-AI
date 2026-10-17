@@ -70,6 +70,68 @@ afterEach(() => {
   vi.useRealTimers()
 })
 describe('preview slot lifetime and first frame', () => {
+  function deferConnections() {
+    const pending: ((value: PreviewLease) => void)[] = []
+    const create = vi.mocked(createPreviewPlayer).getMockImplementation()!
+    vi.mocked(createPreviewPlayer).mockImplementation((events) => {
+      const player = create(events)
+      vi.mocked(player.connect).mockImplementation(
+        () => new Promise((resolve) => pending.push(resolve)),
+      )
+      return player
+    })
+    return pending
+  }
+
+  it('starts all 64 slots in batches of at most four without sending queued requests', async () => {
+    const pending = deferConnections()
+    const preview = usePreviewSlots()
+    const assignments = Array.from({ length: 64 }, (_, index) =>
+      preview.assign(index, channel(String(index + 1)), 'MAIN'),
+    )
+    await vi.waitUntil(() => pending.length === 4)
+    expect(
+      players.slice(4).every((player) => vi.mocked(player.connect).mock.calls.length === 0),
+    ).toBe(true)
+    for (let index = 0; index < 64; index++) {
+      await vi.waitUntil(() => pending.length > index)
+      expect(pending.length - index).toBeLessThanOrEqual(4)
+      pending[index]!(lease)
+    }
+    await Promise.all(assignments)
+    expect(preview.slots.every((slot) => slot.lease?.leaseId === lease.leaseId)).toBe(true)
+  })
+
+  it('cancels a queued slot before opening a lease', async () => {
+    const pending = deferConnections()
+    const preview = usePreviewSlots()
+    const assignments = Array.from({ length: 5 }, (_, index) =>
+      preview.assign(index, channel(String(index + 1)), 'MAIN'),
+    )
+    await vi.waitUntil(() => pending.length === 4)
+    await preview.stop(4)
+    for (const resolve of pending) resolve(lease)
+    await Promise.all(assignments)
+    expect(players[4]!.connect).not.toHaveBeenCalled()
+    expect(preview.slots[4]!.state).toBe('EMPTY')
+  })
+
+  it('unmount cancels queued starts instead of draining them into new requests', async () => {
+    const pending = deferConnections()
+    const preview = usePreviewSlots()
+    const assignments = Array.from({ length: 8 }, (_, index) =>
+      preview.assign(index, channel(String(index + 1)), 'MAIN'),
+    )
+    await vi.waitUntil(() => pending.length === 4)
+    for (const cleanup of hooks.cleanup.splice(0)) cleanup()
+    for (const resolve of pending) resolve(lease)
+    await Promise.all(assignments)
+    expect(pending).toHaveLength(4)
+    expect(
+      players.slice(4).every((player) => vi.mocked(player.connect).mock.calls.length === 0),
+    ).toBe(true)
+  })
+
   it('keeps the playing stream attached across renders and repeated track events', async () => {
     const preview = usePreviewSlots(),
       video = new HTMLVideoElement(),

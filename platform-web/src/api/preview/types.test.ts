@@ -13,6 +13,10 @@ const sample = {
 describe('preview capacity decoding', () => {
   it('reads known usage, including disabled or exceeded configured transcode budgets', () => {
     expect(parsePreviewCapacity(sample)).toEqual(sample)
+    expect(parsePreviewCapacity({ ...sample, maxSessions: 0 }).maxSessions).toBe(0)
+    expect(
+      parsePreviewCapacity({ ...sample, maxSessions: 192, maxTranscodes: 192 }).maxTranscodes,
+    ).toBe(192)
     expect(parsePreviewCapacity({ ...sample, maxTranscodes: 0 }).occupiedTranscodes).toBe(1)
   })
   it('keeps an unreadable journal unknown, never zero', () => {
@@ -22,11 +26,11 @@ describe('preview capacity decoding', () => {
     ).toBeNull()
   })
   it.each([
-    { maxSessions: 65 },
-    { maxSessions: 0 },
+    { maxSessions: 1089 },
+    { maxSessions: -1 },
     { occupiedSessions: -1 },
     { closingSessions: 13 },
-    { maxTranscodes: 9 },
+    { maxTranscodes: 1089 },
     { occupiedTranscodes: 0.5 },
     { transcodesAvailable: false },
     { occupiedTranscodes: null },

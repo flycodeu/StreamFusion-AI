@@ -11,6 +11,11 @@ PREPARE camera_drop_statement FROM @camera_drop_sql;
 EXECUTE camera_drop_statement;
 DEALLOCATE PREPARE camera_drop_statement;
 -- END MYSQL DEFERRED DROP
+DROP TABLE IF EXISTS preview_operation;
+DROP TABLE IF EXISTS preview_viewer;
+DROP TABLE IF EXISTS preview_output;
+DROP TABLE IF EXISTS preview_source;
+DROP TABLE IF EXISTS preview_node;
 DROP TABLE IF EXISTS `camera_access_import_item`;
 DROP TABLE IF EXISTS `camera_access_job`;
 DROP TABLE IF EXISTS `camera_user_channel_grant`;
@@ -826,5 +831,88 @@ CREATE TABLE camera_access_import_item (
     CONSTRAINT fk_access_import_job FOREIGN KEY (job_id) REFERENCES camera_access_job(id) ON DELETE CASCADE,
     CONSTRAINT ck_access_import_item CHECK (page_number BETWEEN 1 AND 100 AND item_index BETWEEN 0 AND 99 AND status IN ('CREATED','EXISTING','FAILED') AND ((status = 'FAILED' AND camera_id IS NULL) OR (status <> 'FAILED' AND camera_id IS NOT NULL)))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='整批导入逐项结果及分页去重';
+
+-- 预览节点表.sql
+CREATE TABLE preview_node (
+    id BIGINT NOT NULL COMMENT '配置ID，本机为0，远程从1开始',
+    node_id VARCHAR(64) NOT NULL COMMENT '机器身份',
+    name VARCHAR(80) NOT NULL COMMENT '显示名',
+    control_uri VARCHAR(512) NULL COMMENT 'HTTPS控制入口，无凭据',
+    certificate_sha256 CHAR(64) NULL COMMENT '绑定证书指纹',
+    token_path VARCHAR(1024) NULL COMMENT '平台本地机器凭据文件路径，不保存凭据',
+    media_address VARCHAR(253) NULL COMMENT '浏览器可达的媒体公布地址',
+    mode VARCHAR(16) NOT NULL DEFAULT 'LOCAL' COMMENT '期望模式LOCAL/REMOTE/DRAINING',
+    config_version CHAR(64) NOT NULL COMMENT '登记时节点配置摘要',
+    priority INT NOT NULL DEFAULT 100 COMMENT '升序调度，本机默认0',
+    max_sources INT NOT NULL DEFAULT 64,
+    max_viewers INT NOT NULL DEFAULT 64,
+    max_transcodes INT NOT NULL DEFAULT 64,
+    max_starting INT NOT NULL DEFAULT 4,
+    ingress_kbps BIGINT NOT NULL DEFAULT 655360,
+    egress_kbps BIGINT NOT NULL DEFAULT 655360,
+    source_upper_kbps BIGINT NOT NULL DEFAULT 8192,
+    output_upper_kbps BIGINT NOT NULL DEFAULT 8192,
+    version BIGINT NOT NULL DEFAULT 0 COMMENT '并发版本',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_preview_node_identity (node_id),
+    CONSTRAINT ck_preview_node_mode CHECK (mode IN ('LOCAL','REMOTE','DRAINING'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本机及可选远程预览节点；预算不代表实测能力';
+INSERT INTO preview_node(id,node_id,name,mode,config_version,priority) VALUES(0,'local','本机','REMOTE','local',0);
+
+-- 预览源归属表.sql
+CREATE TABLE preview_source (
+    profile_id BIGINT NOT NULL COMMENT 'Profile级唯一门，不改变相机关系',
+    connection_key VARCHAR(256) NOT NULL,
+    node_id VARCHAR(64) NOT NULL,
+    config_version VARCHAR(64) NOT NULL,
+    source_codec VARCHAR(16) NULL,
+    ingress_kbps BIGINT NOT NULL,
+    PRIMARY KEY (profile_id),
+    CONSTRAINT fk_preview_source_node FOREIGN KEY (node_id) REFERENCES preview_node(node_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='固定源归属；最后观看确认关闭后释放';
+
+-- 预览输出预占表.sql
+CREATE TABLE preview_output (
+    profile_id BIGINT NOT NULL,
+    output_key VARCHAR(80) NOT NULL COMMENT 'direct或固定H264预设与执行配置摘要',
+    transcode_units INT NOT NULL,
+    PRIMARY KEY (profile_id,output_key),
+    CONSTRAINT fk_preview_output_source FOREIGN KEY (profile_id) REFERENCES preview_source(profile_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='共享输出预算；未知启动和清理中仍占用';
+
+-- 预览远程观看表.sql
+CREATE TABLE preview_viewer (
+    viewer_id CHAR(36) NOT NULL COMMENT '既有预览租约ID',
+    node_id VARCHAR(64) NOT NULL COMMENT '固定归属节点',
+    boot_id CHAR(36) NOT NULL COMMENT '创建时节点启动身份',
+    config_version CHAR(64) NOT NULL COMMENT '创建时配置摘要',
+    profile_id BIGINT NULL COMMENT '源身份快照，不增加资产关系',
+    connection_key VARCHAR(256) NULL COMMENT '既有脱敏连接版本摘要',
+    output_key VARCHAR(80) NULL,
+    egress_kbps BIGINT NOT NULL DEFAULT 0,
+    is_starting INT NOT NULL DEFAULT 1,
+    state VARCHAR(16) NOT NULL COMMENT 'RESERVED/READY/CLOSING',
+    PRIMARY KEY (viewer_id),
+    KEY ix_preview_viewer_source (profile_id, state),
+    CONSTRAINT fk_preview_viewer_node FOREIGN KEY (node_id) REFERENCES preview_node(node_id),
+    CONSTRAINT ck_preview_viewer_state CHECK (state IN ('RESERVED','READY','CLOSING'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='所有预览观看未释放责任；确认关闭后删除';
+
+-- 预览远程操作表.sql
+CREATE TABLE preview_operation (
+    operation_id CHAR(36) NOT NULL COMMENT '幂等操作ID',
+    node_id VARCHAR(64) NOT NULL COMMENT '操作时节点身份快照',
+    viewer_id CHAR(36) NOT NULL COMMENT '操作时租约身份快照',
+    action VARCHAR(16) NOT NULL COMMENT 'CREATE/RENEW/ANSWER/STOP',
+    command_digest CHAR(64) NOT NULL COMMENT '命令摘要；不保存URL或SDP',
+    deadline_at BIGINT NOT NULL COMMENT '控制期限UTC毫秒',
+    state VARCHAR(16) NOT NULL COMMENT 'PENDING/SUCCEEDED/FAILED/CLOSED/UNKNOWN',
+    reason_code VARCHAR(80) NULL COMMENT '脱敏原因码',
+    PRIMARY KEY (operation_id),
+    KEY ix_preview_operation_viewer (viewer_id, state),
+    KEY ix_preview_operation_expiry (state, deadline_at),
+    CONSTRAINT ck_preview_operation_action CHECK (action IN ('CREATE','RENEW','ANSWER','STOP')),
+    CONSTRAINT ck_preview_operation_state CHECK (state IN ('PENDING','SUCCEEDED','FAILED','CLOSED','UNKNOWN'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='有界远程预览控制回执；活动未知操作保留';
 
 ALTER TABLE camera_channel ADD CONSTRAINT fk_camera_default_profile FOREIGN KEY (id,default_preview_profile_id) REFERENCES camera_stream_profile(channel_id,id);

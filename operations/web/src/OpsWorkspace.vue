@@ -2,6 +2,8 @@
 import { ref, onMounted, onUnmounted, watch, computed } from "vue";
 import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
 import { request, upload } from "./api";
+import PreviewConfigForm from "./PreviewConfigForm.vue";
+import { previewDefaults, type PreviewConfig } from "./preview";
 const props = defineProps<{ page: string }>();
 const emit = defineEmits<{ error: [unknown] }>();
 interface Target {
@@ -14,6 +16,7 @@ interface Target {
   observation: { dockerVersion?: string; composeVersion?: string };
 }
 interface Artifact {
+  recipe: string;
   id: string;
   name: string;
   imageId: string;
@@ -39,6 +42,7 @@ interface Binding {
   credentialRevision: string;
 }
 interface Config {
+  preview?: PreviewConfig;
   initialPasswordCredentialId?: string;
   initialPasswordRevision?: string;
   environment: string;
@@ -62,7 +66,16 @@ interface Instance {
   config: Config;
   currentReleaseId: string;
   previousReleaseId: string;
-  observation: { health?: string; releaseId?: string };
+  observation: {
+    health?: string;
+    releaseId?: string;
+    preview?: {
+      state: string;
+      configVersion: string;
+      maxSessions: number;
+      maxTranscodes: number;
+    };
+  };
   observedAt: string;
 }
 interface Release {
@@ -79,6 +92,7 @@ interface Plan {
   expiresAt: string;
   expectedVersion: string;
   expectedGeneration: string;
+  maintenancePermit?: string;
 }
 interface Job {
   id: string;
@@ -98,6 +112,47 @@ const targets = ref<Target[]>([]),
   jobs = ref<Job[]>([]),
   credentials = ref<Credential[]>([]),
   bindings = ref<Binding[]>([]);
+const recipe = ref("java-compose-v1"),
+  importRecipe = ref("java-compose-v1");
+const maintenancePermit = ref(""),
+  planKind = ref("PUBLISH"),
+  registration = ref<unknown>(null);
+const eligibleArtifacts = computed(() =>
+  artifacts.value.filter(
+    (a) =>
+      a.available &&
+      a.recipe ===
+        (planInstance.value?.config.preview
+          ? "preview-node-v1"
+          : "java-compose-v1"),
+  ),
+);
+function recipeChanged() {
+  instanceDraft.value.config =
+    recipe.value === "preview-node-v1"
+      ? {
+          environment: "preview",
+          profile: "",
+          bindAddress: "",
+          hostPort: 9443,
+          containerPort: 9443,
+          memoryMiB: 8192,
+          healthPath: "/preview-control/v1/snapshot",
+          healthSeconds: 60,
+          dataCompatibility: "preview-ownership-v1",
+          bindingIds: [],
+          preview: previewDefaults(),
+        }
+      : configDefault();
+}
+async function showRegistration(i: Instance) {
+  await act(async () => {
+    registration.value = await request(
+      `/instances/${i.id}/preview-registration`,
+    );
+    dialog.value = "registration";
+  });
+}
 const busy = ref(false),
   dialog = ref(""),
   controllerId = ref(""),
@@ -172,14 +227,15 @@ const statusLabels: Record<string, string> = {
   FAILED: "失败",
 };
 const phaseLabels: Record<string, string> = {
-	PULLING: "拉取环境镜像",
-	VERIFYING: "校验环境摘要",
-	VERSION_CHECK: "探测工具版本",
-	RECORDED: "环境已登记",
-	REMOVING: "卸载环境",
-	REMOVED: "环境已卸载",
-	PLUGIN_ERROR: "插件异常",
-	CANCELLED: "已取消",
+  BASELINE_UNCHANGED: "原节点保持运行",
+  PULLING: "拉取环境镜像",
+  VERIFYING: "校验环境摘要",
+  VERSION_CHECK: "探测工具版本",
+  RECORDED: "环境已登记",
+  REMOVING: "卸载环境",
+  REMOVED: "环境已卸载",
+  PLUGIN_ERROR: "插件异常",
+  CANCELLED: "已取消",
   WAITING_UPLOAD: "等待上传",
   UPLOADING: "上传中",
   UPLOADED: "待校验",
@@ -278,6 +334,7 @@ async function probe(t: Target) {
 }
 function openInstance(i?: Instance) {
   selected.value = i;
+  recipe.value = i?.config.preview ? "preview-node-v1" : "java-compose-v1";
   instanceDraft.value = i
     ? {
         name: i.name,
@@ -333,13 +390,16 @@ function pickFile(e: Event) {
 async function importArtifact() {
   await act(async () => {
     if (!file.value) throw new Error("请选择镜像归档");
-    if (file.value.size > 512 * 1024 * 1024) throw new Error("归档上限512MiB");
+    const limit = importRecipe.value === "preview-node-v1" ? 2048 : 512;
+    if (file.value.size > limit * 1024 * 1024)
+      throw new Error(`归档上限 ${limit} MiB`);
     uploadPhase.value = "受理导入";
     const accepted = await request<{ jobId: string }>(
       "/artifact-imports",
       "POST",
       {
         name: importName.value,
+        recipe: importRecipe.value,
         archiveSha256: importSHA.value.trim().toLowerCase(),
         byteSize: file.value.size,
         idempotencyKey: crypto.randomUUID(),
@@ -361,19 +421,25 @@ function initialPasswordSelected(e: Event) {
   instanceDraft.value.config.initialPasswordCredentialId = id;
   instanceDraft.value.config.initialPasswordRevision = revision;
 }
-function choosePublish(i: Instance) {
+function choosePublish(i: Instance, kind = "PUBLISH") {
   planInstance.value = i;
-  artifactChoice.value = artifacts.value.find((a) => a.available)?.id || "";
+  planKind.value = kind;
+  maintenancePermit.value = "";
+  artifactChoice.value = eligibleArtifacts.value[0]?.id || "";
   plan.value = undefined;
   dialog.value = "candidate";
 }
-async function preview(kind = "PUBLISH") {
+async function preview(kind = planKind.value) {
   await act(async () => {
     if (!planInstance.value) return;
     plan.value = await request<Plan>(
       `/instances/${planInstance.value.id}/plans`,
       "POST",
-      { kind, artifactId: kind === "PUBLISH" ? artifactChoice.value : "" },
+      {
+        kind,
+        artifactId: kind === "PUBLISH" ? artifactChoice.value : "",
+        maintenancePermit: maintenancePermit.value,
+      },
     );
     dialog.value = "plan";
   });
@@ -559,7 +625,7 @@ function credentialSelected(
     </template>
     <template v-else-if="page === 'instances'">
       <div class="section-head">
-        <h2>Java 服务实例</h2>
+        <h2>服务实例</h2>
         <button
           class="secondary"
           :disabled="busy || !targets.length"
@@ -619,6 +685,16 @@ function credentialSelected(
                       : "待观察"
                   }}</span
                 ><small>{{ time(i.observedAt) }}</small>
+                <small v-if="i.observation.preview"
+                  >{{
+                    i.observation.preview.state === "MAINTENANCE"
+                      ? "维护封闭中"
+                      : i.observation.preview.state
+                  }}
+                  · {{ i.observation.preview.maxSessions }}/{{
+                    i.observation.preview.maxTranscodes
+                  }}</small
+                >
               </td>
               <td class="actions">
                 <button class="quiet" :disabled="busy" @click="openInstance(i)">
@@ -632,10 +708,7 @@ function credentialSelected(
                 ><button
                   class="quiet"
                   :disabled="busy || !i.previousReleaseId"
-                  @click="
-                    planInstance = i;
-                    preview('ROLLBACK');
-                  "
+                  @click="choosePublish(i, 'ROLLBACK')"
                 >
                   回滚</button
                 ><button
@@ -652,6 +725,14 @@ function credentialSelected(
                   @click="showLogs(i)"
                 >
                   日志
+                </button>
+                <button
+                  v-if="i.config.preview"
+                  class="quiet"
+                  :disabled="busy || !i.currentReleaseId"
+                  @click="showRegistration(i)"
+                >
+                  平台登记指引
                 </button>
               </td>
             </tr>
@@ -689,11 +770,11 @@ function credentialSelected(
                     ? "安装环境"
                     : j.kind === "PLUGIN_REMOVE"
                       ? "卸载环境"
-                    : j.kind === "IMPORT"
-                    ? "导入"
-                    : j.kind === "ROLLBACK"
-                      ? "回滚"
-                      : "发布"
+                      : j.kind === "IMPORT"
+                        ? "导入"
+                        : j.kind === "ROLLBACK"
+                          ? "回滚"
+                          : "发布"
                 }}
               </td>
               <td>
@@ -730,7 +811,10 @@ function credentialSelected(
                 >
                   核对</button
                 ><button
-                  v-if="j.status === 'UNKNOWN' && ['PUBLISH','ROLLBACK'].includes(j.kind)"
+                  v-if="
+                    j.status === 'UNKNOWN' &&
+                    ['PUBLISH', 'ROLLBACK'].includes(j.kind)
+                  "
                   class="quiet danger"
                   :disabled="busy"
                   @click="reconcile(j, true)"
@@ -752,6 +836,7 @@ function credentialSelected(
           target: '登记目标',
           binding: '绑定已有依赖',
           instance: '实例配置草稿',
+          registration: '预览节点登记与维护',
           import: '导入镜像',
           candidate: '选择候选',
           plan: '发布计划',
@@ -859,6 +944,16 @@ function credentialSelected(
       class="dialog-form"
       @submit.prevent="saveInstance"
     >
+      <label
+        >部署配方<select
+          v-model="recipe"
+          :disabled="!!selected"
+          @change="recipeChanged"
+        >
+          <option value="java-compose-v1">Java 服务</option>
+          <option value="preview-node-v1">预览节点 · ZLM / FFmpeg</option>
+        </select></label
+      >
       <label>实例名称<input v-model="instanceDraft.name" required /></label
       ><label
         >目标<select
@@ -871,89 +966,113 @@ function credentialSelected(
           </option>
         </select></label
       >
-      <div class="form-grid">
+      <template v-if="instanceDraft.config.preview">
+        <div class="form-grid">
+          <label
+            >目标绑定 IPv4<input
+              v-model="instanceDraft.config.bindAddress"
+              :disabled="!!selected?.currentReleaseId"
+              required /></label
+          ><label
+            >内存 MiB<input
+              v-model.number="instanceDraft.config.memoryMiB"
+              type="number"
+              min="512"
+              max="65536"
+              required
+          /></label>
+        </div>
+        <PreviewConfigForm
+          v-model="instanceDraft.config.preview"
+          :deployed="!!selected?.currentReleaseId"
+        />
+      </template>
+      <template v-else>
+        <div class="form-grid">
+          <label
+            >环境标签<input
+              v-model="instanceDraft.config.environment"
+              required /></label
+          ><label
+            >Spring profile<input
+              v-model="instanceDraft.config.profile" /></label
+          ><label
+            >绑定地址<input
+              v-model="instanceDraft.config.bindAddress"
+              required /></label
+          ><label
+            >宿主端口<input
+              v-model.number="instanceDraft.config.hostPort"
+              type="number"
+              min="1024"
+              max="65535"
+              required /></label
+          ><label
+            >容器端口<input
+              v-model.number="instanceDraft.config.containerPort"
+              type="number"
+              min="1024"
+              max="65535"
+              required /></label
+          ><label
+            >内存 MiB<input
+              v-model.number="instanceDraft.config.memoryMiB"
+              type="number"
+              min="256"
+              max="8192"
+              required
+          /></label>
+        </div>
         <label
-          >环境标签<input
-            v-model="instanceDraft.config.environment"
-            required /></label
-        ><label
-          >Spring profile<input v-model="instanceDraft.config.profile" /></label
-        ><label
-          >绑定地址<input
-            v-model="instanceDraft.config.bindAddress"
-            required /></label
-        ><label
-          >宿主端口<input
-            v-model.number="instanceDraft.config.hostPort"
-            type="number"
-            min="1024"
-            max="65535"
-            required /></label
-        ><label
-          >容器端口<input
-            v-model.number="instanceDraft.config.containerPort"
-            type="number"
-            min="1024"
-            max="65535"
-            required /></label
-        ><label
-          >内存 MiB<input
-            v-model.number="instanceDraft.config.memoryMiB"
-            type="number"
-            min="256"
-            max="8192"
-            required
-        /></label>
-      </div>
-      <label
-        >外部依赖<select v-model="instanceDraft.config.bindingIds" multiple>
-          <option v-for="b in bindings" :key="b.id" :value="b.id">
-            {{ b.kind }} · {{ b.host }}:{{ b.port }}
-          </option>
-        </select></label
-      >
-      <details>
-        <summary>健康与恢复</summary>
-        <label
-          >应用初始密码修订<select
-            :value="
-              instanceDraft.config.initialPasswordCredentialId
-                ? instanceDraft.config.initialPasswordCredentialId +
-                  ':' +
-                  instanceDraft.config.initialPasswordRevision
-                : ''
-            "
-            @change="initialPasswordSelected"
-          >
-            <option value="">不注入</option>
-            <option
-              v-for="c in credentialOptions.filter(
-                (c) => c.kind === 'PASSWORD',
-              )"
-              :key="c.id + c.revision"
-              :value="c.id + ':' + c.revision"
-            >
-              {{ c.name }} r{{ c.revision }}
+          >外部依赖<select v-model="instanceDraft.config.bindingIds" multiple>
+            <option v-for="b in bindings" :key="b.id" :value="b.id">
+              {{ b.kind }} · {{ b.host }}:{{ b.port }}
             </option>
           </select></label
         >
-        <label
-          >健康路径<input
-            v-model="instanceDraft.config.healthPath"
-            required /></label
-        ><label
-          >健康超时 秒<input
-            v-model.number="instanceDraft.config.healthSeconds"
-            type="number"
-            min="5"
-            max="120"
-            required /></label
-        ><label
-          >数据兼容标识<input
-            v-model="instanceDraft.config.dataCompatibility"
-            required
-        /></label>
-      </details>
+        <details>
+          <summary>健康与恢复</summary>
+          <label
+            >应用初始密码修订<select
+              :value="
+                instanceDraft.config.initialPasswordCredentialId
+                  ? instanceDraft.config.initialPasswordCredentialId +
+                    ':' +
+                    instanceDraft.config.initialPasswordRevision
+                  : ''
+              "
+              @change="initialPasswordSelected"
+            >
+              <option value="">不注入</option>
+              <option
+                v-for="c in credentialOptions.filter(
+                  (c) => c.kind === 'PASSWORD',
+                )"
+                :key="c.id + c.revision"
+                :value="c.id + ':' + c.revision"
+              >
+                {{ c.name }} r{{ c.revision }}
+              </option>
+            </select></label
+          >
+          <label
+            >健康路径<input
+              v-model="instanceDraft.config.healthPath"
+              required /></label
+          ><label
+            >健康超时 秒<input
+              v-model.number="instanceDraft.config.healthSeconds"
+              type="number"
+              min="5"
+              max="120"
+              required /></label
+          ><label
+            >数据兼容标识<input
+              v-model="instanceDraft.config.dataCompatibility"
+              required
+          /></label>
+        </details>
+      </template>
       <button class="primary" :disabled="busy">保存草稿</button>
     </form>
     <form
@@ -961,6 +1080,12 @@ function credentialSelected(
       class="dialog-form"
       @submit.prevent="importArtifact"
     >
+      <label
+        >配方<select v-model="importRecipe">
+          <option value="java-compose-v1">Java 服务</option>
+          <option value="preview-node-v1">预览节点</option>
+        </select></label
+      >
       <label>名称<input v-model="importName" required /></label
       ><label
         >Docker save 归档<input
@@ -974,7 +1099,11 @@ function credentialSelected(
           required
           pattern="[a-fA-F0-9]{64}"
           spellcheck="false" /></label
-      ><small>单镜像 linux/amd64，标签以 sfops/ 开头，最大512MiB。</small
+      ><small>{{
+        importRecipe === "preview-node-v1"
+          ? "选择 S4 节点包内 preview-node-image.tar，使用该文件的可信 SHA-256；最大 2GiB，须支持维护封闭。"
+          : "单镜像 linux/amd64，标签以 sfops/ 开头，最大512MiB。"
+      }}</small
       ><button class="primary" :disabled="busy">
         {{ uploadPhase || "上传并校验" }}
       </button>
@@ -984,17 +1113,30 @@ function credentialSelected(
       class="dialog-form"
       @submit.prevent="preview()"
     >
-      <label
+      <p v-if="planKind === 'ROLLBACK'">回退到上一成功版本，恢复其冻结配置。</p>
+      <label v-if="planKind === 'PUBLISH'"
         >候选制品<select v-model="artifactChoice" required>
-          <option
-            v-for="a in artifacts.filter((a) => a.available)"
-            :key="a.id"
-            :value="a.id"
-          >
+          <option v-for="a in eligibleArtifacts" :key="a.id" :value="a.id">
             {{ a.name }}
           </option>
         </select></label
-      ><button class="primary" :disabled="busy">生成预检计划</button>
+      >
+      <template
+        v-if="planInstance?.config.preview && planInstance.currentReleaseId"
+      >
+        <p>
+          在平台“服务信息 →
+          预览执行节点”停止接新预览；资源归零后获取维护许可。作业完成后，节点仍保持排空。
+        </p>
+        <label
+          >维护许可编号<input
+            v-model="maintenancePermit"
+            required
+            pattern="[a-f0-9-]{36}"
+            autocomplete="off"
+        /></label>
+      </template>
+      <button class="primary" :disabled="busy">生成预检计划</button>
     </form>
     <div v-else-if="dialog === 'plan' && plan" class="dialog-form">
       <dl class="plan-detail">
@@ -1024,7 +1166,19 @@ function credentialSelected(
           {{ plan.candidate.config.healthSeconds }}秒
         </dd>
         <dt>影响</dt>
-        <dd>替换该实例，发布期间会短暂中断；数据库不随应用回滚。</dd>
+        <dd>
+          {{
+            plan.candidate.config.preview
+              ? "只替换此预览节点；已有资源必须清零。失败恢复上一成功版本，作业完成后需到平台检查并明确启用。"
+              : "替换该实例，发布期间会短暂中断；数据库不随应用回滚。"
+          }}
+        </dd>
+        <template v-if="plan.maintenancePermit"
+          ><dt>维护许可</dt>
+          <dd>
+            <code>{{ plan.maintenancePermit }}</code>
+          </dd></template
+        >
         <dt>有效期</dt>
         <dd>{{ time(plan.expiresAt) }}</dd>
       </dl>
@@ -1041,8 +1195,22 @@ function credentialSelected(
         }}</strong
         ><code>{{ r.id }}</code
         ><small>{{ r.imageId }}</small>
+        <details v-if="r.config.preview">
+          <summary>冻结的节点配置</summary>
+          <pre class="log-output">{{ JSON.stringify(r.config, null, 2) }}</pre>
+        </details>
       </article>
       <div v-if="!releases.length" class="empty">暂无版本</div>
+    </div>
+    <div v-else-if="dialog === 'registration'" class="dialog-form">
+      <p>
+        部署就绪后，将目标机上的登记文件和机器凭据安全转交平台管理员，导入节点；浏览器预览验证与明确启用在平台进行。
+      </p>
+      <pre class="log-output">{{ JSON.stringify(registration, null, 2) }}</pre>
+      <p>
+        升级或回退：平台排空 → 获取维护许可 → Ops 预检执行 → 核对作业及版本 →
+        平台检查 / 重新登记 → 解除维护 → 参与调度。
+      </p>
     </div>
     <pre v-else-if="dialog === 'logs'" class="log-output">{{
       logs || "暂无日志"

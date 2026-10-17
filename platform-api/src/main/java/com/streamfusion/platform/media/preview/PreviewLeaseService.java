@@ -1,16 +1,10 @@
 package com.streamfusion.platform.media.preview;
 
-import com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.validation.DecimalInput;
-import com.streamfusion.platform.media.preview.media.PreviewMediaGateway;
-import com.streamfusion.platform.media.preview.media.PreviewMediaGateway.Stream;
-import com.streamfusion.platform.media.preview.media.PreviewMediaGateway.Transcode;
-import com.streamfusion.platform.media.preview.media.PreviewPullRegistry;
-import com.streamfusion.platform.media.preview.media.PreviewTranscodeRegistry;
+import com.streamfusion.platform.media.preview.execution.PreviewExecutor;
 import com.streamfusion.platform.media.preview.source.PreviewLocatorService;
-import com.streamfusion.platform.media.runtime.service.MediaRuntimeService;
 import com.streamfusion.platform.system.auth.pojo.dto.SessionPrincipalDto;
 import jakarta.annotation.PreDestroy;
 import java.time.Clock;
@@ -39,7 +33,7 @@ import org.springframework.boot.web.context.WebServerApplicationContext;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
-/** Bounded viewer leases with one remote pull per configuration and isolated local outputs. */
+/** Owns authorized viewer leases and delegates media ownership to a preview executor. */
 @Service
 public class PreviewLeaseService {
     private static final Logger LOG = LoggerFactory.getLogger(PreviewLeaseService.class);
@@ -48,24 +42,18 @@ public class PreviewLeaseService {
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
     private static final Duration CLEANUP_TIMEOUT = Duration.ofSeconds(12);
     private static final int MAX_LEASES = 64;
-    private static final int MAX_PENDING_REQUESTS = 512;
+    private static final int MAX_PENDING_REQUESTS = 4096;
     private static final int MAX_CLEANUP_ATTEMPTS = 6;
     private final PreviewAuthorization authorization;
     private final PreviewProfileSelector profileSelector;
-    private final PreviewRecoveryCoordinator recovery;
     private final PreviewLocatorService locators;
-    private final PreviewMediaGateway media;
-    private final MediaRuntimeService runtimes;
+    private final PreviewExecutor executor;
     private final Clock clock;
     private final PreviewProperties limits;
-    private final PreviewTranscodeRegistry transcodes;
-    private final PreviewPullRegistry pulls;
-    private final String app =
-            "sf_preview_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+    private final java.util.concurrent.Semaphore starts =
+            new java.util.concurrent.Semaphore(4, true);
     private final Object guard = new Object();
     private final Map<String, Lease> leases = new HashMap<>();
-    // Membership and closing are guarded by guard. Network calls never hold that monitor.
-    private final Map<UpstreamKey, SharedUpstream> upstreams = new HashMap<>();
     private final Map<RequestKey, RequestEntry> requests = new HashMap<>();
     private volatile boolean shuttingDown;
     private volatile boolean recoveryEnabled;
@@ -94,24 +82,16 @@ public class PreviewLeaseService {
     public PreviewLeaseService(
             PreviewAuthorization authorization,
             PreviewProfileSelector profileSelector,
-            PreviewRecoveryCoordinator recovery,
             PreviewLocatorService locators,
-            PreviewMediaGateway media,
-            MediaRuntimeService runtimes,
+            PreviewExecutor executor,
             Clock clock,
-            PreviewProperties limits,
-            PreviewTranscodeRegistry transcodes,
-            PreviewPullRegistry pulls) {
+            PreviewProperties limits) {
         this.authorization = authorization;
         this.profileSelector = profileSelector;
-        this.recovery = recovery;
         this.locators = locators;
-        this.media = media;
-        this.runtimes = runtimes;
+        this.executor = executor;
         this.clock = clock;
         this.limits = limits;
-        this.transcodes = transcodes;
-        this.pulls = pulls;
         reaper.scheduleWithFixedDelay(this::reapSafely, 1, 10, TimeUnit.SECONDS);
     }
 
@@ -138,7 +118,7 @@ public class PreviewLeaseService {
                     throw BusinessException.error(ErrorCode.CONFLICT);
                 lease = null;
             } else {
-                if (leases.size() >= limits.maxSessions())
+                if (leases.size() >= executor.sessionLimit(limits.maxSessions()))
                     throw BusinessException.error(ErrorCode.RATE_LIMITED)
                             .diagnosed("PREVIEW_CAPACITY_EXCEEDED");
                 if (requests.size() >= MAX_PENDING_REQUESTS)
@@ -204,22 +184,27 @@ public class PreviewLeaseService {
         authorization.capacity();
         int occupied;
         int closing;
+        java.util.Set<String> activeLeaseIds;
         synchronized (guard) {
             occupied = leases.size();
+            activeLeaseIds = java.util.Set.copyOf(leases.keySet());
             // closing is volatile: do not acquire lease monitors while holding guard.
             closing = (int) leases.values().stream().filter(lease -> lease.closing).count();
         }
+        int retained = executor.retainedViewers(activeLeaseIds);
+        occupied += retained;
+        closing += retained;
         Integer occupiedTranscodes;
         try {
-            occupiedTranscodes = transcodes.occupied();
+            occupiedTranscodes = executor.occupiedTranscodes();
         } catch (PreviewFailure unavailable) {
             occupiedTranscodes = null;
         }
         return new PreviewModels.Capacity(
-                limits.maxSessions(),
+                executor.sessionLimit(limits.maxSessions()),
                 occupied,
                 closing,
-                limits.maxTranscodes(),
+                executor.transcodeLimit(limits.maxTranscodes()),
                 occupiedTranscodes,
                 occupiedTranscodes != null,
                 now());
@@ -228,23 +213,28 @@ public class PreviewLeaseService {
     private PreviewModels.LeaseView initialize(Lease lease) {
         var deadline = lease.createDeadline;
         beginOperation(lease, deadline);
+        boolean acquired = false;
         try {
-            return initialize(lease, deadline);
-        } catch (PreviewFailure failure) {
-            if (failure.pendingTranscode() != null) {
-                synchronized (lease) {
-                    lease.transcode = failure.pendingTranscode();
-                }
+            while (!acquired) {
+                checkActive(lease, deadline);
+                acquired =
+                        starts.tryAcquire(
+                                Math.min(100, deadline.remaining().toMillis()),
+                                TimeUnit.MILLISECONDS);
             }
-            throw failure;
+            return initialize(lease, deadline);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new PreviewFailure("CANCELLED");
         } finally {
+            if (acquired) starts.release();
             endOperation(lease, deadline);
         }
     }
 
     private PreviewModels.LeaseView initialize(Lease lease, PreviewDeadline deadline) {
         deadline.check();
-        recovery.requireRecovered();
+        executor.requireRecovered();
         var profile =
                 profileSelector.select(
                         lease.cameraId, lease.input.streamProfileId(), lease.input.usage());
@@ -252,143 +242,49 @@ public class PreviewLeaseService {
         lease.profileId = profile.getId();
         if (!Boolean.TRUE.equals(profile.getEnabled()))
             throw new PreviewFailure("PROFILE_DISABLED");
-        var runtime = runtimes.activeZlm().orElseThrow(() -> new PreviewFailure("ZLM_NOT_READY"));
         authorization.request(lease.owner, lease.cameraId);
         lease.connectionKey = locators.connectionKey(profile);
-        var upstream = attachUpstream(lease, profile, runtime, deadline);
+        executor.prepare(
+                lease.id,
+                new PreviewExecutor.SourceKey(profile.getId(), lease.connectionKey),
+                lease.input.videoCodecs(),
+                deadline);
+        executor.attachSource(
+                lease.id,
+                new PreviewExecutor.SourceKey(profile.getId(), lease.connectionKey),
+                () ->
+                        locators.resolve(
+                                        profile,
+                                        () -> {
+                                            checkActive(lease, deadline);
+                                            authorization.request(lease.owner, lease.cameraId);
+                                        },
+                                        deadline)
+                                .uri(),
+                () -> checkActive(lease, deadline),
+                deadline);
+        checkUpstream(lease, deadline);
         checkActive(lease, deadline);
         authorization.request(lease.owner, lease.cameraId);
         requireEnabled(lease);
-        String id = lease.id.replace("-", "");
-        synchronized (lease) {
-            checkActive(lease, deadline);
-            // Retain the exact tuple before mutation, including timeout with unknown outcome.
-            var pending = new Stream(runtime, app, id, "__defaultVhost__/" + app + "/" + id);
-            pulls.register(pending, true);
-            lease.stream = pending;
-        }
-        var stream = media.openViewer(upstream, app, id, deadline);
-        pulls.started(stream);
-        synchronized (lease) {
-            lease.stream = stream;
-        }
-        checkActive(lease, deadline);
-        var stats = awaitTracks(lease, id, deadline);
-        var decision = PreviewPlaybackPlanner.decide(stats.videoCodec(), lease.input.videoCodecs());
-        if (decision == PreviewPlaybackPlanner.Decision.UNSUPPORTED)
-            throw new PreviewFailure("CODEC_UNSUPPORTED");
-        if (decision == PreviewPlaybackPlanner.Decision.TRANSCODE_H264) {
-            synchronized (lease) {
-                lease.outputId = id + "h264";
-            }
-            checkActive(lease, deadline);
-            var transcode = media.transcode(stream, lease.outputId, deadline);
-            synchronized (lease) {
-                lease.transcode = transcode;
-            }
-            stats = awaitTracks(lease, lease.outputId, deadline);
-            if (!"H264".equals(PreviewPlaybackPlanner.normalize(stats.videoCodec())))
-                throw new PreviewFailure("TRANSCODE_CODEC_MISMATCH");
-            lease.transcoded = true;
-        }
+        var playback =
+                executor.start(
+                        lease.id,
+                        lease.input.videoCodecs(),
+                        () -> checkActive(lease, deadline),
+                        deadline);
         deadline.check();
         authorization.request(lease.owner, lease.cameraId);
         requireEnabled(lease);
         synchronized (lease) {
             checkActive(lease, deadline);
-            lease.codec = PreviewPlaybackPlanner.normalize(stats.videoCodec());
-            lease.upstream.established = true;
+            lease.codec = playback.codec();
+            lease.transcoded = playback.transcoded();
+            executor.confirmReady(lease.id, deadline);
             lease.ready = true;
             lease.expiresAt = now().plus(TTL);
             return view(lease);
         }
-    }
-
-    private Stream attachUpstream(
-            Lease lease,
-            CameraProfileEntity profile,
-            MediaRuntimeService.ActiveZlm runtime,
-            PreviewDeadline deadline) {
-        var key = new UpstreamKey(profile.getId(), lease.connectionKey, runtime);
-        SharedUpstream shared;
-        boolean creator;
-        synchronized (guard) {
-            // The lease operation stays registered until this attachment has settled.
-            deadline.check();
-            shared = upstreams.get(key);
-            creator = shared == null;
-            if (creator) {
-                String id = UUID.randomUUID().toString().replace("-", "");
-                shared =
-                        new SharedUpstream(
-                                key,
-                                new Stream(runtime, app, id, "__defaultVhost__/" + app + "/" + id));
-                upstreams.put(key, shared);
-            }
-            if (shared.closing) throw new PreviewFailure("PREVIEW_PENDING");
-            shared.members.add(lease.id);
-            lease.upstream = shared;
-        }
-        if (creator) {
-            try {
-                var source =
-                        locators.resolve(
-                                profile,
-                                () -> {
-                                    checkActive(lease, deadline);
-                                    authorization.request(lease.owner, lease.cameraId);
-                                },
-                                deadline);
-                checkActive(lease, deadline);
-                // Record the exact tuple before mutation, even for unknown network outcomes.
-                pulls.register(shared.stream, false);
-                shared.openAttempted = true;
-                shared.stream =
-                        media.open(runtime, app, shared.stream.id(), source.uri(), deadline);
-                pulls.started(shared.stream);
-                checkActive(lease, deadline);
-                shared.opened.complete(shared.stream);
-            } catch (RuntimeException failure) {
-                shared.opened.completeExceptionally(failure);
-                throw failure;
-            }
-        }
-        try {
-            // Each joining viewer keeps its own finite budget and authorization lifecycle.
-            var stream = shared.opened.get(deadline.remaining().toNanos(), TimeUnit.NANOSECONDS);
-            checkUpstream(lease, deadline);
-            return stream;
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            throw new PreviewFailure("CANCELLED");
-        } catch (java.util.concurrent.TimeoutException ex) {
-            throw new PreviewFailure("PREVIEW_PENDING");
-        } catch (ExecutionException ex) {
-            // A creator's authorization failure is not the joining viewer's identity result.
-            if (ex.getCause() instanceof PreviewFailure failure) throw failure;
-            throw new PreviewFailure("PREVIEW_UNAVAILABLE");
-        }
-    }
-
-    private PreviewModels.Stats awaitTracks(Lease lease, String output, PreviewDeadline deadline) {
-        for (int attempt = 0; attempt < 4; attempt++) {
-            checkActive(lease, deadline);
-            var stats = media.stats(lease.stream, output, deadline);
-            checkActive(lease, deadline);
-            if ("READY".equals(stats.state()) && stats.videoCodec() != null) return stats;
-            if (attempt < 3) {
-                try {
-                    TimeUnit.NANOSECONDS.sleep(
-                            Math.min(
-                                    TimeUnit.MILLISECONDS.toNanos(200),
-                                    deadline.remaining().toNanos()));
-                } catch (InterruptedException ex) {
-                    Thread.currentThread().interrupt();
-                    throw new PreviewFailure("CANCELLED");
-                }
-            }
-        }
-        throw new PreviewFailure("MEDIA_NOT_READY");
     }
 
     public PreviewModels.LeaseView renew(String id) {
@@ -398,6 +294,7 @@ public class PreviewLeaseService {
         beginOperation(lease, deadline);
         try {
             checkUpstream(lease, deadline);
+            executor.renew(lease.id, deadline);
             synchronized (lease) {
                 checkReady(lease);
                 lease.expiresAt = now().plus(TTL);
@@ -409,19 +306,13 @@ public class PreviewLeaseService {
     }
 
     private void checkUpstream(Lease lease, PreviewDeadline deadline) {
-        var shared = lease.upstream;
-        if (shared == null || !shared.established) return;
-        if (media.exists(shared.stream, deadline)) return;
+        var missing = executor.missingSourceViewers(lease.id, deadline);
+        if (missing.isEmpty()) return;
         List<Lease> affected;
         synchronized (guard) {
-            shared.closing = true;
             affected =
-                    shared.members.stream()
-                            .map(leases::get)
-                            .filter(java.util.Objects::nonNull)
-                            .toList();
+                    missing.stream().map(leases::get).filter(java.util.Objects::nonNull).toList();
         }
-        // Confirmed missing generation: do not keep renewing or reusing its dead tuple.
         affected.forEach(this::closeLater);
         throw new PreviewFailure("MEDIA_NOT_READY");
     }
@@ -444,7 +335,7 @@ public class PreviewLeaseService {
         }
         try {
             checkUpstream(lease, deadline);
-            var answer = media.answer(lease.stream, output(lease), offer.sdp(), deadline);
+            var answer = executor.answer(lease.id, offer.sdp(), deadline);
             authorization.request(lease.owner, lease.cameraId);
             requireEnabled(lease);
             synchronized (lease) {
@@ -472,7 +363,7 @@ public class PreviewLeaseService {
         }
         beginOperation(lease, deadline);
         try {
-            var result = media.stats(lease.stream, output(lease), deadline);
+            var result = executor.stats(lease.id, deadline);
             if (!"READY".equals(result.state())) checkUpstream(lease, deadline);
             authorization.request(lease.owner, lease.cameraId);
             checkActive(lease, deadline);
@@ -542,10 +433,7 @@ public class PreviewLeaseService {
             if (lease.connectionKey != null
                     && !lease.connectionKey.equals(locators.connectionKey(profile)))
                 throw new PreviewFailure("CONFIGURATION_CHANGED");
-            var shared = lease.upstream;
-            if (shared != null
-                    && runtimes.activeZlm().filter(shared.key.runtime()::equals).isEmpty())
-                throw new PreviewFailure("ZLM_NOT_READY");
+            executor.requireCurrent(lease.id);
         } catch (RuntimeException failure) {
             closeLater(lease);
             throw failure;
@@ -587,10 +475,6 @@ public class PreviewLeaseService {
                 lease.transcoded);
     }
 
-    private static String output(Lease lease) {
-        return lease.transcoded ? lease.outputId : lease.stream.id();
-    }
-
     private Instant now() {
         return clock.instant();
     }
@@ -600,8 +484,6 @@ public class PreviewLeaseService {
     }
 
     private void release(Lease lease, boolean manual) {
-        Stream stream;
-        Transcode transcode;
         synchronized (lease) {
             lease.closing = true;
             lease.ready = false;
@@ -613,17 +495,10 @@ public class PreviewLeaseService {
                     || !manual && lease.cleanupAttempts >= MAX_CLEANUP_ATTEMPTS) return;
             lease.cleanupRunning = true;
             lease.cleanupAttempts = Math.min(MAX_CLEANUP_ATTEMPTS, lease.cleanupAttempts + 1);
-            stream = lease.stream;
-            transcode = lease.transcode;
         }
         try {
             var deadline = PreviewDeadline.after(CLEANUP_TIMEOUT);
-            if (stream != null && !lease.viewerClosed) {
-                media.close(stream, transcode, deadline);
-                pulls.exited(stream);
-                lease.viewerClosed = true;
-            }
-            detachUpstream(lease, deadline);
+            executor.close(lease.id, deadline);
             synchronized (lease) {
                 lease.cleanupComplete = true;
             }
@@ -646,30 +521,6 @@ public class PreviewLeaseService {
             synchronized (lease) {
                 lease.cleanupRunning = false;
             }
-        }
-    }
-
-    private void detachUpstream(Lease lease, PreviewDeadline deadline) {
-        SharedUpstream shared;
-        synchronized (guard) {
-            shared = lease.upstream;
-            if (shared == null) return;
-            if (shared.members.size() > 1) {
-                shared.members.remove(lease.id);
-                lease.upstream = null;
-                return;
-            }
-            // Retain the last member and its session slot until upstream cleanup is confirmed.
-            shared.closing = true;
-        }
-        if (shared.openAttempted) {
-            media.close(shared.stream, null, deadline);
-            pulls.exited(shared.stream);
-        }
-        synchronized (guard) {
-            shared.members.remove(lease.id);
-            upstreams.remove(shared.key, shared);
-            lease.upstream = null;
         }
     }
 
@@ -796,7 +647,7 @@ public class PreviewLeaseService {
     }
 
     void reconcile() {
-        recovery.reconcile(() -> shuttingDown);
+        executor.reconcile(() -> shuttingDown);
     }
 
     @PreDestroy
@@ -826,24 +677,6 @@ public class PreviewLeaseService {
 
     private record RequestKey(Long owner, String requestId) {}
 
-    private record UpstreamKey(
-            Long profileId, String connectionKey, MediaRuntimeService.ActiveZlm runtime) {}
-
-    private static final class SharedUpstream {
-        final UpstreamKey key;
-        final Set<String> members = new HashSet<>();
-        final CompletableFuture<Stream> opened = new CompletableFuture<>();
-        volatile Stream stream;
-        volatile boolean openAttempted;
-        volatile boolean established;
-        boolean closing;
-
-        SharedUpstream(UpstreamKey key, Stream stream) {
-            this.key = key;
-            this.stream = stream;
-        }
-    }
-
     private static final class RequestEntry {
         final PreviewModels.CreateLease input;
         final Instant expiresAt;
@@ -866,19 +699,14 @@ public class PreviewLeaseService {
         volatile Instant expiresAt;
         volatile Long profileId;
         volatile String connectionKey;
-        volatile SharedUpstream upstream;
         boolean ready;
         volatile boolean closing;
         boolean signalled;
         boolean signalling;
         boolean transcoded;
         String codec;
-        String outputId;
-        Stream stream;
-        Transcode transcode;
         volatile int cleanupAttempts;
         boolean cleanupRunning;
-        boolean viewerClosed;
         volatile boolean cleanupComplete;
         volatile Instant nextCleanupAt;
         final AtomicBoolean cleanupQueued = new AtomicBoolean();

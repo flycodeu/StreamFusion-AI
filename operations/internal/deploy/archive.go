@@ -16,7 +16,14 @@ import (
 // ValidateArchive reads without extracting or invoking Docker. Only one
 // uncompressed Docker-save image in the sfops/ namespace is accepted.
 func ValidateArchive(filename, expected string, size int64) (string, error) {
-	if !Hex.MatchString(expected) || size < 1 || size > ArchiveLimit {
+	return ValidateRecipeArchive(filename, expected, size, "java-compose-v1")
+}
+
+func ValidateRecipeArchive(filename, expected string, size int64, recipe string) (string, error) {
+	if recipe != "java-compose-v1" && recipe != PreviewRecipe {
+		return "", errors.New("RECIPE_UNSUPPORTED")
+	}
+	if !Hex.MatchString(expected) || size < 1 || size > ArchiveLimitFor(recipe) {
 		return "", errors.New("ARCHIVE_LIMIT_OR_HASH")
 	}
 	f, err := os.Open(filename)
@@ -64,7 +71,7 @@ func ValidateArchive(filename, expected string, size int64) (string, error) {
 			return "", errors.New("ARCHIVE_DUPLICATE_ENTRY")
 		}
 		total += hdr.Size
-		if total > size || hdr.Size > ArchiveLimit {
+		if total > size || hdr.Size > ArchiveLimitFor(recipe) {
 			return "", errors.New("ARCHIVE_TOO_LARGE")
 		}
 		sum := sha256.New()
@@ -90,7 +97,11 @@ func ValidateArchive(filename, expected string, size int64) (string, error) {
 		RepoTags []string
 		Layers   []string
 	}
-	if json.Unmarshal(small["manifest.json"], &manifest) != nil || len(manifest) != 1 || len(manifest[0].RepoTags) != 1 || !regexp.MustCompile(`^sfops/[a-z0-9][a-z0-9._/-]*:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$`).MatchString(manifest[0].RepoTags[0]) || len(manifest[0].Layers) < 1 {
+	tagPattern := `^sfops/[a-z0-9][a-z0-9._/-]*:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$`
+	if recipe == PreviewRecipe {
+		tagPattern = `^streamfusion/preview-node:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$`
+	}
+	if json.Unmarshal(small["manifest.json"], &manifest) != nil || len(manifest) != 1 || len(manifest[0].RepoTags) != 1 || !regexp.MustCompile(tagPattern).MatchString(manifest[0].RepoTags[0]) || len(manifest[0].Layers) < 1 {
 		return "", errors.New("ARCHIVE_SINGLE_MANAGED_IMAGE_REQUIRED")
 	}
 	m := manifest[0]
@@ -99,6 +110,9 @@ func ValidateArchive(filename, expected string, size int64) (string, error) {
 		return "", errors.New("ARCHIVE_CONFIG_MISSING")
 	}
 	var config struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"config"`
 		OS           string `json:"os"`
 		Architecture string `json:"architecture"`
 		RootFS       struct {
@@ -107,6 +121,9 @@ func ValidateArchive(filename, expected string, size int64) (string, error) {
 	}
 	if json.Unmarshal(configData, &config) != nil || config.OS != "linux" || config.Architecture != "amd64" || len(config.RootFS.DiffIDs) != len(m.Layers) {
 		return "", errors.New("ARCHIVE_PLATFORM_OR_LAYERS")
+	}
+	if recipe == PreviewRecipe && config.Config.Labels["com.streamfusion.preview.maintenance"] != "1" {
+		return "", errors.New("PREVIEW_MAINTENANCE_IMAGE_REQUIRED")
 	}
 	for i, layer := range m.Layers {
 		if hashes[layer] == "" || "sha256:"+hashes[layer] != config.RootFS.DiffIDs[i] {

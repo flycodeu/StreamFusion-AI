@@ -43,6 +43,12 @@ public interface PreviewMediaGateway {
 
     Transcode transcode(Stream source, String outputId);
 
+    /** Fingerprint of the currently selected encoder and output command; never exposes secrets. */
+    String transcodeConfiguration(Stream source, PreviewDeadline deadline);
+
+    Transcode transcode(
+            Stream source, String outputId, String configuration, PreviewDeadline deadline);
+
     default Transcode transcode(Stream source, String outputId, PreviewDeadline deadline) {
         deadline.check();
         return transcode(source, outputId);

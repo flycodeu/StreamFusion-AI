@@ -51,6 +51,7 @@ func (x *executor) recordNotStarted(req Request, dir string, output io.Writer) e
 			return errors.New("BASELINE_NOT_VERIFIED")
 		}
 		res.ReleaseID, res.ImageID, res.ConfigHash, res.ContainerID, res.Health = actual.ReleaseID, actual.ImageID, actual.ConfigHash, actual.ContainerID, actual.Health
+		res.Preview = actual.Preview
 	} else if err := x.verifyStopped(*req.Candidate); err != nil {
 		return err
 	}

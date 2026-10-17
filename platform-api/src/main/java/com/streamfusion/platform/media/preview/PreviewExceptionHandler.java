@@ -6,7 +6,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-@RestControllerAdvice(assignableTypes = PreviewController.class)
+@RestControllerAdvice(
+        assignableTypes = {
+            PreviewController.class,
+            com.streamfusion.platform.media.preview.node.PreviewNodeController.class
+        })
 public class PreviewExceptionHandler {
     @ExceptionHandler(PreviewFailure.class)
     public ResponseEntity<R<Void>> failure(PreviewFailure failure) {

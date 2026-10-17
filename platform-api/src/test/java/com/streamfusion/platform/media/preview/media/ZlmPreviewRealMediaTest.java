@@ -8,18 +8,29 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.streamfusion.platform.camera.mapper.CameraChannelMapper;
+import com.streamfusion.platform.camera.mapper.CameraProfileMapper;
+import com.streamfusion.platform.camera.pojo.entity.CameraChannelEntity;
 import com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity;
 import com.streamfusion.platform.camera.status.CameraMediaProbe;
 import com.streamfusion.platform.camera.status.CameraMediaPullRegistry;
 import com.streamfusion.platform.camera.status.CameraProbeResult;
 import com.streamfusion.platform.camera.status.RtspDescribeProbe;
 import com.streamfusion.platform.common.config.PlatformProperties;
+import com.streamfusion.platform.media.preview.PreviewAuthorization;
 import com.streamfusion.platform.media.preview.PreviewDeadline;
 import com.streamfusion.platform.media.preview.PreviewFailure;
+import com.streamfusion.platform.media.preview.PreviewLeaseService;
+import com.streamfusion.platform.media.preview.PreviewModels;
+import com.streamfusion.platform.media.preview.PreviewProfileSelector;
+import com.streamfusion.platform.media.preview.PreviewProperties;
+import com.streamfusion.platform.media.preview.execution.LocalPreviewExecutor;
+import com.streamfusion.platform.media.preview.execution.PreviewRecoveryCoordinator;
 import com.streamfusion.platform.media.preview.source.PreviewLocatorService;
 import com.streamfusion.platform.media.runtime.service.MediaRuntimeService;
 import com.streamfusion.platform.media.runtime.service.MediaRuntimeService.ActiveFfmpeg;
 import com.streamfusion.platform.media.runtime.service.MediaRuntimeService.ActiveZlm;
+import com.streamfusion.platform.system.auth.pojo.dto.SessionPrincipalDto;
 import java.net.BindException;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
@@ -33,6 +44,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -126,10 +138,10 @@ class ZlmPreviewRealMediaTest {
                                     "-l",
                                     "3",
                                     "--log-dir",
-                                    directory.resolve("media-logs").toString())
+                                    logPath("media-logs").toString())
                             .directory(directory.toFile())
                             .redirectErrorStream(true)
-                            .redirectOutput(directory.resolve("media-zlm.log").toFile())
+                            .redirectOutput(logPath("media-zlm.log").toFile())
                             .start();
             Process ownedServer = server;
             await(() -> ownedServer.isAlive() && available(), Duration.ofSeconds(12));
@@ -166,7 +178,7 @@ class ZlmPreviewRealMediaTest {
                                     "tcp",
                                     "rtsp://127.0.0.1:" + rtsp + "/" + sourceApp + "/source")
                             .redirectErrorStream(true)
-                            .redirectOutput(directory.resolve("pipe-publisher.log").toFile())
+                            .redirectOutput(logPath("pipe-publisher.log").toFile())
                             .start();
             Process ownedPublisher = publisher;
             byte[] frame = new byte[320 * 180 * 3 / 2];
@@ -347,10 +359,10 @@ class ZlmPreviewRealMediaTest {
                                     "-l",
                                     "3",
                                     "--log-dir",
-                                    directory.resolve("logs").toString())
+                                    logPath("logs").toString())
                             .directory(directory.toFile())
                             .redirectErrorStream(true)
-                            .redirectOutput(directory.resolve("zlm.log").toFile())
+                            .redirectOutput(logPath("zlm.log").toFile())
                             .start();
             Process ownedServer = server;
             await(() -> ownedServer.isAlive() && available(), Duration.ofSeconds(12));
@@ -380,6 +392,8 @@ class ZlmPreviewRealMediaTest {
                     ZlmPreviewGateway activeGateway = gateway;
                     publisher = publisher(ffmpeg, rtsp, sourceApp, codec);
                     await(() -> frames(sourceApp, "source") > 0, Duration.ofSeconds(10));
+                    if ("H265".equals(codec))
+                        verifySharedTranscode(gateway, service, registry, sourceApp, rtsp, result);
                     stream =
                             gateway.open(
                                     runtime,
@@ -570,6 +584,8 @@ class ZlmPreviewRealMediaTest {
             stopOwnedChildren(server, ffmpeg);
             stop(server);
             evidence.put("isolatedZlmStopped", server == null || !server.isAlive());
+            deleteIsolatedExecutable(ffmpeg);
+            evidence.put("isolatedExecutableReleased", true);
             String destination = System.getenv("SF_PREVIEW_REAL_EVIDENCE_DIR");
             if (destination != null) {
                 Path output = Path.of(destination);
@@ -680,7 +696,7 @@ class ZlmPreviewRealMediaTest {
                         "rtsp://127.0.0.1:" + port + "/" + app + "/source"));
         return new ProcessBuilder(arguments)
                 .redirectErrorStream(true)
-                .redirectOutput(directory.resolve(codec + "-publisher.log").toFile())
+                .redirectOutput(logPath(codec + "-publisher.log").toFile())
                 .start();
     }
 
@@ -738,7 +754,16 @@ class ZlmPreviewRealMediaTest {
     private String config(Path ffmpeg, int api, int rtsp, int rtmp, int rtc)
             throws java.io.IOException {
         String previewCommand =
-                Files.readAllLines(Path.of("config/zlm-preview.ini.example")).stream()
+                Files.readAllLines(
+                                Path.of(
+                                        "config",
+                                        "h264_nvenc"
+                                                        .equals(
+                                                                System.getenv(
+                                                                        "SF_PREVIEW_TEST_ENCODER"))
+                                                ? "zlm-preview-nvenc.ini.example"
+                                                : "zlm-preview.ini.example"))
+                        .stream()
                         .filter(line -> line.startsWith("cmd="))
                         .map(line -> line.substring("cmd=".length()))
                         .findFirst()
@@ -795,7 +820,127 @@ class ZlmPreviewRealMediaTest {
                         rtc,
                         ffmpeg.toString().replace('\\', '/'),
                         previewCommand,
-                        directory.resolve("ffmpeg.log").toString().replace('\\', '/'));
+                        logPath("ffmpeg.log").toString().replace('\\', '/'));
+    }
+
+    private Path logPath(String name) throws java.io.IOException {
+        String evidenceDirectory = System.getenv("SF_PREVIEW_REAL_EVIDENCE_DIR");
+        Path logs =
+                evidenceDirectory == null
+                        ? directory
+                        : Path.of(evidenceDirectory)
+                                .resolve("process-logs")
+                                .resolve(directory.getFileName());
+        Files.createDirectories(logs);
+        return logs.resolve(name);
+    }
+
+    private void verifySharedTranscode(
+            ZlmPreviewGateway gateway,
+            MediaRuntimeService runtimes,
+            PreviewTranscodeRegistry registry,
+            String sourceApp,
+            int rtsp,
+            Map<String, Object> evidence)
+            throws Exception {
+        var channels = mock(CameraChannelMapper.class);
+        var profiles = mock(CameraProfileMapper.class);
+        var authorization = mock(PreviewAuthorization.class);
+        var locators = mock(PreviewLocatorService.class);
+        var channel = new CameraChannelEntity();
+        channel.setId(10L);
+        channel.setLifecycle("ENABLED");
+        var profile = new CameraProfileEntity();
+        profile.setId(20L);
+        profile.setChannelId(10L);
+        profile.setEnabled(true);
+        when(channels.selectById(10L)).thenReturn(channel);
+        when(profiles.selectById(20L)).thenReturn(profile);
+        when(profiles.selectList(org.mockito.ArgumentMatchers.any())).thenReturn(List.of(profile));
+        when(authorization.principal(10L))
+                .thenReturn(new SessionPrincipalDto(1L, 0L, Instant.now()));
+        when(authorization.stillAllowed(
+                        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyLong()))
+                .thenReturn(true);
+        when(runtimes.activeZlm()).thenReturn(Optional.of(runtime));
+        when(locators.connectionKey(profile)).thenReturn("real-shared-configuration");
+        when(locators.resolve(
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any()))
+                .thenReturn(
+                        new PreviewLocatorService.Resolved(
+                                URI.create(
+                                        "rtsp://127.0.0.1:" + rtsp + "/" + sourceApp + "/source")));
+        try (var pulls = new PreviewPullRegistry(directory.resolve("shared-pulls"), json)) {
+            var leases =
+                    new PreviewLeaseService(
+                            authorization,
+                            new PreviewProfileSelector(channels, profiles),
+                            locators,
+                            new LocalPreviewExecutor(
+                                    gateway,
+                                    runtimes,
+                                    pulls,
+                                    registry,
+                                    new PreviewRecoveryCoordinator(pulls, gateway, runtimes)),
+                            java.time.Clock.systemUTC(),
+                            new PreviewProperties(64, 64));
+            try {
+                var first =
+                        leases.create(
+                                new PreviewModels.CreateLease(
+                                        UUID.randomUUID().toString(),
+                                        "10",
+                                        "20",
+                                        "MAIN",
+                                        List.of("H264")));
+                assertThat(first.state())
+                        .as("first shared viewer: %s", first.reasonCode())
+                        .isEqualTo("READY");
+                var second =
+                        leases.create(
+                                new PreviewModels.CreateLease(
+                                        UUID.randomUUID().toString(),
+                                        "10",
+                                        "20",
+                                        "MAIN",
+                                        List.of("H264")));
+                assertThat(second.state())
+                        .as("second shared viewer: %s", second.reasonCode())
+                        .isEqualTo("READY");
+                assertThat(first.transcoded() && second.transcoded()).isTrue();
+                assertThat(registry.keys()).hasSize(1);
+                leases.delete(first.leaseId());
+                assertThat(registry.keys()).hasSize(1);
+                assertThat(leases.renew(second.leaseId()).state()).isEqualTo("READY");
+                await(
+                        () -> {
+                            try {
+                                leases.delete(second.leaseId());
+                                return leases.capacity().occupiedSessions() == 0;
+                            } catch (PreviewFailure pending) {
+                                assertThat(pending.reason()).isEqualTo("CLEANUP_PENDING");
+                                assertThat(registry.keys()).hasSize(1);
+                                evidence.put("sharedCleanupRetainsReservation", true);
+                                return false;
+                            }
+                        },
+                        Duration.ofSeconds(40));
+                assertThat(registry.keys()).isEmpty();
+                assertThat(leases.capacity().occupiedSessions()).isZero();
+                evidence.put("sharedTranscodeTwoViewers", true);
+                evidence.put("firstViewerCloseKeepsSharedEncoder", true);
+                evidence.put("lastViewerCloseReleasesSharedEncoder", true);
+                evidence.put(
+                        "configuredEncoder",
+                        System.getenv("SF_PREVIEW_TEST_ENCODER") == null
+                                ? "libx264"
+                                : System.getenv("SF_PREVIEW_TEST_ENCODER"));
+            } finally {
+                leases.close();
+            }
+        }
     }
 
     private boolean available() {
@@ -914,6 +1059,21 @@ class ZlmPreviewRealMediaTest {
                     child.destroyForcibly();
                     child.onExit().get(3, java.util.concurrent.TimeUnit.SECONDS);
                 }
+            }
+        }
+    }
+
+    private static void deleteIsolatedExecutable(Path executable) throws Exception {
+        // Windows can retain the image mapping briefly after ProcessHandle reports exit. Wait
+        // for this test's exact copy to become deletable; persistent locks still fail the test.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (true) {
+            try {
+                Files.deleteIfExists(executable);
+                return;
+            } catch (java.nio.file.FileSystemException locked) {
+                if (System.nanoTime() >= deadline) throw locked;
+                Thread.sleep(100);
             }
         }
     }

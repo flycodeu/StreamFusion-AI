@@ -10,10 +10,10 @@ import org.springframework.boot.context.properties.source.MapConfigurationProper
 
 class PreviewPropertiesTest {
     @Test
-    void defaultsAreConservativeAndIndependent() {
+    void defaultsCoverSixtyFourViewersAndDistinctEncodedSources() {
         var properties = bind(Map.of());
-        assertThat(properties.maxSessions()).isEqualTo(36);
-        assertThat(properties.maxTranscodes()).isEqualTo(2);
+        assertThat(properties.maxSessions()).isEqualTo(64);
+        assertThat(properties.maxTranscodes()).isEqualTo(64);
     }
 
     @Test
@@ -32,8 +32,8 @@ class PreviewPropertiesTest {
                                         "platform.preview.max-sessions",
                                         "64",
                                         "platform.preview.max-transcodes",
-                                        "8")))
-                .isEqualTo(new PreviewProperties(64, 8));
+                                        "64")))
+                .isEqualTo(new PreviewProperties(64, 64));
     }
 
     @Test
@@ -41,7 +41,7 @@ class PreviewPropertiesTest {
         for (int sessions : new int[] {-1, 0, 65, Integer.MAX_VALUE})
             assertThatThrownBy(() -> new PreviewProperties(sessions, 2))
                     .isInstanceOf(IllegalArgumentException.class);
-        for (int transcodes : new int[] {-1, 9, Integer.MAX_VALUE})
+        for (int transcodes : new int[] {-1, 65, Integer.MAX_VALUE})
             assertThatThrownBy(() -> new PreviewProperties(36, transcodes))
                     .isInstanceOf(IllegalArgumentException.class);
     }

@@ -23,21 +23,25 @@ func ValidRoot(root string) bool {
 }
 
 type Config struct {
-	InitialPasswordCredentialID string   `json:"initialPasswordCredentialId"`
-	InitialPasswordRevision     string   `json:"initialPasswordRevision"`
-	BindingIDs                  []string `json:"bindingIds"`
-	Environment                 string   `json:"environment"`
-	Profile                     string   `json:"profile"`
-	BindAddress                 string   `json:"bindAddress"`
-	HostPort                    int      `json:"hostPort"`
-	ContainerPort               int      `json:"containerPort"`
-	MemoryMiB                   int      `json:"memoryMiB"`
-	HealthPath                  string   `json:"healthPath"`
-	HealthSeconds               int      `json:"healthSeconds"`
-	DataCompatibility           string   `json:"dataCompatibility"`
+	Preview                     *PreviewConfig `json:"preview,omitempty"`
+	InitialPasswordCredentialID string         `json:"initialPasswordCredentialId"`
+	InitialPasswordRevision     string         `json:"initialPasswordRevision"`
+	BindingIDs                  []string       `json:"bindingIds"`
+	Environment                 string         `json:"environment"`
+	Profile                     string         `json:"profile"`
+	BindAddress                 string         `json:"bindAddress"`
+	HostPort                    int            `json:"hostPort"`
+	ContainerPort               int            `json:"containerPort"`
+	MemoryMiB                   int            `json:"memoryMiB"`
+	HealthPath                  string         `json:"healthPath"`
+	HealthSeconds               int            `json:"healthSeconds"`
+	DataCompatibility           string         `json:"dataCompatibility"`
 }
 
 func (c Config) Validate() error {
+	if c.Preview != nil {
+		return c.validatePreview()
+	}
 	if (c.InitialPasswordCredentialID == "") != (c.InitialPasswordRevision == "") || c.InitialPasswordCredentialID != "" && (!ID.MatchString(c.InitialPasswordCredentialID) || !regexp.MustCompile(`^[1-9][0-9]{0,3}$`).MatchString(c.InitialPasswordRevision)) {
 		return errors.New("INITIAL_PASSWORD_REFERENCE_INVALID")
 	}
@@ -91,6 +95,7 @@ func (b Binding) Validate() error {
 }
 
 type Request struct {
+	MaintenancePermit    string            `json:"maintenancePermit,omitempty"`
 	ProtocolVersion      int               `json:"protocolVersion"`
 	ExecutorVersion      string            `json:"executorVersion"`
 	ControllerID         string            `json:"controllerId"`
@@ -129,28 +134,29 @@ type Owner struct {
 	DockerBinary    string `json:"dockerBinary"`
 }
 type Result struct {
-	ProtocolVersion   int    `json:"protocolVersion"`
-	ExecutorVersion   string `json:"executorVersion"`
-	ControllerID      string `json:"controllerId"`
-	TargetID          string `json:"targetId"`
-	JobID             string `json:"jobId"`
-	InputHash         string `json:"inputHash"`
-	Status            string `json:"status"`
-	Phase             string `json:"phase"`
-	ErrorCode         string `json:"errorCode"`
-	ReleaseID         string `json:"releaseId"`
-	ImageID           string `json:"imageId"`
-	ConfigHash        string `json:"configHash"`
-	ContainerID       string `json:"containerId"`
-	Health            string `json:"health"`
-	PluginKey         string `json:"pluginKey,omitempty"`
-	PluginVersion     string `json:"pluginVersion,omitempty"`
-	PluginKind        string `json:"pluginKind,omitempty"`
-	PluginImageDigest string `json:"pluginImageDigest,omitempty"`
-	ObservedVersion   string `json:"observedVersion,omitempty"`
-	Platform          string `json:"platform,omitempty"`
-	ObservedAt        string `json:"observedAt"`
-	Ack               bool   `json:"ack"`
+	Preview           *PreviewObservation `json:"preview,omitempty"`
+	ProtocolVersion   int                 `json:"protocolVersion"`
+	ExecutorVersion   string              `json:"executorVersion"`
+	ControllerID      string              `json:"controllerId"`
+	TargetID          string              `json:"targetId"`
+	JobID             string              `json:"jobId"`
+	InputHash         string              `json:"inputHash"`
+	Status            string              `json:"status"`
+	Phase             string              `json:"phase"`
+	ErrorCode         string              `json:"errorCode"`
+	ReleaseID         string              `json:"releaseId"`
+	ImageID           string              `json:"imageId"`
+	ConfigHash        string              `json:"configHash"`
+	ContainerID       string              `json:"containerId"`
+	Health            string              `json:"health"`
+	PluginKey         string              `json:"pluginKey,omitempty"`
+	PluginVersion     string              `json:"pluginVersion,omitempty"`
+	PluginKind        string              `json:"pluginKind,omitempty"`
+	PluginImageDigest string              `json:"pluginImageDigest,omitempty"`
+	ObservedVersion   string              `json:"observedVersion,omitempty"`
+	Platform          string              `json:"platform,omitempty"`
+	ObservedAt        string              `json:"observedAt"`
+	Ack               bool                `json:"ack"`
 }
 
 func StrictJSON(data []byte, dst any) error {

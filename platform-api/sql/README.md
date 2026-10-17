@@ -1,6 +1,6 @@
 # 数据库
 
-要求 MySQL 8.0.17+。新安装只需执行 [streamfusion-mysql.sql](streamfusion-mysql.sql)，包含30张应用表、索引、约束和初始数据。应用启动只检查结构，不自动建表或迁移。
+要求 MySQL 8.0.17+。新安装只需执行 [streamfusion-mysql.sql](streamfusion-mysql.sql)，包含35张应用表、索引、约束和初始数据。应用启动只检查结构，不自动建表或迁移。
 
 **初始化文件包含 DROP TABLE，只能用于专用空库；已有数据的库禁止重复导入。**
 
@@ -44,6 +44,7 @@ SHOW TABLES;
 | 审计与登录 | sys_operation_log、sys_audit_retention_policy、sys_audit_export、sys_login_record、sys_ip_block |
 | 相机与接入 | camera_source、camera_device、camera_channel、camera_stream_profile 及凭据、端点、定位和导入表 |
 | 状态与巡检 | camera_status_check、camera_status_snapshot、camera_status_plan、camera_status_plan_target |
+| 本机及可选远程预览 | preview_node、preview_source、preview_output、preview_viewer、preview_operation |
 | 视频分组与范围 | camera_group、camera_user_scope、camera_user_group_grant、camera_user_channel_grant |
 
 设备、通道、码流分别保存。状态快照以 `(profile_id, layer)` 为主键，区分控制连接、媒体收帧和平台状态；巡检计划保存固定范围、执行间隔、期限和并发方式。检查时间是采样时间，不是设备真实上下线时间。
@@ -82,3 +83,13 @@ CREATE INDEX ix_camera_status_source ON camera_status_check(source_id,layer,exec
 ```
 
 本机检查读取 `local` 配置，结构检查只允许本机3306端口的 `streamfusion` 库；连通检查还需要 Redis。两项默认跳过，不修改业务数据。健康接口正常不代表相机、预览或厂商平台已完成实机验收。
+
+## S3 预览升级
+
+平台累计5张预览责任表，远程节点不连接数据库。新库使用完整初始化；已有库先备份、停止平台并确认所有预览责任已清空，禁止重放初始化。
+
+- 尚无任何preview表：使用[节点包](../preview-node/README.md)中的`platform-upgrade.sql`，由5份逐表源生成CREATE-only语句。
+- 已有完整S2三表：用`python preview-node/export-s2-upgrade.py <新文件.sql>`生成`platform-s2-to-s3.sql`。脚本先拒绝活动观看或PENDING/UNKNOWN操作，再扩展节点/观看字段、增加Source/Output；保留原远程模式。本机行的初始启用与否按原模式确定。
+- 部分升级或结构不一致：逐项核对后制订增量，不盲目重跑。MySQL DDL不具备整段事务回滚；临时过程执行报错后须检查已完成步骤与过程是否仍存在。不要通过删责任记录绕过升级保护。
+
+启动只读检查5表和必需字段，不自动迁移。隔离MySQL验证覆盖全新35表、S2增量后5表列结构一致及活动责任阻断升级；各目标数据库仍需独立备份、演练和核对。回退应用前须排空，保留新增表与备份；S2单节点结构的恢复须维护窗口定向评估。

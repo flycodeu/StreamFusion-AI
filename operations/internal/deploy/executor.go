@@ -151,6 +151,9 @@ func (x *executor) docker(args ...string) ([]byte, error) {
 	if len(args) > 0 && args[0] == "pull" {
 		limit = 8 * time.Minute
 	}
+	if len(args) > 1 && args[0] == "image" && args[1] == "load" {
+		limit = 2 * time.Minute
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	if e := secureAncestors(x.owner.DockerBinary); e != nil {
@@ -165,6 +168,9 @@ func (x *executor) docker(args ...string) ([]byte, error) {
 	return out.Bytes(), err
 }
 func (x *executor) compose(r Release) (string, error) {
+	if r.Config.Preview != nil {
+		return x.previewCompose(r)
+	}
 	dir := filepath.Join(x.root, "instances", r.InstanceID, "releases", r.ID)
 	if e := os.MkdirAll(dir, 0700); e != nil {
 		return "", e
@@ -263,6 +269,9 @@ func (x *executor) inspected(r Release) (Result, error) {
 	return Result{ReleaseID: r.ID, ImageID: v.Image, ConfigHash: Digest(r.Config), ContainerID: v.ID, Health: "PROCESS_RUNNING", ObservedAt: stamp()}, nil
 }
 func (x *executor) healthy(r Release) (Result, error) {
+	if r.Config.Preview != nil {
+		return x.previewHealth(r)
+	}
 	end := time.Now().Add(time.Duration(r.Config.HealthSeconds) * time.Second)
 	client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	defer client.CloseIdleConnections()
@@ -311,11 +320,14 @@ func (x *executor) stopOwned(r Release) error {
 	return e
 }
 func validateRelease(r *Release) error {
-	if r == nil || !ID.MatchString(r.ID) || !ID.MatchString(r.InstanceID) || !ID.MatchString(r.ArtifactID) || !Hex.MatchString(r.ArchiveSHA256) || r.ByteSize < 1 || r.ByteSize > ArchiveLimit || !strings.HasPrefix(r.ImageID, "sha256:") || !Hex.MatchString(strings.TrimPrefix(r.ImageID, "sha256:")) {
+	if r == nil || !ID.MatchString(r.ID) || !ID.MatchString(r.InstanceID) || !ID.MatchString(r.ArtifactID) || !Hex.MatchString(r.ArchiveSHA256) || r.ByteSize < 1 || r.ByteSize > ArchiveLimitFor(r.Config.Recipe()) || !strings.HasPrefix(r.ImageID, "sha256:") || !Hex.MatchString(strings.TrimPrefix(r.ImageID, "sha256:")) {
 		return errors.New("RELEASE_INVALID")
 	}
 	if len(r.Bindings) > 2 {
 		return errors.New("BINDING_LIMIT")
+	}
+	if r.Config.Preview != nil && len(r.Bindings) != 0 {
+		return errors.New("PREVIEW_BINDING_FORBIDDEN")
 	}
 	kinds := map[string]bool{}
 	for _, b := range r.Bindings {
@@ -348,8 +360,8 @@ func Execute(input io.Reader, output io.Writer) error {
 	if e = readJSON(filepath.Join(root, "owner.json"), &x.owner); e != nil {
 		return e
 	}
-	br := bufio.NewReader(io.LimitReader(input, ArchiveLimit+(128<<10)))
-	line, e := br.ReadString('\n')
+	br := bufio.NewReaderSize(io.LimitReader(input, PreviewArchiveLimit+(128<<10)), 64<<10)
+	line, e := br.ReadSlice('\n')
 	if e != nil || len(line) > 64<<10 {
 		return errors.New("ENVELOPE_INVALID")
 	}
@@ -386,7 +398,7 @@ func Execute(input io.Reader, output io.Writer) error {
 		} else if _, e := os.Lstat(filepath.Join(root, "pending.json")); !os.IsNotExist(e) {
 			return errors.New("TARGET_PENDING_DAMAGED")
 		}
-		return json.NewEncoder(output).Encode(map[string]any{"owner": x.owner, "dockerVersion": strings.TrimSpace(string(v)), "composeVersion": strings.TrimSpace(string(c)), "platform": "linux/amd64", "pendingJobId": pendingJob, "dockerRootDir": storageRoot, "dockerAvailableBytes": free, "pluginCatalogHash": pluginCatalogHash()})
+		return json.NewEncoder(output).Encode(map[string]any{"owner": x.owner, "dockerVersion": strings.TrimSpace(string(v)), "composeVersion": strings.TrimSpace(string(c)), "platform": "linux/amd64", "pendingJobId": pendingJob, "dockerRootDir": storageRoot, "dockerAvailableBytes": free, "pluginCatalogHash": pluginCatalogHash(), "previewRecipe": PreviewRecipe})
 	}
 	if req.Action == "BINDING_PROBE" {
 		if req.Binding == nil || req.Binding.Validate() != nil {
@@ -398,6 +410,19 @@ func Execute(input io.Reader, output io.Writer) error {
 		}
 		return json.NewEncoder(output).Encode(map[string]any{"reachable": e == nil, "observedAt": stamp()})
 	}
+	if req.Action == "PREVIEW_REGISTRATION" {
+		if validateRelease(req.Candidate) != nil || req.Candidate.Config.Preview == nil {
+			return errors.New("PREVIEW_RELEASE_REQUIRED")
+		}
+		if _, e = x.inspected(*req.Candidate); e != nil {
+			return e
+		}
+		value, err := x.previewRegistration(*req.Candidate)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(value)
+	}
 	if req.Action == "INSPECT" || req.Action == "LOGS" {
 		if e = validateRelease(req.Candidate); e != nil {
 			return e
@@ -407,6 +432,12 @@ func Execute(input io.Reader, output io.Writer) error {
 			return e
 		}
 		if req.Action == "INSPECT" {
+			if req.Candidate.Config.Preview != nil {
+				actual, e = x.previewObserved(*req.Candidate)
+				if e != nil {
+					return e
+				}
+			}
 			return json.NewEncoder(output).Encode(actual)
 		}
 		out, e := x.docker("logs", "--timestamps", "--tail", "200", actual.ContainerID)
@@ -549,6 +580,15 @@ func Execute(input io.Reader, output io.Writer) error {
 			if e != nil {
 				return errors.New("ACK_ACTUAL_STATE_DRIFT")
 			}
+			if intent.Baseline != nil && intent.Candidate.Config.Preview != nil {
+				current := *intent.Candidate
+				if res.Status == "FAILED" {
+					current = *intent.Baseline
+				}
+				if e = x.previewMaintain(intent, "FINISH", current); e != nil {
+					return e
+				}
+			}
 			if e = atomicJSON(filepath.Join(dir, "ack.json"), map[string]string{"ResultHash": req.ResultHash}); e != nil {
 				return e
 			}
@@ -587,6 +627,9 @@ func Execute(input io.Reader, output io.Writer) error {
 			return errors.New("RECOVERY_COMPATIBILITY_MISMATCH")
 		}
 	}
+	if e = ValidatePreviewTransition(req.Candidate, req.Baseline, req.MaintenancePermit); e != nil {
+		return e
+	}
 	frozen := req
 	frozen.InputHash = ""
 	frozen.Secrets = nil
@@ -620,11 +663,17 @@ func Execute(input io.Reader, output io.Writer) error {
 		if out, e := x.docker("ps", "-a", "--filter", "name=^/"+name+"$", "--format", "{{.ID}}"); e != nil || len(bytes.TrimSpace(out)) > 0 {
 			return errors.New("EXISTING_CONTAINER_CONFLICT")
 		}
-		listener, e := net.Listen("tcp", net.JoinHostPort(req.Candidate.Config.BindAddress, strconv.Itoa(req.Candidate.Config.HostPort)))
-		if e != nil {
-			return errors.New("PORT_IN_USE")
+		if req.Candidate.Config.Preview != nil {
+			if e = previewPorts(req.Candidate.Config); e != nil {
+				return e
+			}
+		} else {
+			listener, e := net.Listen("tcp", net.JoinHostPort(req.Candidate.Config.BindAddress, strconv.Itoa(req.Candidate.Config.HostPort)))
+			if e != nil {
+				return errors.New("PORT_IN_USE")
+			}
+			listener.Close()
 		}
-		listener.Close()
 	}
 	if _, e = x.docker("compose", "version", "--short"); e != nil {
 		return errors.New("COMPOSE_UNAVAILABLE")
@@ -656,7 +705,7 @@ func Execute(input io.Reader, output io.Writer) error {
 		if e != nil {
 			return e
 		}
-		image, e := ValidateArchive(partial, req.Candidate.ArchiveSHA256, req.Candidate.ByteSize)
+		image, e := ValidateRecipeArchive(partial, req.Candidate.ArchiveSHA256, req.Candidate.ByteSize, req.Candidate.Config.Recipe())
 		if e != nil || image != req.Candidate.ImageID {
 			return errors.New("TARGET_ARCHIVE_INVALID")
 		}
@@ -664,7 +713,7 @@ func Execute(input io.Reader, output io.Writer) error {
 			return e
 		}
 	} else {
-		image, e := ValidateArchive(pkg, req.Candidate.ArchiveSHA256, req.Candidate.ByteSize)
+		image, e := ValidateRecipeArchive(pkg, req.Candidate.ArchiveSHA256, req.Candidate.ByteSize, req.Candidate.Config.Recipe())
 		if e != nil || image != req.Candidate.ImageID {
 			return errors.New("TARGET_CACHE_INVALID")
 		}
@@ -682,6 +731,11 @@ func Execute(input io.Reader, output io.Writer) error {
 	if _, e = x.docker("image", "load", "-i", pkg); e != nil {
 		return x.recover(req, resultFile, output, "IMAGE_LOAD_FAILED")
 	}
+	if req.Baseline != nil && req.Candidate.Config.Preview != nil {
+		if e = x.previewMaintain(req, "CLAIM", *req.Baseline); e != nil {
+			return x.recover(req, resultFile, output, e.Error())
+		}
+	}
 	if e = x.checkpoint(req, "ACTIVATE"); e != nil {
 		return e
 	}
@@ -691,6 +745,9 @@ func Execute(input io.Reader, output io.Writer) error {
 		}
 		var actual Result
 		actual, e = x.healthy(*req.Candidate)
+		if e == nil && req.Baseline != nil && req.Candidate.Config.Preview != nil && (actual.Preview == nil || actual.Preview.State != "MAINTENANCE") {
+			e = errors.New("PREVIEW_FENCE_NOT_PRESERVED")
+		}
 		if e == nil {
 			actual.ProtocolVersion = 1
 			actual.ExecutorVersion = Version
@@ -728,15 +785,27 @@ func (x *executor) recover(req Request, resultFile string, output io.Writer, rea
 	}
 	res := Result{ProtocolVersion: 1, ExecutorVersion: Version, ControllerID: req.ControllerID, TargetID: req.TargetID, JobID: req.JobID, InputHash: req.InputHash, Status: "UNKNOWN", Phase: "RECOVERY_REQUIRED", ErrorCode: reason, ObservedAt: stamp()}
 	if req.Baseline != nil {
-		if e := x.activate(*req.Baseline); e == nil {
+		var activateError error
+		previewClaimed := req.Candidate.Config.Preview != nil && x.previewClaimed(req)
+		if previewClaimed {
+			activateError = x.recordPreviewClaim(req)
+		}
+		if activateError == nil && (req.Candidate.Config.Preview == nil || previewClaimed) {
+			activateError = x.activate(*req.Baseline)
+		}
+		if activateError == nil {
 			if actual, e := x.healthy(*req.Baseline); e == nil {
 				res.ReleaseID = actual.ReleaseID
 				res.ImageID = actual.ImageID
 				res.ContainerID = actual.ContainerID
 				res.ConfigHash = actual.ConfigHash
 				res.Health = actual.Health
+				res.Preview = actual.Preview
 				res.Status = "FAILED"
 				res.Phase = "BASELINE_RESTORED"
+				if req.Candidate.Config.Preview != nil && !previewClaimed {
+					res.Phase = "BASELINE_UNCHANGED"
+				}
 			}
 		}
 	} else {

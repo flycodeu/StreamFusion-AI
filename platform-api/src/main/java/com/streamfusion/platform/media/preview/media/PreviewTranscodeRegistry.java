@@ -46,10 +46,10 @@ public final class PreviewTranscodeRegistry {
     }
 
     PreviewTranscodeRegistry(Path directory, ObjectMapper json) {
-        this(directory, json, 2);
+        this(directory, json, 64);
     }
 
-    PreviewTranscodeRegistry(Path directory, ObjectMapper json, int maxTranscodes) {
+    public PreviewTranscodeRegistry(Path directory, ObjectMapper json, int maxTranscodes) {
         if (maxTranscodes < 0) throw new IllegalArgumentException("Invalid transcode capacity");
         this.file = directory.resolve("preview-transcodes.json");
         this.json = json;

@@ -14,8 +14,9 @@ import (
 
 func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id string) {
 	var in struct {
-		Kind       string `json:"kind"`
-		ArtifactID string `json:"artifactId"`
+		MaintenancePermit string `json:"maintenancePermit"`
+		Kind              string `json:"kind"`
+		ArtifactID        string `json:"artifactId"`
 	}
 	if e := decode(w, r, &in); e != nil {
 		h.fail(w, r, 400, "INVALID_INPUT", e.Error())
@@ -31,6 +32,7 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 		return
 	}
 	p := plan{ID: uuid.NewString(), Kind: in.Kind, TargetID: i.TargetID, InstanceID: id, ExpectedVersion: i.Version, ExpectedGeneration: i.Generation, ExpiresAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)}
+	p.MaintenancePermit = in.MaintenancePermit
 	if i.Current != "" {
 		baseline, e := h.store.readRelease(i.Current)
 		if e != nil {
@@ -71,6 +73,10 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 		h.fail(w, r, 409, "DATA_COMPATIBILITY_BLOCKED", "候选与恢复版本的数据兼容标识不同，须先评估数据维护方案")
 		return
 	}
+	if e = deploy.ValidatePreviewTransition(&p.Candidate, p.Baseline, p.MaintenancePermit); e != nil {
+		h.fail(w, r, 409, e.Error(), "请先在平台排空节点并取得维护许可；节点身份不可原地变更")
+		return
+	}
 	checkSecrets := deploy.Request{Candidate: &p.Candidate, Baseline: p.Baseline}
 	if e = h.store.releaseSecrets(&checkSecrets); e != nil {
 		h.fail(w, r, 409, "CREDENTIAL_UNAVAILABLE", "候选或恢复版本的凭据修订不可用")
@@ -78,7 +84,12 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 	}
 	for _, rel := range []*deploy.Release{&p.Candidate, p.Baseline} {
 		if rel != nil {
-			image, e := deploy.ValidateArchive(h.store.artifactPath(rel.ArtifactID), rel.ArchiveSHA256, rel.ByteSize)
+			var recipe string
+			if e = h.store.DB.QueryRow("SELECT recipe FROM artifacts WHERE id=?", rel.ArtifactID).Scan(&recipe); e != nil || recipe != rel.Config.Recipe() {
+				h.fail(w, r, 409, "ARTIFACT_RECIPE_MISMATCH", "请选择与实例配方一致的制品")
+				return
+			}
+			image, e := deploy.ValidateRecipeArchive(h.store.artifactPath(rel.ArtifactID), rel.ArchiveSHA256, rel.ByteSize, rel.Config.Recipe())
 			if e != nil || image != rel.ImageID {
 				h.fail(w, r, 409, "RECOVERY_MATERIAL_MISSING", "候选或恢复镜像归档缺失或损坏")
 				return
@@ -96,10 +107,15 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 		return
 	}
 	var targetFact struct {
-		PendingJobID string `json:"pendingJobId"`
+		PendingJobID  string `json:"pendingJobId"`
+		PreviewRecipe string `json:"previewRecipe"`
 	}
 	if json.Unmarshal(probeResult, &targetFact) != nil || targetFact.PendingJobID != "" {
 		h.fail(w, r, 409, "TARGET_PENDING", "目标仍有未决作业，禁止从旧备份或新计划绕过")
+		return
+	}
+	if p.Candidate.Config.Preview != nil && targetFact.PreviewRecipe != deploy.PreviewRecipe {
+		h.fail(w, r, 409, "TARGET_PREVIEW_RECIPE_REQUIRED", "目标执行器不支持预览节点配方，请先更新执行器")
 		return
 	}
 	p.InputHash = deploy.Digest(p)
@@ -220,6 +236,7 @@ func (h *HTTP) submitPlan(w http.ResponseWriter, r *http.Request, s *session, id
 		}
 	}
 	req := deploy.Request{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: h.storeIDTx(tx), TargetID: p.TargetID, JobID: jobID, TraceID: r.Context().Value(traceKey{}).(string), Action: "ACTIVATE", Candidate: &p.Candidate, Baseline: p.Baseline, DeadlineAt: time.Now().UTC().Add(10 * time.Minute).Format(time.RFC3339)}
+	req.MaintenancePermit = p.MaintenancePermit
 	req.InputHash = deploy.Digest(req)
 	now := Now()
 	_, e = tx.Exec("INSERT INTO jobs(id,actor_id,kind,target_id,instance_id,plan_id,release_id,idempotency_key,request_hash,status,phase,input_json,trace_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'QUEUED','PREFLIGHT',?,?,?,?)", jobID, s.AdminID, p.Kind, p.TargetID, p.InstanceID, p.ID, p.Candidate.ID, in.IdempotencyKey, hash, jsonText(req), req.TraceID, now, now)
@@ -261,6 +278,16 @@ func (h *HTTP) commitResult(id string, req deploy.Request, result deploy.Result)
 	}
 	if result.Status == "FAILED" && req.Baseline == nil && (result.Health != "STOPPED" || result.ReleaseID != "") {
 		return errors.New("STOP_EVIDENCE_MISMATCH")
+	}
+	evidenceRelease := req.Candidate
+	if result.Status == "FAILED" {
+		evidenceRelease = req.Baseline
+	}
+	if evidenceRelease != nil && evidenceRelease.Config.Preview != nil {
+		observed := result.Preview
+		if observed == nil || observed.ProtocolVersion != 1 || observed.NodeID != evidenceRelease.Config.Preview.NodeID || !deploy.ID.MatchString(observed.BootID) || !deploy.Hex.MatchString(observed.ConfigVersion) || observed.MaxSessions != evidenceRelease.Config.Preview.MaxViewers || observed.MaxTranscodes != evidenceRelease.Config.Preview.MaxTranscodes || (observed.State != "READY" && observed.State != "MAINTENANCE") {
+			return errors.New("PREVIEW_HEALTH_EVIDENCE_MISMATCH")
+		}
 	}
 	h.store.mu.Lock()
 	defer h.store.mu.Unlock()

@@ -1,9 +1,10 @@
-package com.streamfusion.platform.media.preview;
+package com.streamfusion.platform.media.preview.execution;
 
+import com.streamfusion.platform.media.preview.PreviewDeadline;
+import com.streamfusion.platform.media.preview.PreviewFailure;
 import com.streamfusion.platform.media.preview.media.PreviewMediaGateway;
 import com.streamfusion.platform.media.preview.media.PreviewMediaGateway.Stream;
 import com.streamfusion.platform.media.preview.media.PreviewPullRegistry;
-import com.streamfusion.platform.media.runtime.service.MediaRuntimeService;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
@@ -21,12 +22,12 @@ public class PreviewRecoveryCoordinator {
     private static final int MAX_ATTEMPTS = 6;
     private final PreviewPullRegistry pulls;
     private final PreviewMediaGateway media;
-    private final MediaRuntimeService runtimes;
+    private final PreviewRuntimeProvider runtimes;
     private final Map<PreviewPullRegistry.Entry, Integer> attempts = new HashMap<>();
     private long nextRetryRequest;
 
     public PreviewRecoveryCoordinator(
-            PreviewPullRegistry pulls, PreviewMediaGateway media, MediaRuntimeService runtimes) {
+            PreviewPullRegistry pulls, PreviewMediaGateway media, PreviewRuntimeProvider runtimes) {
         this.pulls = pulls;
         this.media = media;
         this.runtimes = runtimes;

@@ -33,7 +33,8 @@ import org.springframework.stereotype.Service;
 
 /** Coordinates discovery, read-only probes and the platform's selected runtime versions. */
 @Service
-public class MediaRuntimeService {
+public class MediaRuntimeService
+        implements com.streamfusion.platform.media.preview.execution.PreviewRuntimeProvider {
     private static final Logger LOG = LoggerFactory.getLogger(MediaRuntimeService.class);
     private final MediaRuntimeProperties properties;
     private final MediaHostAdapter adapter;

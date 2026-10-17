@@ -101,7 +101,7 @@ cd web && pnpm build
 
 ## 当前范围
 
-I02 当前实现本机/SSH Linux目标登记、固定 Java Compose 制品发布和应用回滚；Docker引擎自动安装、项目组合发布、源码构建及Jenkins尚未实现。I02仍需当前项目后端和真实第二台主机验收。Linux安装范围为Ubuntu24.04/systemd/amd64，Windows仅支持本机开发运行。
+I02 当前实现本机/SSH Linux目标登记、固定 Java Compose 制品发布和应用回滚；S4另接入预览节点固定配方、维护许可与版本回退，操作见[预览节点维护](preview-nodes.md)，工程验证与负责人验收分开。Docker引擎自动安装、项目组合发布、源码构建及Jenkins尚未实现。I02仍需当前项目后端和真实第二台主机验收。Linux安装范围为Ubuntu24.04/systemd/amd64，Windows仅支持本机开发运行。
 
 插件中心提供内置 Java 17/21 JRE 与 Maven 3.9.11 + JDK 21 的 Docker 镜像环境，按固定摘要和配方预检、安装、校验、核对与卸载。成功返回前验证实际镜像与版本；未知作业保留目标锁。当前尚未将插件绑定到应用实例，也未提供任意下载 URL、脚本安装或自动安装 Docker。与平台的 ZLM/FFmpeg 只读检测职责分开。
 

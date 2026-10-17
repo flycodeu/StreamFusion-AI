@@ -15,7 +15,7 @@ import (
 )
 
 func (h *HTTP) listArtifacts(w http.ResponseWriter, r *http.Request) {
-	rows, e := h.store.DB.Query("SELECT id,name,archive_sha256,byte_size,image_id,created_at FROM artifacts ORDER BY created_at DESC LIMIT 100")
+	rows, e := h.store.DB.Query("SELECT id,name,archive_sha256,byte_size,image_id,created_at,recipe FROM artifacts ORDER BY created_at DESC LIMIT 100")
 	if e != nil {
 		h.internal(w, r, e)
 		return
@@ -23,14 +23,14 @@ func (h *HTTP) listArtifacts(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var id, name, sha, image, created string
+		var id, name, sha, image, created, recipe string
 		var size int64
-		if e = rows.Scan(&id, &name, &sha, &size, &image, &created); e != nil {
+		if e = rows.Scan(&id, &name, &sha, &size, &image, &created, &recipe); e != nil {
 			h.internal(w, r, e)
 			return
 		}
 		_, e := os.Stat(h.store.artifactPath(id))
-		out = append(out, map[string]any{"id": id, "name": name, "archiveSha256": sha, "byteSize": size, "imageId": image, "platform": "linux/amd64", "available": e == nil, "createdAt": created})
+		out = append(out, map[string]any{"id": id, "name": name, "archiveSha256": sha, "byteSize": size, "imageId": image, "platform": "linux/amd64", "available": e == nil, "createdAt": created, "recipe": recipe})
 	}
 	h.success(w, r, out)
 }
@@ -40,8 +40,11 @@ func (h *HTTP) acceptImport(w http.ResponseWriter, r *http.Request, s *session) 
 		h.fail(w, r, 400, "INVALID_INPUT", e.Error())
 		return
 	}
-	if !validName(in.Name) || !deploy.Hex.MatchString(in.SHA) || in.Size < 1 || in.Size > deploy.ArchiveLimit || len(in.IdempotencyKey) < 8 || len(in.IdempotencyKey) > 80 {
-		h.fail(w, r, 400, "IMPORT_INVALID", "请填写名称、预期SHA-256与大小，归档上限512MiB")
+	if in.Recipe == "" {
+		in.Recipe = "java-compose-v1"
+	}
+	if (in.Recipe != "java-compose-v1" && in.Recipe != deploy.PreviewRecipe) || !validName(in.Name) || !deploy.Hex.MatchString(in.SHA) || in.Size < 1 || in.Size > deploy.ArchiveLimitFor(in.Recipe) || len(in.IdempotencyKey) < 8 || len(in.IdempotencyKey) > 80 {
+		h.fail(w, r, 400, "IMPORT_INVALID", "请填写配方、名称、预期SHA-256与大小；Java上限512MiB，预览节点上限2GiB")
 		return
 	}
 	h.store.mu.Lock()
@@ -170,7 +173,10 @@ func (h *HTTP) processImport(id, raw string) {
 	if e != nil {
 		return
 	}
-	image, e := deploy.ValidateArchive(h.store.uploadPath(id), in.SHA, in.Size)
+	if in.Recipe == "" {
+		in.Recipe = "java-compose-v1"
+	}
+	image, e := deploy.ValidateRecipeArchive(h.store.uploadPath(id), in.SHA, in.Size, in.Recipe)
 	if e != nil {
 		h.store.mu.Lock()
 		_, _ = h.store.DB.Exec("UPDATE jobs SET status='FAILED',error_code=?,updated_at=? WHERE id=?", e.Error(), Now(), id)
@@ -189,7 +195,7 @@ func (h *HTTP) processImport(id, raw string) {
 		return
 	}
 	defer tx.Rollback()
-	_, e = tx.Exec("INSERT INTO artifacts VALUES(?,?,?,?,?,?)", artifactID, in.Name, in.SHA, in.Size, image, Now())
+	_, e = tx.Exec("INSERT INTO artifacts(id,name,archive_sha256,byte_size,image_id,created_at,recipe) VALUES(?,?,?,?,?,?,?)", artifactID, in.Name, in.SHA, in.Size, image, Now(), in.Recipe)
 	if e == nil {
 		_, e = tx.Exec("UPDATE jobs SET status='SUCCEEDED',phase='REGISTERED',result_json=?,updated_at=? WHERE id=?", jsonText(map[string]string{"artifactId": artifactID, "imageId": image}), Now(), id)
 	}

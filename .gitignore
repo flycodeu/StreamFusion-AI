@@ -69,6 +69,21 @@ Thumbs.db
 *.tmp
 *.bak
 
+# Generated preview-node configuration, identity and deployment state
+**/machine-token
+**/tls-password
+**/zlm-secret
+/platform-api/preview-node/config/
+/platform-api/preview-node/platform-registration/
+/platform-api/preview-node/state/
+/platform-api/preview-node/build/
+/platform-api/preview-node/preview-node-image.tar
+/platform-api/preview-node/image-id.txt
+/platform-api/preview-node/upstream-images.txt
+/platform-api/preview-node/SHA256SUMS
+/platform-api/preview-node/platform-upgrade.sql
+/platform-api/preview-node/platform-s2-to-s3.sql
+
 # Algorithm artifacts and runtime output
 /algorithm-node/*/model-cache/
 /algorithm-node/*/artifacts/
