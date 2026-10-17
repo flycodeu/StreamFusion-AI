@@ -27,6 +27,12 @@ const diagnostic = ref<PreviewNodeStatus | null>(null),
 const administrator = computed(() => !!sessionState.me?.isSuperAdmin)
 const maintaining = ref<PreviewNodeStatus | null>(null)
 const maintenance = ref<PreviewMaintenance | null>(null)
+const maintenanceNames: Record<string, string> = {
+  OPEN: '未封闭',
+  SEALED: '已签发，等待 Ops 领取',
+  CLAIMED: 'Ops 执行中',
+  COMPLETE: 'Ops 已完成，等待解除',
+}
 const names: Record<string, string> = {
   LOCAL: '不接新预览',
   REMOTE: '参与调度',
@@ -68,7 +74,8 @@ async function run(operation?: () => Promise<unknown>) {
     const value = await getPreviewNodes(controller.signal)
     if (active()) {
       snapshot.value = value
-      if (maintaining.value) maintaining.value = value.nodes.find(n => n.nodeId === maintaining.value?.nodeId) ?? null
+      if (maintaining.value)
+        maintaining.value = value.nodes.find((n) => n.nodeId === maintaining.value?.nodeId) ?? null
       editing.value = null
     }
   } catch (cause) {
@@ -102,8 +109,13 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
   if (!node) return
   const active = captureScope()
   void run(async () => {
-    const value = await previewMaintenance(node, action,
-      action === 'PREPARE' ? globalThis.crypto.randomUUID() : maintenance.value?.permitId ?? undefined)
+    const value = await previewMaintenance(
+      node,
+      action,
+      action === 'PREPARE'
+        ? globalThis.crypto.randomUUID()
+        : (maintenance.value?.permitId ?? undefined),
+    )
     if (active() && maintaining.value?.nodeId === node.nodeId) maintenance.value = value
   })
 }
@@ -171,7 +183,12 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             <ElButton @click="diagnostic = node">诊断 JSON</ElButton>
             <template v-if="administrator">
               <ElButton :disabled="busy" @click="edit(node)">预算与优先级</ElButton>
-              <ElButton v-if="node.nodeId !== 'local'" :disabled="busy" @click="openMaintenance(node)">维护许可</ElButton>
+              <ElButton
+                v-if="node.nodeId !== 'local'"
+                :disabled="busy"
+                @click="openMaintenance(node)"
+                >维护许可</ElButton
+              >
               <ElButton v-if="node.mode !== 'REMOTE'" :disabled="busy" @click="mode(node, 'REMOTE')"
                 >参与调度</ElButton
               >
@@ -204,24 +221,54 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
         </div>
       </details>
     </div>
-    <ElDialog :model-value="!!maintaining" title="预览节点维护" width="min(680px, calc(100vw - 32px))"
-      append-to-body destroy-on-close @close="maintaining = null">
+    <ElDialog
+      :model-value="!!maintaining"
+      title="预览节点维护"
+      width="min(680px, calc(100vw - 32px))"
+      append-to-body
+      destroy-on-close
+      @close="maintaining = null"
+    >
       <div v-if="maintaining" class="maintenance-body">
         <p>{{ maintaining.name }} · {{ names[maintaining.mode] }}</p>
-        <ol><li>停止接新预览，等待已有观看关闭及资源释放。</li>
+        <ol>
+          <li>停止接新预览，等待已有观看关闭及资源释放。</li>
           <li>获取维护许可，在 Ops 对应预览实例的升级或回退计划中填写许可编号。</li>
-          <li>Ops 作业完成后检查节点；配置发生变化时重新导入登记，解除维护，再明确参与调度。</li></ol>
-        <RequestError :error="error" advice="未决 Ops 作业须先核对或恢复。许可过期不会自动解除维护。" />
-        <p v-if="maintenance">维护状态：{{ ({OPEN:'未封闭',SEALED:'已签发，等待 Ops 领取',CLAIMED:'Ops 执行中',COMPLETE:'Ops 已完成，等待解除'} as Record<string,string>)[maintenance.state] || maintenance.state }}</p>
+          <li>Ops 作业完成后检查节点；配置发生变化时重新导入登记，解除维护，再明确参与调度。</li>
+        </ol>
+        <RequestError
+          :error="error"
+          advice="未决 Ops 作业须先核对或恢复。许可过期不会自动解除维护。"
+        />
+        <p v-if="maintenance">
+          维护状态：{{ maintenanceNames[maintenance.state] || maintenance.state }}
+        </p>
         <template v-if="maintenance?.permitId">
-          <label>维护许可编号<input :value="maintenance.permitId" readonly aria-label="维护许可编号" /></label>
+          <label
+            >维护许可编号<input :value="maintenance.permitId" readonly aria-label="维护许可编号"
+          /></label>
           <p>领取期限：{{ formatDateTime(new Date(maintenance.expiresAt).toISOString()) }}</p>
-          <p v-if="maintenance.jobId">Ops 作业：<code>{{ maintenance.jobId }}</code></p>
+          <p v-if="maintenance.jobId">
+            Ops 作业：<code>{{ maintenance.jobId }}</code>
+          </p>
         </template>
         <div class="node-actions">
           <ElButton :disabled="busy" @click="maintain()">刷新维护状态</ElButton>
-          <ElButton :disabled="busy || maintaining.mode !== 'DRAINING' || maintenance?.state === 'CLAIMED'" @click="maintain('PREPARE')">获取维护许可</ElButton>
-          <ElButton :disabled="busy || maintaining.mode !== 'DRAINING' || !maintenance?.permitId || maintenance.state === 'CLAIMED'" @click="maintain('RELEASE')">解除维护</ElButton>
+          <ElButton
+            :disabled="busy || maintaining.mode !== 'DRAINING' || maintenance?.state === 'CLAIMED'"
+            @click="maintain('PREPARE')"
+            >获取维护许可</ElButton
+          >
+          <ElButton
+            :disabled="
+              busy ||
+              maintaining.mode !== 'DRAINING' ||
+              !maintenance?.permitId ||
+              maintenance.state === 'CLAIMED'
+            "
+            @click="maintain('RELEASE')"
+            >解除维护</ElButton
+          >
         </div>
       </div>
     </ElDialog>
@@ -371,10 +418,26 @@ dd {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
 }
-.maintenance-body { font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; }
-.maintenance-body ol { padding-left: 22px; }
-.maintenance-body label { display: grid; gap: 6px; }
-.maintenance-body input { width: 100%; box-sizing: border-box; padding: 8px; color: var(--el-text-color-primary); background: var(--el-bg-color); border: 1px solid var(--border-subtle); }
+.maintenance-body {
+  font-size: 14px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.maintenance-body ol {
+  padding-left: 22px;
+}
+.maintenance-body label {
+  display: grid;
+  gap: 6px;
+}
+.maintenance-body input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  color: var(--el-text-color-primary);
+  background: var(--el-bg-color);
+  border: 1px solid var(--border-subtle);
+}
 .budget-form label {
   display: grid;
   gap: 6px;
