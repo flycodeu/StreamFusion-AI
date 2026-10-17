@@ -285,13 +285,6 @@ onMounted(refresh)
       />
     </aside>
     <section class="camera-list-pane" aria-label="相机管理">
-      <header class="camera-list-heading">
-        <div>
-          <h2>相机管理</h2>
-          <p>{{ groupPath }}</p>
-        </div>
-        <span>{{ total }} 台相机</span>
-      </header>
       <ElForm class="search-form camera-search-form" inline @submit.prevent="search"
         ><ElFormItem label="设备 / 通道"
           ><ElInput
@@ -582,37 +575,19 @@ onMounted(refresh)
   border-radius: 6px;
   background: var(--el-bg-color);
 }
-.group-pane-header,
-.camera-list-heading {
+.group-pane-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-.group-pane-header {
   margin-bottom: 16px;
 }
-.group-pane-header h2,
-.camera-list-heading h2 {
+.group-pane-header h2 {
   font-size: 16px;
   margin: 0;
 }
 .camera-list-pane {
   min-width: 0;
-}
-.camera-list-heading {
-  margin-bottom: 16px;
-}
-.camera-list-heading p {
-  margin: 6px 0 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-.camera-list-heading > span {
-  flex-shrink: 0;
-  color: var(--text-secondary);
-  font-size: 13px;
 }
 .mobile-group-toggle {
   display: none;

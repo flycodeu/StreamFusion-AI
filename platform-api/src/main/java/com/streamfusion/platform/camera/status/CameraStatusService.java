@@ -17,10 +17,6 @@ import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.validation.DecimalInput;
 import com.streamfusion.platform.monitor.diagnostics.DiagnosticLog;
 import com.streamfusion.platform.system.access.mapper.AccessMapper;
-import com.streamfusion.platform.system.access.service.AccessService;
-import com.streamfusion.platform.system.auth.pojo.dto.SessionPrincipalDto;
-import com.streamfusion.platform.system.auth.service.CurrentUserService;
-import com.streamfusion.platform.system.user.service.UserService;
 import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
@@ -40,11 +36,6 @@ import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.security.core.context.SecurityContext;
-import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
-import org.springframework.session.Session;
-import org.springframework.session.SessionRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -57,7 +48,7 @@ public class CameraStatusService {
     private static final Logger LOG = LoggerFactory.getLogger(CameraStatusService.class);
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
     private final CameraStatusCheckMapper checks;
-    private final CameraStatusSnapshotMapper snapshots;
+    private final CameraStatusFactWriter facts;
     private final CameraChannelMapper channels;
     private final CameraProfileMapper profiles;
     private final CameraAccessService cameras;
@@ -65,11 +56,8 @@ public class CameraStatusService {
     private final CameraRtspTargetService targets;
     private final CameraStatusWorker worker;
     private final CameraStatusProperties properties;
-    private final CurrentUserService current;
-    private final UserService users;
-    private final AccessService access;
+    private final CameraStatusExecutionGuard guard;
     private final AccessMapper coordination;
-    private final ObjectProvider<SessionRepository<? extends Session>> repositories;
     private final PlatformTransactionManager manager;
     private final Clock clock;
     private final CameraStatusPlanMapper plans;
@@ -194,7 +182,7 @@ public class CameraStatusService {
         var check = checks.selectById(id);
         if (check == null
                 || !"QUEUED".equals(check.getExecutionState())
-                || check.getPlanId() == null && !sameSession(check, sessionId)) return;
+                || check.getPlanId() == null && !guard.sameSession(check, sessionId)) return;
         var execution = new Execution(sessionId);
         if (submitted.putIfAbsent(id, execution) != null) return;
         try {
@@ -310,7 +298,7 @@ public class CameraStatusService {
                             var check = checks.lock(id);
                             if (check == null || !"QUEUED".equals(check.getExecutionState()))
                                 return null;
-                            String reason = invalidReason(check, camera, profile, sessionId);
+                            String reason = guard.invalidReason(check, camera, profile, sessionId);
                             if (reason != null) {
                                 finish(
                                         check,
@@ -363,7 +351,7 @@ public class CameraStatusService {
                 || !claim.equals(check.getClaimToken()))
             throw new CameraAdapterException("CHECK_NO_LONGER_ACTIVE");
         String reason =
-                invalidReason(
+                guard.invalidReason(
                         check,
                         channels.selectById(check.getCameraId()),
                         profiles.selectById(check.getProfileId()),
@@ -389,7 +377,7 @@ public class CameraStatusService {
                     }
                     if (!"RUNNING".equals(check.getExecutionState())
                             || !claim.equals(check.getClaimToken())) return null;
-                    String reason = invalidReason(check, camera, profile, sessionId);
+                    String reason = guard.invalidReason(check, camera, profile, sessionId);
                     if (reason != null) {
                         finish(
                                 check,
@@ -406,184 +394,21 @@ public class CameraStatusService {
                         finish(check, "CANCELLED", safeReason(result.reasonCode()), result);
                     } else if (result.outcome() == CameraProbeResult.Outcome.NOT_EXECUTED) {
                         finish(check, "SKIPPED", safeReason(result.reasonCode()), result);
-                    } else if ("MEDIA".equals(check.getLayer()) && !validMediaFact(check, result)) {
+                    } else if ("MEDIA".equals(check.getLayer())
+                            && !facts.validMediaFact(check, result)) {
                         finish(check, "SKIPPED", "MEDIA_EVIDENCE_INSUFFICIENT", result);
                     } else {
-                        check.setResultValue(result.outcome().name());
-                        check.setObservedAt(now());
-                        check.setReadAt(check.getObservedAt());
-                        if ("MEDIA".equals(check.getLayer()))
-                            setMediaEvidence(check, result.evidence());
-                        check.setValidUntil(
-                                check.getObservedAt()
-                                        .plusNanos(properties.getFreshnessMs() * 1_000_000));
-                        var previous = snapshots.get(check.getProfileId(), check.getLayer());
-                        boolean applies =
-                                previous == null
-                                        || previous.getCheckRequestedAt()
-                                                .isBefore(check.getRequestedAt())
-                                        || previous.getCheckRequestedAt()
-                                                        .equals(check.getRequestedAt())
-                                                && previous.getCheckId() < check.getId();
-                        check.setSnapshotApplied(applies);
+                        var previous = facts.prepareObservation(check, result);
                         if (finish(check, "COMPLETED", safeReason(result.reasonCode()), result)
-                                && applies) {
-                            var snapshot = new CameraStatusSnapshotEntity();
-                            snapshot.setProfileId(check.getProfileId());
-                            snapshot.setCameraId(check.getCameraId());
-                            snapshot.setLayer(check.getLayer());
-                            snapshot.setProbeKind(check.getProbeKind());
-                            snapshot.setValue(check.getResultValue());
-                            snapshot.setReasonCode(check.getReasonCode());
-                            snapshot.setObservedAt(check.getObservedAt());
-                            snapshot.setReadAt(check.getReadAt());
-                            snapshot.setValidUntil(check.getValidUntil());
-                            snapshot.setMediaWindowStartedAt(check.getMediaWindowStartedAt());
-                            snapshot.setMediaWindowEndedAt(check.getMediaWindowEndedAt());
-                            snapshot.setMediaFirstFrames(check.getMediaFirstFrames());
-                            snapshot.setMediaLastFrames(check.getMediaLastFrames());
-                            snapshot.setMediaSampleCount(check.getMediaSampleCount());
-                            snapshot.setMediaMaxGapMs(check.getMediaMaxGapMs());
-                            snapshot.setCheckRequestedAt(check.getRequestedAt());
-                            snapshot.setCheckId(check.getId());
-                            snapshot.setConnectionKeyId(check.getConnectionKeyId());
-                            snapshot.setConnectionDigest(check.getConnectionDigest());
-                            recordTimeline(snapshot, previous, camera, profile);
-                            snapshot.setUpdatedAt(now());
-                            if (previous == null) snapshots.insert(snapshot);
-                            else snapshots.update(snapshot);
-                        }
+                                && Boolean.TRUE.equals(check.getSnapshotApplied()))
+                            facts.writeSnapshot(check, previous, camera, profile);
                     }
                     return null;
                 });
     }
 
-    private void recordTimeline(
-            CameraStatusSnapshotEntity next,
-            CameraStatusSnapshotEntity previous,
-            CameraChannelEntity camera,
-            CameraProfileEntity profile) {
-        boolean sameConnection = false;
-        if (previous != null) {
-            var original =
-                    targets.inspect(camera, profile, previous.getConnectionKeyId(), () -> {});
-            sameConnection =
-                    original.connectionDigest() != null
-                            && MessageDigest.isEqual(
-                                    previous.getConnectionDigest(), original.connectionDigest());
-        }
-        var prior = sameConnection ? CameraStatusTimelineVo.from(previous) : null;
-        next.setStateSince(
-                sameConnection && Objects.equals(previous.getValue(), next.getValue())
-                        ? LocalDateTime.ofInstant(prior.stateSince(), ZONE)
-                        : next.getObservedAt());
-        next.setLastAccessibleAt(
-                "ACCESSIBLE".equals(next.getValue())
-                        ? next.getObservedAt()
-                        : prior == null || prior.lastAccessibleAt() == null
-                                ? null
-                                : LocalDateTime.ofInstant(prior.lastAccessibleAt(), ZONE));
-        next.setLastFailedAt(
-                "FAILED".equals(next.getValue())
-                        ? next.getObservedAt()
-                        : prior == null || prior.lastFailedAt() == null
-                                ? null
-                                : LocalDateTime.ofInstant(prior.lastFailedAt(), ZONE));
-    }
-
-    private String invalidReason(
-            CameraStatusCheckEntity check,
-            CameraChannelEntity camera,
-            CameraProfileEntity profile,
-            String sessionId) {
-        if (camera == null
-                || profile == null
-                || !Objects.equals(profile.getChannelId(), check.getCameraId()))
-            return "TARGET_DELETED";
-        if (!nowInstant().isBefore(instant(check.getDeadlineAt()))) return "CHECK_EXPIRED";
-        try {
-            if (check.getPlanId() != null && !scheduledAllowed(check))
-                return "PLAN_NO_LONGER_ACTIVE";
-            if (check.getPlanId() == null
-                    && (!sameSession(check, sessionId) || !sessionAllowed(check, sessionId)))
-                return "ACTOR_REVOKED";
-            var inspected = targets.inspect(camera, profile, check.getConnectionKeyId(), () -> {});
-            if ("CONFIGURATION_UNAVAILABLE".equals(inspected.blockingReasonCode()))
-                return "CONFIGURATION_UNAVAILABLE";
-            if (inspected.blockingReasonCode() != null
-                    || inspected.connectionDigest() == null
-                    || !MessageDigest.isEqual(
-                            check.getConnectionDigest(), inspected.connectionDigest()))
-                return "CONFIGURATION_CHANGED";
-            return null;
-        } catch (BusinessException ex) {
-            return "CONFIGURATION_UNAVAILABLE";
-        } catch (CameraAdapterException ex) {
-            return "SESSION_STORE_UNAVAILABLE".equals(ex.reasonCode())
-                    ? "SESSION_STORE_UNAVAILABLE"
-                    : "AUTHORIZATION_UNAVAILABLE";
-        }
-    }
-
-    private boolean sessionAllowed(CameraStatusCheckEntity check, String sessionId) {
-        Session session;
-        try {
-            var repository = repositories.getIfAvailable();
-            if (repository == null) throw new CameraAdapterException("SESSION_STORE_UNAVAILABLE");
-            session = repository.findById(sessionId);
-        } catch (RuntimeException ex) {
-            throw new CameraAdapterException("SESSION_STORE_UNAVAILABLE");
-        }
-        if (session == null || session.isExpired()) return false;
-        Object stored =
-                session.getAttribute(
-                        HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY);
-        if (!(stored instanceof SecurityContext context)
-                || context.getAuthentication() == null
-                || !context.getAuthentication().isAuthenticated()
-                || !(context.getAuthentication().getPrincipal()
-                        instanceof SessionPrincipalDto principal)
-                || principal.getUserId() != check.getActorUserId()) return false;
-        try {
-            var user = users.getById(check.getActorUserId());
-            current.validate(principal, user);
-            if (CurrentUserService.requiresPasswordChange(user)
-                    || !current.hasModuleAccess(check.getActorUserId(), "camera")) return false;
-            cameras.requireVisible(
-                    check.getCameraId(),
-                    new CameraAccessService.Actor(
-                            check.getActorUserId(), access.isSuperAdmin(check.getActorUserId())));
-            return true;
-        } catch (BusinessException ex) {
-            return false;
-        }
-    }
-
     boolean planActorAllowed(long userId, long cameraId) {
-        var user = users.getById(userId);
-        if (user == null
-                || user.getStatus() != 1
-                || CurrentUserService.requiresPasswordChange(user)
-                || !current.hasModuleAccess(userId, "camera")) return false;
-        try {
-            cameras.requireVisible(
-                    cameraId, new CameraAccessService.Actor(userId, access.isSuperAdmin(userId)));
-            return true;
-        } catch (BusinessException ex) {
-            return false;
-        }
-    }
-
-    private boolean scheduledAllowed(CameraStatusCheckEntity check) {
-        var plan = plans.selectById(check.getPlanId());
-        return plan != null
-                && "ACTIVE".equals(plan.getState())
-                && Objects.equals(plan.getActorUserId(), check.getActorUserId())
-                && MessageDigest.isEqual(
-                        check.getSessionDigest(), planDigest(check.getSessionKeyId(), plan))
-                && !now().isBefore(plan.getStartAt())
-                && now().isBefore(plan.getEndAt())
-                && planActorAllowed(check.getActorUserId(), check.getCameraId());
+        return guard.planActorAllowed(userId, cameraId);
     }
 
     /** Called inside the scheduler's locked plan/target transaction; no session or network work. */
@@ -608,7 +433,7 @@ public class CameraStatusService {
                 || !"CONTROL".equals(connection.getLayer())
                 || !"COMPLETED".equals(connection.getExecutionState())
                 || !"ACCESSIBLE".equals(connection.getResultValue())) return null;
-        if (!scheduledAllowed(connection))
+        if (!guard.scheduledAllowed(connection))
             throw new CameraAdapterException("PLAN_NO_LONGER_ACTIVE");
         return createScheduled(
                 plan, target, connection.getRequestedAt(), false, CameraStatusLayer.MEDIA);
@@ -655,7 +480,7 @@ public class CameraStatusService {
                         "camera-status-request",
                         requestInput(check.getCameraId(), check.getProfileId(), layer)));
         check.setSessionKeyId(keyId);
-        check.setSessionDigest(planDigest(keyId, plan));
+        check.setSessionDigest(guard.planDigest(keyId, plan));
         check.setConnectionKeyId(target.getConnectionKeyId());
         check.setConnectionDigest(target.getConnectionDigest());
         check.setLayer(layer.name());
@@ -671,21 +496,6 @@ public class CameraStatusService {
         checks.insert(check);
         logCheck(check, "QUEUED", null);
         return CameraStatusCheckVo.from(check);
-    }
-
-    private byte[] planDigest(String keyId, CameraStatusPlanEntity plan) {
-        return crypto.digest(keyId, "camera-status-plan", plan.getId() + "/" + plan.getVersion());
-    }
-
-    private boolean sameSession(CameraStatusCheckEntity check, String sessionId) {
-        if (sessionId == null) return false;
-        try {
-            return MessageDigest.isEqual(
-                    check.getSessionDigest(),
-                    crypto.digest(check.getSessionKeyId(), "camera-status-session", sessionId));
-        } catch (BusinessException ex) {
-            return false;
-        }
     }
 
     private void skipQueued(long id, String reason) {
@@ -878,42 +688,6 @@ public class CameraStatusService {
                 Long.toString(profileId),
                 "layer",
                 layer.name());
-    }
-
-    private static void setMediaEvidence(
-            CameraStatusCheckEntity check, CameraMediaEvidence evidence) {
-        if (evidence == null) return;
-        check.setMediaWindowStartedAt(LocalDateTime.ofInstant(evidence.windowStartedAt(), ZONE));
-        check.setMediaWindowEndedAt(LocalDateTime.ofInstant(evidence.windowEndedAt(), ZONE));
-        check.setMediaFirstFrames(evidence.firstFrames());
-        check.setMediaLastFrames(evidence.lastFrames());
-        check.setMediaSampleCount(evidence.sampleCount());
-        check.setMediaMaxGapMs(evidence.maxGapMs());
-    }
-
-    private boolean validMediaFact(CameraStatusCheckEntity check, CameraProbeResult result) {
-        var evidence = result.evidence();
-        if (evidence == null
-                || evidence.windowStartedAt() == null
-                || evidence.windowEndedAt() == null) return false;
-        boolean consistentResult =
-                result.outcome() == CameraProbeResult.Outcome.ACCESSIBLE
-                                && "MEDIA_RECEIVING".equals(result.reasonCode())
-                                && evidence.lastFrames() > evidence.firstFrames()
-                        || result.outcome() == CameraProbeResult.Outcome.FAILED
-                                && "MEDIA_NO_FRAMES".equals(result.reasonCode())
-                                && evidence.lastFrames() == evidence.firstFrames();
-        return consistentResult
-                && Duration.between(evidence.windowStartedAt(), evidence.windowEndedAt()).toMillis()
-                        >= 5_000
-                && !evidence.windowStartedAt()
-                        .truncatedTo(ChronoUnit.MILLIS)
-                        .isBefore(instant(check.getStartedAt()))
-                && !evidence.windowEndedAt().truncatedTo(ChronoUnit.MILLIS).isAfter(nowInstant())
-                && evidence.firstFrames() >= 0
-                && evidence.lastFrames() >= evidence.firstFrames()
-                && evidence.sampleCount() >= 3
-                && evidence.maxGapMs() >= 0;
     }
 
     private Instant nowInstant() {

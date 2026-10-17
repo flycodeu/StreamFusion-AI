@@ -19,6 +19,7 @@ import com.streamfusion.platform.camera.service.CameraCryptoService;
 import com.streamfusion.platform.camera.service.CameraSourceRules;
 import com.streamfusion.platform.media.preview.source.PreviewLocatorService;
 import com.streamfusion.platform.media.preview.source.StreamLocatorAdapter;
+import com.streamfusion.platform.media.preview.source.StreamLocatorAdapterRegistry;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -89,7 +90,13 @@ class PreviewConnectionKeyTest {
         when(adapter.type()).thenReturn("RTSP");
         service =
                 new PreviewLocatorService(
-                        locators, sources, endpoints, credentials, crypto, rules, List.of(adapter));
+                        locators,
+                        sources,
+                        endpoints,
+                        credentials,
+                        crypto,
+                        rules,
+                        new StreamLocatorAdapterRegistry(List.of(adapter)));
         // Adapter type registration is construction only, not connection-key work.
         clearInvocations(adapter);
     }

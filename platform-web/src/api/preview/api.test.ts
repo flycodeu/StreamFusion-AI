@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createPreviewLease, exchangeWebRtc, getPreviewCapacity } from './api'
+import { createPreviewLease, exchangeWebRtc, getPreviewCapacity, renewPreviewLease } from './api'
 import { clearIdentity, sessionState } from '../../session/state'
 
 const input = {
@@ -43,6 +43,28 @@ afterEach(() => {
   vi.useRealTimers()
 })
 describe('preview creation receipt recovery', () => {
+  it('retains envelope diagnostics for unavailable creation and renewal receipts without replaying them', async () => {
+    const unavailable = {
+      ...lease,
+      leaseId: null,
+      state: 'UNAVAILABLE',
+      reasonCode: 'SOURCE_UNAVAILABLE',
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(response(unavailable, 201))
+      .mockResolvedValueOnce(response(unavailable, 200))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await createPreviewLease(input)).toMatchObject({
+      state: 'UNAVAILABLE',
+      receipt: { status: 201, traceId: 'a'.repeat(32), timestamp: '2026-10-15T01:00:00Z' },
+    })
+    expect(await renewPreviewLease('lease-1')).toMatchObject({
+      state: 'UNAVAILABLE',
+      receipt: { status: 200, traceId: 'a'.repeat(32), timestamp: '2026-10-15T01:00:00Z' },
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
   it('reads aggregate capacity with a cancellable GET and no retry on rejection', async () => {
     const controller = new AbortController()
     const fetchMock = vi.fn().mockResolvedValue(response(null, 403, 'ACCESS_DENIED'))

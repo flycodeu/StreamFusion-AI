@@ -24,6 +24,22 @@ class CameraAccessIntegrationTest extends CameraTestSupport {
     @Autowired CameraConnectionRules connections;
 
     @Test
+    void missingConnectionMethodIsRejectedBeforeCreatingAJobOrReadingTheDirectory()
+            throws Exception {
+        var auth = admin();
+        var connection = Map.of("host", "10.0.1.5");
+        write(
+                post("/camera-access/jobs"),
+                auth,
+                Map.of("clientRequestId", requestId(), "connection", connection),
+                400);
+        write(post("/camera-access/platform-regions"), auth, Map.of("connection", connection), 400);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM camera_access_job", Integer.class))
+                .isZero();
+        verifyNoInteractions(worker);
+    }
+
+    @Test
     void fullRtspInputCreatesAssetsWithoutManualInternalProfilesAndReplays() throws Exception {
         var auth = admin();
         var body = rtsp();

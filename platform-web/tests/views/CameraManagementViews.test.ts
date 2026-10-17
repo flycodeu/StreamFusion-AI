@@ -1306,6 +1306,37 @@ describe('camera management interaction boundaries', () => {
       selections: [{ candidateId: 'channel-a', profileIds: [] }],
     })
   })
+  it('serializes manual scan refresh and ignores its late response after cancellation', async () => {
+    vi.useFakeTimers()
+    const running = { ...accessJob, kind: 'SCAN', status: 'RUNNING', hosts: [], candidates: [] }
+    api.getAccessJob.mockResolvedValue(running)
+    api.cancelAccessJob
+      .mockRejectedValueOnce(new Error('cancel response lost'))
+      .mockResolvedValueOnce({ ...running, status: 'CANCELLED' })
+    const root = await mount(ScanDialog)
+    await setField(root, 'IPv4 网段', '192.0.2.0/31')
+    await click(root, '开始搜索')
+    await click(root, '取消搜索')
+    expect(button(root, '刷新搜索状态')).toBeDefined()
+    let complete!: (value: typeof running) => void
+    api.getAccessJob.mockReturnValueOnce(
+      new Promise((resolve) => {
+        complete = resolve
+      }),
+    )
+    const read = click(root, '刷新搜索状态')
+    await settle()
+    expect(button(root, '刷新搜索状态').props.loading).toBe(true)
+    await click(root, '刷新搜索状态')
+    expect(api.getAccessJob).toHaveBeenCalledTimes(2)
+    await click(root, '取消搜索')
+    expect(button(root, '取消搜索')).toBeUndefined()
+    complete(running)
+    await read
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(button(root, '取消搜索')).toBeUndefined()
+    expect(api.getAccessJob).toHaveBeenCalledTimes(2)
+  })
   it('preserves successful scan registrations and retries only an uncertain row with its original request', async () => {
     api.getAccessJob.mockResolvedValue({
       ...accessJob,
@@ -1402,6 +1433,33 @@ describe('camera management interaction boundaries', () => {
     await setField(root, 'AppKey', 'test-key')
     await setField(root, 'AppSecret', 'test-secret')
     await openPlatformRegion(root, false)
+    expect(api.createSource).toHaveBeenCalledWith({
+      clientRequestId: expect.any(String),
+      name: '海康平台',
+      adapterType: 'HIK_PLATFORM',
+      connectionCategory: 'PLATFORM',
+      networkPolicyKey: 'approved',
+      enabled: true,
+      credentials: [
+        {
+          purpose: 'PLATFORM_HTTP',
+          username: { action: 'REPLACE', value: 'test-key' },
+          password: { action: 'REPLACE', value: 'test-secret' },
+        },
+      ],
+      endpoints: [
+        {
+          purpose: 'PLATFORM_HTTP',
+          scheme: 'http',
+          host: 'platform.test',
+          port: 80,
+          basePath: '/artemis',
+          authMode: 'DRIVER_NEGOTIATED',
+          credentialPurpose: 'PLATFORM_HTTP',
+          tlsPolicy: 'SYSTEM_CA',
+        },
+      ],
+    })
     await click(root, '选择可导入通道')
     await click(root, '查看导入影响')
     await click(root, '确认导入')
@@ -1420,6 +1478,40 @@ describe('camera management interaction boundaries', () => {
     })
     expect(text(root)).toContain('已选 0 个')
     expect(api.createAccessJob.mock.calls[1]![0]).not.toHaveProperty('password')
+  })
+  it('retries the same platform source command when its creation response is uncertain', async () => {
+    api.getAccessOptions.mockResolvedValue({
+      ready: true,
+      methods: ['HIK_PLATFORM'],
+      adapters: [
+        {
+          type: 'HIK_PLATFORM',
+          label: '海康平台',
+          category: 'PLATFORM',
+          inputKind: 'PLATFORM_APPKEY',
+          autoDetect: false,
+          paged: true,
+        },
+      ],
+      networkPolicies: [],
+      diagnostics: [],
+    })
+    api.createSource.mockRejectedValueOnce(new Error('source response lost'))
+    const root = await mount(CreateDialog, { mode: 'platform' })
+    await setField(root, '平台地址', 'platform.test')
+    await setField(root, '连接名称', '  厂区平台  ')
+    await setField(root, 'AppKey', 'test-key')
+    await setField(root, 'AppSecret', 'test-secret')
+    await click(root, '保存密钥并打开目录')
+    expect(api.createSource).toHaveBeenCalledOnce()
+    expect(api.createSource.mock.calls[0]![0].name).toBe('厂区平台')
+    expect(api.createAccessJob).not.toHaveBeenCalled()
+    expect(text(root)).toContain('读取结果未确认')
+    await click(root, '重试原读取请求')
+    expect(api.createSource).toHaveBeenCalledTimes(2)
+    expect(api.createSource.mock.calls[1]).toEqual(api.createSource.mock.calls[0])
+    expect(text(root)).toContain('选择左侧区域后查看相机')
+    expect(text(root)).not.toContain('test-secret')
   })
   it('loads device details only from the row action and switches channels without nesting tables', async () => {
     api.getDeviceChannels.mockResolvedValue({
@@ -1567,6 +1659,7 @@ describe('camera management interaction boundaries', () => {
     ).toBe(false)
     await click(root, '保存密钥并打开目录')
     expect(api.createAccessJob).not.toHaveBeenCalled()
+    expect(api.createSource).not.toHaveBeenCalled()
   })
   it('shows inferred roles without turning a label edit into a manual role override', async () => {
     api.getCamera.mockResolvedValue({
@@ -1868,6 +1961,38 @@ describe('camera management interaction boundaries', () => {
     await click(root, '启动巡检')
     expect(api.createStatusPlan.mock.calls[0]![0]).toMatchObject({ intervalMinutes: 5 })
     expect(text(root)).not.toContain('检测间隔不延长结果有效期')
+  })
+  it('does not restore an active plan from a poll after stopping it', async () => {
+    vi.useFakeTimers()
+    const plan = {
+      planId: '1',
+      state: 'ACTIVE',
+      targetCount: 1,
+      intervalMinutes: 60,
+      startAt: new Date().toISOString(),
+      endAt: new Date(Date.now() + 3600000).toISOString(),
+      version: '1',
+    }
+    api.getStatusPlans.mockResolvedValue([plan])
+    api.stopStatusPlan.mockResolvedValue({ ...plan, state: 'STOPPED', version: '2' })
+    const root = await mount(PlanDialog, { groupKeys: [] })
+    await patrolTab(root, 'tasks')
+    let complete!: (value: (typeof plan)[]) => void
+    api.getStatusPlans.mockReturnValueOnce(
+      new Promise((resolve) => {
+        complete = resolve
+      }),
+    )
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(api.getStatusPlans).toHaveBeenCalledTimes(2)
+    api.getStatusPlans.mockResolvedValueOnce([{ ...plan, state: 'STOPPED', version: '2' }])
+    await click(root, '停止')
+    expect(button(root, '恢复执行')).toBeDefined()
+    complete([plan])
+    await settle()
+    expect(button(root, '停止')).toBeUndefined()
+    expect(button(root, '恢复执行')).toBeDefined()
+    expect(api.getStatusPlans).toHaveBeenCalledTimes(3)
   })
   it('passes the plan version when stopping and permits correcting a rejected new plan', async () => {
     api.inspectPlanTargets.mockResolvedValue({
@@ -2559,6 +2684,9 @@ describe('camera management interaction boundaries', () => {
     api.getSource.mockResolvedValue(platformSource)
     const root = await mount(SourceEditor, { sourceId: '1' })
     await settle()
+    expect(field(root, 'AppKey', 'ElSelect').props.modelValue).toBe('KEEP')
+    expect(field(root, 'AppSecret', 'ElSelect').props.modelValue).toBe('KEEP')
+    expect(field(root, '需要认证', 'ElSwitch').props.disabled).toBe(true)
     await setField(root, '连接主机', 'platform-new.test')
     await click(root, '保存配置')
     expect(api.updateSource).toHaveBeenCalledWith('1', {

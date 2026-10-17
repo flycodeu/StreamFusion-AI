@@ -1,6 +1,7 @@
 package com.streamfusion.platform.camera.service;
 
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
+import com.streamfusion.platform.camera.access.adapter.CameraAccessAdapterRegistry;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessCatalog;
 import com.streamfusion.platform.camera.mapper.CameraLocatorMapper;
 import com.streamfusion.platform.camera.pojo.dto.CameraLocatorDto;
@@ -30,6 +31,7 @@ public class CameraLocatorService {
     private final CameraSourceRules rules;
     private final CameraCryptoService crypto;
     private final Clock clock;
+    private final CameraAccessAdapterRegistry adapters;
 
     @Transactional(propagation = Propagation.MANDATORY)
     public void create(long sourceId, long profileId, String externalKey, CameraLocatorDto input) {
@@ -132,27 +134,7 @@ public class CameraLocatorService {
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("channelKey", channelKey);
         config.put("profileKey", profileKey);
-        if ("ONVIF".equals(locator.kind()) || "HIKVISION".equals(locator.kind())) {
-            config.put("profileToken", opaque(locator.profileToken(), 512));
-            if ("ONVIF".equals(locator.kind())) {
-                if (locator.serviceNamespace() != null || locator.serviceEndpoint() != null) {
-                    if (!("http://www.onvif.org/ver10/media/wsdl".equals(locator.serviceNamespace())
-                                    || "http://www.onvif.org/ver20/media/wsdl"
-                                            .equals(locator.serviceNamespace()))
-                            || locator.serviceEndpoint() == null) throw CameraSourceRules.invalid();
-                    config.put("serviceNamespace", locator.serviceNamespace());
-                    config.put("serviceEndpoint", locator.serviceEndpoint().toASCIIString());
-                }
-            }
-        } else {
-            if (locator.streamType() == null
-                    || locator.streamType() < 0
-                    || locator.streamType() > 255) throw CameraSourceRules.invalid();
-            config.put("streamType", locator.streamType());
-            // Platform monitor key or native channel/stream reference, never a URL.
-            if (locator.profileToken() != null)
-                config.put("resourceToken", opaque(locator.profileToken(), 512));
-        }
+        config.putAll(adapters.locatorConfiguration(locator));
         var row = new CameraLocatorEntity();
         row.setProfileId(profileId);
         row.setSourceId(sourceId);
@@ -176,15 +158,6 @@ public class CameraLocatorService {
         row.setCreatedAt(now());
         row.setUpdatedAt(row.getCreatedAt());
         locators.insert(row);
-    }
-
-    private static String opaque(String value, int max) {
-        if (value == null
-                || value.isEmpty()
-                || value.codePointCount(0, value.length()) > max
-                || value.codePoints().anyMatch(Character::isISOControl))
-            throw CameraSourceRules.invalid();
-        return value;
     }
 
     private byte[] identityDigest(long sourceId, String externalKey) {

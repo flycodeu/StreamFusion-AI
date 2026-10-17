@@ -26,6 +26,11 @@ public class HikvisionCameraAccessAdapter implements CameraAccessAdapter {
     }
 
     @Override
+    public Map<String, Object> locatorConfiguration(CameraAccessCatalog.Locator locator) {
+        return CameraCatalogSupport.tokenLocator(locator);
+    }
+
+    @Override
     public CameraAdapterDescriptor descriptor() {
         return new CameraAdapterDescriptor(
                 type(), "海康设备", "DEVICE", "DEVICE_LOGIN", true, 10, false, "", "VENDOR_HTTP");

@@ -4,6 +4,7 @@ import { nextTick, type App, type Component } from 'vue'
 import { node, nodes, renderer, text, type Host } from '../support/renderer'
 import RetentionDialog from '../../src/features/audit/RetentionDialog.vue'
 import ExportDialog from '../../src/features/audit/ExportDialog.vue'
+import CaptureDialog from '../../src/features/diagnostics/CaptureDialog.vue'
 
 const api = vi.hoisted(() => ({
   getRetention: vi.fn(),
@@ -16,11 +17,16 @@ const api = vi.hoisted(() => ({
   removeExport: vi.fn(),
   downloadExport: vi.fn(),
   getAuditPage: vi.fn(),
+  getCapture: vi.fn(),
+  captureRoutes: vi.fn(),
+  startCapture: vi.fn(),
+  stopCapture: vi.fn(),
 }))
 vi.mock('../../src/api/audit/maintenance', () => api)
 vi.mock('../../src/api/audit/api', () => ({ getAuditPage: api.getAuditPage }))
+vi.mock('../../src/api/diagnostics/api', () => api)
 vi.mock('element-plus', async () => {
-  const { defineComponent, h } = await import('vue')
+  const { computed, defineComponent, h, inject, provide } = await import('vue')
   return {
     ...Object.fromEntries(
       [
@@ -39,6 +45,7 @@ vi.mock('element-plus', async () => {
         'ElOption',
         'ElTable',
         'ElTableColumn',
+        'ElInput',
       ].map((name) => [
         name,
         defineComponent({
@@ -50,6 +57,28 @@ vi.mock('element-plus', async () => {
         }),
       ]),
     ),
+    ElTable: defineComponent({
+      inheritAttrs: false,
+      setup(_, { attrs, slots }) {
+        provide(
+          'maintenanceRows',
+          computed(() => attrs.data as Record<string, unknown>[]),
+        )
+        return () => h('ElTable', attrs, slots.default?.())
+      },
+    }),
+    ElTableColumn: defineComponent({
+      inheritAttrs: false,
+      setup(_, { attrs, slots }) {
+        const rows = inject<{ value: Record<string, unknown>[] }>('maintenanceRows')!
+        return () =>
+          h(
+            'ElTableColumn',
+            attrs,
+            rows.value.map((row) => slots.default?.({ row })),
+          )
+      },
+    }),
     ElMessage: { success: vi.fn() },
     ElMessageBox: { confirm: vi.fn() },
   }
@@ -74,6 +103,24 @@ const preview = {
   limited: false,
   cutoff: null,
   exportInProgress: false,
+}
+const capture = {
+  enabled: true,
+  ownerId: '1',
+  expiresAt: '2026-10-17T04:00:00Z',
+  matched: 10,
+  recorded: 10,
+  limit: 1000,
+  routes: ['camera-status'],
+  actorId: null,
+  errorsOnly: true,
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((ready) => {
+    resolve = ready
+  })
+  return { promise, resolve }
 }
 async function flush() {
   for (let i = 0; i < 4; i++) {
@@ -108,6 +155,9 @@ beforeEach(() => {
   api.saveRetention.mockImplementation(async (input) => ({ ...policy, ...input, version: '1' }))
   api.getExports.mockResolvedValue([])
   api.getAuditPage.mockResolvedValue({ items: [], total: 5, page: 1, size: 1 })
+  api.getCapture.mockResolvedValue({ ...capture })
+  api.captureRoutes.mockResolvedValue([{ key: 'camera-status', label: '状态检查' }])
+  api.stopCapture.mockResolvedValue({ ...capture, enabled: false })
 })
 afterEach(() => {
   app?.unmount()
@@ -115,6 +165,67 @@ afterEach(() => {
 })
 
 describe('log maintenance dialogs', () => {
+  it('does not restore an enabled capture from a poll that finishes after stopping', async () => {
+    const late = deferred<typeof capture>()
+    const root = await mount(CaptureDialog)
+    api.getCapture.mockReturnValueOnce(late.promise)
+    await vi.advanceTimersByTimeAsync(5000)
+    await click(root, '停止记录')
+    expect(text(root)).toContain('未开启')
+    late.resolve({ ...capture, recorded: 9 })
+    await flush()
+    expect(text(root)).toContain('未开启')
+    expect(button(root, '开始记录').props.disabled).toBe(false)
+    expect(nodes(root).some((n) => n.type === 'ElButton' && text(n) === '停止记录')).toBe(false)
+  })
+  it('keeps the current retention execution state when an older poll arrives afterwards', async () => {
+    api.getRetention.mockResolvedValue({ ...policy, enabled: true })
+    api.runRetention.mockResolvedValue({
+      ...policy,
+      enabled: true,
+      version: '1',
+      lastResult: 'RUNNING',
+    })
+    const root = await mount(RetentionDialog)
+    const late = deferred<typeof policy>()
+    api.getRetention.mockReturnValueOnce(late.promise)
+    await vi.advanceTimersByTimeAsync(5000)
+    await click(root, '立即执行')
+    expect(text(root)).toContain('正在清理')
+    late.resolve({ ...policy, enabled: true })
+    await flush()
+    expect(text(root)).toContain('正在清理')
+    expect(api.runRetention).toHaveBeenCalledExactlyOnceWith('0')
+  })
+  it('does not restore a queued export after its cancellation receipt was refreshed', async () => {
+    const job = {
+      id: '1',
+      actorId: '1',
+      state: 'QUEUED',
+      format: 'CSV',
+      rowCount: 0,
+      fileBytes: 0,
+      reasonCode: null,
+      createdAt: '2026-10-17T02:00:00Z',
+      finishedAt: null,
+      expiresAt: '2026-10-18T02:00:00Z',
+      downloadable: false,
+      filter: {},
+    }
+    api.getExports.mockResolvedValue([job])
+    const root = await mount(ExportDialog, { filter: { page: 1, size: 20 } })
+    const late = deferred<(typeof job)[]>()
+    api.getExports.mockReturnValueOnce(late.promise)
+    await vi.advanceTimersByTimeAsync(3000)
+    api.getExports.mockResolvedValueOnce([{ ...job, state: 'CANCELLED' }])
+    await click(root, '取消')
+    expect(text(root)).toContain('已取消')
+    late.resolve([job])
+    await flush()
+    expect(text(root)).toContain('已取消')
+    expect(text(root)).not.toContain('等待导出')
+    expect(api.cancelExport).toHaveBeenCalledExactlyOnceWith('1')
+  })
   it('requires preview and only sends command fields from the policy response', async () => {
     const root = await mount(RetentionDialog)
     await change(root, 'ElSwitch', true)

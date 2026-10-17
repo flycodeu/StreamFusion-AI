@@ -13,6 +13,7 @@ import { usePageScope } from '../../composables/usePageScope'
 import { sessionState } from '../../session/state'
 import { formError, isRequestRejected as rejected, useCreateRequest } from '../camera/form'
 import { connectionError, connectionInput, initialSelections, newConnection } from './form'
+import { getPlatformConnection, platformSourceInput } from './platformConnection'
 import { createSource } from '../../api/camera-sources/api'
 import type { SourceCreate } from '../../api/camera-sources/types'
 
@@ -356,6 +357,11 @@ export function useAccessWizard(
   }
   async function preparePlatform() {
     const adapter = options.value?.adapters.find((item) => item.type === connection.value.method)
+    const config = getPlatformConnection(connection.value.method)
+    if (!config) {
+      error.value = formError('此平台预设尚未适配，暂不能读取目录。')
+      return
+    }
     const message = saving.pending.value ? '' : connectionError(connection.value, adapter)
     if (message) {
       error.value = formError(message)
@@ -368,33 +374,7 @@ export function useAccessWizard(
       let saved: AccessConnection
       if (connection.value.reuse) saved = connectionInput(connection.value, adapter)
       else {
-        const draft = connection.value
-        const command = saving.capture({
-          name: draft.name.trim() || '海康平台',
-          adapterType: draft.method,
-          connectionCategory: 'PLATFORM',
-          networkPolicyKey: draft.networkPolicyKey || undefined,
-          enabled: true,
-          credentials: [
-            {
-              purpose: 'PLATFORM_HTTP',
-              username: { action: 'REPLACE', value: draft.username },
-              password: { action: 'REPLACE', value: draft.password },
-            },
-          ],
-          endpoints: [
-            {
-              purpose: 'PLATFORM_HTTP',
-              scheme: draft.scheme,
-              host: draft.host.trim(),
-              port: draft.port,
-              basePath: '/artemis',
-              authMode: 'DRIVER_NEGOTIATED',
-              credentialPurpose: 'PLATFORM_HTTP',
-              tlsPolicy: 'SYSTEM_CA',
-            },
-          ],
-        })
+        const command = saving.capture(platformSourceInput(connection.value, config))
         const source = await createSource(command)
         saved = {
           method: source.adapterType!,

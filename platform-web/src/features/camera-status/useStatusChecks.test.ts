@@ -4,6 +4,12 @@ import type { EffectScope, Ref } from 'vue'
 import type { CameraStatus, StatusCheck, StatusLayer } from '../../api/camera-status/types'
 import { ApiRequestError } from '../../lib/http/error'
 import { useStatusChecks } from './useStatusChecks'
+import { clearIdentity, sessionState } from '../../session/state'
+import type { AuthUser } from '../../api/auth/types'
+
+function signIn(id = '1') {
+  sessionState.me = { user: { id }, modules: ['camera'] } as AuthUser
+}
 
 const api = vi.hoisted(() => ({ status: vi.fn(), create: vi.fn(), check: vi.fn() }))
 const hooks = vi.hoisted(() => ({
@@ -98,6 +104,7 @@ beforeEach(async () => {
   api.status.mockReset().mockImplementation(async (id: string) => status(id))
   api.create.mockReset().mockResolvedValue(check())
   api.check.mockReset().mockResolvedValue(check('RUNNING'))
+  signIn()
   cameraId = ref('1')
   profileId = ref('10')
   active = ref(true)
@@ -108,6 +115,7 @@ beforeEach(async () => {
 })
 afterEach(() => {
   scope.stop()
+  clearIdentity()
   hooks.activated.splice(0)
   hooks.deactivated.splice(0)
   vi.unstubAllGlobals()
@@ -115,6 +123,59 @@ afterEach(() => {
 })
 
 describe('manual CONTROL check read owner', () => {
+  it('clears reads and uncertain commands on identity loss without replaying the POST', async () => {
+    api.create.mockRejectedValueOnce(new ApiRequestError('REQUEST_TIMEOUT', '请求超时'))
+    await controls.submit()
+    expect(controls.pending.value?.uncertain).toBe(true)
+    const late = deferred<CameraStatus>()
+    api.status.mockReturnValueOnce(late.promise)
+    const read = controls.refresh()
+    const signal = api.status.mock.calls.at(-1)![1] as AbortSignal
+    clearIdentity()
+    expect(signal.aborted).toBe(true)
+    expect(controls.pending.value).toBeNull()
+    expect(controls.snapshot.value).toBeNull()
+    late.resolve(status())
+    await read
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(controls.snapshot.value).toBeNull()
+    expect(api.create).toHaveBeenCalledOnce()
+    expect(api.status).toHaveBeenCalledTimes(2)
+    expect(controls.canSubmit.value).toBe(false)
+  })
+  it('does not let the old account POST clear the new accounts pending submission', async () => {
+    const oldPost = deferred<StatusCheck>(),
+      newPost = deferred<StatusCheck>()
+    api.create.mockReturnValueOnce(oldPost.promise).mockReturnValueOnce(newPost.promise)
+    const first = controls.submit()
+    const oldSignal = api.create.mock.calls[0]![2] as AbortSignal
+    const oldKey = api.create.mock.calls[0]![1].clientRequestId
+    clearIdentity()
+    signIn('2')
+    await flush()
+    const second = controls.submit()
+    expect(oldSignal.aborted).toBe(true)
+    expect(api.create.mock.calls[1]![1].clientRequestId).not.toBe(oldKey)
+    oldPost.resolve(check())
+    await first
+    expect(controls.posting.value).toBe(true)
+    expect(controls.pending.value).not.toBeNull()
+    newPost.resolve(check())
+    await second
+    expect(controls.posting.value).toBe(false)
+    expect(controls.pending.value).toBeNull()
+    expect(controls.check.value?.executionState).toBe('QUEUED')
+  })
+  it('stops progress reads and drops the local receipt when camera module access is removed', async () => {
+    await controls.submit()
+    sessionState.me = { user: { id: '1' }, modules: [] } as unknown as AuthUser
+    await flush()
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(controls.snapshot.value).toBeNull()
+    expect(controls.check.value).toBeNull()
+    expect(controls.canSubmit.value).toBe(false)
+    expect(api.check).not.toHaveBeenCalled()
+  })
   it('sends the selected layer and isolates unknown commands from the other layer', async () => {
     api.create.mockRejectedValueOnce(new ApiRequestError('REQUEST_TIMEOUT', '请求超时'))
     layer.value = 'MEDIA'

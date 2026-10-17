@@ -22,15 +22,54 @@ URL_CREDENTIALS = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^/\s@]+@")
 BEARER = re.compile(r"(?i)\bBearer\s+[^\s,;\"']+")
 SECRETS = re.compile(
     r"""(?ix)(["']?(?:password|passwd|token|secret|api[_-]?key|access[_-]?key|
-    access[_-]?token|authorization)["']?\s*[:=]\s*)
-    (?:"[^"]*"|'[^']*'|[^\s,;&}]+)"""
+    access[_-]?token|authorization)["']?\s*[:=]\s*)"""
 )
 
 
 def redact(value: str) -> str:
+    # Transport substitutions must not remove escapes inside a quoted secret value.
+    value = _redact_secrets(value, quoted_only=True)
     value = URL_CREDENTIALS.sub(r"\1[REDACTED]@", value)
     value = BEARER.sub("Bearer [REDACTED]", value)
-    return SECRETS.sub(r"\1[REDACTED]", value)
+    return _redact_secrets(value, quoted_only=False)
+
+
+def _redact_secrets(value: str, *, quoted_only: bool) -> str:
+    safe: list[str] = []
+    copied = 0
+    while match := SECRETS.search(value, copied):
+        start = match.end()
+        safe.append(value[copied:start])
+        if quoted_only and (start == len(value) or value[start] not in {'"', "'"}):
+            copied = start
+            continue
+        safe.append("[REDACTED]")
+        copied = _secret_end(value, start)
+        if copied == len(value):
+            break
+    safe.append(value[copied:])
+    return "".join(safe)
+
+
+def _secret_end(value: str, start: int) -> int:
+    """Quoted exception/JSON values may contain escaped quotes or end mid-value."""
+    if start == len(value):
+        return start
+    quote = value[start]
+    if quote in {'"', "'"}:
+        index = start + 1
+        while index < len(value):
+            if value[index] == "\\":
+                index += 2
+            elif value[index] == quote:
+                return index + 1
+            else:
+                index += 1
+        return len(value)
+    end = start
+    while end < len(value) and not value[end].isspace() and value[end] not in ",;&}":
+        end += 1
+    return end
 
 
 class TransportLogFilter(logging.Filter):
@@ -61,9 +100,27 @@ class JsonFormatter(logging.Formatter):
             "message": redact(record.getMessage())[:16384],
         }
         if record.exc_info:
-            payload["exception"] = redact("".join(traceback.format_exception(*record.exc_info)))[
-                :16384
-            ]
+            failure = traceback.TracebackException(*record.exc_info, lookup_lines=False)
+            pending = [failure]
+            while pending:
+                current = pending.pop()
+                # Source literals can escape credentials a second time. Keep locations, not source.
+                current.stack = traceback.StackSummary.from_list(
+                    [
+                        traceback.FrameSummary(
+                            frame.filename, frame.lineno, frame.name, lookup_line=False, line=""
+                        )
+                        for frame in current.stack
+                    ]
+                )
+                if current.exc_type is not None and issubclass(current.exc_type, SyntaxError):
+                    current.text = ""
+                for nested in (current.__cause__, current.__context__):
+                    if nested is not None:
+                        pending.append(nested)
+                if current.exceptions:
+                    pending.extend(current.exceptions)
+            payload["exception"] = redact("".join(failure.format()))[:16384]
         return json.dumps(payload, ensure_ascii=False)
 
 

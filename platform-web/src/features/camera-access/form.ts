@@ -5,13 +5,14 @@ import type {
   CandidateSelection,
   AccessAdapter,
 } from '../../api/camera-access/types'
+import { getPlatformConnection, hikPlatformConnection } from './platformConnection'
 
 export const methodLabels: Record<AccessMethod, string> = {
   AUTO: '设备自动识别',
   ONVIF: 'ONVIF 设备',
   HIKVISION: '海康设备',
   DAHUA: '大华设备',
-  HIK_PLATFORM: '海康平台',
+  HIK_PLATFORM: hikPlatformConnection.defaultName,
   RTSP: '完整 RTSP 地址',
 }
 const warningLabels: Record<string, string> = {
@@ -72,6 +73,7 @@ export function newConnection(): ConnectionDraft {
   }
 }
 export function connectionError(draft: ConnectionDraft, adapter?: AccessAdapter): string {
+  const platform = getPlatformConnection(draft.method)
   if (draft.reuse && (!draft.sourceId || !draft.sourceVersion)) return '请选择已保存的连接。'
   if (adapter?.inputKind === 'RTSP_URL' || draft.method === 'RTSP') {
     if (!draft.name.trim()) return '请填写相机名称。'
@@ -92,10 +94,10 @@ export function connectionError(draft: ConnectionDraft, adapter?: AccessAdapter)
     return '请填写设备地址和有效端口。'
   if (
     !draft.reuse &&
-    (adapter?.inputKind === 'PLATFORM_APPKEY' || draft.method === 'HIK_PLATFORM') &&
+    (adapter?.inputKind === 'PLATFORM_APPKEY' || platform) &&
     (!draft.username.trim() || !draft.password)
   )
-    return '请填写平台提供的 AppKey 和 AppSecret。'
+    return platform?.missingCredentialsMessage ?? '请填写平台提供的接入凭据。'
   if (!draft.reuse && ((draft.username && !draft.password) || (!draft.username && draft.password)))
     return '账号和密码请一起填写，或同时留空。'
   return ''

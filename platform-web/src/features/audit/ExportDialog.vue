@@ -34,6 +34,7 @@ const scope = usePageScope()
 let timer: ReturnType<typeof globalThis.setTimeout> | undefined
 let requestKey: string | undefined
 let alive = true
+let revision = 0
 watch(
   () => [format.value, JSON.stringify(props.filter)],
   () => {
@@ -96,12 +97,13 @@ async function estimate() {
   }
 }
 async function load() {
-  const active = scope()
+  const active = scope(),
+    current = ++revision
   try {
     const value = await getExports()
-    if (active()) rows.value = value
+    if (active() && current === revision) rows.value = value
   } catch (e) {
-    if (active()) error.value = e
+    if (active() && current === revision) error.value = e
   }
 }
 async function refresh() {
@@ -109,6 +111,8 @@ async function refresh() {
   await Promise.all([load(), estimate()])
 }
 async function act(action: 'create' | 'cancel' | 'remove' | 'download', row?: ExportJob) {
+  if (loading.value) return
+  ++revision
   const active = scope()
   loading.value = true
   error.value = null
@@ -140,7 +144,8 @@ onMounted(async () => {
   if (!alive) return
   const poll = async () => {
     if (!alive) return
-    if (rows.value.some((r) => ['QUEUED', 'RUNNING'].includes(r.state))) await load()
+    if (!loading.value && rows.value.some((r) => ['QUEUED', 'RUNNING'].includes(r.state)))
+      await load()
     if (alive) timer = globalThis.setTimeout(poll, 3000)
   }
   timer = globalThis.setTimeout(poll, 3000)

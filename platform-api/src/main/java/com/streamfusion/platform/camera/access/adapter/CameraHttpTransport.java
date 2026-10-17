@@ -209,7 +209,8 @@ public class CameraHttpTransport {
                 throw new CameraAdapterException("REDIRECT_REJECTED");
             if (response.status == 404 || response.status == 405 || response.status == 501)
                 throw new CameraAdapterException("PROTOCOL_NOT_SUPPORTED");
-            if (response.status == 500 && contentType.startsWith("application/soap+xml")) {
+            if ((response.status >= 200 && response.status < 300 || response.status == 500)
+                    && contentType.startsWith("application/soap+xml")) {
                 CameraXml.checkSoapFault(CameraXml.parse(response.body));
             }
             if (response.status < 200 || response.status >= 300)

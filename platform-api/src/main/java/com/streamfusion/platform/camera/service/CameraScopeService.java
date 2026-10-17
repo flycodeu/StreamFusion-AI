@@ -35,7 +35,7 @@ public class CameraScopeService {
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public CameraScopeVo get(String userId) {
         access.requireSuper(access.readActor());
-        long uid = CameraGroupService.id(userId);
+        long uid = CameraGroupRules.id(userId);
         if (users.getById(uid) == null) throw BusinessException.error(ErrorCode.NOT_FOUND);
         return read(uid);
     }
@@ -46,7 +46,7 @@ public class CameraScopeService {
         var tree = new CameraGroupTree(groups.allBounded());
         var gids = scopes.grantedGroups(uid);
         var cids = scopes.grantedCameras(uid);
-        if (gids.size() > 200 || cids.size() > 2000) throw CameraGroupService.conflict();
+        if (gids.size() > 200 || cids.size() > 2000) throw CameraGroupRules.conflict();
         var visibility = new CameraAccessService.Visibility(admin, uid, tree.descendants(gids));
         var groupViews =
                 gids.stream()
@@ -81,14 +81,14 @@ public class CameraScopeService {
                 row == null
                         ? null
                         : row.getUpdatedAt().atZone(ZoneId.of("Asia/Shanghai")).toInstant(),
-                row == null ? null : CameraGroupService.strOrNull(row.getUpdatedBy()));
+                row == null ? null : CameraGroupRules.strOrNull(row.getUpdatedBy()));
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public CameraScopeVo update(
             String userId, CameraScopeUpdateDto input, AuditContextDto context) {
-        if (input == null) throw CameraGroupService.invalid();
-        long uid = CameraGroupService.id(userId),
+        if (input == null) throw CameraGroupRules.invalid();
+        long uid = CameraGroupRules.id(userId),
                 expected = DecimalInput.version(input.version(), "version");
         var desiredGroups = ids(input.groupIds(), 200, "groupIds");
         var desiredCameras = ids(input.cameraIds(), 2000, "cameraIds");
@@ -104,10 +104,10 @@ public class CameraScopeService {
         Set<Long> oldGroups = new HashSet<>(scopes.grantedGroups(uid)),
                 oldCameras = new HashSet<>(scopes.grantedCameras(uid));
         var found = scopes.channels(desiredCameras);
-        if (found.size() != desiredCameras.size()) throw CameraGroupService.invalid();
+        if (found.size() != desiredCameras.size()) throw CameraGroupRules.invalid();
         for (var c : found)
             if (!oldCameras.contains(c.getId()) && !"ENABLED".equals(c.getLifecycle()))
-                throw CameraGroupService.invalid();
+                throw CameraGroupRules.invalid();
         Set<Long> newGroups = new HashSet<>(desiredGroups),
                 newCameras = new HashSet<>(desiredCameras);
         if (oldGroups.equals(newGroups) && oldCameras.equals(newCameras)) return read(uid);
@@ -167,7 +167,7 @@ public class CameraScopeService {
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public PageResultVo<CameraScopeUserVo> userOptions(String name, int page, int size) {
         access.requireSuper(access.readActor());
-        CameraGroupService.pageBounds(page, size);
+        CameraGroupRules.pageBounds(page, size);
         String term = like(name);
         var rows = scopes.userOptions(term, (long) (page - 1) * size, size);
         var userIds = rows.stream().map(u -> u.getId()).toList();
@@ -192,8 +192,8 @@ public class CameraScopeService {
     public PageResultVo<Map<String, Object>> cameraOptions(
             String groupId, boolean includeDescendants, String name, int page, int size) {
         access.requireSuper(access.readActor());
-        CameraGroupService.pageBounds(page, size);
-        Long gid = CameraGroupService.optionalId(groupId);
+        CameraGroupRules.pageBounds(page, size);
+        Long gid = CameraGroupRules.optionalId(groupId);
         String term = like(name);
         var tree = new CameraGroupTree(groups.allBounded());
         List<Long> groupIds =
@@ -215,7 +215,7 @@ public class CameraScopeService {
     @Transactional(readOnly = true)
     public Map<String, Object> reasons(String userId, String cameraId) {
         access.requireSuper(access.readActor());
-        long uid = CameraGroupService.id(userId), cid = CameraGroupService.id(cameraId);
+        long uid = CameraGroupRules.id(userId), cid = CameraGroupRules.id(cameraId);
         if (users.getById(uid) == null) throw BusinessException.error(ErrorCode.NOT_FOUND);
         var c = scopes.channel(cid);
         if (c == null) throw BusinessException.error(ErrorCode.NOT_FOUND);
@@ -246,7 +246,7 @@ public class CameraScopeService {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("cameraId", c.getId().toString());
         value.put("name", c.getName());
-        value.put("groupId", CameraGroupService.strOrNull(c.getGroupId()));
+        value.put("groupId", CameraGroupRules.strOrNull(c.getGroupId()));
         value.put("path", tree.path(c.getGroupId()));
         value.put("groupPath", tree.path(c.getGroupId()));
         value.put("lifecycle", c.getLifecycle());
@@ -254,10 +254,10 @@ public class CameraScopeService {
     }
 
     private static List<Long> ids(List<String> raw, int limit, String field) {
-        if (raw == null || raw.size() > limit) throw CameraGroupService.invalid();
+        if (raw == null || raw.size() > limit) throw CameraGroupRules.invalid();
         Set<Long> result = new TreeSet<>();
         for (String s : raw)
-            if (!result.add(DecimalInput.id(s, field))) throw CameraGroupService.invalid();
+            if (!result.add(DecimalInput.id(s, field))) throw CameraGroupRules.invalid();
         return List.copyOf(result);
     }
 
@@ -268,7 +268,7 @@ public class CameraScopeService {
     }
 
     private static String like(String name) {
-        String s = CameraGroupService.text(name, 128, false);
+        String s = CameraGroupRules.text(name, 128, false);
         return s == null ? null : s.replace("!", "!!").replace("%", "!%").replace("_", "!_");
     }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import {
   ElButton,
   ElForm,
@@ -14,6 +14,7 @@ import {
 import * as api from '../../api/camera-sources/api'
 import { getCameraOptions } from '../../api/camera/api'
 import { useDeviceAdapters } from '../camera-access/useDeviceAdapters'
+import { getPlatformConnection } from '../camera-access/platformConnection'
 import type {
   Source,
   SourceEndpoint,
@@ -36,6 +37,7 @@ const saving = ref(false),
   formError = ref<unknown>(null),
   manualStorageReady = ref(true)
 const error = formError
+const platform = computed(() => getPlatformConnection(editing.value?.adapterType))
 let detailSequence = 0
 const form = reactive({
   adapterType: '',
@@ -274,12 +276,10 @@ onBeforeUnmount(() => {
         ><ElInputNumber v-model="form.rtspPort" :min="1" :max="65535"
       /></ElFormItem>
       <ElFormItem label="需要认证"
-        ><ElSwitch v-model="form.authenticated" :disabled="editing?.adapterType === 'HIK_PLATFORM'"
+        ><ElSwitch v-model="form.authenticated" :disabled="!!platform"
       /></ElFormItem>
       <template v-if="form.authenticated">
-        <ElFormItem
-          :label="editing?.adapterType === 'HIK_PLATFORM' ? 'AppKey' : '设备账号'"
-          required
+        <ElFormItem :label="platform?.usernameLabel ?? '设备账号'" required
           ><ElSelect v-if="editing?.credentials.length" v-model="form.usernameAction"
             ><ElOption value="KEEP" label="保留已保存账号" /><ElOption
               value="REPLACE"
@@ -290,9 +290,7 @@ onBeforeUnmount(() => {
             autocomplete="off"
             maxlength="128"
         /></ElFormItem>
-        <ElFormItem
-          :label="editing?.adapterType === 'HIK_PLATFORM' ? 'AppSecret' : '设备密码'"
-          required
+        <ElFormItem :label="platform?.passwordLabel ?? '设备密码'" required
           ><ElSelect v-if="editing?.credentials.length" v-model="form.passwordAction"
             ><ElOption value="KEEP" label="保留已保存密码" /><ElOption
               value="REPLACE"

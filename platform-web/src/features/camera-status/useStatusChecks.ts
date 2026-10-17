@@ -21,6 +21,7 @@ import type {
 import { isRequestRejected } from '../camera/form'
 import { invalidResponse } from '../../lib/http/error'
 import { isTerminal } from './model'
+import { sessionState } from '../../session/state'
 
 interface PendingCommand {
   cameraId: string
@@ -45,8 +46,9 @@ export function useStatusChecks(
   const error = shallowRef<unknown>(null)
   const visible = ref(typeof document === 'undefined' || !document.hidden)
   const activated = ref(true)
+  const authorized = computed(() => !!sessionState.me?.modules.includes('camera'))
   const enabled = computed(
-    () => active.value && visible.value && activated.value && !!cameraId.value,
+    () => active.value && visible.value && activated.value && !!cameraId.value && authorized.value,
   )
   const selectedProfile = computed(
     () => snapshot.value?.profiles.find((item) => item.streamProfileId === profileId.value) ?? null,
@@ -223,16 +225,14 @@ export function useStatusChecks(
       }
     }
     const command = pending.value,
-      current = generation
+      current = generation,
+      identity = sessionState.epoch,
+      controller = new AbortController()
     posting.value = true
-    postController = new AbortController()
+    postController = controller
     try {
-      const result = await api.createStatusCheck(
-        command.cameraId,
-        command.input,
-        postController.signal,
-      )
-      if (disposed) return
+      const result = await api.createStatusCheck(command.cameraId, command.input, controller.signal)
+      if (disposed || sessionState.epoch !== identity) return
       if (pending.value === command) pending.value = null
       if (
         viewing(command.cameraId, command.input.streamProfileId, current) &&
@@ -256,7 +256,7 @@ export function useStatusChecks(
         await refresh()
       }
     } catch (cause) {
-      if (disposed) return
+      if (disposed || sessionState.epoch !== identity) return
       if (isRequestRejected(cause)) {
         if (pending.value === command) pending.value = null
         if (viewing(command.cameraId, command.input.streamProfileId, current)) error.value = cause
@@ -264,17 +264,38 @@ export function useStatusChecks(
         pending.value = { ...command, uncertain: true, error: cause }
       }
     } finally {
-      if (!disposed) posting.value = false
-      postController = undefined
+      if (postController === controller) {
+        if (!disposed) posting.value = false
+        postController = undefined
+      }
     }
   }
 
+  function discardCommand() {
+    postController?.abort()
+    postController = undefined
+    posting.value = false
+    pending.value = null
+  }
+  watch(
+    () => sessionState.epoch,
+    () => {
+      stopReads()
+      discardCommand()
+      snapshot.value = null
+      localCheck.value = null
+      error.value = null
+    },
+    { flush: 'sync' },
+  )
   const unwatch = watch(
-    [cameraId, profileId, enabled, layer],
-    ([nextCamera], [previousCamera]) => {
+    [cameraId, profileId, enabled, layer, () => sessionState.me?.user.id],
+    ([nextCamera, , , , nextUser], [previousCamera, , , , previousUser]) => {
       stopReads()
       localCheck.value = null
-      if (nextCamera !== previousCamera) snapshot.value = null
+      if (nextCamera !== previousCamera || nextUser !== previousUser || !authorized.value)
+        snapshot.value = null
+      if (nextUser !== previousUser || !authorized.value) discardCommand()
       error.value = null
       pollCount = 0
       failures = 0

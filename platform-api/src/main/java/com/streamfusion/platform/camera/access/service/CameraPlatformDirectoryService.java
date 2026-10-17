@@ -13,7 +13,7 @@ public class CameraPlatformDirectoryService {
     private final CameraAccessService access;
     private final CameraSourceService sources;
     private final CameraConnectionRules connections;
-    private final HikPlatformApi api;
+    private final CameraAccessAdapterRegistry adapters;
     private final java.util.concurrent.Semaphore slots = new java.util.concurrent.Semaphore(2);
 
     public record Query(
@@ -40,7 +40,8 @@ public class CameraPlatformDirectoryService {
         var actor = access.readActor();
         access.requireSuper(actor);
         var c = connections.normalize(sources.resolveConnection(query.connection()));
-        if (!"HIK_PLATFORM".equals(c.method())) throw CameraSourceRules.invalid();
+        if (!adapters.supportsCategory(c.method(), "PLATFORM")) throw CameraSourceRules.invalid();
+        var adapter = adapters.platform(c.method());
         int page = query.page() == null ? 1 : query.page();
         int size = query.size() == null ? 100 : query.size();
         if (page < 1 || page > 100000 || size < 1 || size > 100) throw CameraSourceRules.invalid();
@@ -59,22 +60,18 @@ public class CameraPlatformDirectoryService {
                             if (c.sourceId() != null) sources.resolveConnection(query.connection());
                         },
                         System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10));
-        if (query.parentCode() == null) {
-            if (page != 1) throw CameraSourceRules.invalid();
-            return new Regions(List.of(region(api.root(context))), 1, 1, size);
-        }
-        var result = api.regions(context, query.parentCode(), page, size);
-        var items = new java.util.ArrayList<Region>();
-        for (var value : result.path("list")) items.add(region(value));
-        return new Regions(List.copyOf(items), result.path("total").asLong(), page, size);
-    }
-
-    private Region region(com.fasterxml.jackson.databind.JsonNode value) {
-        String code = value.path("indexCode").asText();
-        HikPlatformApi.requireCode(code);
-        String name = value.path("name").asText();
-        if (name.isBlank() || name.length() > 512)
-            throw new CameraAdapterException("INVALID_PROTOCOL_RESPONSE");
-        return new Region(code, value.path("parentIndexCode").asText(null), name);
+        var result = adapter.regions(context, query.parentCode(), page, size);
+        return new Regions(
+                result.items().stream()
+                        .map(
+                                region ->
+                                        new Region(
+                                                region.indexCode(),
+                                                region.parentIndexCode(),
+                                                region.name()))
+                        .toList(),
+                result.total(),
+                result.page(),
+                result.size());
     }
 }

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PreviewChannel, PreviewLease } from '../../api/preview/types'
+import { ApiRequestError } from '../../lib/http/error'
 import { createPreviewPlayer } from './player'
 import type { PlayerEvents, PreviewPlayer } from './player'
 import { usePreviewSlots } from './usePreviewSlots'
@@ -109,7 +110,12 @@ describe('preview slot lifetime and first frame', () => {
     expect(preview.slots[0]!.state).toBe('CONNECTING')
     await vi.advanceTimersByTimeAsync(20000)
     expect(preview.slots[0]!.state).toBe('ERROR')
-    expect(preview.slots[0]!.error).toContain('视频画面')
+    expect(preview.slots[0]!.error?.message).toContain('视频画面')
+    expect(preview.slots[0]!.error).toMatchObject({
+      code: 'FIRST_FRAME_TIMEOUT',
+      leaseId: 'lease-1',
+      cameraId: '1',
+    })
     expect(players[0]?.close).toHaveBeenCalled()
   })
   it('acknowledges a browser video frame and removes its frame timeout', async () => {
@@ -174,7 +180,7 @@ describe('preview slot lifetime and first frame', () => {
     vi.mocked(players[0]!.close).mockRejectedValueOnce(new Error('unconfirmed'))
     await preview.assign(0, channel('2'), 'MAIN')
     expect(preview.slots[0]!.state).toBe('ERROR')
-    expect(preview.slots[0]!.error).toContain('释放未确认')
+    expect(preview.slots[0]!.error?.message).toContain('释放未确认')
     expect(preview.slots[0]!.channel?.cameraId).toBe('1')
     expect(players).toHaveLength(1)
     await preview.assign(0, channel('2'), 'MAIN')
@@ -277,5 +283,59 @@ describe('preview slot lifetime and first frame', () => {
     confirm()
     expect(await pending).toBe(false)
     expect(preview.slots[63]!.channel?.cameraId).toBe('65')
+  })
+
+  it('keeps the allocated lease and signaling trace when connection fails', async () => {
+    const request = new ApiRequestError('SIGNAL_REJECTED', '信令被拒绝', {
+      traceId: 'abcdef0123456789abcdef0123456789',
+      timestamp: '2026-10-17T02:00:00Z',
+    })
+    vi.mocked(createPreviewPlayer).mockImplementationOnce((events) => ({
+      connect: vi.fn().mockImplementation(async () => {
+        events.lease?.(lease)
+        throw request
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+      recoverVideoError: vi.fn().mockResolvedValue(null),
+      stats: vi.fn().mockResolvedValue(null),
+    }))
+    const preview = usePreviewSlots()
+    await preview.assign(0, channel('1'), 'MAIN')
+    expect(preview.slots[0]!.error).toMatchObject({
+      code: 'SIGNAL_REJECTED',
+      leaseId: 'lease-1',
+      cameraId: '1',
+      streamProfileId: '1',
+      traceId: request.traceId,
+      timestamp: request.timestamp,
+    })
+  })
+
+  it('retains renewal diagnostics but ignores lease and error callbacks from the previous assignment', async () => {
+    const preview = usePreviewSlots()
+    await preview.assign(0, channel('1'), 'MAIN')
+    const oldCallbacks = callbacks[0]!
+    callbacks[0]!.failed(
+      'LEASE_EXPIRED',
+      new ApiRequestError('FORBIDDEN', '权限已变化', {
+        traceId: 'abcdef0123456789abcdef0123456789',
+        timestamp: '2026-10-17T02:00:00Z',
+      }),
+    )
+    expect(preview.slots[0]!.error).toMatchObject({
+      code: 'LEASE_EXPIRED',
+      requestCode: 'FORBIDDEN',
+      leaseId: 'lease-1',
+      traceId: 'abcdef0123456789abcdef0123456789',
+    })
+    await preview.assign(0, channel('2'), 'MAIN')
+    oldCallbacks.lease?.({ ...lease, leaseId: 'stale-lease' })
+    oldCallbacks.failed(
+      'LEASE_RELEASE_FAILED',
+      new ApiRequestError('REQUEST_TIMEOUT', '旧请求超时'),
+    )
+    expect(preview.slots[0]!.error).toBeNull()
+    expect(preview.slots[0]!.lease?.leaseId).toBe('lease-1')
+    expect(preview.slots[0]!.channel?.cameraId).toBe('2')
   })
 })

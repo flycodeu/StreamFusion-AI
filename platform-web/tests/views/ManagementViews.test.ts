@@ -759,6 +759,18 @@ describe('management page interactions', () => {
 })
 
 describe('audit and IP block recovery', () => {
+  it('shows audit diagnostic JSON without requiring clipboard access or diagnostic privileges', async () => {
+    const detail = auditDetail()
+    api.getAuditPage.mockResolvedValue({ items: [detail.record], total: 1, page: 1, size: 20 })
+    api.getAuditDetail.mockResolvedValue(detail)
+    const root = await mount(AuditView)
+    await click(button(root, '详情'))
+    const json = findAll(root, 'pre').find((item) => item.props['aria-label'] === '审计排查 JSON')!
+    expect(JSON.parse(content(json))).toEqual(detail)
+    expect(content(root)).toContain('查看排查 JSON')
+    expect(api.getAuditDetail).toHaveBeenCalledTimes(1)
+  })
+
   it('retries failed audit details in the same drawer and shows readable reasons', async () => {
     api.getAuditPage.mockResolvedValue({ items: [audit()], total: 1, page: 1, size: 20 })
     api.getAuditDetail

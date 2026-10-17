@@ -221,7 +221,7 @@ watch(
     <RequestError :error="error" :diagnostic-link="false" />
     <TablePanel>
       <template #actions>
-        <ElButton v-if="!context && sessionState.me?.isSuperAdmin" @click="captureOpen = true"
+        <ElButton v-if="sessionState.me?.isSuperAdmin" @click="captureOpen = true"
           >临时详细记录</ElButton
         >
         <span v-if="truncated" class="query-warning" role="status"
@@ -290,8 +290,11 @@ watch(
           ></ElTableColumn
         >
         <template #empty
-          ><ElEmpty description="没有找到日志，请检查时间范围和筛选条件" :image-size="72"
-        /></template>
+          ><ElEmpty description="没有找到日志，请检查时间范围和筛选条件" :image-size="72" />
+          <p class="empty-guidance">
+            诊断日志按当前服务实例的文件和保留期查询，与操作记录分别保存；历史日志可能已轮转清理。
+          </p></template
+        >
       </ElTable>
       <template #footer>
         <div class="log-pagination">
@@ -374,6 +377,10 @@ watch(
           <ElButton type="primary" plain @click="copy">复制排查信息</ElButton
           ><ElButton v-if="selected.planId" @click="relatedPlan">查看同任务检查</ElButton>
         </div>
+        <details class="exception-detail">
+          <summary>查看完整诊断 JSON</summary>
+          <pre tabindex="0" aria-label="完整诊断 JSON">{{ JSON.stringify(selected, null, 2) }}</pre>
+        </details>
         <details v-if="selected.exceptionType" open class="exception-detail">
           <summary>技术堆栈</summary>
           <pre
@@ -393,7 +400,7 @@ watch(
           <pre>{{ JSON.stringify(selected.response, null, 2) }}</pre>
         </details>
         <p v-if="!selected.request && !selected.response" class="last-read">
-          该记录未采集请求参数或返回内容；临时详细记录仅对开启后匹配的请求生效。
+          该记录仅有基础诊断信息，未采集请求参数或返回内容。临时详细记录仅对开启后匹配的业务接口生效；登录等敏感接口不采集正文，旧记录不会补录。
         </p>
       </template>
     </ElDialog>
@@ -478,12 +485,24 @@ watch(
 }
 .exception-detail summary {
   cursor: pointer;
+  color: var(--el-color-primary);
 }
 .exception-detail pre {
+  max-height: 480px;
+  overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   padding: 14px;
   background: var(--el-fill-color-light);
+  line-height: 1.7;
+  font-size: 12px;
+}
+.empty-guidance {
+  margin: 0 auto 20px;
+  max-width: 560px;
+  padding: 0 16px;
+  color: var(--el-text-color-secondary);
+  white-space: normal;
   line-height: 1.7;
   font-size: 12px;
 }

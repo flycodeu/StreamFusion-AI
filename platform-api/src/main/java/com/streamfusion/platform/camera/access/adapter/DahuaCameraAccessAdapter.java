@@ -31,6 +31,11 @@ public class DahuaCameraAccessAdapter implements CameraAccessAdapter {
     }
 
     @Override
+    public Map<String, Object> locatorConfiguration(CameraAccessCatalog.Locator locator) {
+        return CameraCatalogSupport.streamLocator(locator);
+    }
+
+    @Override
     public CameraAdapterDescriptor descriptor() {
         return new CameraAdapterDescriptor(
                 type(), "大华设备", "DEVICE", "DEVICE_LOGIN", true, 20, false, "", "VENDOR_HTTP");

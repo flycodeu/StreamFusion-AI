@@ -202,14 +202,14 @@ public class CameraRtspTargetService {
         if (locator == null)
             return blocked(
                     ("RTSP".equals(source.getAdapterType())
-                                    || CameraStatusStreamResolver.supports(source.getAdapterType()))
+                                    || streams.supports(source.getAdapterType()))
                             ? "LOCATOR_NOT_CONFIGURED"
                             : "SOURCE_PROTOCOL_NOT_SUPPORTED");
         if (!profile.getSourceId().equals(locator.getSourceId())) return blocked("LOCATOR_INVALID");
         boolean direct = "RTSP".equals(locator.getLocatorKind());
         boolean platform = "HIK_PLATFORM".equals(locator.getLocatorKind());
         if (!direct
-                && (!CameraStatusStreamResolver.supports(locator.getLocatorKind())
+                && (!streams.supports(locator.getLocatorKind())
                         || !locator.getLocatorKind().equals(source.getAdapterType())))
             return blocked("SOURCE_PROTOCOL_NOT_SUPPORTED");
         if (direct

@@ -1,8 +1,14 @@
 import * as api from '../../api/preview/api'
 import type { PreviewLease, PreviewStats } from '../../api/preview/types'
 import type { StreamUsage } from './model'
+import { previewReason } from './model'
+import { ApiRequestError } from '../../lib/http/error'
 
 type PreviewInput = { cameraId: string; profileId: string; usage: StreamUsage }
+function unavailableLease(lease: PreviewLease, fallback: string): ApiRequestError {
+  const code = /^[A-Z][A-Z0-9_]{0,79}$/.test(lease.reasonCode ?? '') ? lease.reasonCode! : fallback
+  return new ApiRequestError(code, previewReason(code), lease.receipt)
+}
 export interface PreviewPlayer {
   connect(input: PreviewInput): Promise<PreviewLease>
   recoverVideoError(code: number): Promise<PreviewLease | null>
@@ -11,8 +17,9 @@ export interface PreviewPlayer {
 }
 export interface PlayerEvents {
   stream(stream: MediaStream): void
+  lease?(lease: PreviewLease): void
   state(state: 'CONNECTING'): void
-  failed(code: string): void
+  failed(code: string, cause?: unknown): void
 }
 export function supportedVideoCodecs(): string[] {
   if (typeof RTCRtpReceiver === 'undefined') return []
@@ -80,6 +87,7 @@ class WebRtcPreviewPlayer implements PreviewPlayer {
   private fallbackUsed = false
   private creationPending: Promise<PreviewLease> | null = null
   private unknownCreation = false
+  private creationFailure: unknown
   private releasePending: Promise<void> | null = null
   private recoveryPending: Promise<PreviewLease> | null = null
   private renewTimer: ReturnType<typeof setTimeout> | undefined
@@ -94,7 +102,13 @@ class WebRtcPreviewPlayer implements PreviewPlayer {
     try {
       return await this.open(this.codecs)
     } catch (cause) {
-      if (cause instanceof Error && cause.message === 'VIDEO_CODEC_NEGOTIATION_FAILED') {
+      const code =
+        cause instanceof ApiRequestError
+          ? cause.code
+          : cause instanceof Error
+            ? cause.message
+            : null
+      if (code === 'VIDEO_CODEC_NEGOTIATION_FAILED') {
         try {
           if (this.canFallback()) return await this.recoverH264()
         } catch (fallbackFailure) {
@@ -122,17 +136,18 @@ class WebRtcPreviewPlayer implements PreviewPlayer {
       lease = await creation
     } catch (cause) {
       this.unknownCreation = api.isUnknownPreviewReceipt(cause)
+      this.creationFailure = cause
       throw cause
     } finally {
       if (this.creationPending === creation) this.creationPending = null
     }
     this.lease = lease
+    this.events.lease?.(lease)
     if (this.closed) {
       await this.releaseLease()
       throw new Error('CANCELLED')
     }
-    if (lease.state !== 'READY' || !lease.leaseId)
-      throw new Error(lease.reasonCode || 'MEDIA_NOT_READY')
+    if (lease.state !== 'READY' || !lease.leaseId) throw unavailableLease(lease, 'MEDIA_NOT_READY')
     const peer = new RTCPeerConnection()
     this.peer = peer
     peer.addTransceiver('video', { direction: 'recvonly' })
@@ -211,17 +226,19 @@ class WebRtcPreviewPlayer implements PreviewPlayer {
       try {
         const result = await api.renewPreviewLease(lease.leaseId!)
         if (this.closed || this.lease !== lease) return
-        if (result.state !== 'READY') throw new Error(result.reasonCode || 'LEASE_EXPIRED')
+        if (result.state !== 'READY') throw unavailableLease(result, 'LEASE_EXPIRED')
         this.lease = result
+        this.events.lease?.(result)
         this.scheduleRenew()
-      } catch {
-        if (!this.closed && this.lease === lease) this.fail('LEASE_EXPIRED')
+      } catch (cause) {
+        if (!this.closed && this.lease === lease) this.fail('LEASE_EXPIRED', cause)
       }
     }, delay)
   }
-  private fail(code: string): void {
-    this.events.failed(code)
-    void this.close().catch(() => this.events.failed('LEASE_RELEASE_FAILED'))
+  private fail(code: string, cause?: unknown): void {
+    if (cause === undefined) this.events.failed(code)
+    else this.events.failed(code, cause)
+    void this.close().catch((failure) => this.events.failed('LEASE_RELEASE_FAILED', failure))
   }
   async stats(): Promise<PreviewStats | null> {
     const lease = this.lease
@@ -248,17 +265,19 @@ class WebRtcPreviewPlayer implements PreviewPlayer {
         await creation
       } catch (cause) {
         this.unknownCreation = api.isUnknownPreviewReceipt(cause)
+        this.creationFailure = cause
       }
     }
-    if (this.unknownCreation) throw new Error('LEASE_RELEASE_FAILED')
+    if (this.unknownCreation)
+      throw new Error('LEASE_RELEASE_FAILED', { cause: this.creationFailure })
     await this.releaseLease()
   }
   private async releaseLease(): Promise<void> {
     if (this.releasePending) return this.releasePending
     const lease = this.lease
     if (!lease?.leaseId) return
-    this.releasePending = api.deletePreviewLease(lease.leaseId).catch(() => {
-      throw new Error('LEASE_RELEASE_FAILED')
+    this.releasePending = api.deletePreviewLease(lease.leaseId).catch((cause) => {
+      throw new Error('LEASE_RELEASE_FAILED', { cause })
     })
     try {
       await this.releasePending

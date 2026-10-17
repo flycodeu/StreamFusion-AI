@@ -2,6 +2,7 @@ import type { PreviewChannel, PreviewProfile } from '../../api/preview/types'
 import type { MenuRoute } from '../../api/auth/types'
 
 export type StreamUsage = 'MAIN' | 'SUB'
+export type PreviewMenuAction = 'snapshot' | 'fullscreen' | 'reconnect' | 'close' | 'diagnostics'
 export interface PreviewDevice {
   key: string
   name: string
@@ -93,6 +94,7 @@ export function previewReason(code: string | null): string {
     UPSTREAM_REJECTED: '相机拒绝视频请求，请检查连接资料',
     BROWSER_UNSUPPORTED: '当前浏览器不支持视频预览',
     CONNECT_TIMEOUT: '连接超时，请重连',
+    FIRST_FRAME_TIMEOUT: '尚未收到视频画面，请重连或检查相机编码',
     LEASE_EXPIRED: '预览已过期，请重连',
     CONNECTION_FAILED: '视频连接中断，请重连',
     VIDEO_CODEC_NEGOTIATION_FAILED: '视频编码协商失败，请切换码流或检查转码配置',

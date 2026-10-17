@@ -12,7 +12,11 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
 /** Opt-in, read-only metadata checks for an existing local schema. */
-@SpringBootTest
+@SpringBootTest(
+        properties = {
+            "streamfusion.work-dir=target/local-schema-work",
+            "platform.media-runtime.auto-select-on-startup=false"
+        })
 @ActiveProfiles("local")
 @EnabledIfSystemProperty(named = "sf.test.localSchema", matches = "true")
 class LocalSchemaInspectionTest {

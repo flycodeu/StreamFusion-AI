@@ -22,6 +22,7 @@ import com.streamfusion.platform.camera.service.CameraSourceRules;
 import com.streamfusion.platform.media.preview.source.DahuaStreamLocatorAdapter;
 import com.streamfusion.platform.media.preview.source.HikvisionStreamLocatorAdapter;
 import com.streamfusion.platform.media.preview.source.OnvifStreamLocatorAdapter;
+import com.streamfusion.platform.media.preview.source.StreamLocatorAdapterRegistry;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -58,6 +59,7 @@ class CameraRtspTargetServiceTest {
         endpoints = mock(CameraEndpointMapper.class);
         credentials = mock(CameraCredentialMapper.class);
         onvif = mock(OnvifStreamLocatorAdapter.class);
+        when(onvif.type()).thenReturn("ONVIF");
         service =
                 new CameraRtspTargetService(
                         locators,
@@ -68,9 +70,12 @@ class CameraRtspTargetServiceTest {
                         new CameraSourceRules(properties),
                         properties,
                         new CameraStatusStreamResolver(
-                                onvif,
-                                new HikvisionStreamLocatorAdapter(),
-                                new DahuaStreamLocatorAdapter()));
+                                new StreamLocatorAdapterRegistry(
+                                        List.of(
+                                                onvif,
+                                                new HikvisionStreamLocatorAdapter(),
+                                                new DahuaStreamLocatorAdapter()))));
+        clearInvocations(onvif);
         camera = new CameraChannelEntity();
         camera.setId(2L);
         camera.setSourceId(1L);

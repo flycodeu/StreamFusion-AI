@@ -38,6 +38,20 @@ public class OnvifCameraAccessAdapter implements CameraAccessAdapter {
     }
 
     @Override
+    public Map<String, Object> locatorConfiguration(CameraAccessCatalog.Locator locator) {
+        var config = new LinkedHashMap<>(CameraCatalogSupport.tokenLocator(locator));
+        if (locator.serviceNamespace() != null || locator.serviceEndpoint() != null) {
+            if (!(MEDIA.equals(locator.serviceNamespace())
+                            || MEDIA2.equals(locator.serviceNamespace()))
+                    || locator.serviceEndpoint() == null)
+                throw com.streamfusion.platform.camera.service.CameraSourceRules.invalid();
+            config.put("serviceNamespace", locator.serviceNamespace());
+            config.put("serviceEndpoint", locator.serviceEndpoint().toASCIIString());
+        }
+        return config;
+    }
+
+    @Override
     public CameraAdapterDescriptor descriptor() {
         return new CameraAdapterDescriptor(
                 type(),

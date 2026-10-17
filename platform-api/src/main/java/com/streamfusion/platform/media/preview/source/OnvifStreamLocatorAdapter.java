@@ -2,6 +2,7 @@ package com.streamfusion.platform.media.preview.source;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessContext;
+import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
 import com.streamfusion.platform.camera.access.adapter.CameraHttpTransport;
 import com.streamfusion.platform.camera.pojo.entity.CameraLocatorEntity;
 import com.streamfusion.platform.media.preview.PreviewFailure;
@@ -82,7 +83,7 @@ public class OnvifStreamLocatorAdapter implements StreamLocatorAdapter {
             var values = doc.getElementsByTagNameNS("*", "Uri");
             if (values.getLength() != 1) throw new PreviewFailure("LOCATOR_INVALID");
             return transport.streamUri(context, values.item(0).getTextContent().strip());
-        } catch (PreviewFailure ex) {
+        } catch (PreviewFailure | CameraAdapterException ex) {
             throw ex;
         } catch (Exception ex) {
             throw new PreviewFailure("LOCATOR_INVALID");

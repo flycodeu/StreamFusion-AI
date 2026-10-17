@@ -65,6 +65,20 @@ public class CameraAccessAdapterRegistry {
                 .anyMatch(d -> d.type().equals(type) && d.category().equals(category));
     }
 
+    public Map<String, Object> locatorConfiguration(CameraAccessCatalog.Locator locator) {
+        return required(locator.kind()).locatorConfiguration(locator);
+    }
+
+    public void validateCredentials(String type, String username, String password) {
+        if (!"AUTO".equals(type)) required(type).validateCredentials(username, password);
+    }
+
+    public CameraPlatformAccessAdapter platform(String type) {
+        if (!(required(type) instanceof CameraPlatformAccessAdapter platform))
+            throw new CameraAdapterException("PROTOCOL_NOT_SUPPORTED");
+        return platform;
+    }
+
     public CameraAccessAdapterRegistry(List<CameraAccessAdapter> implementations) {
         var entries = new LinkedHashMap<String, CameraAccessAdapter>();
         var metadata = new ArrayList<CameraAdapterDescriptor>();

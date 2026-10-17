@@ -67,6 +67,7 @@ const pollPaused = ref(false)
 let clockOffset = 0
 let nextRefresh = 0
 let failures = 0
+let readRevision = 0
 let pageActive = true
 let timer: ReturnType<typeof globalThis.setInterval> | undefined
 function planActive(plan: StatusPlan) {
@@ -177,7 +178,8 @@ const planErrorAdvice = computed(() => {
 })
 async function load(silent = false) {
   if (loading.value) return
-  const active = capture()
+  const active = capture(),
+    current = ++readRevision
   loading.value = true
   if (!silent) {
     error.value = null
@@ -186,7 +188,7 @@ async function load(silent = false) {
   }
   try {
     const result = await getStatusPlans()
-    if (active()) {
+    if (active() && current === readRevision) {
       plans.value = result
       const serverNow = result.find((plan) => plan.serverNow)?.serverNow
       clockOffset = serverNow ? Date.parse(serverNow) - Date.now() : 0
@@ -195,7 +197,7 @@ async function load(silent = false) {
       if (errorOperation.value === 'load') error.value = null
     }
   } catch (cause) {
-    if (active()) {
+    if (active() && current === readRevision) {
       if (!error.value || errorOperation.value === 'load') {
         error.value = cause
         errorOperation.value = 'load'
@@ -203,11 +205,15 @@ async function load(silent = false) {
       if (++failures >= 3) pollPaused.value = true
     }
   } finally {
-    if (active()) {
+    if (active() && current === readRevision) {
       loading.value = false
       nextRefresh = Date.now() + 30_000
     }
   }
+}
+function invalidateRead() {
+  ++readRevision
+  loading.value = false
 }
 async function create() {
   if (step.value !== 3 || busy.value || !canCreate.value) return
@@ -227,6 +233,7 @@ async function create() {
     ...(scope.value === 'GROUPS' ? { groupIds: [...selectedGroups.value] } : {}),
     ...(scope.value === 'PLAN' ? { planId: reusedPlan.value!.planId } : {}),
   }
+  invalidateRead()
   busy.value = true
   error.value = null
   errorOperation.value = 'create'
@@ -258,6 +265,7 @@ async function create() {
 async function stop(plan: StatusPlan) {
   if (busy.value) return
   const active = capture()
+  invalidateRead()
   busy.value = true
   error.value = null
   errorOperation.value = 'stop'
@@ -279,6 +287,7 @@ async function stop(plan: StatusPlan) {
 async function resume(plan: StatusPlan) {
   if (busy.value) return
   const active = capture()
+  invalidateRead()
   busy.value = true
   error.value = null
   errorOperation.value = 'resume'

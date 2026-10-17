@@ -13,6 +13,7 @@ import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -57,9 +58,9 @@ public class AuditRetentionService {
         return view(require(policies.selectById(1L)));
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public View save(Command command, AuditContextDto context) {
-        long actor = access.administrator();
+        long actor = access.lockAdministrator();
         validate(command);
         var row = require(policies.lock());
         if (row.getVersion() != DecimalInput.version(command.version(), "version"))
@@ -117,9 +118,9 @@ public class AuditRetentionService {
                 exports.activeCount(now()) > 0);
     }
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public View requestRun(String version, AuditContextDto context) {
-        long actor = access.administrator();
+        long actor = access.lockAdministrator();
         var row = require(policies.lock());
         if (row.getVersion() != DecimalInput.version(version, "version"))
             throw error(ErrorCode.VERSION_CONFLICT);

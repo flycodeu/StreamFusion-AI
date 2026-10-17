@@ -25,6 +25,8 @@ export interface PreviewChannel {
   profiles: PreviewProfile[]
 }
 export interface PreviewLease {
+  /** Frontend receipt context, copied from the existing response envelope. */
+  receipt?: { status: number; traceId: string; timestamp: string }
   leaseId: string | null
   cameraId: string
   streamProfileId: string | null

@@ -118,8 +118,8 @@ class PreviewLeaseServiceTest {
         service =
                 new PreviewLeaseService(
                         authorization,
-                        channels,
-                        profiles,
+                        new PreviewProfileSelector(channels, profiles),
+                        new PreviewRecoveryCoordinator(pulls, media, runtimes),
                         locators,
                         media,
                         runtimes,
@@ -132,6 +132,25 @@ class PreviewLeaseServiceTest {
     @AfterEach
     void close() {
         service.close();
+    }
+
+    @Test
+    void nullCodecIsRejectedBeforeAuthorizationOrMediaAllocation() {
+        var request =
+                new PreviewModels.CreateLease(
+                        UUID.randomUUID().toString(),
+                        "10",
+                        null,
+                        "MAIN",
+                        java.util.Arrays.asList("H264", null));
+
+        assertThatThrownBy(() -> service.create(request))
+                .isInstanceOfSatisfying(
+                        BusinessException.class,
+                        failure ->
+                                assertThat(failure.code()).isEqualTo(ErrorCode.VALIDATION_ERROR));
+
+        verifyNoInteractions(authorization, locators, media, pulls, transcodes);
     }
 
     @Test
@@ -177,8 +196,8 @@ class PreviewLeaseServiceTest {
             service =
                     new PreviewLeaseService(
                             authorization,
-                            channels,
-                            profiles,
+                            new PreviewProfileSelector(channels, profiles),
+                            new PreviewRecoveryCoordinator(restarted, media, runtimes),
                             locators,
                             media,
                             runtimes,
@@ -558,8 +577,8 @@ class PreviewLeaseServiceTest {
         service =
                 new PreviewLeaseService(
                         authorization,
-                        channels,
-                        profiles,
+                        new PreviewProfileSelector(channels, profiles),
+                        new PreviewRecoveryCoordinator(pulls, media, runtimes),
                         locators,
                         media,
                         runtimes,
@@ -880,8 +899,8 @@ class PreviewLeaseServiceTest {
         service =
                 new PreviewLeaseService(
                         actualAuthorization,
-                        channels,
-                        profiles,
+                        new PreviewProfileSelector(channels, profiles),
+                        new PreviewRecoveryCoordinator(pulls, media, runtimes),
                         locators,
                         media,
                         runtimes,

@@ -85,8 +85,31 @@ beforeEach(() => {
 afterEach(() => {
   app?.unmount()
   app = null
+  vi.useRealTimers()
 })
 describe('media runtime selection and display', () => {
+  it('retains a choice edited while a background runtime read is pending', async () => {
+    vi.useFakeTimers()
+    const root = await mount()
+    let complete!: (value: MediaRuntimeSnapshot) => void
+    api.getMediaRuntime.mockReturnValueOnce(
+      new Promise((resolve) => {
+        complete = resolve
+      }),
+    )
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(api.getMediaRuntime).toHaveBeenCalledTimes(2)
+    await choose(root, 1, null)
+    complete(snapshot())
+    await settle()
+    expect(nodes(root).filter((item) => item.type === 'ElSelect')[1]!.props.modelValue).toBeNull()
+    expect(button(root, '保存选择').props.disabled).toBe(false)
+    await (button(root, '保存选择').props.onClick as () => Promise<void>)()
+    expect(api.selectMediaRuntime).toHaveBeenCalledWith('2', {
+      zlmId: 'zlm-current',
+      ffmpegId: null,
+    })
+  })
   it('shows an available idle FFmpeg as on demand, not an offline service', async () => {
     const root = await mount()
     expect(text(root)).toContain('调用状态')

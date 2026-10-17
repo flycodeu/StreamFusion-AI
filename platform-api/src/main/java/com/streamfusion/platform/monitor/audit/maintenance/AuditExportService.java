@@ -21,6 +21,7 @@ import java.util.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -58,9 +59,9 @@ public class AuditExportService {
             boolean downloadable,
             AuditCriteria filter) {}
 
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public View create(Command command, AuditContextDto context) {
-        long actor = access.actor();
+        long actor = access.lockActor();
         if (command == null
                 || command.clientRequestId() == null
                 || !command.clientRequestId().matches("[a-f0-9-]{36}")

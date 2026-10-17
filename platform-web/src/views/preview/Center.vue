@@ -1,15 +1,25 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElButton, ElEmpty, ElInput, ElMessage, ElOption, ElSelect, vLoading } from 'element-plus'
-import { Search, Refresh, VideoPlay, Close, Grid, Folder } from '@element-plus/icons-vue'
+import { ElButton, ElEmpty, ElInput, ElMessage, vLoading } from 'element-plus'
+import {
+  Search,
+  Refresh,
+  VideoPlay,
+  Close,
+  Grid,
+  Folder,
+  MoreFilled,
+} from '@element-plus/icons-vue'
 import { getPreviewCatalog } from '../../api/preview/api'
 import { getGroupTree } from '../../api/camera-groups/api'
 import type { CameraGroup } from '../../api/camera-groups/types'
 import type { PreviewChannel, PreviewStats } from '../../api/preview/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
-import { groupCatalog, usageLabels } from '../../features/preview/model'
+import { usageLabels } from '../../features/preview/model'
+import type { PreviewMenuAction } from '../../features/preview/model'
+import type { PreviewFailure } from '../../features/preview/failure'
 import {
   deviceLayout,
   getPreviewLayout,
@@ -20,6 +30,8 @@ import {
 import PreviewCameraTree from '../../features/preview/PreviewCameraTree.vue'
 import PreviewLayoutPicker from '../../features/preview/PreviewLayoutPicker.vue'
 import PreviewCapacity from '../../features/preview/PreviewCapacity.vue'
+import PreviewSlotMenu from '../../features/preview/PreviewSlotMenu.vue'
+import PreviewDiagnosticsDialog from '../../features/preview/PreviewDiagnosticsDialog.vue'
 import { usePreviewSlots } from '../../features/preview/usePreviewSlots'
 
 defineOptions({ name: 'PreviewCenter' })
@@ -42,12 +54,17 @@ const selectedDevice = computed(() =>
     : undefined,
 )
 const deviceMode = computed(() => route.query.mode === 'device')
-const grouped = computed(() => groupCatalog(channels.value))
+const loadedDeviceCount = computed(
+  () => new Set(channels.value.map((channel) => channel.deviceGroupKey)).size,
+)
 const deviceTitle = computed(
   () => channels.value[0]?.deviceName || channels.value[0]?.name || '相机预览',
 )
 const activeSlot = ref(0),
   context = ref<{ x: number; y: number; slot: number } | null>(null)
+const diagnosticFailure = ref<PreviewFailure | null>(null)
+let menuTrigger: globalThis.HTMLElement | null = null,
+  menuTile: globalThis.HTMLElement | null = null
 const {
   slots,
   setVideoRef,
@@ -149,7 +166,7 @@ let layoutSequence = 0
 async function chooseLayout(value: PreviewLayout): Promise<boolean> {
   const revision = ++layoutSequence,
     active = captureScope()
-  context.value = null
+  closeContext()
   if (!(await trim(value)) || revision !== layoutSequence || !active()) return false
   layout.value = value
   const count = layoutCount(value)
@@ -207,18 +224,56 @@ async function load(append = false) {
 }
 function openContext(event: globalThis.MouseEvent, index: number) {
   event.preventDefault()
-  activeSlot.value = index
   if (!slots[index].channel) return
+  rememberFocus(event.currentTarget)
+  activeSlot.value = index
   context.value = {
     x: Math.max(8, Math.min(event.clientX, globalThis.innerWidth - 232)),
     y: Math.max(8, Math.min(event.clientY, globalThis.innerHeight - 375)),
     slot: index,
   }
 }
-async function menuAction(action: 'snapshot' | 'fullscreen' | 'reconnect' | 'close') {
-  const index = context.value?.slot
+function rememberFocus(target: globalThis.EventTarget | null) {
+  menuTrigger = target instanceof globalThis.HTMLElement ? target : null
+  menuTile = menuTrigger?.closest<globalThis.HTMLElement>('.preview-tile') ?? null
+}
+function restoreFocus() {
+  void nextTick(() => (menuTrigger?.isConnected ? menuTrigger : menuTile)?.focus())
+}
+function closeContext(restore = true) {
   context.value = null
+  if (restore) restoreFocus()
+}
+function openMore(event: globalThis.MouseEvent | globalThis.KeyboardEvent, index: number) {
+  if (!slots[index].channel) return
+  rememberFocus(event.currentTarget)
+  if (!menuTrigger) return
+  const box = menuTrigger.getBoundingClientRect()
+  activeSlot.value = index
+  context.value = { x: box.right - 224, y: box.bottom + 6, slot: index }
+}
+function tileKeydown(event: globalThis.KeyboardEvent, index: number) {
+  if (event.target !== event.currentTarget) return
+  if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
+    event.preventDefault()
+    openMore(event, index)
+  } else if (event.key === 'Enter') activeSlot.value = index
+}
+function showDiagnostics(index: number, event?: globalThis.MouseEvent) {
+  const failure = slots[index].error
+  if (!failure) return
+  if (event) rememberFocus(event.currentTarget)
+  diagnosticFailure.value = { ...failure }
+}
+function closeDiagnostics() {
+  diagnosticFailure.value = null
+  restoreFocus()
+}
+async function menuAction(action: PreviewMenuAction) {
+  const index = context.value?.slot
   if (index == null) return
+  closeContext(action !== 'diagnostics')
+  if (action === 'diagnostics') showDiagnostics(index)
   if (action === 'snapshot') {
     if (!(await snapshot(index))) ElMessage.info('当前还没有可抓取的画面')
   }
@@ -230,12 +285,12 @@ async function menuAction(action: 'snapshot' | 'fullscreen' | 'reconnect' | 'clo
 function menuChannel(cameraId: string) {
   const index = context.value?.slot,
     channel = channels.value.find((channel) => channel.cameraId === cameraId)
-  context.value = null
+  closeContext()
   if (index != null && channel) void assign(index, channel, slots[index].usage)
 }
 function menuProfile(profileId: string) {
   const index = context.value?.slot
-  context.value = null
+  closeContext()
   if (index != null) void switchProfile(index, profileId)
 }
 function displayRate(stats: PreviewStats | null) {
@@ -252,7 +307,7 @@ function rateDetails(stats: PreviewStats | null) {
 }
 function dismissContext(event: globalThis.KeyboardEvent) {
   if (event.key === 'Escape') {
-    context.value = null
+    if (context.value) closeContext()
     catalogOpen.value = false
   }
 }
@@ -349,8 +404,7 @@ onBeforeUnmount(() => {
         >
       </div>
       <footer class="preview-sidebar-footer">
-        <span>{{ grouped.reduce((count, group) => count + group.devices.length, 0) }} 台相机</span
-        ><span>{{ total }} 个通道</span>
+        <span>已加载 {{ loadedDeviceCount }} 台</span><span>共 {{ total }} 个通道</span>
       </footer>
     </aside>
     <main class="preview-stage">
@@ -385,13 +439,15 @@ onBeforeUnmount(() => {
               lead: Boolean(layoutDefinition.leadSpan) && index === 0,
             }"
             tabindex="0"
+            aria-keyshortcuts="Shift+F10"
             :aria-label="
               slot.channel
                 ? `${slot.channel.name}，${usageLabels[slot.profile?.usage || slot.usage]}`
                 : `画面 ${index + 1}`
             "
             @click="activeSlot = index"
-            @keydown.enter="activeSlot = index"
+            @focusin="activeSlot = index"
+            @keydown="tileKeydown($event, index)"
             @contextmenu="openContext($event, index)"
           >
             <video
@@ -416,20 +472,34 @@ onBeforeUnmount(() => {
             </div>
             <div v-if="slot.channel && slot.state !== 'PLAYING'" class="tile-state">
               <VideoPlay v-if="slot.state !== 'ERROR'" class="state-icon" /><span>{{
-                slot.error || '正在连接…'
-              }}</span
-              ><ElButton
-                v-if="slot.state === 'ERROR'"
-                size="small"
-                text
-                type="primary"
-                @click.stop="play(index)"
-                >重连</ElButton
-              >
+                slot.error?.message || '正在连接…'
+              }}</span>
+              <div v-if="slot.state === 'ERROR'" class="tile-error-actions">
+                <ElButton size="small" text type="primary" @click.stop="play(index)">重连</ElButton>
+                <ElButton
+                  v-if="slot.error"
+                  size="small"
+                  text
+                  @click.stop="showDiagnostics(index, $event)"
+                  >排查信息</ElButton
+                >
+              </div>
             </div>
             <div v-if="!slot.channel" class="tile-empty">
               <VideoPlay /><span>{{ index + 1 }}</span>
             </div>
+            <button
+              v-if="slot.channel"
+              class="tile-more"
+              type="button"
+              :aria-label="`${slot.channel.name} 更多操作`"
+              aria-haspopup="dialog"
+              aria-controls="preview-slot-menu"
+              :aria-expanded="context?.slot === index"
+              @click.stop="openMore($event, index)"
+            >
+              <MoreFilled />
+            </button>
             <button
               v-if="slot.channel"
               class="tile-close"
@@ -465,60 +535,25 @@ onBeforeUnmount(() => {
         </div>
       </footer>
     </main>
-    <template v-if="context">
-      <button
-        class="context-backdrop"
-        type="button"
-        aria-label="关闭菜单"
-        @click="context = null"
-        @contextmenu.prevent="context = null"
-      />
-      <div
-        class="preview-context"
-        :style="{ left: `${context.x}px`, top: `${context.y}px` }"
-        role="menu"
-      >
-        <div v-if="contextChannels.length > 1" class="context-section">
-          <span>通道</span
-          ><ElSelect
-            :model-value="contextSlot?.channel?.cameraId"
-            size="small"
-            aria-label="切换通道"
-            @change="menuChannel"
-            ><ElOption
-              v-for="channel in contextChannels"
-              :key="channel.cameraId"
-              :value="channel.cameraId"
-              :label="channel.name"
-              :disabled="channel.lifecycle !== 'ENABLED'"
-          /></ElSelect>
-        </div>
-        <div v-if="contextProfiles.length" class="context-section">
-          <span>码流</span
-          ><ElSelect
-            :model-value="contextSlot?.profile?.streamProfileId"
-            size="small"
-            aria-label="切换码流"
-            @change="menuProfile"
-            ><ElOption
-              v-for="profile in contextProfiles"
-              :key="profile.streamProfileId"
-              :value="profile.streamProfileId"
-              :label="`${usageLabels[profile.usage]} · ${profile.label}`"
-          /></ElSelect>
-        </div>
-        <button
-          role="menuitem"
-          type="button"
-          :disabled="contextSlot?.state !== 'PLAYING'"
-          @click="menuAction('snapshot')"
-        >
-          抓图</button
-        ><button role="menuitem" type="button" @click="menuAction('fullscreen')">全屏</button
-        ><button role="menuitem" type="button" @click="menuAction('reconnect')">重新连接</button
-        ><button role="menuitem" type="button" @click="menuAction('close')">关闭预览</button>
-      </div>
-    </template>
+    <PreviewSlotMenu
+      v-if="context && contextSlot?.channel"
+      :position="context"
+      :channels="contextChannels"
+      :profiles="contextProfiles"
+      :camera-id="contextSlot.channel.cameraId"
+      :profile-id="contextSlot.profile?.streamProfileId"
+      :playing="contextSlot.state === 'PLAYING'"
+      :failed="Boolean(contextSlot.error)"
+      @close="closeContext"
+      @action="menuAction"
+      @channel="menuChannel"
+      @profile="menuProfile"
+    />
+    <PreviewDiagnosticsDialog
+      v-if="diagnosticFailure"
+      :failure="diagnosticFailure"
+      @close="closeDiagnostics"
+    />
   </div>
 </template>
 

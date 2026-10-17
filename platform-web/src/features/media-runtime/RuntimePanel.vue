@@ -61,7 +61,8 @@ function versionName(row: MediaRuntimeCandidate) {
 async function load(detect = false, background = false) {
   if (loading.value || detecting.value || saving.value || (background && dirty.value)) return
   const active = captureScope(),
-    preserveSelection = dirty.value
+    preserveSelection = dirty.value,
+    selectionAtStart = { ...selection.value }
   controller = new globalThis.AbortController()
   if (detect) detecting.value = true
   else loading.value = true
@@ -71,8 +72,11 @@ async function load(detect = false, background = false) {
       ? detectMediaRuntime(controller.signal)
       : getMediaRuntime(controller.signal))
     if (!active()) return
+    const editedWhileReading =
+      selection.value.zlmId !== selectionAtStart.zlmId ||
+      selection.value.ffmpegId !== selectionAtStart.ffmpegId
     snapshot.value = result
-    if (!preserveSelection) selection.value = { ...result.selected }
+    if (!preserveSelection && !editedWhileReading) selection.value = { ...result.selected }
   } catch (cause) {
     if (active()) error.value = cause
   } finally {

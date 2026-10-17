@@ -204,6 +204,44 @@ describe('diagnostic query page', () => {
     expect(mock.route.query.traceId).toBe('b'.repeat(32))
   })
 
+  it('renders complete diagnostic JSON even when request bodies were not captured', async () => {
+    const event = {
+      occurredAt: '2026-10-17T00:00:00Z',
+      kind: 'REQUEST',
+      level: 'INFO',
+      traceId: 'a'.repeat(32),
+      route: '/camera/devices',
+      method: 'POST',
+      status: 200,
+      durationMs: 12,
+      request: null,
+      response: null,
+      stack: [],
+    }
+    mock.getDiagnostics.mockResolvedValue({ items: [event] })
+    const root = await mount()
+    const table = nodes(root).find((n) => n.type === 'ElTable')!
+    ;(table.props.onRowDblclick as (row: unknown) => void)(event)
+    await flush()
+    const json = nodes(root).find((n) => n.props['aria-label'] === '完整诊断 JSON')!
+    expect(JSON.parse(text(json))).toEqual(event)
+    expect(text(root)).toContain('旧记录不会补录')
+    expect(mock.getDiagnostics).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers existing capture controls inside related diagnostics only to super administrators', async () => {
+    sessionState.me = {
+      user: { id: '1001' },
+      modules: ['diagnostics'],
+      isSuperAdmin: true,
+    } as NonNullable<typeof sessionState.me>
+    const root = await mount({ context: { traceId: 'a'.repeat(32) } })
+    expect(button(root, '临时详细记录')).toBeDefined()
+    sessionState.me.isSuperAdmin = false
+    await flush()
+    expect(button(root, '临时详细记录')).toBeUndefined()
+  })
+
   it('opens the diagnostic link in a dialog and requires diagnostic module access', async () => {
     const root = node('root')
     app = renderer.createApp(DiagnosticLink, { traceId: 'a'.repeat(32) })

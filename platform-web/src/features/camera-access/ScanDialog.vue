@@ -65,6 +65,7 @@ const running = computed(
 const frozen = computed(() => !!creation.pending.value)
 const savedIds = computed(() => rows.value.flatMap((row) => (row.cameraId ? [row.cameraId] : [])))
 const paused = ref(false)
+const refreshing = ref(false)
 let timer: ReturnType<typeof globalThis.setTimeout> | undefined,
   sequence = 0,
   reads = 0,
@@ -103,10 +104,13 @@ async function loadOptions() {
   }
 }
 async function refresh() {
-  if (!jobId.value) return
+  if (!jobId.value || refreshing.value) return
   stop()
   const active = captureScope(),
     current = sequence
+  refreshing.value = true
+  paused.value = false
+  error.value = null
   try {
     const value = await api.getAccessJob(jobId.value)
     if (!active() || current !== sequence) return
@@ -123,6 +127,8 @@ async function refresh() {
       error.value = cause
       paused.value = true
     }
+  } finally {
+    if (active() && current === sequence) refreshing.value = false
   }
 }
 async function start() {
@@ -177,15 +183,19 @@ async function cancel() {
   if (!jobId.value || busy.value) return
   const active = captureScope()
   busy.value = true
+  sequence++
+  refreshing.value = false
   stop()
   try {
     const value = await api.cancelAccessJob(jobId.value)
     if (active()) {
-      sequence++
       receive(value)
     }
   } catch (cause) {
-    if (active()) error.value = cause
+    if (active()) {
+      error.value = cause
+      paused.value = true
+    }
   } finally {
     if (active()) busy.value = false
   }
@@ -402,7 +412,13 @@ onBeforeUnmount(() => {
         savedIds.length ? '完成' : '关闭'
       }}</ElButton>
       <ElButton v-if="running" :loading="busy" @click="cancel">取消搜索</ElButton>
-      <ElButton v-if="paused && running" :disabled="busy" @click="refresh">刷新搜索状态</ElButton>
+      <ElButton
+        v-if="(paused || refreshing) && running"
+        :loading="refreshing"
+        :disabled="busy || refreshing"
+        @click="refresh"
+        >刷新搜索状态</ElButton
+      >
       <ElButton
         v-else-if="!savedIds.length"
         :loading="busy"

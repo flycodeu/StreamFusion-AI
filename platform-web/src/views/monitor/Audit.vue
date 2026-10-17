@@ -450,6 +450,12 @@ watch(
                 </div></ElDescriptionsItem
               >
             </ElDescriptions>
+            <details class="diagnostic-json">
+              <summary>查看排查 JSON</summary>
+              <pre tabindex="0" aria-label="审计排查 JSON">{{
+                JSON.stringify(detail, null, 2)
+              }}</pre>
+            </details>
             <h3 class="detail-section-title">变更内容</h3>
             <ElTable v-if="changes.length" :data="changes" border
               ><ElTableColumn prop="name" label="字段" width="150" /><ElTableColumn label="内容"
@@ -492,5 +498,24 @@ watch(
 .change-content {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+.diagnostic-json {
+  margin-top: 20px;
+  font-size: 13px;
+}
+.diagnostic-json summary {
+  cursor: pointer;
+  color: var(--el-color-primary);
+}
+.diagnostic-json pre {
+  max-height: 480px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 14px;
+  background: var(--el-fill-color-light);
+  font:
+    12px/1.7 Consolas,
+    monospace;
 }
 </style>

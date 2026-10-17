@@ -17,19 +17,54 @@ import org.springframework.stereotype.Component;
 
 /** ISC/Artemis resource v2 camera/search; not a universal HikCentral/iVMS/Hik-Connect adapter. */
 @Component
-public class HikPlatformCameraAccessAdapter implements CameraAccessAdapter {
+public class HikPlatformCameraAccessAdapter implements CameraPlatformAccessAdapter {
     private static final String PATH = "/artemis/api/resource/v2/camera/search";
     private final CameraHttpTransport transport;
     private final ObjectMapper json;
+    private final HikPlatformApi api;
 
-    public HikPlatformCameraAccessAdapter(CameraHttpTransport transport, ObjectMapper json) {
+    public HikPlatformCameraAccessAdapter(
+            CameraHttpTransport transport, ObjectMapper json, HikPlatformApi api) {
         this.transport = transport;
         this.json = json;
+        this.api = api;
     }
 
     @Override
     public String type() {
         return "HIK_PLATFORM";
+    }
+
+    @Override
+    public Map<String, Object> locatorConfiguration(CameraAccessCatalog.Locator locator) {
+        return CameraCatalogSupport.streamLocator(locator);
+    }
+
+    @Override
+    public void validateRegionCode(String code) {
+        HikPlatformApi.requireCode(code);
+    }
+
+    @Override
+    public Regions regions(CameraAccessContext context, String parentCode, int page, int size) {
+        if (parentCode == null) {
+            if (page != 1)
+                throw com.streamfusion.platform.camera.service.CameraSourceRules.invalid();
+            return new Regions(List.of(region(api.root(context))), 1, 1, size);
+        }
+        var result = api.regions(context, parentCode, page, size);
+        var items = new ArrayList<Region>();
+        for (var value : result.path("list")) items.add(region(value));
+        return new Regions(items, result.path("total").asLong(), page, size);
+    }
+
+    private static Region region(JsonNode value) {
+        String code = value.path("indexCode").asText();
+        HikPlatformApi.requireCode(code);
+        String name = value.path("name").asText();
+        if (name.isBlank() || name.length() > 512)
+            throw new CameraAdapterException("INVALID_PROTOCOL_RESPONSE");
+        return new Region(code, value.path("parentIndexCode").asText(null), name);
     }
 
     @Override

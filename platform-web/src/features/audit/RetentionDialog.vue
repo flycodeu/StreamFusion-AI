@@ -58,6 +58,7 @@ const results: Record<string, string> = {
 }
 let timer: ReturnType<typeof globalThis.setTimeout> | undefined
 let alive = true
+let revision = 0
 function applyPolicy(value: RetentionPolicy) {
   const { enabled, mode, keepMonths, maxRecords, version } = value
   Object.assign(form, { enabled, mode, keepMonths, maxRecords, version })
@@ -69,29 +70,34 @@ watch(
   },
 )
 async function load(initial = false) {
-  const active = scope()
+  if (loading.value) return
+  const active = scope(),
+    current = ++revision
   try {
     const value = await getRetention()
-    if (!active()) return
+    if (!active() || current !== revision) return
     policy.value = value
     if (initial) applyPolicy(value)
   } catch (e) {
-    if (active()) error.value = e
+    if (active() && current === revision) error.value = e
   }
 }
 async function act(action: 'preview' | 'save' | 'run') {
-  const active = scope()
+  if (loading.value || !policy.value) return
+  const active = scope(),
+    current = ++revision
   loading.value = true
   error.value = null
   try {
     if (action === 'preview') {
       const input = { ...form }
       const value = await previewRetention(input)
-      if (active() && JSON.stringify(input) === JSON.stringify(form)) preview.value = value
+      if (active() && current === revision && JSON.stringify(input) === JSON.stringify(form))
+        preview.value = value
     } else {
       const value =
         action === 'run' ? await runRetention(form.version) : await saveRetention({ ...form })
-      if (active()) {
+      if (active() && current === revision) {
         policy.value = value
         applyPolicy(value)
         preview.value = null
@@ -99,7 +105,7 @@ async function act(action: 'preview' | 'save' | 'run') {
       }
     }
   } catch (e) {
-    if (active()) error.value = e
+    if (active() && current === revision) error.value = e
   } finally {
     if (active()) loading.value = false
   }

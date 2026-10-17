@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -104,3 +105,91 @@ def test_redaction_covers_structured_values_and_tracebacks() -> None:
         assert secret not in redacted
     record = logging.LogRecord("test", logging.ERROR, "", 1, value, (), None)
     assert json.loads(JsonFormatter("test").format(record))["timestamp"].endswith("Z")
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (
+            json.dumps({"password": 'head"tail-secret\\ending', "status": "ok"}),
+            '{"password": [REDACTED], "status": "ok"}',
+        ),
+        (
+            "{'token': 'head\\'tail-secret', 'status': 'ok'}",
+            "{'token': [REDACTED], 'status': 'ok'}",
+        ),
+        ('password="head\\"tail-secret with spaces', "password=[REDACTED]"),
+        ("token='head\\'tail-secret with spaces\\", "token=[REDACTED]"),
+        ('password="', "password=[REDACTED]"),
+        ("token='\\", "token=[REDACTED]"),
+        (
+            "password=first;status=ok token=second&count=2",
+            "password=[REDACTED];status=ok token=[REDACTED]&count=2",
+        ),
+        ("status=ok path=/health", "status=ok path=/health"),
+        (
+            'authorization="Bearer head\\"tail-secret" status=ok',
+            "authorization=[REDACTED] status=ok",
+        ),
+        ('password="Bearer head\\"tail-secret" status=ok', "password=[REDACTED] status=ok"),
+        ("token='Bearer head\\'tail-secret' status=ok", "token=[REDACTED] status=ok"),
+        (
+            "authorization=Bearer raw-secret status=ok",
+            "authorization=[REDACTED] [REDACTED] status=ok",
+        ),
+    ],
+)
+def test_redaction_handles_escaped_and_truncated_values(value: str, expected: str) -> None:
+    assert redact(value) == expected
+
+
+def test_formatter_hides_escaped_exception_values_and_long_secrets() -> None:
+    try:
+        raise RuntimeError("token='head\\'exception-tail'")
+    except RuntimeError:
+        record = logging.LogRecord(
+            "test",
+            logging.ERROR,
+            "",
+            1,
+            'password="head\\"message-tail" status=ok',
+            (),
+            sys.exc_info(),
+        )
+    payload = json.loads(JsonFormatter("test").format(record))
+    assert "message-tail" not in payload["message"]
+    assert "status=ok" in payload["message"]
+    assert "exception-tail" not in payload["exception"]
+    assert "RuntimeError" in payload["exception"]
+    assert redact('password="' + '\\"' * 20000 + 'tail-secret" status=ok') == (
+        "password=[REDACTED] status=ok"
+    )
+
+
+def test_formatter_keeps_chain_and_group_locations_without_source_literals() -> None:
+    try:
+        try:
+            raise ValueError("password='head\\'cause-tail'")
+        except ValueError as cause:
+            raise ExceptionGroup("group", [RuntimeError('token="head\\"group-tail"')]) from cause
+    except ExceptionGroup:
+        record = logging.LogRecord("test", logging.ERROR, "", 1, "rejected", (), sys.exc_info())
+    exception = json.loads(JsonFormatter("test").format(record))["exception"]
+    assert "cause-tail" not in exception
+    assert "group-tail" not in exception
+    assert "ValueError" in exception
+    assert "ExceptionGroup" in exception
+    assert "RuntimeError" in exception
+    assert "test_foundation.py" in exception
+    assert "direct cause" in exception
+
+
+def test_formatter_omits_syntax_error_source_excerpt() -> None:
+    try:
+        raise SyntaxError("invalid syntax", ("plugin.py", 7, 4, 'x="source-only-secret"'))
+    except SyntaxError:
+        record = logging.LogRecord("test", logging.ERROR, "", 1, "rejected", (), sys.exc_info())
+    exception = json.loads(JsonFormatter("test").format(record))["exception"]
+    assert "source-only-secret" not in exception
+    assert 'File "plugin.py", line 7' in exception
+    assert "SyntaxError: invalid syntax" in exception

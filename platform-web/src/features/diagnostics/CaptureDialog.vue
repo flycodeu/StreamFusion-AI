@@ -32,6 +32,7 @@ const status = ref<CaptureWindow | null>(null),
 const scope = usePageScope()
 let timer: ReturnType<typeof globalThis.setTimeout> | undefined
 let alive = true
+let revision = 0
 function updateStatus(value: CaptureWindow) {
   status.value = value
   if (value.enabled) {
@@ -41,44 +42,52 @@ function updateStatus(value: CaptureWindow) {
   }
 }
 async function load() {
-  const active = scope()
+  if (busy.value) return
+  const active = scope(),
+    current = ++revision
   try {
     const value = await getCapture()
-    if (active()) updateStatus(value)
+    if (active() && current === revision) {
+      updateStatus(value)
+      error.value = null
+    }
   } catch (e) {
-    if (active()) error.value = e
+    if (active() && current === revision) error.value = e
   }
 }
 async function change(stop = false) {
+  if (busy.value) return
   validation.value = ''
   if (!stop && !form.routes.length) validation.value = '请选择至少一个接口'
   if (!stop && form.actorId && !/^[1-9][0-9]{0,18}$/.test(form.actorId))
     validation.value = '账号编号必须为正整数'
   if (validation.value) return
-  const active = scope()
+  const active = scope(),
+    current = ++revision
   busy.value = true
   error.value = null
   try {
     const value = stop
       ? await stopCapture()
       : await startCapture({ ...form, actorId: form.actorId || null })
-    if (active()) updateStatus(value)
+    if (active() && current === revision) updateStatus(value)
   } catch (e) {
-    if (active()) error.value = e
+    if (active() && current === revision) error.value = e
   } finally {
     if (active()) busy.value = false
   }
 }
 onMounted(async () => {
-  const active = scope()
+  const active = scope(),
+    current = ++revision
   try {
     const values = await Promise.all([getCapture(), captureRoutes()])
-    if (active()) {
+    if (active() && current === revision) {
       updateStatus(values[0])
       routes.value = values[1]
     }
   } catch (e) {
-    if (active()) error.value = e
+    if (active() && current === revision) error.value = e
   }
   if (!alive) return
   const poll = async () => {
@@ -99,6 +108,7 @@ onBeforeUnmount(() => {
     title="临时详细记录"
     width="720px"
     class="management-dialog"
+    append-to-body
     @close="$emit('close')"
   >
     <RequestError :error="error" />

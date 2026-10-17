@@ -8,6 +8,7 @@ import java.util.Set;
 
 /** Small asset-specific rules; shared ID, version, HTTP and authorization rules stay shared. */
 public final class CameraAssetRules {
+    static final Set<String> LIFECYCLES = Set.of("PENDING_ASSIGNMENT", "ENABLED", "DISABLED");
     private static final Set<String> USAGES = Set.of("MAIN", "SUB", "THIRD", "CUSTOM", "UNKNOWN");
 
     private CameraAssetRules() {}

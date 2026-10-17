@@ -18,6 +18,7 @@ import com.streamfusion.platform.camera.service.CameraCryptoService;
 import com.streamfusion.platform.camera.service.CameraSourceRules;
 import com.streamfusion.platform.media.preview.source.PreviewLocatorService;
 import com.streamfusion.platform.media.preview.source.StreamLocatorAdapter;
+import com.streamfusion.platform.media.preview.source.StreamLocatorAdapterRegistry;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
@@ -62,7 +63,13 @@ class PreviewLocatorDeadlineTest {
         when(adapter.resolve(any(), any(), any())).thenReturn(URI.create("rtsp://127.0.0.1/live"));
         service =
                 new PreviewLocatorService(
-                        locators, sources, endpoints, credentials, crypto, rules, List.of(adapter));
+                        locators,
+                        sources,
+                        endpoints,
+                        credentials,
+                        crypto,
+                        rules,
+                        new StreamLocatorAdapterRegistry(List.of(adapter)));
     }
 
     @AfterEach
@@ -92,7 +99,13 @@ class PreviewLocatorDeadlineTest {
         service.close();
         service =
                 new PreviewLocatorService(
-                        locators, sources, endpoints, credentials, crypto, rules, List.of(adapter));
+                        locators,
+                        sources,
+                        endpoints,
+                        credentials,
+                        crypto,
+                        rules,
+                        new StreamLocatorAdapterRegistry(List.of(adapter)));
         var uri = service.resolve(profile, authorization).uri();
         assertThat(uri.getRawUserInfo()).isNull();
         assertThat(uri.toString()).doesNotContain("private-appkey", "private-appsecret");

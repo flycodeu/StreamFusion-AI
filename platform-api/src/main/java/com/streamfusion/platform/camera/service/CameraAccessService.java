@@ -64,7 +64,7 @@ public class CameraAccessService {
     /** Reuses the identity domain's role predicate in bounded batches, never one query per user. */
     public Set<Long> superAdminIds(Collection<Long> userIds) {
         List<Long> ids = userIds.stream().distinct().sorted().toList();
-        CameraGroupService.bounded(ids.size());
+        CameraGroupRules.bounded(ids.size());
         Set<Long> result = new HashSet<>();
         for (int offset = 0; offset < ids.size(); offset += 1000)
             for (var role :

@@ -2,10 +2,35 @@ package com.streamfusion.platform.camera.access.adapter;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 
 final class CameraCatalogSupport {
     private CameraCatalogSupport() {}
+
+    static Map<String, Object> tokenLocator(CameraAccessCatalog.Locator locator) {
+        return Map.of("profileToken", opaque(locator.profileToken()));
+    }
+
+    static Map<String, Object> streamLocator(CameraAccessCatalog.Locator locator) {
+        if (locator.streamType() == null || locator.streamType() < 0 || locator.streamType() > 255)
+            throw com.streamfusion.platform.camera.service.CameraSourceRules.invalid();
+        var config = new LinkedHashMap<String, Object>();
+        config.put("streamType", locator.streamType());
+        if (locator.profileToken() != null)
+            config.put("resourceToken", opaque(locator.profileToken()));
+        return config;
+    }
+
+    private static String opaque(String value) {
+        if (value == null
+                || value.isEmpty()
+                || value.codePointCount(0, value.length()) > 512
+                || value.codePoints().anyMatch(Character::isISOControl))
+            throw com.streamfusion.platform.camera.service.CameraSourceRules.invalid();
+        return value;
+    }
 
     static CameraAccessCatalog.Device device(
             String name,

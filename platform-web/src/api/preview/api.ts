@@ -8,6 +8,8 @@ import {
   parsePreviewCapacity,
 } from './types'
 import type { PreviewUsage } from './types'
+import type { PreviewLease } from './types'
+import type { ApiResult } from '../../lib/http/types'
 import { ApiRequestError } from '../../lib/http/error'
 
 export async function getPreviewCapacity(signal?: AbortSignal) {
@@ -31,6 +33,11 @@ export function isUnknownPreviewReceipt(cause: unknown): boolean {
       cause.code === 'REQUEST_TIMEOUT' ||
       (cause.code === 'INVALID_RESPONSE' && cause.status === 201))
   )
+}
+
+function withLeaseReceipt(result: ApiResult<PreviewLease>): PreviewLease {
+  const { status, traceId, timestamp } = result.meta
+  return { ...result.data, receipt: { status, traceId, timestamp } }
 }
 
 export async function getPreviewCatalog(query: {
@@ -68,10 +75,10 @@ export async function createPreviewLease(input: {
       decode: parseLease,
     })
   try {
-    return (await create()).data
+    return withLeaseReceipt(await create())
   } catch (cause) {
     if (!isUnknownPreviewReceipt(cause)) throw cause
-    return (await create()).data
+    return withLeaseReceipt(await create())
   }
 }
 export async function exchangeWebRtc(leaseId: string, sdp: string) {
@@ -98,15 +105,15 @@ export async function getPreviewStats(leaseId: string) {
   ).data
 }
 export async function renewPreviewLease(leaseId: string) {
-  return (
+  return withLeaseReceipt(
     await request({
       path: `/preview/leases/${encodeURIComponent(leaseId)}/renew`,
       method: 'POST',
       successStatus: 200,
       timeoutMs: 10000,
       decode: parseLease,
-    })
-  ).data
+    }),
+  )
 }
 export async function deletePreviewLease(leaseId: string) {
   await request({

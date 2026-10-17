@@ -5,41 +5,34 @@ import com.streamfusion.platform.camera.access.adapter.CameraAccessContext;
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
 import com.streamfusion.platform.camera.pojo.entity.CameraLocatorEntity;
 import com.streamfusion.platform.media.preview.PreviewFailure;
-import com.streamfusion.platform.media.preview.source.DahuaStreamLocatorAdapter;
-import com.streamfusion.platform.media.preview.source.HikvisionStreamLocatorAdapter;
-import com.streamfusion.platform.media.preview.source.OnvifStreamLocatorAdapter;
+import com.streamfusion.platform.media.preview.source.StreamLocatorAdapter;
+import com.streamfusion.platform.media.preview.source.StreamLocatorAdapterRegistry;
 import java.net.URI;
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 /** Reuses preview's protocol identities; only the worker resolves ONVIF over the network. */
 @Component
-@RequiredArgsConstructor
 public class CameraStatusStreamResolver {
-    private final OnvifStreamLocatorAdapter onvif;
-    private final HikvisionStreamLocatorAdapter hikvision;
-    private final DahuaStreamLocatorAdapter dahua;
+    private final StreamLocatorAdapterRegistry adapters;
 
-    public static boolean supports(String kind) {
-        return "ONVIF".equals(kind)
-                || "HIKVISION".equals(kind)
-                || "DAHUA".equals(kind)
-                || "HIK_PLATFORM".equals(kind);
+    public CameraStatusStreamResolver(StreamLocatorAdapterRegistry adapters) {
+        this.adapters = adapters;
+    }
+
+    public boolean supports(String kind) {
+        return adapters.supports(kind);
     }
 
     public URI configuredUri(
             CameraLocatorEntity locator, JsonNode config, CameraAccessContext context) {
-        return switch (locator.getLocatorKind()) {
-            case "HIKVISION" -> hikvision.resolve(locator, config, context);
-            case "DAHUA" -> dahua.resolve(locator, config, context);
-            case "ONVIF" -> {
-                validateOnvif(config, context);
-                String host = context.endpoint().getHost();
-                // Identity only: this URI is replaced by GetStreamUri before any RTSP request.
-                yield URI.create("rtsp://" + host + ":" + context.rtspPort() + "/");
-            }
-            default -> throw new PreviewFailure("SOURCE_PROTOCOL_NOT_SUPPORTED");
-        };
+        var adapter = required(locator.getLocatorKind());
+        if ("ONVIF".equals(locator.getLocatorKind())) {
+            validateOnvif(config, context);
+            String host = context.endpoint().getHost();
+            // Identity only: GetStreamUri runs in the worker, never during read-only inspection.
+            return URI.create("rtsp://" + host + ":" + context.rtspPort() + "/");
+        }
+        return adapter.resolve(locator, config, context);
     }
 
     public CameraStatusWorker.TargetResolver deferred(
@@ -58,10 +51,10 @@ public class CameraStatusStreamResolver {
                             deadline);
             URI uri;
             try {
-                uri = onvif.resolve(locator, config, execution);
+                uri = required(locator.getLocatorKind()).resolve(locator, config, execution);
                 validateRtsp(uri);
             } catch (PreviewFailure ex) {
-                throw new CameraAdapterException("STREAM_URI_INVALID");
+                throw new CameraAdapterException(resolutionReason(ex.reason()));
             } catch (CameraAdapterException ex) {
                 throw new CameraAdapterException(resolutionReason(ex.reasonCode()));
             }
@@ -73,6 +66,10 @@ public class CameraStatusStreamResolver {
                     context.password(),
                     context.checkAuthorization());
         };
+    }
+
+    private StreamLocatorAdapter required(String kind) {
+        return adapters.required(kind);
     }
 
     public static void validateRtsp(URI uri) {
@@ -112,7 +109,7 @@ public class CameraStatusStreamResolver {
             case "AUTHENTICATION_FAILED" -> "STREAM_URI_AUTH_REJECTED";
             case "CONNECTION_TIMEOUT", "DISCOVERY_TIMEOUT" -> "STREAM_URI_TIMEOUT";
             case "DESTINATION_REJECTED", "CREDENTIAL_ORIGIN_REJECTED" -> "NETWORK_BLOCKED";
-            case "INVALID_STREAM_URI" -> "STREAM_URI_INVALID";
+            case "INVALID_STREAM_URI", "LOCATOR_INVALID" -> "STREAM_URI_INVALID";
             case "ACTOR_REVOKED",
                     "CONFIGURATION_CHANGED",
                     "CONFIGURATION_UNAVAILABLE",

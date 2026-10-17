@@ -1,5 +1,6 @@
 node_modules
 dist
 coverage
+.run
 pnpm-lock.yaml
 .env*

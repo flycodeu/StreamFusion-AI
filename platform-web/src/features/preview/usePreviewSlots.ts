@@ -5,11 +5,12 @@ import type {
   PreviewProfile,
   PreviewStats,
 } from '../../api/preview/types'
-import { ApiRequestError } from '../../lib/http/error'
 import { createPreviewPlayer } from './player'
 import type { PreviewPlayer } from './player'
-import { previewReason, selectProfile } from './model'
+import { selectProfile } from './model'
 import type { StreamUsage } from './model'
+import { previewFailure } from './failure'
+import type { PreviewFailure } from './failure'
 import { layoutCount, MAX_PREVIEW_SLOTS, type PreviewLayout } from './layouts'
 
 export interface PreviewSlot {
@@ -20,7 +21,7 @@ export interface PreviewSlot {
   player: PreviewPlayer | null
   stats: PreviewStats | null
   state: 'EMPTY' | 'CONNECTING' | 'PLAYING' | 'ERROR'
-  error: string | null
+  error: PreviewFailure | null
 }
 export function usePreviewSlots() {
   const slots = reactive<PreviewSlot[]>(
@@ -45,6 +46,19 @@ export function usePreviewSlots() {
   let active = true,
     statsBusy = false
   const current = (index: number, revision: number) => active && revisions.get(index) === revision
+  function fail(index: number, revision: number, cause: unknown, code?: string) {
+    if (!current(index, revision)) return
+    const slot = slots[index]!
+    slot.state = 'ERROR'
+    slot.error = previewFailure(cause, {
+      code,
+      cameraId: slot.channel?.cameraId,
+      cameraName: slot.channel?.name,
+      streamProfileId: slot.profile?.streamProfileId,
+      profileName: slot.profile?.label,
+      leaseId: slot.lease?.leaseId,
+    })
+  }
   function bindVideo(video: HTMLVideoElement, stream: MediaStream | null) {
     // Function refs run on each render; reassigning even the same stream resets playback.
     if (video.srcObject !== stream) video.srcObject = stream
@@ -80,11 +94,8 @@ export function usePreviewSlots() {
     if (video) video.srcObject = null
     try {
       await player?.close()
-    } catch {
-      if (current(index, revision)) {
-        slot.state = 'ERROR'
-        slot.error = previewReason('LEASE_RELEASE_FAILED')
-      }
+    } catch (cause) {
+      fail(index, revision, cause, 'LEASE_RELEASE_FAILED')
       return -1
     }
     if (!current(index, revision)) return revision
@@ -105,11 +116,8 @@ export function usePreviewSlots() {
       index,
       setTimeout(() => {
         if (!current(index, revision) || slots[index]!.state === 'PLAYING') return
-        slots[index]!.state = 'ERROR'
-        slots[index]!.error = '尚未收到视频画面，请重连或检查相机编码'
-        void player.close().catch(() => {
-          if (current(index, revision)) slots[index]!.error = previewReason('LEASE_RELEASE_FAILED')
-        })
+        fail(index, revision, 'FIRST_FRAME_TIMEOUT')
+        void player.close().catch((cause) => fail(index, revision, cause, 'LEASE_RELEASE_FAILED'))
       }, 20000),
     )
   }
@@ -146,16 +154,10 @@ export function usePreviewSlots() {
       let failure = cause
       try {
         await player.close()
-      } catch {
-        failure = new Error('LEASE_RELEASE_FAILED')
+      } catch (cause) {
+        failure = new Error('LEASE_RELEASE_FAILED', { cause })
       }
-      if (current(index, revision)) {
-        slot.state = 'ERROR'
-        slot.error =
-          failure instanceof ApiRequestError
-            ? `${failure.code === 'RATE_LIMITED' ? previewReason(failure.code) : failure.message} (${failure.code})`
-            : previewReason(failure instanceof Error ? failure.message : null)
-      }
+      fail(index, revision, failure)
     } finally {
       if (recovering.get(index) === revision) recovering.delete(index)
     }
@@ -176,20 +178,22 @@ export function usePreviewSlots() {
             if (video) bindVideo(video, stream)
           }
         },
+        lease(lease) {
+          if (current(index, revision)) slot.lease = lease
+        },
         state(state) {
           if (current(index, revision)) {
             slot.state = state
             slot.error = null
           }
         },
-        failed(code) {
+        failed(code, cause) {
           if (current(index, revision)) {
             clearTimeout(frameTimers.get(index))
             streams.delete(index)
             const video = videoRefs.get(index)
             if (video) bindVideo(video, null)
-            slot.state = 'ERROR'
-            slot.error = previewReason(code)
+            fail(index, revision, cause ?? code, code)
           }
         },
       }),
@@ -208,15 +212,11 @@ export function usePreviewSlots() {
       let failure = cause
       try {
         await player.close()
-      } catch {
-        failure = new Error('LEASE_RELEASE_FAILED')
+      } catch (cause) {
+        failure = new Error('LEASE_RELEASE_FAILED', { cause })
       }
       if (!current(index, revision)) return
-      slot.state = 'ERROR'
-      slot.error =
-        failure instanceof ApiRequestError
-          ? `${failure.code === 'RATE_LIMITED' ? previewReason(failure.code) : failure.message} (${failure.code})`
-          : previewReason(failure instanceof Error ? failure.message : null)
+      fail(index, revision, failure)
     }
   }
   function firstFrame(index: number) {
@@ -235,8 +235,7 @@ export function usePreviewSlots() {
     slot.usage = usage
     slot.profile = selectProfile(channel, usage)
     if (!slot.profile) {
-      slot.state = 'ERROR'
-      slot.error = usage === 'MAIN' ? '没有可用主码流' : '没有可用辅码流'
+      fail(index, revision, usage === 'MAIN' ? 'NO_MAIN_PROFILE' : 'NO_SUB_PROFILE')
       return
     }
     await play(index)

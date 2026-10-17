@@ -23,7 +23,7 @@ public class CameraConnectionRules {
     private final CameraSourceRules rules;
 
     public CameraConnection normalize(CameraConnection input) {
-        if (input == null || !adapters.methods().contains(input.method()))
+        if (input == null || input.method() == null || !adapters.methods().contains(input.method()))
             throw CameraSourceRules.invalid();
         int page = input.pageNumber() == null ? 1 : input.pageNumber();
         int size = input.pageSize() == null ? 100 : input.pageSize();
@@ -39,8 +39,7 @@ public class CameraConnectionRules {
                 || (!paged && (page != 1 || size != 100))) throw CameraSourceRules.invalid();
         if (input.regionIndexCode() != null) {
             if (!platform) throw CameraSourceRules.invalid();
-            com.streamfusion.platform.camera.access.adapter.HikPlatformApi.requireCode(
-                    input.regionIndexCode());
+            adapters.platform(input.method()).validateRegionCode(input.regionIndexCode());
         }
         String policy = properties.defaultNetworkPolicyKey(input.networkPolicyKey());
         rules.policy(policy);
@@ -113,7 +112,7 @@ public class CameraConnectionRules {
         int port = input.port() == null ? ("https".equals(scheme) ? 443 : 80) : input.port();
         CameraSourceRules.port(port);
         credentials(username, password);
-        if (platform && username == null) throw CameraSourceRules.invalid();
+        adapters.validateCredentials(input.method(), username, password);
         return new CameraConnection(
                 input.method(),
                 name == null || name.isBlank() ? host : name,

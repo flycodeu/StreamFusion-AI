@@ -41,7 +41,7 @@ class MockPeer {
   setRemoteDescription = vi.fn().mockResolvedValue(undefined)
   close = vi.fn()
 }
-const events = () => ({ stream: vi.fn(), state: vi.fn(), failed: vi.fn() })
+const events = () => ({ stream: vi.fn(), lease: vi.fn(), state: vi.fn(), failed: vi.fn() })
 beforeEach(() => {
   vi.useFakeTimers()
   MockPeer.offerSdp = 'offer'
@@ -70,6 +70,50 @@ afterEach(() => {
   vi.useRealTimers()
 })
 describe('native WebRTC preview adapter', () => {
+  it('preserves diagnostics from HTTP success with an unavailable lease without starting WebRTC', async () => {
+    vi.mocked(api.createPreviewLease).mockResolvedValueOnce({
+      ...lease,
+      leaseId: null,
+      state: 'UNAVAILABLE',
+      reasonCode: 'SOURCE_UNAVAILABLE',
+      receipt: { status: 201, traceId: 'a'.repeat(32), timestamp: '2026-10-17T02:00:00Z' },
+    })
+    await expect(
+      createPreviewPlayer(events()).connect({ cameraId: '1', profileId: '2', usage: 'MAIN' }),
+    ).rejects.toMatchObject({
+      code: 'SOURCE_UNAVAILABLE',
+      traceId: 'a'.repeat(32),
+      timestamp: '2026-10-17T02:00:00Z',
+      status: 201,
+    })
+    expect(MockPeer.instances).toHaveLength(0)
+    expect(api.createPreviewLease).toHaveBeenCalledOnce()
+    expect(api.deletePreviewLease).not.toHaveBeenCalled()
+  })
+  it('keeps unavailable renewal receipt diagnostics and closes the original lease', async () => {
+    const callbacks = events(),
+      player = createPreviewPlayer(callbacks)
+    await player.connect({ cameraId: '1', profileId: '2', usage: 'MAIN' })
+    const peer = MockPeer.instances[0]!
+    peer.connectionState = 'connected'
+    ;(peer.onconnectionstatechange as () => void)()
+    vi.mocked(api.renewPreviewLease).mockResolvedValueOnce({
+      ...lease,
+      state: 'UNAVAILABLE',
+      reasonCode: 'SOURCE_UNAVAILABLE',
+      receipt: { status: 200, traceId: 'b'.repeat(32), timestamp: '2026-10-17T02:01:00Z' },
+    })
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(callbacks.failed).toHaveBeenCalledWith(
+      'LEASE_EXPIRED',
+      expect.objectContaining({
+        code: 'SOURCE_UNAVAILABLE',
+        traceId: 'b'.repeat(32),
+        timestamp: '2026-10-17T02:01:00Z',
+      }),
+    )
+    expect(api.deletePreviewLease).toHaveBeenCalledWith('lease-1')
+  })
   it('advertises only codecs actually available in the browser', async () => {
     expect(supportedVideoCodecs()).toEqual(['H264'])
     const player = createPreviewPlayer(events())
@@ -108,10 +152,13 @@ describe('native WebRTC preview adapter', () => {
     const peer = (player as unknown as { peer: MockPeer }).peer
     peer.connectionState = 'connected'
     ;(peer.onconnectionstatechange as () => void)()
-    vi.mocked(api.renewPreviewLease).mockRejectedValue(new Error('unavailable'))
+    const failure = new ApiRequestError('REQUEST_TIMEOUT', '续租超时', {
+      traceId: 'abcdef0123456789abcdef0123456789',
+    })
+    vi.mocked(api.renewPreviewLease).mockRejectedValue(failure)
     await vi.advanceTimersByTimeAsync(30000)
     expect(api.renewPreviewLease).toHaveBeenCalledWith('lease-1')
-    expect(callbacks.failed).toHaveBeenCalledWith('LEASE_EXPIRED')
+    expect(callbacks.failed).toHaveBeenCalledWith('LEASE_EXPIRED', failure)
     expect(api.deletePreviewLease).toHaveBeenCalledWith('lease-1')
   })
   it('does not register a pull when the browser has no supported codec', async () => {
@@ -132,6 +179,17 @@ describe('native WebRTC preview adapter', () => {
     expect(api.deletePreviewLease).toHaveBeenCalledWith('lease-1')
     expect(api.createPreviewLease).toHaveBeenCalledOnce()
     expect(MockPeer.instances[0]!.close).toHaveBeenCalledOnce()
+  })
+  it('publishes the allocated lease before signaling so failed setup can be diagnosed', async () => {
+    const callbacks = events()
+    vi.mocked(api.exchangeWebRtc).mockImplementationOnce(async () => {
+      expect(callbacks.lease).toHaveBeenCalledWith(lease)
+      throw new ApiRequestError('SIGNAL_REJECTED', '信令失败')
+    })
+    await expect(
+      createPreviewPlayer(callbacks).connect({ cameraId: '1', profileId: '2', usage: 'MAIN' }),
+    ).rejects.toThrow('信令失败')
+    expect(api.deletePreviewLease).toHaveBeenCalledWith('lease-1')
   })
   it('releases H265 direct output before one H264 retry when the actual offer excludes H265', async () => {
     MockPeer.offerSdp = videoOffer()

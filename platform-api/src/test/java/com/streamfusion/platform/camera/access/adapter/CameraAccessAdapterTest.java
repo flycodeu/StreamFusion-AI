@@ -6,7 +6,11 @@ import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.streamfusion.platform.camera.config.CameraProperties;
+import com.streamfusion.platform.camera.pojo.entity.CameraLocatorEntity;
 import com.streamfusion.platform.camera.service.CameraSourceRules;
+import com.streamfusion.platform.camera.status.CameraStatusStreamResolver;
+import com.streamfusion.platform.media.preview.source.OnvifStreamLocatorAdapter;
+import com.streamfusion.platform.media.preview.source.StreamLocatorAdapterRegistry;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
@@ -22,6 +26,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 /** Local protocol fixtures only. No camera, network discovery, or provider account is contacted. */
 class CameraAccessAdapterTest {
@@ -370,7 +376,10 @@ class CameraAccessAdapterTest {
                             200,
                             "{\"code\":\"0\",\"data\":{\"total\":2,\"list\":[{\"cameraIndexCode\":\"opaque-A\",\"cameraName\":\"A\",\"encodeDevIndexCode\":\"device-A\",\"encodeDevName\":\"Device A\"},{\"indexCode\":\"opaque-B\",\"name\":\"B\"}]}}");
                 });
-        var result = new HikPlatformCameraAccessAdapter(transport, json).discover(context);
+        var result =
+                new HikPlatformCameraAccessAdapter(
+                                transport, json, new HikPlatformApi(transport, json))
+                        .discover(context);
         assertThat(result.device()).isNull();
         assertThat(result.complete()).isTrue();
         assertThat(result.channels())
@@ -553,7 +562,10 @@ class CameraAccessAdapterTest {
                                             "data",
                                             Map.of("total", 500, "list", list))));
                 });
-        var result = new HikPlatformCameraAccessAdapter(transport, json).discover(context);
+        var result =
+                new HikPlatformCameraAccessAdapter(
+                                transport, json, new HikPlatformApi(transport, json))
+                        .discover(context);
         assertThat(result.channels()).hasSize(100);
         assertThat(result.complete()).isTrue();
         assertThat(result.page().hasMore()).isTrue();
@@ -569,7 +581,10 @@ class CameraAccessAdapterTest {
                         context.deadlineNanos(),
                         2,
                         100);
-        var next = new HikPlatformCameraAccessAdapter(transport, json).discover(second);
+        var next =
+                new HikPlatformCameraAccessAdapter(
+                                transport, json, new HikPlatformApi(transport, json))
+                        .discover(second);
         assertThat(next.channels().getFirst().externalKey()).isEqualTo("2-0");
         assertThat(next.page().pageNumber()).isEqualTo(2);
         assertThat(calls.get()).isEqualTo(2);
@@ -854,6 +869,71 @@ class CameraAccessAdapterTest {
         assertThatThrownBy(() -> new OnvifCameraAccessAdapter(transport).discover(context))
                 .hasMessage("AUTHENTICATION_FAILED");
         assertThat(calls.get()).isEqualTo(1);
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "200,NotAuthorized,STREAM_URI_AUTH_REJECTED",
+        "500,NotAuthorized,STREAM_URI_AUTH_REJECTED",
+        "200,ActionNotSupported,STREAM_URI_UNAVAILABLE",
+        "200,DeviceError,STREAM_URI_UNAVAILABLE"
+    })
+    void onvifStreamLookupClassifiesSoapFaultBeforeTreatingResponseAsUri(
+            int status, String fault, String expectedReason) {
+        server.createContext("/onvif/media", exchange -> reply(exchange, status, soapFault(fault)));
+        var resolver =
+                new CameraStatusStreamResolver(
+                        new StreamLocatorAdapterRegistry(
+                                List.of(new OnvifStreamLocatorAdapter(transport))));
+        var locator = new CameraLocatorEntity();
+        locator.setLocatorKind("ONVIF");
+        var config =
+                json.createObjectNode()
+                        .put("profileToken", "Profile-A")
+                        .put("serviceNamespace", "http://www.onvif.org/ver10/media/wsdl")
+                        .put(
+                                "serviceEndpoint",
+                                context.endpoint().resolve("/onvif/media").toString());
+        var lookup = resolver.deferred(locator, config, context);
+        assertThatThrownBy(
+                        () ->
+                                lookup.resolve(
+                                        System.nanoTime() + TimeUnit.SECONDS.toNanos(3), () -> {}))
+                .isInstanceOf(CameraAdapterException.class)
+                .hasMessage(expectedReason);
+    }
+
+    @Test
+    void onvifStreamDestinationRejectionKeepsItsNetworkReason() {
+        server.createContext(
+                "/onvif/media",
+                exchange ->
+                        reply(
+                                exchange,
+                                200,
+                                "<GetStreamUriResponse><Uri>rtsp://192.0.2.99/live</Uri></GetStreamUriResponse>"));
+        when(rules.host("192.0.2.99", "fixture")).thenThrow(CameraSourceRules.invalid());
+        var resolver =
+                new CameraStatusStreamResolver(
+                        new StreamLocatorAdapterRegistry(
+                                List.of(new OnvifStreamLocatorAdapter(transport))));
+        var locator = new CameraLocatorEntity();
+        locator.setLocatorKind("ONVIF");
+        var config =
+                json.createObjectNode()
+                        .put("profileToken", "Profile-A")
+                        .put("serviceNamespace", "http://www.onvif.org/ver10/media/wsdl")
+                        .put(
+                                "serviceEndpoint",
+                                context.endpoint().resolve("/onvif/media").toString());
+
+        assertThatThrownBy(
+                        () ->
+                                resolver.deferred(locator, config, context)
+                                        .resolve(
+                                                System.nanoTime() + TimeUnit.SECONDS.toNanos(3),
+                                                () -> {}))
+                .hasMessage("NETWORK_BLOCKED");
     }
 
     @Test

@@ -73,7 +73,8 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
         background =
                 new CameraStatusService(
                         checks,
-                        snapshots,
+                        new CameraStatusFactWriter(
+                                snapshots, targets, bean(CameraStatusProperties.class), clock),
                         channels,
                         profiles,
                         bean(CameraAccessService.class),
@@ -81,11 +82,17 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
                         targets,
                         worker,
                         bean(CameraStatusProperties.class),
-                        bean(CurrentUserService.class),
-                        bean(UserService.class),
-                        bean(AccessService.class),
+                        new CameraStatusExecutionGuard(
+                                bean(CameraAccessService.class),
+                                crypto,
+                                targets,
+                                bean(CurrentUserService.class),
+                                bean(UserService.class),
+                                bean(AccessService.class),
+                                repositoryProvider,
+                                bean(CameraStatusPlanMapper.class),
+                                clock),
                         bean(AccessMapper.class),
-                        repositoryProvider,
                         bean(PlatformTransactionManager.class),
                         clock,
                         bean(CameraStatusPlanMapper.class),

@@ -1,8 +1,5 @@
 package com.streamfusion.platform.media.preview;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.streamfusion.platform.camera.mapper.CameraChannelMapper;
-import com.streamfusion.platform.camera.mapper.CameraProfileMapper;
 import com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
@@ -54,8 +51,8 @@ public class PreviewLeaseService {
     private static final int MAX_PENDING_REQUESTS = 512;
     private static final int MAX_CLEANUP_ATTEMPTS = 6;
     private final PreviewAuthorization authorization;
-    private final CameraChannelMapper channels;
-    private final CameraProfileMapper profiles;
+    private final PreviewProfileSelector profileSelector;
+    private final PreviewRecoveryCoordinator recovery;
     private final PreviewLocatorService locators;
     private final PreviewMediaGateway media;
     private final MediaRuntimeService runtimes;
@@ -63,9 +60,6 @@ public class PreviewLeaseService {
     private final PreviewProperties limits;
     private final PreviewTranscodeRegistry transcodes;
     private final PreviewPullRegistry pulls;
-    private final Map<PreviewPullRegistry.Entry, Integer> recoveryAttempts = new HashMap<>();
-    private long nextRecoveryRequest;
-    private String lastRecoveryFailure;
     private final String app =
             "sf_preview_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
     private final Object guard = new Object();
@@ -75,6 +69,7 @@ public class PreviewLeaseService {
     private final Map<RequestKey, RequestEntry> requests = new HashMap<>();
     private volatile boolean shuttingDown;
     private volatile boolean recoveryEnabled;
+    private String lastRecoveryFailure;
     private final ThreadPoolExecutor cleanupWorkers =
             new ThreadPoolExecutor(
                     4,
@@ -98,8 +93,8 @@ public class PreviewLeaseService {
 
     public PreviewLeaseService(
             PreviewAuthorization authorization,
-            CameraChannelMapper channels,
-            CameraProfileMapper profiles,
+            PreviewProfileSelector profileSelector,
+            PreviewRecoveryCoordinator recovery,
             PreviewLocatorService locators,
             PreviewMediaGateway media,
             MediaRuntimeService runtimes,
@@ -108,8 +103,8 @@ public class PreviewLeaseService {
             PreviewTranscodeRegistry transcodes,
             PreviewPullRegistry pulls) {
         this.authorization = authorization;
-        this.channels = channels;
-        this.profiles = profiles;
+        this.profileSelector = profileSelector;
+        this.recovery = recovery;
         this.locators = locators;
         this.media = media;
         this.runtimes = runtimes;
@@ -249,16 +244,10 @@ public class PreviewLeaseService {
 
     private PreviewModels.LeaseView initialize(Lease lease, PreviewDeadline deadline) {
         deadline.check();
-        requireRecovered();
-        var channel = channels.selectById(lease.cameraId);
-        if (channel == null) throw new PreviewFailure("CAMERA_NOT_FOUND");
-        if (!"ENABLED".equals(channel.getLifecycle())) throw new PreviewFailure("CAMERA_DISABLED");
+        recovery.requireRecovered();
         var profile =
-                chooseProfile(
-                        lease.cameraId,
-                        lease.input.streamProfileId(),
-                        lease.input.usage(),
-                        channel.getDefaultPreviewProfileId());
+                profileSelector.select(
+                        lease.cameraId, lease.input.streamProfileId(), lease.input.usage());
         if (profile == null) throw new PreviewFailure("PROFILE_NOT_FOUND");
         lease.profileId = profile.getId();
         if (!Boolean.TRUE.equals(profile.getEnabled()))
@@ -544,12 +533,8 @@ public class PreviewLeaseService {
     }
 
     private void requireEnabled(Lease lease) {
-        var channel = channels.selectById(lease.cameraId);
-        var profile = profiles.selectById(lease.profileId);
-        if (channel == null
-                || !"ENABLED".equals(channel.getLifecycle())
-                || profile == null
-                || !Boolean.TRUE.equals(profile.getEnabled())) {
+        var profile = profileSelector.enabled(lease.cameraId, lease.profileId);
+        if (profile == null) {
             closeLater(lease);
             throw new PreviewFailure("CAMERA_DISABLED");
         }
@@ -567,33 +552,6 @@ public class PreviewLeaseService {
         }
     }
 
-    private CameraProfileEntity chooseProfile(
-            long camera, String id, String requested, Long preferred) {
-        var values =
-                profiles.selectList(
-                        new LambdaQueryWrapper<CameraProfileEntity>()
-                                .eq(CameraProfileEntity::getChannelId, camera)
-                                .orderByAsc(CameraProfileEntity::getId));
-        if (id != null) {
-            long profile = DecimalInput.id(id, "streamProfileId");
-            return values.stream().filter(p -> p.getId().equals(profile)).findFirst().orElse(null);
-        }
-        var enabled = values.stream().filter(p -> Boolean.TRUE.equals(p.getEnabled())).toList();
-        if (requested != null) {
-            var match =
-                    enabled.stream()
-                            .filter(p -> requested.equals(PreviewCatalogService.usage(p)))
-                            .findFirst();
-            if (match.isPresent()) return match.get();
-        }
-        var defaults = enabled.stream().filter(p -> p.getId().equals(preferred)).findFirst();
-        if (defaults.isPresent()) return defaults.get();
-        return enabled.stream()
-                .filter(p -> "MAIN".equals(PreviewCatalogService.usage(p)))
-                .findFirst()
-                .orElse(enabled.isEmpty() ? null : enabled.getFirst());
-    }
-
     private void validate(PreviewModels.CreateLease input) {
         if (input == null
                 || input.clientRequestId() == null
@@ -603,7 +561,8 @@ public class PreviewLeaseService {
                 || input.videoCodecs() == null
                 || input.videoCodecs().isEmpty()
                 || input.videoCodecs().size() > 2
-                || !Set.of("H264", "H265").containsAll(input.videoCodecs())
+                || input.videoCodecs().stream()
+                        .anyMatch(codec -> !"H264".equals(codec) && !"H265".equals(codec))
                 || input.usage() != null && !Set.of("MAIN", "SUB").contains(input.usage()))
             throw BusinessException.error(ErrorCode.VALIDATION_ERROR);
     }
@@ -836,70 +795,8 @@ public class PreviewLeaseService {
         recoveryEnabled = event.getApplicationContext() instanceof WebServerApplicationContext;
     }
 
-    private void requireRecovered() {
-        try {
-            pulls.requireRecovered();
-        } catch (PreviewFailure pending) {
-            synchronized (recoveryAttempts) {
-                if (System.nanoTime() >= nextRecoveryRequest) {
-                    recoveryAttempts.clear();
-                    nextRecoveryRequest = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
-                }
-            }
-            throw pending;
-        }
-    }
-
-    /** Old leases are invalidated, not restored. Only durable exact tuples may be closed. */
     void reconcile() {
-        var pending = pulls.pending();
-        synchronized (recoveryAttempts) {
-            recoveryAttempts.keySet().retainAll(pending);
-        }
-        var deadline = PreviewDeadline.after(Duration.ofSeconds(3));
-        int processed = 0;
-        for (var entry : pending) {
-            if (shuttingDown || processed >= 16 || deadline.remaining().toMillis() < 100) break;
-            if (Instant.now().toEpochMilli() < entry.notBefore()) continue;
-            synchronized (recoveryAttempts) {
-                int attempts = recoveryAttempts.getOrDefault(entry, 0);
-                if (attempts >= MAX_CLEANUP_ATTEMPTS) continue;
-                recoveryAttempts.put(entry, attempts + 1);
-            }
-            processed++;
-            try {
-                var runtime =
-                        runtimes.activeZlm()
-                                .filter(entry::matches)
-                                .or(() -> runtimes.recoveryZlm(entry.api(), entry.config()))
-                                .orElseThrow(() -> new PreviewFailure("ZLM_NOT_READY"));
-                var stream =
-                        new Stream(
-                                runtime,
-                                entry.app(),
-                                entry.id(),
-                                "__defaultVhost__/" + entry.app() + "/" + entry.id());
-                media.closeRecovered(stream, deadline);
-                pulls.exited(stream);
-                synchronized (recoveryAttempts) {
-                    recoveryAttempts.remove(entry);
-                }
-                LOG.info(
-                        "Preview orphan stopped traceId={} app={} streamId={}",
-                        "preview-recovery",
-                        entry.app(),
-                        entry.id());
-            } catch (RuntimeException ex) {
-                LOG.warn(
-                        "Preview orphan cleanup pending traceId={} app={} streamId={} reasonCode={}",
-                        "preview-recovery",
-                        entry.app(),
-                        entry.id(),
-                        ex instanceof PreviewFailure known
-                                ? known.reason()
-                                : "DEPENDENCY_UNAVAILABLE");
-            }
-        }
+        recovery.reconcile(() -> shuttingDown);
     }
 
     @PreDestroy

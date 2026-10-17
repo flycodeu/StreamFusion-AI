@@ -18,6 +18,7 @@ import { usePageScope } from '../../composables/usePageScope'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { methodLabels } from './form'
 import type { ConnectionDraft } from './form'
+import { getPlatformConnection } from './platformConnection'
 
 const props = defineProps<{ options: AccessOptions; disabled: boolean }>()
 const emit = defineEmits<{ editing: [value: boolean] }>()
@@ -54,9 +55,8 @@ const unavailable = computed(() => platformMode.value && selectedPreset.value?.a
 const isRtsp = computed(
   () => descriptor.value?.inputKind === 'RTSP_URL' || model.value.method === 'RTSP',
 )
-const isPlatform = computed(
-  () => descriptor.value?.inputKind === 'PLATFORM_APPKEY' || model.value.method === 'HIK_PLATFORM',
-)
+const platform = computed(() => getPlatformConnection(model.value.method))
+const isPlatform = computed(() => descriptor.value?.category === 'PLATFORM' || !!platform.value)
 const label = (method: string) =>
   props.options.adapters?.find((item) => item.type === method)?.label ??
   methodLabels[method] ??
@@ -311,21 +311,25 @@ watch(
           /></ElFormItem>
         </template>
         <template v-if="!model.reuse">
-          <ElFormItem :label="isPlatform ? 'AppKey' : '用户名'" :required="isPlatform"
+          <ElFormItem :label="platform?.usernameLabel ?? '用户名'" :required="isPlatform"
             ><ElInput
               v-model="model.username"
               autocomplete="off"
               maxlength="128"
-              :placeholder="isRtsp ? '地址未包含账号时，可单独填写' : '设备或平台提供的账号'"
+              :placeholder="
+                isRtsp
+                  ? '地址未包含账号时，可单独填写'
+                  : (platform?.usernamePlaceholder ?? '设备或平台提供的账号')
+              "
           /></ElFormItem>
-          <ElFormItem :label="isPlatform ? 'AppSecret' : '密码'" :required="isPlatform"
+          <ElFormItem :label="platform?.passwordLabel ?? '密码'" :required="isPlatform"
             ><ElInput
               v-model="model.password"
               type="password"
               show-password
               autocomplete="new-password"
               maxlength="512"
-              placeholder="不会回显已保存密码"
+              :placeholder="platform?.passwordPlaceholder ?? '不会回显已保存密码'"
           /></ElFormItem>
           <details class="advanced-settings">
             <summary>高级设置</summary>

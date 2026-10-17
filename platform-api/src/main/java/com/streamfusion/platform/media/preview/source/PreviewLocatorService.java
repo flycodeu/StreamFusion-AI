@@ -19,12 +19,9 @@ import java.net.InetAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -35,7 +32,7 @@ public class PreviewLocatorService {
     private final CameraCredentialMapper credentials;
     private final CameraCryptoService crypto;
     private final CameraSourceRules rules;
-    private final Map<String, StreamLocatorAdapter> adapters;
+    private final StreamLocatorAdapterRegistry adapters;
     private final ThreadPoolExecutor dns =
             new ThreadPoolExecutor(
                     2,
@@ -57,16 +54,14 @@ public class PreviewLocatorService {
             CameraCredentialMapper credentials,
             CameraCryptoService crypto,
             CameraSourceRules rules,
-            List<StreamLocatorAdapter> adapters) {
+            StreamLocatorAdapterRegistry adapters) {
         this.locators = locators;
         this.sources = sources;
         this.endpoints = endpoints;
         this.credentials = credentials;
         this.crypto = crypto;
         this.rules = rules;
-        this.adapters =
-                adapters.stream()
-                        .collect(Collectors.toUnmodifiableMap(StreamLocatorAdapter::type, a -> a));
+        this.adapters = adapters;
     }
 
     @PreDestroy
@@ -134,8 +129,7 @@ public class PreviewLocatorService {
             throw new PreviewFailure("LOCATOR_NOT_CONFIGURED");
         if (!profile.getSourceId().equals(locator.getSourceId()))
             throw new PreviewFailure("LOCATOR_INVALID");
-        var adapter = adapters.get(locator.getLocatorKind());
-        if (adapter == null) throw new PreviewFailure("SOURCE_PROTOCOL_NOT_SUPPORTED");
+        var adapter = adapters.required(locator.getLocatorKind());
         var endpoint =
                 endpoints.selectOne(
                         new LambdaQueryWrapper<CameraEndpointEntity>()

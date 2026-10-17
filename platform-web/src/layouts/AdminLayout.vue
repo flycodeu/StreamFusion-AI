@@ -1,11 +1,20 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { inject, ref, watch } from 'vue'
+import { routeLocationKey } from 'vue-router'
 import AdminHeader from './components/AdminHeader.vue'
 import AdminSidebar from './components/AdminSidebar.vue'
 import AdminContent from './components/AdminContent.vue'
 
 defineProps<{ displayName?: string }>()
 const collapsed = ref(typeof globalThis.innerWidth === 'number' && globalThis.innerWidth <= 680)
+const route = inject(routeLocationKey, null)
+watch(
+  () => route?.fullPath,
+  () => {
+    if (typeof globalThis.innerWidth === 'number' && globalThis.innerWidth <= 680)
+      collapsed.value = true
+  },
+)
 </script>
 
 <template>
