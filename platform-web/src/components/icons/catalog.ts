@@ -44,7 +44,7 @@ export const iconCatalog = [
   { key: 'video-camera', label: '视频', component: VideoCamera },
   { key: 'camera', label: '相机', component: Camera },
   { key: 'monitor', label: '监控', component: Monitor },
-  { key: 'server', label: '服务信息', component: Cpu },
+  { key: 'server', label: '节点管理', component: Cpu },
   { key: 'audit', label: '操作记录', component: Document },
   { key: 'list', label: '列表', component: List },
   { key: 'folder', label: '目录', component: Folder },

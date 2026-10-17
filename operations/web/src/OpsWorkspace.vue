@@ -4,6 +4,8 @@ import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
 import { request, upload } from "./api";
 import PreviewConfigForm from "./PreviewConfigForm.vue";
 import { previewDefaults, type PreviewConfig } from "./preview";
+import ZLMConfigForm from "./ZLMConfigForm.vue";
+import { zlmDefaults, type ZLMConfig } from "./zlm";
 const props = defineProps<{ page: string }>();
 const emit = defineEmits<{ error: [unknown] }>();
 interface Target {
@@ -43,6 +45,7 @@ interface Binding {
 }
 interface Config {
   preview?: PreviewConfig;
+  zlm?: ZLMConfig;
   initialPasswordCredentialId?: string;
   initialPasswordRevision?: string;
   environment: string;
@@ -124,12 +127,28 @@ const eligibleArtifacts = computed(() =>
       a.recipe ===
         (planInstance.value?.config.preview
           ? "preview-node-v1"
-          : "java-compose-v1"),
+          : planInstance.value?.config.zlm
+            ? "zlm-direct-v1"
+            : "java-compose-v1"),
   ),
 );
 function recipeChanged() {
   instanceDraft.value.config =
-    recipe.value === "preview-node-v1"
+    recipe.value === "zlm-direct-v1"
+      ? {
+          environment: "zlm",
+          profile: "",
+          bindAddress: "",
+          hostPort: 18080,
+          containerPort: 8080,
+          memoryMiB: 4096,
+          healthPath: "/index/api/getServerConfig",
+          healthSeconds: 60,
+          dataCompatibility: "zlm-direct-v1",
+          bindingIds: [],
+          zlm: zlmDefaults(),
+        }
+      : recipe.value === "preview-node-v1"
       ? {
           environment: "preview",
           profile: "",
@@ -156,6 +175,7 @@ async function showRegistration(i: Instance) {
 const busy = ref(false),
   dialog = ref(""),
   controllerId = ref(""),
+  bindingProbeTargets = ref<Record<string, string>>({}),
   selected = ref<Instance>(),
   plan = ref<Plan>(),
   planInstance = ref<Instance>(),
@@ -275,6 +295,11 @@ async function refresh() {
     request<Credential[]>("/credentials"),
   ]);
   targets.value = t;
+  for (const binding of b) {
+    if (!t.some((target) => target.id === bindingProbeTargets.value[binding.id])) {
+      bindingProbeTargets.value[binding.id] = t.length === 1 ? t[0].id : "";
+    }
+  }
   artifacts.value = a;
   instances.value = i;
   jobs.value = j;
@@ -334,7 +359,11 @@ async function probe(t: Target) {
 }
 function openInstance(i?: Instance) {
   selected.value = i;
-  recipe.value = i?.config.preview ? "preview-node-v1" : "java-compose-v1";
+  recipe.value = i?.config.preview
+    ? "preview-node-v1"
+    : i?.config.zlm
+      ? "zlm-direct-v1"
+      : "java-compose-v1";
   instanceDraft.value = i
     ? {
         name: i.name,
@@ -352,6 +381,10 @@ function openInstance(i?: Instance) {
 }
 async function saveInstance() {
   await act(async () => {
+    if (instanceDraft.value.config.zlm) {
+      const zlm = instanceDraft.value.config.zlm;
+      instanceDraft.value.config.hostPort = zlm.apiPort;
+    }
     await request(
       selected.value ? `/instances/${selected.value.id}` : "/instances",
       selected.value ? "PATCH" : "POST",
@@ -371,15 +404,18 @@ async function saveBinding() {
 }
 async function bindingProbe(b: Binding) {
   await act(async () => {
-    if (!targets.value.length) throw new Error("请先登记目标");
+    const target = targets.value.find(
+      (item) => item.id === bindingProbeTargets.value[b.id],
+    );
+    if (!target) throw new Error("请先选择检查来源主机");
     const out = await request<{
       controller: { reachable: boolean };
       targetHost: { reachable: boolean };
     }>("/bindings/" + b.id + "/probes", "POST", {
-      targetId: targets.value[0].id,
+      targetId: target.id,
     });
     ElMessage.info(
-      `TCP：控制器${out.controller.reachable ? "可达" : "不可达"}，目标宿主${out.targetHost.reachable ? "可达" : "不可达"}；认证及应用网络未验证`,
+      `TCP：控制器${out.controller.reachable ? "可达" : "不可达"}，${target.name}${out.targetHost.reachable ? "可达" : "不可达"}；认证及应用网络未验证`,
     );
   });
 }
@@ -390,7 +426,7 @@ function pickFile(e: Event) {
 async function importArtifact() {
   await act(async () => {
     if (!file.value) throw new Error("请选择镜像归档");
-    const limit = importRecipe.value === "preview-node-v1" ? 2048 : 512;
+    const limit = importRecipe.value === "java-compose-v1" ? 512 : 2048;
     if (file.value.size > limit * 1024 * 1024)
       throw new Error(`归档上限 ${limit} MiB`);
     uploadPhase.value = "受理导入";
@@ -563,6 +599,7 @@ function credentialSelected(
               <th>类型</th>
               <th>地址</th>
               <th>数据库</th>
+              <th>检查来源</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -572,7 +609,15 @@ function credentialSelected(
               <td>{{ b.host }}:{{ b.port }}</td>
               <td>{{ b.database || "—" }}</td>
               <td>
-                <button class="quiet" :disabled="busy" @click="bindingProbe(b)">
+                <select v-model="bindingProbeTargets[b.id]" :aria-label="`检查来源：${b.host}`">
+                  <option value="">选择主机</option>
+                  <option v-for="t in targets" :key="t.id" :value="t.id">
+                    {{ t.name }} · {{ t.address }}
+                  </option>
+                </select>
+              </td>
+              <td>
+                <button class="quiet" :disabled="busy || !bindingProbeTargets[b.id]" @click="bindingProbe(b)">
                   TCP 检查
                 </button>
               </td>
@@ -952,6 +997,7 @@ function credentialSelected(
         >
           <option value="java-compose-v1">Java 服务</option>
           <option value="preview-node-v1">预览节点 · ZLM / FFmpeg</option>
+          <option value="zlm-direct-v1">独立 ZLM</option>
         </select></label
       >
       <label>实例名称<input v-model="instanceDraft.name" required /></label
@@ -966,7 +1012,14 @@ function credentialSelected(
           </option>
         </select></label
       >
-      <template v-if="instanceDraft.config.preview">
+      <template v-if="instanceDraft.config.zlm">
+        <div class="form-grid">
+          <label>目标绑定 IPv4<input v-model="instanceDraft.config.bindAddress" :disabled="!!selected?.currentReleaseId" required /></label>
+          <label>内存 MiB<input v-model.number="instanceDraft.config.memoryMiB" type="number" min="512" max="65536" required /></label>
+        </div>
+        <ZLMConfigForm v-model="instanceDraft.config.zlm" :credentials="credentialOptions" :deployed="!!selected?.currentReleaseId" />
+      </template>
+      <template v-else-if="instanceDraft.config.preview">
         <div class="form-grid">
           <label
             >目标绑定 IPv4<input
@@ -1084,6 +1137,7 @@ function credentialSelected(
         >配方<select v-model="importRecipe">
           <option value="java-compose-v1">Java 服务</option>
           <option value="preview-node-v1">预览节点</option>
+          <option value="zlm-direct-v1">独立 ZLM</option>
         </select></label
       >
       <label>名称<input v-model="importName" required /></label
@@ -1100,7 +1154,9 @@ function credentialSelected(
           pattern="[a-fA-F0-9]{64}"
           spellcheck="false" /></label
       ><small>{{
-        importRecipe === "preview-node-v1"
+        importRecipe === "zlm-direct-v1"
+          ? "选择独立 ZLM 镜像归档，使用可信 SHA-256；单镜像 linux/amd64，最大 2GiB。"
+          : importRecipe === "preview-node-v1"
           ? "选择 S4 节点包内 preview-node-image.tar，使用该文件的可信 SHA-256；最大 2GiB，须支持维护封闭。"
           : "单镜像 linux/amd64，标签以 sfops/ 开头，最大512MiB。"
       }}</small

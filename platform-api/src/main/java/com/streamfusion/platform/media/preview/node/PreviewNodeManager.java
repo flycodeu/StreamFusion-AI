@@ -5,6 +5,8 @@ import com.streamfusion.platform.media.preview.PreviewDeadline;
 import com.streamfusion.platform.media.preview.PreviewFailure;
 import com.streamfusion.platform.media.preview.PreviewProperties;
 import com.streamfusion.platform.media.preview.control.PreviewControl;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
@@ -38,10 +40,16 @@ public final class PreviewNodeManager {
     private final PreviewNodeProperties properties;
     private final PreviewProperties limits;
     private final ObjectMapper json;
+    private final ZlmDirectGateway zlm;
 
     private record Observation(PreviewControl.Snapshot snapshot, Instant at, String reason) {}
 
     private final java.util.Map<String, Observation> observations =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private record DirectObservation(String version, Instant at, String reason) {}
+
+    private final java.util.Map<String, DirectObservation> directObservations =
             new java.util.concurrent.ConcurrentHashMap<>();
 
     public PreviewNodeManager(
@@ -49,10 +57,21 @@ public final class PreviewNodeManager {
             PreviewNodeProperties properties,
             PreviewProperties limits,
             ObjectMapper json) {
+        this(repository, properties, limits, json, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public PreviewNodeManager(
+            PreviewNodeRepository repository,
+            PreviewNodeProperties properties,
+            PreviewProperties limits,
+            ObjectMapper json,
+            ZlmDirectGateway zlm) {
         this.repository = repository;
         this.properties = properties;
         this.limits = limits;
         this.json = json;
+        this.zlm = zlm;
     }
 
     public PreviewNodeClient client(PreviewNodeConnection connection) {
@@ -78,6 +97,11 @@ public final class PreviewNodeManager {
 
     public PreviewControl.Snapshot inspect(
             PreviewNodeRepository.Node node, PreviewDeadline deadline) {
+        return inspect(node, deadline, true);
+    }
+
+    private PreviewControl.Snapshot inspect(
+            PreviewNodeRepository.Node node, PreviewDeadline deadline, boolean recordObservation) {
         try (var client = client(node.connection())) {
             var value = client.get("snapshot", PreviewControl.Snapshot.class, deadline);
             if (value.protocolVersion() != 1
@@ -87,10 +111,12 @@ public final class PreviewNodeManager {
                     || value.resources() == null
                     || value.resources().size() > 64)
                 throw new PreviewFailure("NODE_IDENTITY_CHANGED");
-            observations.put(node.nodeId(), new Observation(value, Instant.now(), null));
+            if (recordObservation)
+                observations.put(node.nodeId(), new Observation(value, Instant.now(), null));
             return value;
         } catch (PreviewFailure ex) {
-            observations.put(node.nodeId(), new Observation(null, Instant.now(), ex.reason()));
+            if (recordObservation)
+                observations.put(node.nodeId(), new Observation(null, Instant.now(), ex.reason()));
             throw ex;
         }
     }
@@ -99,7 +125,8 @@ public final class PreviewNodeManager {
         for (var node : repository.nodes()) {
             if (node.local()) continue;
             try {
-                inspect(node, PreviewDeadline.after(Duration.ofSeconds(4)));
+                if (node.zlm() != null) inspectDirect(node);
+                else inspect(node, PreviewDeadline.after(Duration.ofSeconds(4)));
             } catch (PreviewFailure ignored) {
             }
         }
@@ -123,6 +150,37 @@ public final class PreviewNodeManager {
 
     public void invalidate(String nodeId) {
         observations.remove(nodeId);
+        directObservations.remove(nodeId);
+    }
+
+    public String inspectDirect(PreviewNodeRepository.Node node) {
+        if (node.zlm() == null || zlm == null) throw new PreviewFailure("ZLM_UNAVAILABLE");
+        try {
+            var deadline = PreviewDeadline.after(Duration.ofSeconds(4));
+            zlm.requireReady(node.zlm(), deadline);
+            String version = zlm.version(node.zlm(), deadline);
+            directObservations.put(
+                    node.nodeId(), new DirectObservation(version, Instant.now(), null));
+            return version;
+        } catch (PreviewFailure failure) {
+            directObservations.put(
+                    node.nodeId(), new DirectObservation(null, Instant.now(), failure.reason()));
+            throw failure;
+        }
+    }
+
+    public String directVersion(String nodeId) {
+        var observed = directObservations.get(nodeId);
+        return observed == null
+                        || observed.reason() != null
+                        || observed.at().isBefore(Instant.now().minusSeconds(15))
+                ? null
+                : observed.version();
+    }
+
+    public Instant directObservedAt(String nodeId) {
+        var observed = directObservations.get(nodeId);
+        return observed == null ? null : observed.at();
     }
 
     public record Registration(
@@ -132,7 +190,7 @@ public final class PreviewNodeManager {
             long checkedAt) {}
 
     public Registration registration() {
-        return registration(null);
+        return registration((String) null);
     }
 
     public Registration registration(String nodeId) {
@@ -143,11 +201,70 @@ public final class PreviewNodeManager {
                         .filter(c -> nodeId == null || c.nodeId().equals(nodeId))
                         .findFirst()
                         .orElseThrow(() -> new PreviewFailure("NODE_NOT_REGISTERED"));
+        return registration(connection);
+    }
+
+    public record ConnectionInput(
+            String nodeId,
+            String name,
+            String controlUri,
+            String certificateSha256,
+            String mediaAddress,
+            Long version) {}
+
+    public boolean directRegistrationAvailable() {
+        if (properties.credentialDirectory().isBlank()) return false;
+        try {
+            Path directory = Path.of(properties.credentialDirectory());
+            return directory.isAbsolute()
+                    && Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS);
+        } catch (RuntimeException invalid) {
+            return false;
+        }
+    }
+
+    public Registration registration(ConnectionInput input) {
+        if (!directRegistrationAvailable())
+            throw new PreviewFailure("NODE_CREDENTIAL_DIRECTORY_MISSING");
+        if (input == null) throw new PreviewFailure("NODE_REGISTRATION_INVALID");
+        PreviewNodeConnection connection;
+        try {
+            if (input.nodeId() == null || !input.nodeId().matches("[A-Za-z0-9_-]{1,64}"))
+                throw new IllegalArgumentException();
+            Path directory = Path.of(properties.credentialDirectory()).toRealPath();
+            Path token = directory.resolve(input.nodeId() + ".token");
+            if (!Files.isRegularFile(token, LinkOption.NOFOLLOW_LINKS)
+                    || !token.toRealPath().getParent().equals(directory))
+                throw new IllegalArgumentException();
+            com.streamfusion.platform.media.preview.control.PreviewControlTls.secret(token);
+            connection =
+                    new PreviewNodeConnection(
+                            input.nodeId(),
+                            input.name(),
+                            java.net.URI.create(input.controlUri()),
+                            input.certificateSha256(),
+                            token,
+                            input.mediaAddress());
+        } catch (Exception invalid) {
+            throw new PreviewFailure("NODE_REGISTRATION_INVALID");
+        }
         var old = repository.node(connection.nodeId());
+        if (old == null
+                ? input.version() != null
+                : !java.util.Objects.equals(old.version(), input.version()))
+            throw new PreviewFailure("NODE_CONFIGURATION_CHANGED");
+        return registration(connection);
+    }
+
+    Registration registration(PreviewNodeConnection connection) {
+        var old = repository.node(connection.nodeId());
+        if (old != null && "REMOTE".equals(old.mode()))
+            throw new PreviewFailure("NODE_DRAIN_REQUIRED");
         var snapshot =
                 inspect(
                         new PreviewNodeRepository.Node(connection, "LOCAL", null, 0),
-                        PreviewDeadline.after(Duration.ofSeconds(4)));
+                        PreviewDeadline.after(Duration.ofSeconds(4)),
+                        false);
         requireEmpty(snapshot, true);
         return new Registration(
                 connection,
@@ -177,7 +294,18 @@ public final class PreviewNodeManager {
                     registered.priority(),
                     candidate.snapshot().budget(),
                     registered.version());
+        invalidate(candidate.connection().nodeId());
         return view(candidate.connection().nodeId());
+    }
+
+    Path credential(String nodeId) {
+        var node = repository.node(nodeId);
+        return node == null || node.connection() == null ? null : node.connection().tokenFile();
+    }
+
+    boolean credentialInUse(Path file) {
+        return repository.nodes().stream()
+                .anyMatch(n -> n.connection() != null && n.connection().tokenFile().equals(file));
     }
 
     public record ModeChange(
@@ -262,9 +390,13 @@ public final class PreviewNodeManager {
                 || p.priority() < 0
                 || p.priority() > 10000) throw new PreviewFailure("NODE_CONFIGURATION_CHANGED");
         var observed =
-                node.local() || !p.mode().equals("REMOTE")
+                node.local() || node.zlm() != null || !p.mode().equals("REMOTE")
                         ? null
                         : inspect(node, PreviewDeadline.after(Duration.ofSeconds(4)));
+        if (node.zlm() != null) {
+            if (p.budget().maxTranscodes() != 0) throw new PreviewFailure("NODE_BUDGET_MISMATCH");
+            if ("REMOTE".equals(p.mode())) inspectDirect(node);
+        }
         if (observed != null) {
             if (!"READY".equals(observed.state())
                     || !node.configVersion().equals(observed.configVersion()))
@@ -305,6 +437,7 @@ public final class PreviewNodeManager {
 
     public record NodeStatus(
             String nodeId,
+            String kind,
             String name,
             String mode,
             long version,
@@ -315,8 +448,11 @@ public final class PreviewNodeManager {
             String reasonCode,
             Instant observedAt,
             String controlUri,
+            String zlmApiAddress,
+            String certificateSha256,
             String mediaAddress,
             String desiredConfigVersion,
+            String zlmVersion,
             PreviewControl.Snapshot observation,
             com.streamfusion.platform.media.preview.execution.PreviewAdmissionProtection.Observation
                     protection) {}
@@ -327,11 +463,17 @@ public final class PreviewNodeManager {
                 .map(
                         n -> {
                             var observed = observations.get(n.nodeId());
+                            var direct = directObservations.get(n.nodeId());
                             var snapshot = cached(n.nodeId());
                             var capacity = scheduler.capacity(n.nodeId());
                             return new NodeStatus(
                                     n.nodeId(),
-                                    n.local() ? "本机" : n.connection().name(),
+                                    n.kind(),
+                                    n.local()
+                                            ? "本机"
+                                            : n.zlm() != null
+                                                    ? n.zlm().name()
+                                                    : n.connection().name(),
                                     n.mode(),
                                     n.version(),
                                     n.priority(),
@@ -339,16 +481,43 @@ public final class PreviewNodeManager {
                                     capacity.usage(),
                                     n.local()
                                             ? scheduler.localState()
-                                            : snapshot == null ? "UNKNOWN" : snapshot.state(),
+                                            : n.zlm() != null
+                                                    ? direct != null
+                                                                    && direct.reason() == null
+                                                                    && direct.at()
+                                                                            .isAfter(
+                                                                                    Instant.now()
+                                                                                            .minusSeconds(
+                                                                                                    15))
+                                                            ? "READY"
+                                                            : "UNKNOWN"
+                                                    : snapshot == null
+                                                            ? "UNKNOWN"
+                                                            : snapshot.state(),
                                     capacity.reasonCode() != null
                                             ? capacity.reasonCode()
-                                            : observed == null ? null : observed.reason(),
+                                            : n.zlm() != null
+                                                    ? direct == null ? null : direct.reason()
+                                                    : observed == null ? null : observed.reason(),
                                     n.local()
                                             ? Instant.now()
-                                            : observed == null ? null : observed.at(),
-                                    n.local() ? null : n.connection().controlUri().toString(),
-                                    n.local() ? null : n.connection().mediaAddress(),
+                                            : n.zlm() != null
+                                                    ? direct == null ? null : direct.at()
+                                                    : observed == null ? null : observed.at(),
+                                    n.connection() == null
+                                            ? null
+                                            : n.connection().controlUri().toString(),
+                                    n.zlm() == null ? null : n.zlm().apiUri().toString(),
+                                    n.connection() == null
+                                            ? null
+                                            : n.connection().certificateSha256(),
+                                    n.local()
+                                            ? null
+                                            : n.zlm() != null
+                                                    ? n.zlm().mediaAddress()
+                                                    : n.connection().mediaAddress(),
                                     n.configVersion(),
+                                    directVersion(n.nodeId()),
                                     snapshot,
                                     n.local()
                                             ? scheduler.localProtection()

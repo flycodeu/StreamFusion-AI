@@ -67,6 +67,7 @@ func run(args []string) error {
 	key := flags.String("key", "", "恢复密钥文件")
 	cert := flags.String("tls-cert", "", "HTTPS证书路径")
 	tlsKey := flags.String("tls-key", "", "HTTPS私钥路径")
+	platformTokenFile := flags.String("platform-token-file", "", "Platform 服务身份令牌文件；不配置则关闭预览实例目录")
 	stopTimeout := flags.Duration("timeout", 15*time.Second, "关闭等待时间，1s至2m")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -228,6 +229,9 @@ func run(args []string) error {
 	logger := log.New(io.MultiWriter(os.Stderr, rotating), "", log.LstdFlags|log.LUTC)
 	handler, err := controller.NewHTTP(s, controller.OriginFor(*listen, *cert != ""), webui.Handler(), logger)
 	if err != nil {
+		return err
+	}
+	if err = handler.ConfigurePlatformTokenFile(*platformTokenFile); err != nil {
 		return err
 	}
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, ErrorLog: logger}

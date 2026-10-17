@@ -109,6 +109,7 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 	var targetFact struct {
 		PendingJobID  string `json:"pendingJobId"`
 		PreviewRecipe string `json:"previewRecipe"`
+		ZLMRecipe     string `json:"zlmRecipe"`
 	}
 	if json.Unmarshal(probeResult, &targetFact) != nil || targetFact.PendingJobID != "" {
 		h.fail(w, r, 409, "TARGET_PENDING", "目标仍有未决作业，禁止从旧备份或新计划绕过")
@@ -116,6 +117,10 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 	}
 	if p.Candidate.Config.Preview != nil && targetFact.PreviewRecipe != deploy.PreviewRecipe {
 		h.fail(w, r, 409, "TARGET_PREVIEW_RECIPE_REQUIRED", "目标执行器不支持预览节点配方，请先更新执行器")
+		return
+	}
+	if p.Candidate.Config.ZLM != nil && targetFact.ZLMRecipe != deploy.ZLMRecipe {
+		h.fail(w, r, 409, "TARGET_ZLM_RECIPE_REQUIRED", "目标执行器不支持独立 ZLM 配方，请先更新执行器")
 		return
 	}
 	p.InputHash = deploy.Digest(p)

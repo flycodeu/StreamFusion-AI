@@ -14,7 +14,6 @@ import type {
 import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
-import PreviewNodePanel from '../preview/PreviewNodePanel.vue'
 
 defineOptions({ name: 'MediaRuntimePanel' })
 const captureScope = usePageScope()
@@ -254,7 +253,6 @@ onBeforeUnmount(() => {
       <p v-for="(item, index) in snapshot.scanDiagnostics" :key="index">{{ item.message }}</p>
     </div>
   </section>
-  <PreviewNodePanel />
 </template>
 
 <style scoped>

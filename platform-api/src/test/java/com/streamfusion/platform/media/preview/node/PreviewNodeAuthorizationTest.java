@@ -88,6 +88,34 @@ class PreviewNodeAuthorizationTest extends CameraTestSupport {
         assertThat(rejected.path("applied").asBoolean()).isFalse();
         assertThat(rejected.path("reasonCode").asText()).isEqualTo("NODE_REGISTRATION_MISSING");
         assertThat(rejected.path("node").path("mode").asText()).isEqualTo("LOCAL");
+        var direct =
+                write(
+                        post("/preview-node/connections"),
+                        auth,
+                        Map.of(
+                                "nodeId",
+                                "a",
+                                "name",
+                                "A",
+                                "controlUri",
+                                "https://127.0.0.1:9443",
+                                "certificateSha256",
+                                "a".repeat(64),
+                                "mediaAddress",
+                                "127.0.0.1"),
+                        200);
+        assertThat(direct.path("reasonCode").asText())
+                .isEqualTo("NODE_CREDENTIAL_DIRECTORY_MISSING");
+        var ops = read("/preview-node/ops-instances", auth);
+        assertThat(ops.path("available").asBoolean()).isFalse();
+        assertThat(ops.path("items")).isEmpty();
+        var opsImport =
+                write(
+                        post("/preview-node/ops-import"),
+                        auth,
+                        Map.of("instanceId", "sample", "releaseId", "sample"),
+                        200);
+        assertThat(opsImport.path("reasonCode").asText()).isEqualTo("OPS_NOT_CONFIGURED");
     }
 
     @Test
@@ -106,6 +134,9 @@ class PreviewNodeAuthorizationTest extends CameraTestSupport {
         var reader = login("PreviewNodeReader", "Initial1!");
         assertThat(read("/preview-node", reader).path("mode").asText()).isEqualTo("LOCAL");
         write(post("/preview-node/register"), reader, Map.of(), 403);
+        write(post("/preview-node/connections"), reader, Map.of(), 403);
+        write(post("/preview-node/ops-import"), reader, Map.of(), 403);
+        mvc.perform(get("/preview-node/ops-instances")).andExpect(status().isUnauthorized());
         write(put("/preview-node/mode"), reader, Map.of("mode", "REMOTE", "version", 0), 403);
         write(post("/preview-node/reconcile"), reader, Map.of(), 403);
         write(

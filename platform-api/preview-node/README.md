@@ -39,6 +39,8 @@ sudo python3 configure.py --node-id preview-a --name '预览 A' \
 
 ## 平台数据库与登记
 
+从已运行的 S3/S4 数据库升级到独立 ZLM 直连时，先备份并停 Platform，再核对 `preview_node` 尚无 `node_kind`，执行[一次性增量脚本](upgrade-zlm-direct.sql)。脚本仅增加节点类型字段、把本机标为 `LOCAL`，并补齐“预览节点”菜单与超管关系；远端旧节点默认 `MANAGED`，不重建任何表。脚本不可盲目重复执行；已有库禁止重放完整初始化。启动后检查节点列表、原预览和新直连入口。
+
 先备份并排空全部预览，停止平台。已有库若完全没有preview表，执行`platform-upgrade.sql`仅新增5表；已有S2三表则执行`platform-s2-to-s3.sql`定向ALTER并新增Source/Output。升级会拒绝活动观看或未知操作。MySQL DDL不具备整段事务回滚，报错即停并核对，不盲目重跑；新库使用完整初始化，已有库禁止重放。启动只读检查，节点本身不需要数据库。
 
 安全复制各节点`platform-registration`文件到平台保护目录，分别修改connection.json的tokenFile为平台绝对路径。`SF_PREVIEW_NODE_CONNECTION_FILE`可指向单个连接对象或A/B对象数组的JSON，最多16个远程；local是本机保留身份。凭据不放页面、数据库明文或交付材料。

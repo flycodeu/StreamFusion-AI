@@ -17,6 +17,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public final class PreviewNodeAdministration {
     private final PreviewNodeManager manager;
+    private final OpsPreviewCatalog ops;
     private final CurrentUserService current;
     private final AccessService access;
     private final AccessMapper coordination;
@@ -25,12 +26,14 @@ public final class PreviewNodeAdministration {
 
     public PreviewNodeAdministration(
             PreviewNodeManager manager,
+            OpsPreviewCatalog ops,
             CurrentUserService current,
             AccessService access,
             AccessMapper coordination,
             AuditService audit,
             PlatformTransactionManager transactions) {
         this.manager = manager;
+        this.ops = ops;
         this.current = current;
         this.access = access;
         this.coordination = coordination;
@@ -52,13 +55,38 @@ public final class PreviewNodeAdministration {
     }
 
     public PreviewNodeManager.View register(AuditContextDto context) {
-        return register(null, context);
+        return register((String) null, context);
     }
 
     public PreviewNodeManager.View register(String nodeId, AuditContextDto context) {
         administrator();
         var candidate = manager.registration(nodeId);
         return save("PREVIEW_NODE_REGISTER", () -> manager.register(candidate), context);
+    }
+
+    public PreviewNodeManager.View register(
+            PreviewNodeManager.ConnectionInput input, AuditContextDto context) {
+        administrator();
+        var candidate = manager.registration(input);
+        return save("PREVIEW_NODE_REGISTER", () -> manager.register(candidate), context);
+    }
+
+    public PreviewNodeManager.View importFromOps(
+            OpsPreviewCatalog.Selection selection, AuditContextDto context) {
+        administrator();
+        var prepared = ops.prepare(selection, manager);
+        try {
+            var result =
+                    save(
+                            "PREVIEW_NODE_OPS_IMPORT",
+                            () -> manager.register(prepared.registration()),
+                            context);
+            ops.discardPrevious(prepared, manager);
+            return result;
+        } catch (RuntimeException failure) {
+            ops.discard(prepared.tokenFile());
+            throw failure;
+        }
     }
 
     public PreviewNodeManager.View mode(String mode, long version, AuditContextDto context) {

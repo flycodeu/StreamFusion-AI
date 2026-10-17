@@ -168,6 +168,9 @@ func (x *executor) docker(args ...string) ([]byte, error) {
 	return out.Bytes(), err
 }
 func (x *executor) compose(r Release) (string, error) {
+	if r.Config.ZLM != nil {
+		return x.zlmCompose(r)
+	}
 	if r.Config.Preview != nil {
 		return x.previewCompose(r)
 	}
@@ -269,6 +272,9 @@ func (x *executor) inspected(r Release) (Result, error) {
 	return Result{ReleaseID: r.ID, ImageID: v.Image, ConfigHash: Digest(r.Config), ContainerID: v.ID, Health: "PROCESS_RUNNING", ObservedAt: stamp()}, nil
 }
 func (x *executor) healthy(r Release) (Result, error) {
+	if r.Config.ZLM != nil {
+		return x.zlmObserved(r)
+	}
 	if r.Config.Preview != nil {
 		return x.previewHealth(r)
 	}
@@ -326,7 +332,7 @@ func validateRelease(r *Release) error {
 	if len(r.Bindings) > 2 {
 		return errors.New("BINDING_LIMIT")
 	}
-	if r.Config.Preview != nil && len(r.Bindings) != 0 {
+	if (r.Config.Preview != nil || r.Config.ZLM != nil) && len(r.Bindings) != 0 {
 		return errors.New("PREVIEW_BINDING_FORBIDDEN")
 	}
 	kinds := map[string]bool{}
@@ -398,7 +404,7 @@ func Execute(input io.Reader, output io.Writer) error {
 		} else if _, e := os.Lstat(filepath.Join(root, "pending.json")); !os.IsNotExist(e) {
 			return errors.New("TARGET_PENDING_DAMAGED")
 		}
-		return json.NewEncoder(output).Encode(map[string]any{"owner": x.owner, "dockerVersion": strings.TrimSpace(string(v)), "composeVersion": strings.TrimSpace(string(c)), "platform": "linux/amd64", "pendingJobId": pendingJob, "dockerRootDir": storageRoot, "dockerAvailableBytes": free, "pluginCatalogHash": pluginCatalogHash(), "previewRecipe": PreviewRecipe})
+		return json.NewEncoder(output).Encode(map[string]any{"owner": x.owner, "dockerVersion": strings.TrimSpace(string(v)), "composeVersion": strings.TrimSpace(string(c)), "platform": "linux/amd64", "pendingJobId": pendingJob, "dockerRootDir": storageRoot, "dockerAvailableBytes": free, "pluginCatalogHash": pluginCatalogHash(), "previewRecipe": PreviewRecipe, "zlmRecipe": ZLMRecipe})
 	}
 	if req.Action == "BINDING_PROBE" {
 		if req.Binding == nil || req.Binding.Validate() != nil {
@@ -423,6 +429,19 @@ func Execute(input io.Reader, output io.Writer) error {
 		}
 		return json.NewEncoder(output).Encode(value)
 	}
+	if req.Action == "PREVIEW_HANDOFF" {
+		if validateRelease(req.Candidate) != nil || req.Candidate.Config.Preview == nil {
+			return errors.New("PREVIEW_RELEASE_REQUIRED")
+		}
+		if _, e = x.inspected(*req.Candidate); e != nil {
+			return e
+		}
+		value, err := x.previewHandoff(*req.Candidate)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(value)
+	}
 	if req.Action == "INSPECT" || req.Action == "LOGS" {
 		if e = validateRelease(req.Candidate); e != nil {
 			return e
@@ -432,7 +451,12 @@ func Execute(input io.Reader, output io.Writer) error {
 			return e
 		}
 		if req.Action == "INSPECT" {
-			if req.Candidate.Config.Preview != nil {
+			if req.Candidate.Config.ZLM != nil {
+				actual, e = x.zlmObserved(*req.Candidate)
+				if e != nil {
+					return e
+				}
+			} else if req.Candidate.Config.Preview != nil {
 				actual, e = x.previewObserved(*req.Candidate)
 				if e != nil {
 					return e
@@ -663,7 +687,11 @@ func Execute(input io.Reader, output io.Writer) error {
 		if out, e := x.docker("ps", "-a", "--filter", "name=^/"+name+"$", "--format", "{{.ID}}"); e != nil || len(bytes.TrimSpace(out)) > 0 {
 			return errors.New("EXISTING_CONTAINER_CONFLICT")
 		}
-		if req.Candidate.Config.Preview != nil {
+		if req.Candidate.Config.ZLM != nil {
+			if e = zlmPorts(req.Candidate.Config); e != nil {
+				return e
+			}
+		} else if req.Candidate.Config.Preview != nil {
 			if e = previewPorts(req.Candidate.Config); e != nil {
 				return e
 			}

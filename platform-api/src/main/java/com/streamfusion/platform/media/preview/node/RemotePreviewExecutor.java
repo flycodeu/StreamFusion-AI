@@ -205,6 +205,8 @@ public final class RemotePreviewExecutor implements PreviewExecutor {
         for (var viewer : repository.viewers()) {
             if (stopping.getAsBoolean() || count >= 4) break;
             if (viewer.nodeId().equals("local")
+                    || repository.node(viewer.nodeId()) == null
+                    || repository.node(viewer.nodeId()).zlm() != null
                     || repository.scheduled(viewer.id())
                     || current.contains(viewer.id())
                     || recoveryAttempts.getOrDefault(viewer.id(), 0) >= 6) continue;

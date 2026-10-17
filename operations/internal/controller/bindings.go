@@ -126,6 +126,17 @@ func (s *Store) releaseSecrets(req *deploy.Request) error {
 		if rel == nil {
 			continue
 		}
+		if rel.Config.ZLM != nil {
+			z := rel.Config.ZLM
+			secret, e := s.secret(z.SecretCredentialID, z.SecretRevision, "TOKEN")
+			if e != nil {
+				return e
+			}
+			if !deploy.Hex.MatchString(string(secret)) {
+				return errors.New("ZLM_SECRET_INVALID")
+			}
+			req.Secrets[z.SecretCredentialID+":"+z.SecretRevision] = string(secret)
+		}
 		if rel.Config.InitialPasswordCredentialID != "" {
 			secret, e := s.secret(rel.Config.InitialPasswordCredentialID, rel.Config.InitialPasswordRevision, "PASSWORD")
 			if e != nil {
@@ -152,6 +163,11 @@ func (s *Store) releaseSecrets(req *deploy.Request) error {
 	return nil
 }
 func bindReleaseTx(tx *sql.Tx, r deploy.Release) error {
+	if r.Config.ZLM != nil {
+		if _, e := tx.Exec("INSERT INTO release_credentials VALUES(?,?,?)", r.ID, r.Config.ZLM.SecretCredentialID, r.Config.ZLM.SecretRevision); e != nil {
+			return e
+		}
+	}
 	if r.Config.InitialPasswordCredentialID != "" {
 		if _, e := tx.Exec("INSERT INTO release_credentials VALUES(?,?,?)", r.ID, r.Config.InitialPasswordCredentialID, r.Config.InitialPasswordRevision); e != nil {
 			return e

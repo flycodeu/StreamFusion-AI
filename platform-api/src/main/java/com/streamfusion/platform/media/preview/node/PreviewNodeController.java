@@ -5,6 +5,7 @@ import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.response.R;
 import com.streamfusion.platform.common.security.ModuleAccess;
 import com.streamfusion.platform.media.preview.PreviewFailure;
+import com.streamfusion.platform.media.preview.node.zlm.ZlmDirectService;
 import com.streamfusion.platform.monitor.audit.pojo.dto.AuditContextDto;
 import com.streamfusion.platform.monitor.audit.service.AuditService;
 import com.streamfusion.platform.system.access.service.AccessService;
@@ -25,6 +26,8 @@ public class PreviewNodeController {
     private final AccessService access;
     private final AuditService audit;
     private final PreviewNodeAdministration administration;
+    private final OpsPreviewCatalog ops;
+    private final ZlmDirectService zlm;
     private final PreviewScheduler scheduler;
     private final PreviewNodeMaintenanceService maintenance;
     private final com.streamfusion.platform.media.preview.execution.PreviewRoutingExecutor routing;
@@ -48,9 +51,81 @@ public class PreviewNodeController {
         return action(() -> administration.register(nodeId, AuditContextDto.from(request)));
     }
 
+    @PostMapping("/connections")
+    public R<ActionResult> connection(
+            @RequestBody PreviewNodeManager.ConnectionInput input, HttpServletRequest request) {
+        administrator();
+        return action(() -> administration.register(input, AuditContextDto.from(request)));
+    }
+
+    @GetMapping("/ops-instances")
+    public R<OpsPreviewCatalog.Listing> opsInstances() {
+        administrator();
+        return R.success(ops.listing());
+    }
+
+    @PostMapping("/ops-import")
+    public R<ActionResult> opsImport(
+            @RequestBody OpsPreviewCatalog.Selection selection, HttpServletRequest request) {
+        administrator();
+        return action(() -> administration.importFromOps(selection, AuditContextDto.from(request)));
+    }
+
+    @GetMapping("/zlm-instances")
+    public R<ZlmDirectService.Listing> zlmInstances() {
+        administrator();
+        return R.success(zlm.listing());
+    }
+
+    @GetMapping("/ops-zlm-instances")
+    public R<OpsPreviewCatalog.ZlmListing> opsZlmInstances() {
+        administrator();
+        return R.success(ops.zlmListing());
+    }
+
+    @PostMapping("/ops-zlm-import")
+    public R<PolicyResult> opsZlmImport(
+            @RequestBody OpsPreviewCatalog.Selection selection, HttpServletRequest request) {
+        administrator();
+        return zlmAction(() -> zlm.importFromOps(selection, AuditContextDto.from(request)));
+    }
+
+    @PostMapping("/zlm-instances")
+    public R<PolicyResult> zlmCreate(
+            @RequestBody ZlmDirectService.Input input, HttpServletRequest request) {
+        administrator();
+        return zlmAction(() -> zlm.create(input, AuditContextDto.from(request)));
+    }
+
+    @PutMapping("/zlm-instances/{nodeId}")
+    public R<PolicyResult> zlmPolicy(
+            @PathVariable String nodeId,
+            @RequestBody ZlmDirectService.Policy input,
+            HttpServletRequest request) {
+        administrator();
+        return zlmAction(() -> zlm.policy(nodeId, input, AuditContextDto.from(request)));
+    }
+
+    @PutMapping("/zlm-instances/{nodeId}/credential")
+    public R<PolicyResult> zlmCredential(
+            @PathVariable String nodeId,
+            @RequestBody ZlmDirectService.Credential input,
+            HttpServletRequest request) {
+        administrator();
+        return zlmAction(() -> zlm.credential(nodeId, input, AuditContextDto.from(request)));
+    }
+
+    @DeleteMapping("/zlm-instances/{nodeId}")
+    public R<PolicyResult> zlmRemove(
+            @PathVariable String nodeId, @RequestParam long version, HttpServletRequest request) {
+        administrator();
+        return zlmAction(() -> zlm.remove(nodeId, version, AuditContextDto.from(request)));
+    }
+
     public record Cluster(
             java.util.List<PreviewNodeManager.NodeStatus> nodes,
-            java.util.List<PreviewNodeManager.RegistrationOption> registrationOptions) {}
+            java.util.List<PreviewNodeManager.RegistrationOption> registrationOptions,
+            boolean directRegistrationAvailable) {}
 
     @GetMapping("/nodes")
     public R<Cluster> nodes() {
@@ -60,10 +135,21 @@ public class PreviewNodeController {
                         manager.statuses(scheduler),
                         access.isSuperAdmin(current.requireNormal().getId())
                                 ? manager.registrationOptions()
-                                : java.util.List.of()));
+                                : java.util.List.of(),
+                        access.isSuperAdmin(current.requireNormal().getId())
+                                && manager.directRegistrationAvailable()));
     }
 
     public record PolicyResult(boolean applied, String reasonCode) {}
+
+    private R<PolicyResult> zlmAction(Runnable operation) {
+        try {
+            operation.run();
+            return R.success(new PolicyResult(true, null));
+        } catch (PreviewFailure failure) {
+            return R.success(new PolicyResult(false, failure.reason()));
+        }
+    }
 
     @GetMapping("/nodes/{nodeId}/maintenance")
     public R<MaintenanceResult> maintenance(@PathVariable String nodeId) {

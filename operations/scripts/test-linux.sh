@@ -53,6 +53,32 @@ else:
 PY
 bash "$scripts/install-linux.sh" "${args[@]}" --apply --password-file "$work/password"
 bash "$scripts/install-linux.sh" "${args[@]}" --apply
+python3 - "$work/platform-token" <<'PY'
+import secrets, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(secrets.token_hex(32))
+PY
+chmod 0600 "$work/platform-token"
+if bash "$scripts/install-linux.sh" "${args[@]}" --platform-token-file "$work/password" --apply >/dev/null 2>&1; then echo 'weak platform token accepted'; exit 1; fi
+bash "$scripts/install-linux.sh" "${args[@]}" --platform-token-file "$work/platform-token" --apply
+bash "$scripts/install-linux.sh" "${args[@]}" --platform-token-file "$work/platform-token" --apply
+[[ $(stat -c %a "$state/platform-service.token") == 600 && $(stat -c %U "$state/platform-service.token") == "$name" ]]
+python3 - "$port" "$work/platform-token" <<'PY'
+import json, sys, urllib.error, urllib.request
+port, token_file = sys.argv[1:]
+url = f'http://127.0.0.1:{port}/ops/api/v1/platform/preview-instances'
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+try:
+    opener.open(url, timeout=3)
+    raise AssertionError('anonymous Platform catalog accepted')
+except urllib.error.HTTPError as error:
+    assert error.code == 401, error.code
+request = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + open(token_file).read().strip()})
+with opener.open(request, timeout=3) as response:
+    assert json.load(response)['data']['items'] == []
+print('PASS: installed Ops Platform service catalog')
+PY
+if bash "$scripts/install-linux.sh" "${args[@]}" --apply >/dev/null 2>&1; then echo 'platform service identity silently disabled'; exit 1; fi
 python3 - "$name.service" <<'PY'
 import json, os, pathlib, subprocess, sys, time
 pid=int(subprocess.check_output(['systemctl','show','-p','MainPID','--value',sys.argv[1]],text=True))

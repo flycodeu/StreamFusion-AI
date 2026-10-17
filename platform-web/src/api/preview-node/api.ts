@@ -137,6 +137,7 @@ export function parseCluster(value: unknown) {
         used = object(row.usage)
       return {
         nodeId: string(row.nodeId),
+        kind: optionalString(row.kind),
         name: string(row.name),
         mode: string(row.mode),
         version: integer(row.version),
@@ -154,6 +155,8 @@ export function parseCluster(value: unknown) {
         reasonCode: optionalString(row.reasonCode),
         observedAt: optionalString(row.observedAt),
         controlUri: optionalString(row.controlUri),
+        zlmApiAddress: optionalString(row.zlmApiAddress),
+        certificateSha256: optionalString(row.certificateSha256),
         mediaAddress: optionalString(row.mediaAddress),
         desiredConfigVersion: string(row.desiredConfigVersion),
         observation: row.observation == null ? null : object(row.observation),
@@ -164,10 +167,260 @@ export function parseCluster(value: unknown) {
       const row = object(value)
       return { nodeId: string(row.nodeId), name: string(row.name) }
     }),
+    directRegistrationAvailable:
+      root.directRegistrationAvailable == null ? false : boolean(root.directRegistrationAvailable),
   }
 }
 export type PreviewCluster = ReturnType<typeof parseCluster>
 export type PreviewNodeStatus = PreviewCluster['nodes'][number]
+export type PreviewBudget = PreviewNodeStatus['budget']
+export type PreviewNodeConnectionInput = {
+  nodeId: string
+  name: string
+  controlUri: string
+  certificateSha256: string
+  mediaAddress: string
+  version: number | null
+}
+
+export type DirectZlmInput = {
+  name: string
+  apiHost: string
+  apiPort: number
+  mediaAddress: string
+  secret: string
+  priority: number
+  budget: PreviewBudget
+}
+
+export function parseDirectZlmInstances(value: unknown) {
+  const root = object(value)
+  return {
+    registrationAvailable: boolean(root.registrationAvailable),
+    items: list(root.items, (value) => {
+      const row = object(value),
+        used = object(row.usage)
+      return {
+        nodeId: string(row.nodeId),
+        name: string(row.name),
+        apiHost: string(row.apiHost),
+        apiPort: integer(row.apiPort),
+        zlmVersion: optionalString(row.zlmVersion),
+        mediaAddress: string(row.mediaAddress),
+        mode: string(row.mode),
+        version: integer(row.version),
+        priority: integer(row.priority),
+        budget: parseBudget(row.budget),
+        usage: {
+          sources: integer(used.sources),
+          viewers: integer(used.viewers),
+          transcodes: integer(used.transcodes),
+          starting: integer(used.starting),
+          ingressKbps: integer(used.ingressKbps),
+          egressKbps: integer(used.egressKbps),
+        },
+        state: string(row.state),
+        reasonCode: optionalString(row.reasonCode),
+        observedAt: optionalString(row.observedAt),
+      }
+    }),
+  }
+}
+export type DirectZlmInstances = ReturnType<typeof parseDirectZlmInstances>
+export type DirectZlmInstance = DirectZlmInstances['items'][number]
+
+function policyReceipt(value: unknown) {
+  const row = object(value)
+  return { applied: boolean(row.applied), reasonCode: optionalString(row.reasonCode) }
+}
+function requireApplied(result: ApiResult<ReturnType<typeof policyReceipt>>) {
+  if (!result.data.applied) {
+    const code = result.data.reasonCode ?? 'NODE_UNAVAILABLE'
+    throw new ApiRequestError(code, previewReason(code), result.meta)
+  }
+}
+export async function getDirectZlmInstances(signal?: AbortSignal) {
+  return (
+    await request({
+      path: '/preview-node/zlm-instances',
+      method: 'GET',
+      successStatus: 200,
+      signal,
+      decode: parseDirectZlmInstances,
+    })
+  ).data
+}
+export async function createDirectZlmInstance(input: DirectZlmInput) {
+  requireApplied(
+    await request({
+      path: '/preview-node/zlm-instances',
+      method: 'POST',
+      body: input,
+      successStatus: 200,
+      timeoutMs: 20000,
+      decode: policyReceipt,
+    }),
+  )
+}
+export async function saveDirectZlmInstance(
+  instance: DirectZlmInstance,
+  changes: Partial<Pick<DirectZlmInstance, 'mode' | 'priority' | 'budget'>>,
+) {
+  requireApplied(
+    await request({
+      path: `/preview-node/zlm-instances/${encodeURIComponent(instance.nodeId)}`,
+      method: 'PUT',
+      body: {
+        mode: changes.mode ?? instance.mode,
+        priority: changes.priority ?? instance.priority,
+        budget: changes.budget ?? instance.budget,
+        version: instance.version,
+      },
+      successStatus: 200,
+      timeoutMs: 10000,
+      decode: policyReceipt,
+    }),
+  )
+}
+export async function rotateDirectZlmSecret(instance: DirectZlmInstance, secret: string) {
+  requireApplied(
+    await request({
+      path: `/preview-node/zlm-instances/${encodeURIComponent(instance.nodeId)}/credential`,
+      method: 'PUT',
+      body: { secret, version: instance.version },
+      successStatus: 200,
+      timeoutMs: 20000,
+      decode: policyReceipt,
+    }),
+  )
+}
+export async function deleteDirectZlmInstance(instance: DirectZlmInstance) {
+  requireApplied(
+    await request({
+      path: `/preview-node/zlm-instances/${encodeURIComponent(instance.nodeId)}?version=${instance.version}`,
+      method: 'DELETE',
+      successStatus: 200,
+      timeoutMs: 10000,
+      decode: policyReceipt,
+    }),
+  )
+}
+
+export function parseOpsPreviewInstances(value: unknown) {
+  const root = object(value)
+  return {
+    available: boolean(root.available),
+    reasonCode: optionalString(root.reasonCode),
+    items: list(root.items, (value) => {
+      const row = object(value)
+      return {
+        instanceId: string(row.instanceId),
+        name: string(row.name),
+        targetName: string(row.targetName),
+        targetAddress: string(row.targetAddress),
+        installRoot: string(row.installRoot),
+        releaseId: string(row.releaseId),
+        nodeId: string(row.nodeId),
+        controlUri: string(row.controlUri),
+        mediaAddress: string(row.mediaAddress),
+        maxSources: integer(row.maxSources),
+        maxViewers: integer(row.maxViewers),
+        maxTranscodes: integer(row.maxTranscodes),
+      }
+    }),
+  }
+}
+export type OpsPreviewInstances = ReturnType<typeof parseOpsPreviewInstances>
+
+export function parseOpsZlmInstances(value: unknown) {
+  const root = object(value)
+  return {
+    available: boolean(root.available),
+    reasonCode: optionalString(root.reasonCode),
+    items: list(root.items, (value) => {
+      const row = object(value)
+      return {
+        instanceId: string(row.instanceId),
+        name: string(row.name),
+        targetName: string(row.targetName),
+        targetAddress: string(row.targetAddress),
+        installRoot: string(row.installRoot),
+        releaseId: string(row.releaseId),
+        apiUrl: string(row.apiUrl),
+        mediaAddress: string(row.mediaAddress),
+        apiPort: integer(row.apiPort),
+        rtcPort: integer(row.rtcPort),
+        maxSources: integer(row.maxSources),
+        maxViewers: integer(row.maxViewers),
+        maxTranscodes: integer(row.maxTranscodes),
+      }
+    }),
+  }
+}
+export type OpsZlmInstances = ReturnType<typeof parseOpsZlmInstances>
+
+export async function getOpsZlmInstances(signal?: AbortSignal) {
+  return (
+    await request({
+      path: '/preview-node/ops-zlm-instances',
+      method: 'GET',
+      successStatus: 200,
+      signal,
+      decode: parseOpsZlmInstances,
+    })
+  ).data
+}
+
+export async function importOpsZlmInstance(instanceId: string, releaseId: string) {
+  requireApplied(
+    await request({
+      path: '/preview-node/ops-zlm-import',
+      method: 'POST',
+      body: { instanceId, releaseId },
+      successStatus: 200,
+      timeoutMs: 30000,
+      decode: policyReceipt,
+    }),
+  )
+}
+
+export async function getOpsPreviewInstances(signal?: AbortSignal) {
+  return (
+    await request({
+      path: '/preview-node/ops-instances',
+      method: 'GET',
+      successStatus: 200,
+      signal,
+      decode: parseOpsPreviewInstances,
+    })
+  ).data
+}
+
+export async function importOpsPreviewInstance(instanceId: string, releaseId: string) {
+  return applied(
+    await request({
+      path: '/preview-node/ops-import',
+      method: 'POST',
+      body: { instanceId, releaseId },
+      successStatus: 200,
+      timeoutMs: 20000,
+      decode: parseNodeAction,
+    }),
+  )
+}
+
+export async function configurePreviewNode(input: PreviewNodeConnectionInput) {
+  return applied(
+    await request({
+      path: '/preview-node/connections',
+      method: 'POST',
+      body: input,
+      successStatus: 200,
+      timeoutMs: 10000,
+      decode: parseNodeAction,
+    }),
+  )
+}
 export async function getPreviewNodes(signal?: AbortSignal) {
   return (
     await request({

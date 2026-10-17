@@ -89,7 +89,7 @@ cd web && pnpm build
 
 构建二进制后，Linux集成验收入口为 `sudo bash scripts/test-linux.sh /absolute/path/to/streamfusion-ops`；它使用唯一的测试单元、账号和目录，并在完成后清理。浏览器验收入口为 `python scripts/test-browser.py --binary ./streamfusion-ops.exe --output ../.run/ops-browser-new`，需要已有 Python/Playwright/Chromium，仅用于开发测试。
 
-看进程日志及状态目录下 `logs/controller.log`。目录锁冲突返回STATE_LOCKED；端口冲突返回LISTEN_FAILED；高版本数据库返回SCHEMA_TOO_NEW；缺少已有凭据密钥返回KEY_MISSING。现行Schema为3。首次升级Schema1/2前分别生成before-schema-2/3一致性归档，再事务升级，旧迁移摘要保持不变。旧程序拒绝打开高版本数据库；代码回退须用原密钥与对应升级前备份恢复到新目录。
+看进程日志及状态目录下 `logs/controller.log`。目录锁冲突返回STATE_LOCKED；端口冲突返回LISTEN_FAILED；高版本数据库返回SCHEMA_TOO_NEW；缺少已有凭据密钥返回KEY_MISSING。现行Schema为4。首次升级Schema1/2前分别生成before-schema-2/3一致性归档，再事务升级，旧迁移摘要保持不变。旧程序拒绝打开高版本数据库；代码回退须用原密钥与对应升级前备份恢复到新目录。
 
 `STATE_LOCKED` 表示该目录仍被进程持有，锁文件存在本身不表示故障，不能通过删除它关闭服务。优先用 `stop --state`；旧版后台实例未提供本地关闭记录时返回 `STOP_UNAVAILABLE`，需核实监听端口、可执行文件和启动参数后关闭对应进程，随后使用新二进制。
 

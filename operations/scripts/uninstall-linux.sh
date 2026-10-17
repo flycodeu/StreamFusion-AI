@@ -21,7 +21,9 @@ sha256=$(sed -n 's/^sha256=//p' "$marker")
 grep -Fxq "prefix=$prefix" "$marker" || fail '路径归属不一致'
 unit="/etc/systemd/system/$name.service"
 [[ -f $unit && ! -L $unit ]] || fail '缺少受管单元'
-grep -Fxq "ExecStart=$prefix/streamfusion-ops serve --state $state --listen 127.0.0.1:$port" "$unit" || fail '单元归属发生变化'
+grep -Fxq "ExecStart=$prefix/streamfusion-ops serve --state $state --listen 127.0.0.1:$port" "$unit" ||
+  grep -Fxq "ExecStart=$prefix/streamfusion-ops serve --state $state --listen 127.0.0.1:$port --platform-token-file $state/platform-service.token" "$unit" ||
+  fail '单元归属发生变化'
 [[ -f $prefix/streamfusion-ops && ! -L $prefix/streamfusion-ops && $(sha256sum "$prefix/streamfusion-ops" | cut -d' ' -f1) == "$sha256" ]] || fail '程序归属发生变化'
 printf '卸载计划: 程序 %s；单元 %s；状态及账号保留: %s\n' "$prefix" "$name" "$state"
 $apply || exit 0

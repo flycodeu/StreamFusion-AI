@@ -6,14 +6,18 @@ S4 已实现固定配方 `preview-node-v1`：导入离线镜像，部署新节�
 
 ## 首次部署
 
-1. 准备 Ubuntu 24.04/amd64、Docker Engine 和 Compose。在现有 Ops 登记本机或 SSH 目标，按现有目标安装说明准备受保护的 executor。控制器和目标 executor 均须支持 `preview-node-v1`；预检未返回该能力时拒绝部署。不会自动更新旧 executor 或安装 Docker。
+1. 准备 Ubuntu 24.04/amd64、Docker Engine 和 Compose。在现有 Ops 登记本机或 SSH 目标，按现有目标安装说明准备受保护的 executor。Ops 可登记一台本机及最多 16 台 SSH 目标；控制器和目标 executor 均须支持 `preview-node-v1`。预检未返回该能力时拒绝部署，不会自动更新旧 executor 或安装 Docker。
 2. 用同版本 `platform-api/preview-node/build-package.sh` 生成离线包，核对可信 SHA256SUMS。解包后，在“制品”选择“预览节点”，导入 **`preview-node-image.tar`**。不上传整个 `.tar.gz`；上限 2 GiB，镜像须为 `streamfusion/preview-node:*`，具备 `com.streamfusion.preview.maintenance=1`。
 3. “服务实例 → 新增实例”选择预览配方及目标，填写唯一 nodeId、实际绑定 IPv4、控制域名/IP、浏览器可达的媒体 IPv4、允许访问的相机 IP:RTSP 端口。高级容量默认 64/64/64/4，可向下校准；CPU/内存按机器配置。
 4. 保存草稿、生成发布计划，检查目标、摘要、冻结配置和端口后执行。只公开 9443/TCP、18000/TCP+UDP；不开放 ZLM 管理端口。节点容器不连接业务 MySQL/Redis。
-5. 成功后打开“平台登记指引”。页面给出控制地址、证书指纹与目标上机器凭据文件的位置，不显示凭据。通过已有安全管理通道复制 `machine-token` 到 Platform 的受保护目录，修改连接 JSON 的 tokenFile；不要把 token 粘贴进页面、日志或 Git。
-6. 把连接加入 `SF_PREVIEW_NODE_CONNECTION_FILE` 指向的文件，在平台“服务信息 → 媒体环境 → 预览执行节点”登记、检查并设置预算/优先级。显式启用后，到原预览中心选择有权限的视频试播；失败就停止该节点接新预览。当前没有绕过调度的“未启用节点专用试播”入口。
+5. 首次对接时，由管理员在 Ops 与 Platform 分别配置内容相同、权限受保护的服务身份令牌文件，并设置 Ops 地址；这是一项平台级连接配置，不需要逐节点填写控制地址或证书指纹。Ops 前台启动使用 `--platform-token-file` 指向私有目录中的 0600 文件；Linux systemd 安装使用 `scripts/install-linux.sh --platform-token-file <0700目录内的0600令牌源文件> --apply`，安装脚本复制到私有状态目录并把目标路径写入服务单元，重复安装须继续传同一令牌。Platform 配置 `SF_PREVIEW_OPS_BASE_URI`、`SF_PREVIEW_OPS_TOKEN_FILE` 和 `SF_PREVIEW_NODE_CREDENTIAL_DIRECTORY`。非回环 Ops 地址必须走 HTTPS，证书须被 Platform 信任。服务身份文件和机器令牌不得进入网页、日志或 Git。
+6. Ops 发布成功后，在“监控面板 → 预览节点”选择该服务器上的已部署实例，核对名称、安装位置、发布版本和容量，点击“引入”。Platform 服务端按实例及发布版本从 Ops 安全取得连接元数据和机器令牌，验证节点身份与资源，再将机器令牌写入受保护目录；登记后默认不接新预览。检查预算/优先级并显式启用，到预览中心试播；失败时停止该节点接新预览。旧受保护连接 JSON 导入与手工登记保留在高级入口；普通接入不需要复制 `machine-token` 或手填节点 ID、控制 HTTPS 地址、证书指纹。
 
 首次部署不需要维护许可，因为该 Ops 实例没有旧版本。默认固定端口适合每台媒体机一个节点；A/B 分别重复部署。已有手工节点不会被自动接管，不得用首次部署绕过其排空和责任核对。
+
+Ops 的实例目录只列出已发布的预览配方。引入时若发布版本已改变、节点不可达、证书或节点身份不匹配、资源未归零，应保持原登记与调度状态并按错误码排查。现有观看不迁移；重新引入前先停止该节点接新预览并等待资源归零。独立 Linux 实机与 A/B 首帧仍需另行验收。
+
+同一 Ops 实例升级时保持 `nodeId` 稳定。若确需更换身份，Platform 会视为新节点；先排空并核对旧节点，再单独登记新节点，不会自动替换原节点。
 
 ## 排空、升级和回退
 

@@ -66,7 +66,7 @@ class PreviewSchedulerTest {
         manager =
                 new PreviewNodeManager(
                         repository,
-                        new PreviewNodeProperties(""),
+                        new PreviewNodeProperties("", ""),
                         new PreviewProperties(64, 64),
                         json);
         scheduler = new PreviewScheduler(repository, ledger, manager, local);

@@ -1,30 +1,90 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElButton, ElDialog, ElTag } from 'element-plus'
 import { RouterLink } from 'vue-router'
+import { getMediaRuntime } from '../../api/media-runtime/api'
+import type { MediaRuntimeCandidate } from '../../api/media-runtime/types'
 import {
   getPreviewNodes,
+  getDirectZlmInstances,
+  createDirectZlmInstance,
+  saveDirectZlmInstance,
+  rotateDirectZlmSecret,
+  deleteDirectZlmInstance,
+  getOpsPreviewInstances,
+  importOpsPreviewInstance,
+  getOpsZlmInstances,
+  importOpsZlmInstance,
+  configurePreviewNode,
   previewNodeAction,
   registerPreviewNode,
   savePreviewNode,
   type PreviewCluster,
+  type DirectZlmInstances,
+  type DirectZlmInstance,
+  type DirectZlmInput,
+  type OpsPreviewInstances,
+  type OpsZlmInstances,
   type PreviewNodeStatus,
+  type PreviewNodeConnectionInput,
   previewMaintenance,
   type PreviewMaintenance,
 } from '../../api/preview-node/api'
 import RequestError from '../../components/feedback/RequestError.vue'
+import { ApiRequestError } from '../../lib/http/error'
 import { usePageScope } from '../../composables/usePageScope'
 import { sessionState } from '../../session/state'
 import { formatDateTime } from '../../utils/dateTime'
 import { previewReason } from './model'
 
+const props = withDefaults(defineProps<{ management?: boolean }>(), { management: false })
 const captureScope = usePageScope()
 const snapshot = ref<PreviewCluster | null>(null),
   busy = ref(false),
   error = ref<unknown>(null)
+const localZlm = ref<MediaRuntimeCandidate | null>(null)
+const opsInstances = ref<OpsPreviewInstances | null>(null)
+const opsZlmInstances = ref<OpsZlmInstances | null>(null)
+const opsBusy = ref(false)
+const opsError = ref<unknown>(null)
+const opsZlmBusy = ref(false)
+const opsZlmError = ref<unknown>(null)
+const directInstances = ref<DirectZlmInstances | null>(null)
+const directBusy = ref(false)
+const directError = ref<unknown>(null)
+const directAdvice = computed(() => {
+  const failure = directError.value
+  if (!(failure instanceof ApiRequestError)) return undefined
+  if (failure.status === 403) return '请核对超级管理员权限及当前 Platform 服务版本。'
+  if (failure.code === 'NODE_CREDENTIAL_DIRECTORY_MISSING')
+    return '请配置 Platform 受保护的预览节点凭据目录。'
+  if (failure.code === 'ZLM_UNAVAILABLE')
+    return '请检查 ZLM 地址、端口及 Platform 的实际出口 IP 是否被允许访问。'
+  if (failure.code === 'ZLM_REQUEST_FAILED' || failure.code === 'ZLM_UNAUTHORIZED')
+    return '请核对 ZLM secret 及 ZLM 的 API 访问策略。'
+  if (failure.code === 'NODE_MEDIA_CONFIGURATION_INVALID')
+    return '请核对 ZLM 的 rtc.externIP 与媒体地址一致、rtc.port 和 rtsp.port 可用、rtsp.directProxy=0、空闲保留至少 20 秒，并限制 API 调试和访问 IP 范围。'
+  return undefined
+})
+const directForm = ref<DirectZlmInput | null>(null)
+const directEditing = ref<{
+  instance: DirectZlmInstance
+  priority: number
+  budget: DirectZlmInstance['budget']
+} | null>(null)
+const directCredential = ref<{ instance: DirectZlmInstance; secret: string } | null>(null)
+const directRemoving = ref<DirectZlmInstance | null>(null)
 const diagnostic = ref<PreviewNodeStatus | null>(null),
   editing = ref<PreviewNodeStatus | null>(null)
+const connection = ref<PreviewNodeConnectionInput | null>(null)
 const administrator = computed(() => !!sessionState.me?.isSuperAdmin)
+const canManage = computed(() => props.management && administrator.value)
+const configuredConnections = computed(() =>
+  (snapshot.value?.registrationOptions ?? []).map((item) => ({
+    ...item,
+    registered: snapshot.value?.nodes.find((node) => node.nodeId === item.nodeId),
+  })),
+)
 const maintaining = ref<PreviewNodeStatus | null>(null)
 const maintenance = ref<PreviewMaintenance | null>(null)
 const maintenanceNames: Record<string, string> = {
@@ -46,6 +106,16 @@ const names: Record<string, string> = {
   NODE_HOST_OVERLOADED: '节点持续高负载，暂停新预览',
   NODE_BITRATE_EXCEEDED: '实测码率超出预算，暂停新预览',
 }
+const defaultDirectBudget: DirectZlmInput['budget'] = {
+  maxSources: 64,
+  maxViewers: 64,
+  maxTranscodes: 0,
+  maxStarting: 4,
+  ingressKbps: 655360,
+  egressKbps: 655360,
+  sourceUpperKbps: 8192,
+  outputUpperKbps: 8192,
+}
 const fields: {
   key: keyof PreviewNodeStatus['budget']
   label: string
@@ -61,8 +131,194 @@ const fields: {
   { key: 'sourceUpperKbps', label: '每源码率上界（kbps）', min: 1, max: 1000000 },
   { key: 'outputUpperKbps', label: '每观看码率上界（kbps）', min: 1, max: 1000000 },
 ]
+const directFields = fields.filter((field) => field.key !== 'maxTranscodes')
 let controller: globalThis.AbortController | undefined
-onBeforeUnmount(() => controller?.abort())
+let runtimeController: globalThis.AbortController | undefined
+let opsController: globalThis.AbortController | undefined
+let opsZlmController: globalThis.AbortController | undefined
+let directController: globalThis.AbortController | undefined
+onBeforeUnmount(() => {
+  controller?.abort()
+  runtimeController?.abort()
+  opsController?.abort()
+  opsZlmController?.abort()
+  directController?.abort()
+})
+onMounted(() => {
+  void run()
+  void loadLocalZlm()
+})
+watch(
+  canManage,
+  (enabled) => {
+    if (enabled) {
+      void loadOpsInstances()
+      void loadOpsZlmInstances()
+      void loadDirectInstances()
+    } else {
+      opsController?.abort()
+      opsZlmController?.abort()
+      opsController = undefined
+      opsBusy.value = false
+      opsError.value = null
+      opsInstances.value = null
+      opsZlmInstances.value = null
+      opsZlmBusy.value = false
+      opsZlmError.value = null
+      directController?.abort()
+      directController = undefined
+      directBusy.value = false
+      directError.value = null
+      directInstances.value = null
+      directForm.value = null
+      directCredential.value = null
+    }
+  },
+  { immediate: true },
+)
+
+async function loadDirectInstances() {
+  if (!canManage.value) return
+  if (directBusy.value) return
+  const active = captureScope()
+  directController?.abort()
+  const nextController = new globalThis.AbortController()
+  directController = nextController
+  directBusy.value = true
+  directError.value = null
+  directInstances.value = null
+  try {
+    const value = await getDirectZlmInstances(nextController.signal)
+    if (active() && canManage.value) directInstances.value = value
+  } catch (cause) {
+    if (active() && canManage.value) directError.value = cause
+  } finally {
+    if (directController === nextController) directBusy.value = false
+  }
+}
+
+function openDirectForm() {
+  directForm.value = {
+    name: '',
+    apiHost: '',
+    apiPort: 80,
+    mediaAddress: '',
+    secret: '',
+    priority: 100,
+    budget: { ...defaultDirectBudget },
+  }
+}
+function saveDirectForm() {
+  if (!directForm.value) return
+  const input = {
+    ...directForm.value,
+    mediaAddress: directForm.value.mediaAddress || directForm.value.apiHost,
+    budget: { ...directForm.value.budget },
+  }
+  directForm.value.secret = ''
+  void run(async () => {
+    await createDirectZlmInstance(input)
+    directForm.value = null
+  }).then(() => void loadDirectInstances())
+}
+function updateDirect(
+  instance: DirectZlmInstance,
+  changes: Partial<Pick<DirectZlmInstance, 'mode' | 'priority' | 'budget'>>,
+) {
+  void run(async () => {
+    await saveDirectZlmInstance(instance, changes)
+    directEditing.value = null
+  }).then(() => void loadDirectInstances())
+}
+function saveDirectCredential() {
+  if (!directCredential.value?.secret) return
+  const { instance, secret } = directCredential.value
+  directCredential.value.secret = ''
+  void run(async () => {
+    await rotateDirectZlmSecret(instance, secret)
+    directCredential.value = null
+  }).then(() => void loadDirectInstances())
+}
+function removeDirect() {
+  if (!directRemoving.value) return
+  const instance = directRemoving.value
+  void run(async () => {
+    await deleteDirectZlmInstance(instance)
+    directRemoving.value = null
+  }).then(() => void loadDirectInstances())
+}
+function directIdle(instance: DirectZlmInstance) {
+  return (
+    instance.usage.sources === 0 && instance.usage.viewers === 0 && instance.usage.starting === 0
+  )
+}
+
+function opsZlmRegistered(apiUrl: string) {
+  return (directInstances.value?.items ?? []).some(
+    (item) => `http://${item.apiHost}:${item.apiPort}` === apiUrl,
+  )
+}
+
+async function loadOpsInstances() {
+  if (opsBusy.value) return
+  const active = captureScope()
+  opsController?.abort()
+  const nextController = new globalThis.AbortController()
+  opsController = nextController
+  opsBusy.value = true
+  opsError.value = null
+  opsInstances.value = null
+  try {
+    const value = await getOpsPreviewInstances(nextController.signal)
+    if (active() && canManage.value) opsInstances.value = value
+  } catch (cause) {
+    if (active() && canManage.value) opsError.value = cause
+  } finally {
+    if (opsController === nextController) opsBusy.value = false
+  }
+}
+
+async function loadOpsZlmInstances() {
+  if (!canManage.value || opsZlmBusy.value) return
+  const active = captureScope()
+  opsZlmController?.abort()
+  const nextController = new globalThis.AbortController()
+  opsZlmController = nextController
+  opsZlmBusy.value = true
+  opsZlmError.value = null
+  try {
+    const value = await getOpsZlmInstances(nextController.signal)
+    if (active() && canManage.value) opsZlmInstances.value = value
+  } catch (cause) {
+    if (active() && canManage.value) opsZlmError.value = cause
+  } finally {
+    if (opsZlmController === nextController) opsZlmBusy.value = false
+  }
+}
+
+function importZlmFromOps(instanceId: string, releaseId: string) {
+  void run(() => importOpsZlmInstance(instanceId, releaseId)).then(() => {
+    void loadDirectInstances()
+    void loadOpsZlmInstances()
+  })
+}
+
+function importFromOps(instanceId: string, releaseId: string) {
+  void run(() => importOpsPreviewInstance(instanceId, releaseId))
+}
+
+async function loadLocalZlm() {
+  const active = captureScope()
+  runtimeController = new globalThis.AbortController()
+  try {
+    const runtime = await getMediaRuntime(runtimeController.signal)
+    if (active())
+      localZlm.value =
+        runtime.candidates.find((candidate) => candidate.id === runtime.selected.zlmId) ?? null
+  } catch {
+    // Node status remains available when local software inspection fails.
+  }
+}
 async function run(operation?: () => Promise<unknown>) {
   if (busy.value) return
   const active = captureScope()
@@ -84,11 +340,26 @@ async function run(operation?: () => Promise<unknown>) {
     if (active()) busy.value = false
   }
 }
-function expanded(event: globalThis.Event) {
-  if ((event.target as globalThis.HTMLDetailsElement).open) void run()
-}
 function edit(node: PreviewNodeStatus) {
   editing.value = { ...node, budget: { ...node.budget } }
+}
+function openConnection(node?: PreviewNodeStatus) {
+  connection.value = {
+    nodeId: node?.nodeId ?? '',
+    name: node?.name ?? '',
+    controlUri: node?.controlUri ?? 'https://',
+    certificateSha256: node?.certificateSha256 ?? '',
+    mediaAddress: node?.mediaAddress ?? '',
+    version: node?.version ?? null,
+  }
+}
+function saveConnection() {
+  if (!connection.value) return
+  const value = { ...connection.value }
+  void run(async () => {
+    await configurePreviewNode(value)
+    connection.value = null
+  })
 }
 function mode(node: PreviewNodeStatus, value: string) {
   void run(() => savePreviewNode({ ...node, mode: value }))
@@ -122,8 +393,13 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
 </script>
 
 <template>
-  <details class="preview-node-panel" @toggle="expanded">
-    <summary>预览执行节点 <span>同源复用 · 容量不足分配新源 · 已有观看保持原节点</span></summary>
+  <section class="preview-node-panel" :aria-label="management ? '预览节点管理' : '预览节点总览'">
+    <header class="node-title">
+      <div>
+        <h2>预览节点</h2>
+        <span>{{ snapshot?.nodes.length ?? '—' }} 台已登记</span>
+      </div>
+    </header>
     <RequestError
       :error="error"
       advice="核对节点原因和预算；连接异常时检查证书、凭据与节点日志，资源未确认关闭前保留占用。"
@@ -132,15 +408,265 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
       <div class="node-actions">
         <ElButton :loading="busy" @click="run(() => previewNodeAction('check'))">检查节点</ElButton>
         <ElButton
-          v-if="administrator"
+          v-if="canManage"
           :disabled="busy"
           @click="run(() => previewNodeAction('reconcile'))"
           >重新核对资源</ElButton
         >
-        <RouterLink to="/preview/center">前往预览</RouterLink>
+        <RouterLink v-if="!management" to="/preview/center">前往预览</RouterLink>
       </div>
+      <section v-if="canManage" class="node-guide direct-guide" aria-label="直连 ZLM">
+        <div class="connection-heading">
+          <h3>直连 ZLM</h3>
+          <div class="node-actions">
+            <ElButton
+              :disabled="busy || directBusy || !directInstances?.registrationAvailable"
+              @click="openDirectForm()"
+              >接入 ZLM</ElButton
+            >
+            <ElButton :loading="directBusy" @click="loadDirectInstances()">刷新</ElButton>
+          </div>
+        </div>
+        <RequestError :error="directError" :advice="directAdvice" />
+        <div class="ops-zlm-catalog">
+          <div class="connection-heading">
+            <h4>Ops 已安装</h4>
+            <ElButton :loading="opsZlmBusy" @click="loadOpsZlmInstances()">刷新</ElButton>
+          </div>
+          <RequestError
+            :error="opsZlmError"
+            advice="检查 Platform 与 Ops 的连接，以及 Ops 中 ZLM 实例的发布状态。"
+          />
+          <p v-if="opsZlmBusy && !opsZlmInstances" class="connection-empty">
+            正在读取 Ops 的 ZLM 实例…
+          </p>
+          <p v-else-if="opsZlmInstances?.reasonCode" class="connection-empty">
+            {{ previewReason(opsZlmInstances.reasonCode) }}
+            <code>{{ opsZlmInstances.reasonCode }}</code>
+          </p>
+          <p v-else-if="opsZlmInstances && !opsZlmInstances.available" class="connection-empty">
+            尚未连接 Ops 实例目录，可手工接入已安装的 ZLM。
+          </p>
+          <p v-else-if="opsZlmInstances && !opsZlmInstances.items.length" class="connection-empty">
+            Ops 暂无已发布的 ZLM 实例。
+          </p>
+          <div v-if="opsZlmInstances?.items.length" class="connection-list">
+            <article
+              v-for="item in opsZlmInstances.items"
+              :key="item.instanceId"
+              class="connection-row"
+            >
+              <div class="connection-detail">
+                <div class="connection-name">
+                  <strong>{{ item.name }}</strong>
+                  <ElTag :type="opsZlmRegistered(item.apiUrl) ? 'info' : 'warning'" effect="plain">
+                    {{ opsZlmRegistered(item.apiUrl) ? '已接入' : '可引入' }}
+                  </ElTag>
+                </div>
+                <div class="connection-meta">
+                  <span>服务器：{{ item.targetName }}</span>
+                  <span>地址：{{ item.targetAddress }}</span>
+                  <span>API：{{ item.apiUrl }}</span>
+                  <span>源流 {{ item.maxSources }} · 观看 {{ item.maxViewers }}</span>
+                </div>
+              </div>
+              <ElButton
+                :disabled="
+                  busy ||
+                  opsZlmBusy ||
+                  !directInstances?.registrationAvailable ||
+                  opsZlmRegistered(item.apiUrl)
+                "
+                @click="importZlmFromOps(item.instanceId, item.releaseId)"
+                >引入平台</ElButton
+              >
+            </article>
+          </div>
+        </div>
+        <p v-if="directBusy && !directInstances" class="connection-empty">正在读取 ZLM 实例…</p>
+        <p
+          v-else-if="directInstances && !directInstances.registrationAvailable"
+          class="connection-empty"
+        >
+          请先配置 Platform 受保护的预览节点凭据目录，再接入 ZLM。
+        </p>
+        <p v-if="directInstances && !directInstances.items.length" class="connection-empty">
+          尚未接入 ZLM 实例。
+        </p>
+        <div v-if="directInstances?.items.length" class="connection-list">
+          <article
+            v-for="item in directInstances.items"
+            :key="item.nodeId"
+            class="connection-row direct-row"
+          >
+            <div class="connection-detail">
+              <div class="connection-name">
+                <strong>{{ item.name }}</strong>
+                <ElTag effect="plain">{{ names[item.mode] || item.mode }}</ElTag>
+              </div>
+              <div class="connection-meta">
+                <span>ZLM HTTP：{{ item.apiHost }}:{{ item.apiPort }}</span>
+                <span>媒体地址：{{ item.mediaAddress }}</span>
+                <span>ZLM 版本：{{ item.zlmVersion || '未检测' }}</span>
+                <span>状态：{{ names[item.state] || item.state }}</span>
+              </div>
+              <div class="connection-meta">
+                <span>源流 {{ item.usage.sources }} / {{ item.budget.maxSources }}</span>
+                <span>观看 {{ item.usage.viewers }} / {{ item.budget.maxViewers }}</span>
+                <span>转码 {{ item.usage.transcodes }} / {{ item.budget.maxTranscodes }}</span>
+                <span>优先级 {{ item.priority }}</span>
+              </div>
+              <p v-if="item.reasonCode" class="node-reason">
+                {{ previewReason(item.reasonCode) }} <code>{{ item.reasonCode }}</code>
+              </p>
+            </div>
+            <div class="node-actions direct-actions">
+              <ElButton
+                v-if="item.mode !== 'REMOTE'"
+                :disabled="busy || !directIdle(item)"
+                @click="updateDirect(item, { mode: 'REMOTE' })"
+                >参与调度</ElButton
+              >
+              <ElButton v-else :disabled="busy" @click="updateDirect(item, { mode: 'DRAINING' })"
+                >排空</ElButton
+              >
+              <ElButton
+                :disabled="busy || item.mode === 'REMOTE'"
+                @click="
+                  directEditing = {
+                    instance: item,
+                    priority: item.priority,
+                    budget: { ...item.budget },
+                  }
+                "
+                >预算设置</ElButton
+              >
+              <ElButton
+                :disabled="
+                  busy ||
+                  !directInstances.registrationAvailable ||
+                  item.mode === 'REMOTE' ||
+                  !directIdle(item)
+                "
+                @click="directCredential = { instance: item, secret: '' }"
+                >更新密钥</ElButton
+              >
+              <ElButton
+                :disabled="busy || item.mode === 'REMOTE' || !directIdle(item)"
+                @click="directRemoving = item"
+                >移除</ElButton
+              >
+            </div>
+          </article>
+        </div>
+      </section>
+      <section v-if="canManage" class="node-guide" aria-label="接入预览节点">
+        <div class="connection-heading">
+          <h3>从 Ops 引入</h3>
+          <div class="node-actions">
+            <ElButton :loading="opsBusy" @click="loadOpsInstances()">刷新实例</ElButton>
+          </div>
+        </div>
+        <RequestError
+          :error="opsError"
+          advice="检查 Platform 与 Ops 的连接及 Ops 中预览实例的部署状态。"
+        />
+        <p v-if="opsBusy && !opsInstances" class="connection-empty">正在读取 Ops 实例…</p>
+        <p v-else-if="opsInstances?.reasonCode" class="connection-empty">
+          {{ previewReason(opsInstances.reasonCode) }}
+          <code>{{ opsInstances.reasonCode }}</code>
+        </p>
+        <p v-else-if="opsInstances && !opsInstances.available" class="connection-empty">
+          尚未连接 Ops 实例目录。
+        </p>
+        <p v-else-if="opsInstances && !opsInstances.items.length" class="connection-empty">
+          Ops 暂无可引入的预览实例。
+        </p>
+        <div v-if="opsInstances?.items.length" class="connection-list">
+          <div v-for="item in opsInstances.items" :key="item.instanceId" class="connection-row">
+            <div class="connection-detail">
+              <div class="connection-name">
+                <strong>{{ item.name }}</strong>
+                <ElTag
+                  :type="
+                    snapshot.nodes.some((node) => node.nodeId === item.nodeId) ? 'info' : 'warning'
+                  "
+                  effect="plain"
+                  >{{
+                    snapshot.nodes.some((node) => node.nodeId === item.nodeId) ? '已登记' : '可引入'
+                  }}</ElTag
+                >
+              </div>
+              <div class="connection-meta">
+                <span>服务器：{{ item.targetName }}</span>
+                <span v-if="item.targetAddress">地址：{{ item.targetAddress }}</span>
+              </div>
+              <div class="connection-meta">
+                <span>安装位置：{{ item.installRoot }}</span>
+              </div>
+              <div class="connection-meta">
+                <span>发布版本：{{ item.releaseId }}</span>
+                <span>源流 {{ item.maxSources }}</span>
+                <span>观看 {{ item.maxViewers }}</span>
+                <span>转码 {{ item.maxTranscodes }}</span>
+              </div>
+            </div>
+            <ElButton
+              :disabled="
+                busy ||
+                opsBusy ||
+                snapshot.nodes.some((node) => node.nodeId === item.nodeId && node.mode === 'REMOTE')
+              "
+              @click="importFromOps(item.instanceId, item.releaseId)"
+              >{{
+                snapshot.nodes.some((node) => node.nodeId === item.nodeId) ? '更新登记' : '引入节点'
+              }}</ElButton
+            >
+          </div>
+        </div>
+        <details v-if="configuredConnections.length" class="connection-extra">
+          <summary>登记文件中的节点（{{ configuredConnections.length }}）</summary>
+          <div class="connection-list">
+            <div v-for="item in configuredConnections" :key="item.nodeId" class="connection-row">
+              <div class="connection-name">
+                <strong>{{ item.name }}</strong>
+                <code>{{ item.nodeId }}</code>
+                <ElTag :type="item.registered ? 'info' : 'warning'" effect="plain">{{
+                  item.registered ? '已登记' : '待导入'
+                }}</ElTag>
+              </div>
+              <ElButton
+                :disabled="busy || item.registered?.mode === 'REMOTE'"
+                @click="run(() => registerPreviewNode(item.nodeId))"
+                >{{ item.registered ? '重新导入' : '导入节点' }}</ElButton
+              >
+            </div>
+          </div>
+        </details>
+        <details class="connection-extra">
+          <summary>高级：手工登记节点</summary>
+          <p class="connection-empty">
+            一般从 Ops 引入即可，连接信息会自动登记。节点控制地址不是 ZLM HTTP API；内网 IP 可由 Ops
+            生成自签名 HTTPS 控制口，无需公网证书。
+          </p>
+          <p v-if="!snapshot.directRegistrationAvailable" class="connection-empty">
+            须先配置 Platform 受保护的机器凭据目录。
+          </p>
+          <ElButton
+            :disabled="busy || !snapshot.directRegistrationAvailable"
+            @click="openConnection()"
+            >手工登记</ElButton
+          >
+        </details>
+      </section>
       <div class="node-list">
-        <article v-for="node in snapshot.nodes" :key="node.nodeId" class="node-card">
+        <article
+          v-for="node in management
+            ? snapshot.nodes.filter((item) => item.kind !== 'ZLM_DIRECT')
+            : snapshot.nodes"
+          :key="node.nodeId"
+          class="node-card"
+        >
           <div class="node-heading">
             <div>
               <h3>{{ node.name }}</h3>
@@ -152,75 +678,307 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             实际状态：{{ names[node.state] || node.state
             }}<span v-if="node.observedAt"> · {{ formatDateTime(node.observedAt) }}</span>
           </p>
-          <dl class="node-metrics">
+          <dl class="node-identity">
             <div>
-              <dt>源流</dt>
-              <dd>{{ node.usage.sources }} / {{ node.budget.maxSources }}</dd>
+              <dt>
+                {{
+                  node.kind === 'ZLM_DIRECT'
+                    ? 'ZLM API 地址'
+                    : node.nodeId === 'local'
+                      ? 'ZLM 地址'
+                      : '节点控制地址'
+                }}
+              </dt>
+              <dd>
+                {{
+                  node.kind === 'ZLM_DIRECT'
+                    ? node.zlmApiAddress || '未登记'
+                    : node.nodeId === 'local'
+                      ? localZlm?.apiBase || '本机'
+                      : node.controlUri || '未登记'
+                }}
+              </dd>
             </div>
-            <div>
-              <dt>观看</dt>
-              <dd>{{ node.usage.viewers }} / {{ node.budget.maxViewers }}</dd>
+            <div v-if="node.nodeId !== 'local'">
+              <dt>媒体地址</dt>
+              <dd>{{ node.mediaAddress || '未登记' }}</dd>
             </div>
-            <div>
-              <dt>转码</dt>
-              <dd>{{ node.usage.transcodes }} / {{ node.budget.maxTranscodes }}</dd>
+            <div v-if="node.kind !== 'ZLM_DIRECT'">
+              <dt>{{ node.nodeId === 'local' ? 'ZLM 版本' : '节点程序版本' }}</dt>
+              <dd>
+                {{
+                  node.nodeId === 'local'
+                    ? localZlm?.softwareVersion || '未检测'
+                    : node.observation?.version || '未上报'
+                }}
+              </dd>
             </div>
-            <div>
-              <dt>启动中</dt>
-              <dd>{{ node.usage.starting }} / {{ node.budget.maxStarting }}</dd>
+            <div v-if="node.kind === 'MANAGED' || (node.nodeId !== 'local' && !node.kind)">
+              <dt>ZLM 版本</dt>
+              <dd>节点未上报</dd>
+            </div>
+            <div v-if="node.nodeId === 'local' && localZlm?.ports.length">
+              <dt>监听端口</dt>
+              <dd class="node-ports">
+                <span v-for="port in localZlm.ports" :key="`${port.protocol}-${port.port}`">
+                  {{ port.protocol }} {{ port.port }}
+                </span>
+              </dd>
             </div>
           </dl>
-          <p class="node-bandwidth">
-            预留带宽：入站 {{ (node.usage.ingressKbps / 1000).toFixed(1) }} /
-            {{ node.budget.ingressKbps / 1000 }} Mbps · 出口
-            {{ (node.usage.egressKbps / 1000).toFixed(1) }} /
-            {{ node.budget.egressKbps / 1000 }} Mbps
-          </p>
-          <p v-if="node.reasonCode" class="node-reason">
-            {{ previewReason(node.reasonCode) }} <code>{{ node.reasonCode }}</code>
-          </p>
-          <div class="node-actions">
-            <ElButton @click="diagnostic = node">诊断 JSON</ElButton>
-            <template v-if="administrator">
-              <ElButton :disabled="busy" @click="edit(node)">预算与优先级</ElButton>
-              <ElButton
-                v-if="node.nodeId !== 'local'"
-                :disabled="busy"
-                @click="openMaintenance(node)"
-                >维护许可</ElButton
+          <div class="node-operational">
+            <dl class="node-metrics">
+              <div>
+                <dt>源流</dt>
+                <dd>{{ node.usage.sources }} / {{ node.budget.maxSources }}</dd>
+              </div>
+              <div>
+                <dt>观看</dt>
+                <dd>{{ node.usage.viewers }} / {{ node.budget.maxViewers }}</dd>
+              </div>
+              <div>
+                <dt>转码</dt>
+                <dd>{{ node.usage.transcodes }} / {{ node.budget.maxTranscodes }}</dd>
+              </div>
+              <div>
+                <dt>启动中</dt>
+                <dd>{{ node.usage.starting }} / {{ node.budget.maxStarting }}</dd>
+              </div>
+            </dl>
+            <div class="node-bandwidth">
+              <span>预留带宽</span>
+              <span
+                >入站 {{ (node.usage.ingressKbps / 1000).toFixed(1) }} /
+                {{ node.budget.ingressKbps / 1000 }} Mbps</span
               >
-              <ElButton v-if="node.mode !== 'REMOTE'" :disabled="busy" @click="mode(node, 'REMOTE')"
-                >参与调度</ElButton
+              <span
+                >出口 {{ (node.usage.egressKbps / 1000).toFixed(1) }} /
+                {{ node.budget.egressKbps / 1000 }} Mbps</span
               >
-              <ElButton v-else :disabled="busy" @click="mode(node, 'DRAINING')"
-                >停止接新预览</ElButton
+            </div>
+            <p v-if="node.reasonCode" class="node-reason">
+              {{ previewReason(node.reasonCode) }} <code>{{ node.reasonCode }}</code>
+            </p>
+            <div class="node-actions">
+              <ElButton @click="diagnostic = node">诊断 JSON</ElButton>
+              <template v-if="canManage">
+                <ElButton :disabled="busy" @click="edit(node)">预算与优先级</ElButton>
+                <ElButton
+                  v-if="node.kind !== 'ZLM_DIRECT' && node.nodeId !== 'local'"
+                  :disabled="busy"
+                  @click="openMaintenance(node)"
+                  >维护许可</ElButton
+                >
+                <ElButton
+                  v-if="node.mode !== 'REMOTE'"
+                  :disabled="busy"
+                  @click="mode(node, 'REMOTE')"
+                  >参与调度</ElButton
+                >
+                <ElButton v-else :disabled="busy" @click="mode(node, 'DRAINING')"
+                  >停止接新预览</ElButton
+                >
+              </template>
+            </div>
+            <details
+              v-if="canManage && node.kind !== 'ZLM_DIRECT' && node.nodeId !== 'local'"
+              class="node-advanced"
+            >
+              <summary>高级连接配置</summary>
+              <ElButton :disabled="busy || node.mode === 'REMOTE'" @click="openConnection(node)"
+                >手工修改连接</ElButton
               >
-            </template>
+            </details>
           </div>
         </article>
       </div>
-      <details class="node-guide">
-        <summary>添加节点与容量说明</summary>
-        <p>
-          仅使用本机时无需部署其他节点。需要扩容时，部署预览节点包，将 A/B
-          的登记配置放入平台受保护的连接配置文件，然后逐个导入并启用。
-        </p>
-        <p>
-          优先级数值越小越先使用。预算包含启动中和待清理资源；64
-          是每节点配置上限，实际容量需按码率和目标机器验证。码率上界按 1.25 倍预留，默认 8192 kbps
-          是可调整配置。
-        </p>
-        <div v-if="administrator" class="node-actions">
-          <ElButton
-            v-for="item in snapshot.registrationOptions"
-            :key="item.nodeId"
-            :disabled="busy"
-            @click="run(() => registerPreviewNode(item.nodeId))"
-            >导入 {{ item.name }}</ElButton
-          >
-        </div>
-      </details>
     </div>
+    <ElDialog
+      :model-value="!!directForm"
+      title="接入 ZLM"
+      width="min(620px, calc(100vw - 32px))"
+      append-to-body
+      destroy-on-close
+      @close="directForm = null"
+    >
+      <form v-if="directForm" class="budget-form" @submit.prevent="saveDirectForm">
+        <p class="connection-form-intro">
+          填写内网 ZLM HTTP API，并允许 Platform 实际出口 IP 访问。接入后默认不参与调度。
+        </p>
+        <label>实例名称<input v-model.trim="directForm.name" maxlength="80" required /></label>
+        <label
+          >内网 IP<input v-model.trim="directForm.apiHost" placeholder="10.0.0.10" required
+        /></label>
+        <label
+          >HTTP 端口<input
+            v-model.number="directForm.apiPort"
+            type="number"
+            min="1"
+            max="65535"
+            required
+        /></label>
+        <label
+          >ZLM secret<input
+            v-model="directForm.secret"
+            type="password"
+            autocomplete="new-password"
+            required
+        /></label>
+        <details class="form-advanced">
+          <summary>高级设置：媒体地址与预算</summary>
+          <div class="budget-form form-advanced-fields">
+            <label
+              >浏览器可达媒体地址<input
+                v-model.trim="directForm.mediaAddress"
+                :placeholder="directForm.apiHost || '默认同内网 IP'"
+            /></label>
+            <label
+              >优先级<input
+                v-model.number="directForm.priority"
+                type="number"
+                min="0"
+                max="1000"
+                required
+            /></label>
+            <label v-for="field in directFields" :key="field.key">
+              {{ field.label
+              }}<input
+                v-model.number="directForm.budget[field.key]"
+                type="number"
+                :min="field.min"
+                :max="field.max"
+                required
+              />
+            </label>
+          </div>
+        </details>
+        <p>secret 仅用于本次提交，页面不回显已保存的值。</p>
+        <ElButton native-type="submit" :loading="busy">检查并接入</ElButton>
+      </form>
+    </ElDialog>
+    <ElDialog
+      :model-value="!!directEditing"
+      title="ZLM 预算设置"
+      width="min(620px, calc(100vw - 32px))"
+      append-to-body
+      destroy-on-close
+      @close="directEditing = null"
+    >
+      <form
+        v-if="directEditing"
+        class="budget-form"
+        @submit.prevent="
+          updateDirect(directEditing.instance, {
+            priority: directEditing.priority,
+            budget: directEditing.budget,
+          })
+        "
+      >
+        <label
+          >优先级<input
+            v-model.number="directEditing.priority"
+            type="number"
+            min="0"
+            max="1000"
+            required
+        /></label>
+        <label v-for="field in directFields" :key="field.key">
+          {{ field.label
+          }}<input
+            v-model.number="directEditing.budget[field.key]"
+            type="number"
+            :min="field.min"
+            :max="field.max"
+            required
+          />
+        </label>
+        <p>直连 ZLM 首期不支持转码，转码上限固定为 0。降低预算只影响新申请。</p>
+        <ElButton native-type="submit" :loading="busy">保存</ElButton>
+      </form>
+    </ElDialog>
+    <ElDialog
+      :model-value="!!directCredential"
+      title="更新 ZLM secret"
+      width="min(520px, calc(100vw - 32px))"
+      append-to-body
+      destroy-on-close
+      @close="directCredential = null"
+    >
+      <form v-if="directCredential" class="budget-form" @submit.prevent="saveDirectCredential">
+        <p class="connection-form-intro">
+          {{ directCredential.instance.name }}：排空并确认资源归零后才能更新。
+        </p>
+        <label
+          >新 secret<input
+            v-model="directCredential.secret"
+            type="password"
+            autocomplete="new-password"
+            required
+        /></label>
+        <ElButton native-type="submit" :loading="busy">更新密钥</ElButton>
+      </form>
+    </ElDialog>
+    <ElDialog
+      :model-value="!!directRemoving"
+      title="移除 ZLM 实例"
+      width="min(520px, calc(100vw - 32px))"
+      append-to-body
+      destroy-on-close
+      @close="directRemoving = null"
+    >
+      <p v-if="directRemoving" class="maintenance-body">
+        确认移除 {{ directRemoving.name }}？仅排空且无资源归属时允许移除。
+      </p>
+      <ElButton :loading="busy" @click="removeDirect()">确认移除</ElButton>
+    </ElDialog>
+    <ElDialog
+      :model-value="!!connection"
+      :title="connection?.version == null ? '新增远程预览节点' : '修改节点连接'"
+      width="min(680px, calc(100vw - 32px))"
+      append-to-body
+      destroy-on-close
+      @close="connection = null"
+    >
+      <form v-if="connection" class="budget-form" @submit.prevent="saveConnection">
+        <p class="connection-form-intro">
+          从 Ops 引入时，连接信息会自动登记，无需填写此表单。这里的节点控制地址不是 ZLM HTTP
+          API；内网 IP 可由 Ops 生成自签名 HTTPS 控制口，无需公网证书。
+        </p>
+        <label
+          >节点 ID<input
+            v-model.trim="connection.nodeId"
+            :readonly="connection.version != null"
+            maxlength="64"
+            required
+        /></label>
+        <label>名称<input v-model.trim="connection.name" maxlength="80" required /></label>
+        <label
+          >节点控制地址（高级）<input
+            v-model.trim="connection.controlUri"
+            type="url"
+            placeholder="https://10.0.0.10:9443"
+            required
+        /></label>
+        <label
+          >浏览器可达媒体地址<input
+            v-model.trim="connection.mediaAddress"
+            placeholder="10.0.0.10"
+            required
+        /></label>
+        <label
+          >证书 SHA-256 指纹<input
+            v-model.trim="connection.certificateSha256"
+            minlength="64"
+            maxlength="64"
+            required
+        /></label>
+        <p>
+          机器凭据须预先存放在 Platform 受保护目录，文件名为“节点
+          ID.token”。页面不会接收或显示令牌。登记前会检查节点身份和资源；成功后仍需手动启用调度。
+        </p>
+        <ElButton native-type="submit" :loading="busy">检查并登记</ElButton>
+      </form>
+    </ElDialog>
     <ElDialog
       :model-value="!!maintaining"
       title="预览节点维护"
@@ -312,48 +1070,64 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
         <ElButton native-type="submit" :loading="busy">保存</ElButton>
       </form>
     </ElDialog>
-  </details>
+  </section>
 </template>
 
 <style scoped>
 .preview-node-panel {
-  margin-top: 24px;
   padding: 20px 24px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   background: var(--el-bg-color);
 }
-summary {
-  cursor: pointer;
-  font-weight: 600;
-  line-height: 1.6;
+.node-title,
+.node-title > div {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
 }
-summary > span {
-  margin-left: 12px;
-  font-size: 13px;
-  font-weight: 400;
+.node-title {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.node-title h2 {
+  margin: 0;
+  font-size: 17px;
+}
+.node-title span {
   color: var(--text-secondary);
+  font-size: 13px;
 }
 .node-content {
   margin-top: 20px;
 }
 .node-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr));
   gap: 16px;
   margin-top: 16px;
 }
 .node-card {
+  container-name: node-card;
+  container-type: inline-size;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 390px);
+  column-gap: 24px;
+  align-content: start;
   min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
   padding: 18px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
 }
 .node-heading {
+  grid-column: 1 / -1;
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
 h3 {
   font-size: 16px;
@@ -369,16 +1143,62 @@ small,
 }
 .node-metrics {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-  margin: 16px 0;
+  margin: 0 0 14px;
+}
+.node-metrics > div {
+  min-width: 0;
+}
+.node-identity {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+.node-state {
+  grid-column: 1 / -1;
+  margin: 10px 0 16px;
+}
+.node-operational {
+  min-width: 0;
+  padding-left: 24px;
+  border-left: 1px solid var(--border-subtle);
+}
+.node-identity > div {
+  display: grid;
+  grid-template-columns: 100px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+.node-identity dd {
+  overflow-wrap: break-word;
+  margin: 0;
+}
+.node-ports {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 12px;
+  row-gap: 2px;
+}
+.node-ports > span {
+  white-space: nowrap;
+}
+.node-bandwidth {
+  display: grid;
+  gap: 2px;
+  margin: 0 0 16px;
+}
+.node-bandwidth > span:first-child {
+  color: var(--el-text-color-primary);
+  font-weight: 600;
 }
 dt {
   color: var(--text-secondary);
   font-size: 12px;
 }
 dd {
-  margin: 4px 0 0;
+  margin: 0;
   font-variant-numeric: tabular-nums;
 }
 .node-actions {
@@ -398,6 +1218,109 @@ dd {
   margin-top: 20px;
   border-top: 1px solid var(--border-subtle);
   padding-top: 16px;
+}
+.node-guide h3 {
+  color: var(--el-text-color-primary);
+}
+.ops-zlm-catalog {
+  margin: 12px 0 16px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+.ops-zlm-catalog h4 {
+  margin: 0;
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+}
+.connection-empty,
+.connection-hint {
+  margin: 4px 0 0;
+}
+.connection-name code {
+  overflow-wrap: anywhere;
+}
+.connection-heading,
+.connection-row,
+.connection-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.connection-heading {
+  justify-content: space-between;
+}
+.connection-heading h3 {
+  margin: 0;
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+}
+.connection-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.connection-row {
+  justify-content: space-between;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+.connection-detail {
+  min-width: 0;
+  flex: 1 1 280px;
+}
+.direct-row {
+  align-items: flex-start;
+}
+.direct-actions {
+  justify-content: flex-end;
+  flex: 0 1 350px;
+}
+.connection-meta {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 14px;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.connection-meta > span {
+  min-width: 0;
+}
+.connection-extra {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+.connection-extra summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+}
+.connection-extra > .el-button {
+  margin-top: 10px;
+}
+.node-advanced {
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.node-advanced summary {
+  width: fit-content;
+  cursor: pointer;
+}
+.node-advanced > .el-button {
+  margin-top: 8px;
+}
+.connection-name strong {
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+}
+.connection-name code {
+  font-size: 12px;
 }
 .node-reason {
   font-size: 13px;
@@ -459,19 +1382,52 @@ dd {
   line-height: 1.7;
   color: var(--text-secondary);
 }
+.budget-form > .el-button {
+  grid-column: 1 / -1;
+  justify-self: start;
+  min-width: 140px;
+}
+.budget-form .connection-form-intro {
+  margin: 0;
+}
+.form-advanced {
+  grid-column: 1 / -1;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+.form-advanced summary {
+  width: fit-content;
+  cursor: pointer;
+  font-size: 13px;
+}
+.form-advanced-fields {
+  margin-top: 14px;
+}
 @media (max-width: 560px) {
   .preview-node-panel {
     padding: 16px;
   }
-  summary > span {
-    display: block;
-    margin-left: 0;
-  }
-  .node-metrics {
-    grid-template-columns: repeat(2, 1fr);
+  .node-identity > div {
+    grid-template-columns: 84px minmax(0, 1fr);
   }
   .budget-form {
     grid-template-columns: 1fr;
+  }
+  .direct-actions {
+    justify-content: flex-start;
+  }
+}
+@container node-card (max-width: 1024px) {
+  .node-identity,
+  .node-operational {
+    grid-column: 1 / -1;
+  }
+  .node-operational {
+    margin-top: 16px;
+    padding-top: 16px;
+    padding-left: 0;
+    border-top: 1px solid var(--border-subtle);
+    border-left: 0;
   }
 }
 </style>

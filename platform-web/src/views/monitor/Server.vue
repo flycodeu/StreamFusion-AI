@@ -7,6 +7,8 @@ import {
   ElDescriptionsItem,
   ElTable,
   ElTableColumn,
+  ElTabPane,
+  ElTabs,
   ElTag,
   vLoading,
 } from 'element-plus'
@@ -16,9 +18,11 @@ import RequestError from '../../components/feedback/RequestError.vue'
 import TablePanel from '../../components/table/TablePanel.vue'
 import { formatDateTime } from '../../utils/dateTime'
 import RuntimePanel from '../../features/media-runtime/RuntimePanel.vue'
+import PreviewNodePanel from '../../features/preview/PreviewNodePanel.vue'
 
 defineOptions({ name: 'SystemServer' })
 const snapshot = ref<ServerSnapshot | null>(null)
+const activeTab = ref('host')
 const loading = ref(false)
 const error = ref<unknown>(null)
 const statusNames: Record<string, string> = {
@@ -56,129 +60,151 @@ onMounted(load)
 
 <template>
   <div class="content-page server-page">
-    <div class="server-toolbar">
-      <span>采集时间：{{ formatDateTime(snapshot?.sampledAt) }}</span
-      ><ElButton type="primary" :loading="loading" @click="load">刷新</ElButton>
-    </div>
-    <RequestError :error="error" />
-    <ElAlert
-      v-if="snapshot?.stale"
-      :title="snapshot.sampledAt ? '采集暂不可用，当前显示上次结果' : '采集暂不可用，请稍后刷新'"
-      type="warning"
-      :closable="false"
-      show-icon
-    />
-    <div v-loading="loading && !snapshot" class="server-metrics">
-      <section class="server-section">
-        <h2>运行环境</h2>
-        <ElDescriptions :column="1" border>
-          <ElDescriptionsItem label="操作系统">{{
-            snapshot?.host?.os || '不可用'
-          }}</ElDescriptionsItem>
-          <ElDescriptionsItem label="架构">{{
-            snapshot?.host?.architecture || '不可用'
-          }}</ElDescriptionsItem>
-          <ElDescriptionsItem label="逻辑处理器">{{
-            snapshot?.host?.processors ?? '不可用'
-          }}</ElDescriptionsItem>
-          <ElDescriptionsItem label="CPU使用率">{{
-            percent(snapshot?.host?.cpuPercent)
-          }}</ElDescriptionsItem>
-          <ElDescriptionsItem label="内存使用"
-            >{{ bytes(snapshot?.host?.memoryUsedBytes) }} /
-            {{ bytes(snapshot?.host?.memoryTotalBytes) }}</ElDescriptionsItem
-          >
-        </ElDescriptions>
-      </section>
-      <section class="server-section">
-        <h2>Platform API</h2>
-        <ElDescriptions :column="2" border>
-          <ElDescriptionsItem label="Java版本">{{
-            snapshot?.jvm?.javaVersion || '不可用'
-          }}</ElDescriptionsItem>
-          <ElDescriptionsItem label="进程ID">{{
-            snapshot?.jvm?.pid || '不可用'
-          }}</ElDescriptionsItem>
-          <ElDescriptionsItem label="CPU使用率">{{
-            percent(snapshot?.jvm?.cpuPercent)
-          }}</ElDescriptionsItem>
-          <ElDescriptionsItem label="非堆内存">{{
-            bytes(snapshot?.jvm?.nonHeapUsedBytes)
-          }}</ElDescriptionsItem>
-          <ElDescriptionsItem label="堆内存" :span="2"
-            >{{ bytes(snapshot?.jvm?.heapUsedBytes) }} /
-            {{ bytes(snapshot?.jvm?.heapMaxBytes) }}</ElDescriptionsItem
-          >
-          <ElDescriptionsItem label="启动时间" :span="2">{{
-            formatDateTime(snapshot?.jvm?.startedAt)
-          }}</ElDescriptionsItem>
-          <ElDescriptionsItem label="运行时长" :span="2">{{
-            uptime(snapshot?.jvm?.uptimeMillis)
-          }}</ElDescriptionsItem>
-        </ElDescriptions>
-      </section>
-    </div>
-    <RuntimePanel />
-    <TablePanel>
-      <template #actions><h2 class="table-section-title">项目服务</h2></template>
-      <ElTable :data="snapshot?.services || []" border row-key="key" empty-text="暂无采集结果">
-        <ElTableColumn prop="name" label="服务" min-width="190" />
-        <ElTableColumn label="地址" min-width="160"
-          ><template #default="{ row }">{{ row.host || '—' }}</template></ElTableColumn
-        >
-        <ElTableColumn label="监听端口" width="120"
-          ><template #default="{ row }">{{ row.port ?? '—' }}</template></ElTableColumn
-        >
-        <ElTableColumn label="探测状态" min-width="130"
-          ><template #default="{ row }"
-            ><ElTag
-              :type="
-                ['RUNNING', 'REACHABLE'].includes(row.status)
-                  ? 'success'
-                  : row.status === 'NOT_CONFIGURED'
-                    ? 'info'
-                    : 'warning'
-              "
-              effect="plain"
-              >{{ statusNames[row.status] || row.status }}</ElTag
-            ></template
-          ></ElTableColumn
-        >
-      </ElTable>
-    </TablePanel>
-    <TablePanel>
-      <template #actions><h2 class="table-section-title">GPU</h2></template>
-      <template #tools
-        ><ElTag v-if="snapshot?.gpuStatus !== 'AVAILABLE'" type="info" effect="plain">{{
-          snapshot?.gpuStatus === 'DISABLED' ? '未启用采集' : '不可用'
-        }}</ElTag></template
-      >
-      <ElTable
-        :data="snapshot?.gpus || []"
-        border
-        row-key="index"
-        empty-text="当前主机未提供GPU信息"
-      >
-        <ElTableColumn prop="index" label="序号" width="80" />
-        <ElTableColumn prop="name" label="设备" min-width="220" />
-        <ElTableColumn label="使用率" min-width="120"
-          ><template #default="{ row }">{{
-            percent(row.utilizationPercent)
-          }}</template></ElTableColumn
-        >
-        <ElTableColumn label="显存使用" min-width="180"
-          ><template #default="{ row }"
-            >{{ row.memoryUsedMiB == null ? '不可用' : `${row.memoryUsedMiB} MiB` }} /
-            {{ row.memoryTotalMiB == null ? '不可用' : `${row.memoryTotalMiB} MiB` }}</template
-          ></ElTableColumn
-        >
-      </ElTable>
-    </TablePanel>
+    <ElTabs v-model="activeTab" class="server-tabs">
+      <ElTabPane label="主机状态" name="host">
+        <div class="host-content">
+          <div class="server-toolbar">
+            <span>采集时间：{{ formatDateTime(snapshot?.sampledAt) }}</span
+            ><ElButton type="primary" :loading="loading" @click="load">刷新</ElButton>
+          </div>
+          <RequestError :error="error" />
+          <ElAlert
+            v-if="snapshot?.stale"
+            :title="
+              snapshot.sampledAt ? '采集暂不可用，当前显示上次结果' : '采集暂不可用，请稍后刷新'
+            "
+            type="warning"
+            :closable="false"
+            show-icon
+          />
+          <div v-loading="loading && !snapshot" class="server-metrics">
+            <section class="server-section">
+              <h2>运行环境</h2>
+              <ElDescriptions :column="1" border>
+                <ElDescriptionsItem label="操作系统">{{
+                  snapshot?.host?.os || '不可用'
+                }}</ElDescriptionsItem>
+                <ElDescriptionsItem label="架构">{{
+                  snapshot?.host?.architecture || '不可用'
+                }}</ElDescriptionsItem>
+                <ElDescriptionsItem label="逻辑处理器">{{
+                  snapshot?.host?.processors ?? '不可用'
+                }}</ElDescriptionsItem>
+                <ElDescriptionsItem label="CPU使用率">{{
+                  percent(snapshot?.host?.cpuPercent)
+                }}</ElDescriptionsItem>
+                <ElDescriptionsItem label="内存使用"
+                  >{{ bytes(snapshot?.host?.memoryUsedBytes) }} /
+                  {{ bytes(snapshot?.host?.memoryTotalBytes) }}</ElDescriptionsItem
+                >
+              </ElDescriptions>
+            </section>
+            <section class="server-section">
+              <h2>Platform API</h2>
+              <ElDescriptions :column="2" border>
+                <ElDescriptionsItem label="Java版本">{{
+                  snapshot?.jvm?.javaVersion || '不可用'
+                }}</ElDescriptionsItem>
+                <ElDescriptionsItem label="进程ID">{{
+                  snapshot?.jvm?.pid || '不可用'
+                }}</ElDescriptionsItem>
+                <ElDescriptionsItem label="CPU使用率">{{
+                  percent(snapshot?.jvm?.cpuPercent)
+                }}</ElDescriptionsItem>
+                <ElDescriptionsItem label="非堆内存">{{
+                  bytes(snapshot?.jvm?.nonHeapUsedBytes)
+                }}</ElDescriptionsItem>
+                <ElDescriptionsItem label="堆内存" :span="2"
+                  >{{ bytes(snapshot?.jvm?.heapUsedBytes) }} /
+                  {{ bytes(snapshot?.jvm?.heapMaxBytes) }}</ElDescriptionsItem
+                >
+                <ElDescriptionsItem label="启动时间" :span="2">{{
+                  formatDateTime(snapshot?.jvm?.startedAt)
+                }}</ElDescriptionsItem>
+                <ElDescriptionsItem label="运行时长" :span="2">{{
+                  uptime(snapshot?.jvm?.uptimeMillis)
+                }}</ElDescriptionsItem>
+              </ElDescriptions>
+            </section>
+          </div>
+          <TablePanel>
+            <template #actions><h2 class="table-section-title">项目服务</h2></template>
+            <ElTable
+              :data="snapshot?.services || []"
+              border
+              row-key="key"
+              empty-text="暂无采集结果"
+            >
+              <ElTableColumn prop="name" label="服务" min-width="190" />
+              <ElTableColumn label="地址" min-width="160"
+                ><template #default="{ row }">{{ row.host || '—' }}</template></ElTableColumn
+              >
+              <ElTableColumn label="监听端口" width="120"
+                ><template #default="{ row }">{{ row.port ?? '—' }}</template></ElTableColumn
+              >
+              <ElTableColumn label="探测状态" min-width="130"
+                ><template #default="{ row }"
+                  ><ElTag
+                    :type="
+                      ['RUNNING', 'REACHABLE'].includes(row.status)
+                        ? 'success'
+                        : row.status === 'NOT_CONFIGURED'
+                          ? 'info'
+                          : 'warning'
+                    "
+                    effect="plain"
+                    >{{ statusNames[row.status] || row.status }}</ElTag
+                  ></template
+                ></ElTableColumn
+              >
+            </ElTable>
+          </TablePanel>
+          <TablePanel>
+            <template #actions><h2 class="table-section-title">GPU</h2></template>
+            <template #tools
+              ><ElTag v-if="snapshot?.gpuStatus !== 'AVAILABLE'" type="info" effect="plain">{{
+                snapshot?.gpuStatus === 'DISABLED' ? '未启用采集' : '不可用'
+              }}</ElTag></template
+            >
+            <ElTable
+              :data="snapshot?.gpus || []"
+              border
+              row-key="index"
+              empty-text="当前主机未提供GPU信息"
+            >
+              <ElTableColumn prop="index" label="序号" width="80" />
+              <ElTableColumn prop="name" label="设备" min-width="220" />
+              <ElTableColumn label="使用率" min-width="120"
+                ><template #default="{ row }">{{
+                  percent(row.utilizationPercent)
+                }}</template></ElTableColumn
+              >
+              <ElTableColumn label="显存使用" min-width="180"
+                ><template #default="{ row }"
+                  >{{ row.memoryUsedMiB == null ? '不可用' : `${row.memoryUsedMiB} MiB` }} /
+                  {{
+                    row.memoryTotalMiB == null ? '不可用' : `${row.memoryTotalMiB} MiB`
+                  }}</template
+                ></ElTableColumn
+              >
+            </ElTable>
+          </TablePanel>
+        </div>
+      </ElTabPane>
+      <ElTabPane label="节点总览" name="nodes">
+        <PreviewNodePanel v-if="activeTab === 'nodes'" />
+      </ElTabPane>
+      <ElTabPane label="本机媒体" name="runtime"><RuntimePanel /></ElTabPane>
+    </ElTabs>
   </div>
 </template>
 
 <style scoped>
 .server-page {
+  display: grid;
+  gap: 16px;
+}
+.host-content {
   display: grid;
   gap: 16px;
 }

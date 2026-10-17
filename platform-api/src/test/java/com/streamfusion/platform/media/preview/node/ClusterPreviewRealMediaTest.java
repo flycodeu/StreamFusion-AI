@@ -73,7 +73,7 @@ class ClusterPreviewRealMediaTest {
         var manager =
                 new PreviewNodeManager(
                         repository,
-                        new PreviewNodeProperties(config.path("connections").asText()),
+                        new PreviewNodeProperties(config.path("connections").asText(), ""),
                         new PreviewProperties(64, 64),
                         json);
         for (String nodeId : List.of("a", "b")) {

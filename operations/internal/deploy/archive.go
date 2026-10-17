@@ -20,7 +20,7 @@ func ValidateArchive(filename, expected string, size int64) (string, error) {
 }
 
 func ValidateRecipeArchive(filename, expected string, size int64, recipe string) (string, error) {
-	if recipe != "java-compose-v1" && recipe != PreviewRecipe {
+	if recipe != "java-compose-v1" && recipe != PreviewRecipe && recipe != ZLMRecipe {
 		return "", errors.New("RECIPE_UNSUPPORTED")
 	}
 	if !Hex.MatchString(expected) || size < 1 || size > ArchiveLimitFor(recipe) {
@@ -100,6 +100,8 @@ func ValidateRecipeArchive(filename, expected string, size int64, recipe string)
 	tagPattern := `^sfops/[a-z0-9][a-z0-9._/-]*:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$`
 	if recipe == PreviewRecipe {
 		tagPattern = `^streamfusion/preview-node:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$`
+	} else if recipe == ZLMRecipe {
+		tagPattern = `^streamfusion/zlm-direct:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$`
 	}
 	if json.Unmarshal(small["manifest.json"], &manifest) != nil || len(manifest) != 1 || len(manifest[0].RepoTags) != 1 || !regexp.MustCompile(tagPattern).MatchString(manifest[0].RepoTags[0]) || len(manifest[0].Layers) < 1 {
 		return "", errors.New("ARCHIVE_SINGLE_MANAGED_IMAGE_REQUIRED")
@@ -124,6 +126,9 @@ func ValidateRecipeArchive(filename, expected string, size int64, recipe string)
 	}
 	if recipe == PreviewRecipe && config.Config.Labels["com.streamfusion.preview.maintenance"] != "1" {
 		return "", errors.New("PREVIEW_MAINTENANCE_IMAGE_REQUIRED")
+	}
+	if recipe == ZLMRecipe && config.Config.Labels["com.streamfusion.zlm.direct"] != "1" {
+		return "", errors.New("ZLM_DIRECT_IMAGE_REQUIRED")
 	}
 	for i, layer := range m.Layers {
 		if hashes[layer] == "" || "sha256:"+hashes[layer] != config.RootFS.DiffIDs[i] {

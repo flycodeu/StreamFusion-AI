@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -29,16 +32,17 @@ type session struct {
 	Generation                    int
 }
 type HTTP struct {
-	store     *Store
-	origin    *url.URL
-	assets    http.Handler
-	started   time.Time
-	logger    *log.Logger
-	rateMu    sync.Mutex
-	rateStart time.Time
-	attempts  int
-	hashSlots chan struct{}
-	dummyHash []byte
+	store         *Store
+	origin        *url.URL
+	assets        http.Handler
+	started       time.Time
+	logger        *log.Logger
+	rateMu        sync.Mutex
+	rateStart     time.Time
+	attempts      int
+	hashSlots     chan struct{}
+	dummyHash     []byte
+	platformToken []byte
 }
 type Envelope struct {
 	Code      string `json:"code"`
@@ -58,6 +62,46 @@ func NewHTTP(s *Store, origin string, assets http.Handler, logger *log.Logger) (
 		return nil, err
 	}
 	return &HTTP{store: s, origin: u, assets: assets, started: time.Now(), logger: logger, hashSlots: make(chan struct{}, 2), dummyHash: dummy}, nil
+}
+
+// ConfigurePlatformTokenFile enables the server-to-server preview catalog.
+// An empty path keeps the integration disabled; no browser session can enable it.
+func (h *HTTP) ConfigurePlatformTokenFile(path string) error {
+	if path == "" {
+		return nil
+	}
+	if h.origin.Scheme != "https" {
+		ip := net.ParseIP(h.origin.Hostname())
+		if ip == nil || !ip.IsLoopback() {
+			return errors.New("PLATFORM_TOKEN_REQUIRES_TLS")
+		}
+	}
+	if runtime.GOOS != "windows" {
+		parent, err := os.Lstat(filepath.Dir(path))
+		if err != nil || !parent.IsDir() || parent.Mode()&os.ModeSymlink != 0 || parent.Mode().Perm()&0077 != 0 {
+			return errors.New("PLATFORM_TOKEN_DIRECTORY_INVALID")
+		}
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() < 32 || info.Size() > 256 || runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+		return errors.New("PLATFORM_TOKEN_FILE_INVALID")
+	}
+	if err := validatePlatformTokenAccess(path); err != nil {
+		return err
+	}
+	token, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	token = []byte(strings.TrimSpace(string(token)))
+	if len(token) < 32 || len(token) > 128 || strings.ContainsAny(string(token), " \t\r\n") {
+		return errors.New("PLATFORM_TOKEN_FILE_INVALID")
+	}
+	h.platformToken = token
+	return nil
 }
 func (h *HTTP) reply(w http.ResponseWriter, r *http.Request, status int, code, msg string, data any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -142,6 +186,10 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, api)
 	if r.Method == "GET" && path == "/health" {
 		h.success(w, r, map[string]string{"status": "UP"})
+		return
+	}
+	if strings.HasPrefix(path, "/platform/") {
+		h.platformRoute(w, r, path)
 		return
 	}
 	if r.Method != "GET" {

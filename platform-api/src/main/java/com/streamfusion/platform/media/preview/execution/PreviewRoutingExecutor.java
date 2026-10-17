@@ -6,10 +6,13 @@ import com.streamfusion.platform.media.preview.PreviewModels;
 import com.streamfusion.platform.media.preview.node.PreviewNodeManager;
 import com.streamfusion.platform.media.preview.node.PreviewNodeRepository;
 import com.streamfusion.platform.media.preview.node.RemotePreviewExecutor;
+import com.streamfusion.platform.media.preview.node.ZlmDirectExecutor;
 import java.net.URI;
 import java.util.List;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
@@ -19,11 +22,30 @@ import org.springframework.stereotype.Component;
 public final class PreviewRoutingExecutor implements PreviewExecutor {
     private final LocalPreviewExecutor local;
     private final RemotePreviewExecutor remote;
+    private final ZlmDirectExecutor direct;
     private final PreviewNodeManager manager;
     private final PreviewNodeRepository repository;
     private final com.streamfusion.platform.media.preview.node.PreviewScheduler scheduler;
     private final java.util.Map<String, Integer> retries =
             new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, List<String>> requestedCodecs =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    @Autowired
+    public PreviewRoutingExecutor(
+            LocalPreviewExecutor local,
+            RemotePreviewExecutor remote,
+            ZlmDirectExecutor direct,
+            PreviewNodeManager manager,
+            PreviewNodeRepository repository,
+            com.streamfusion.platform.media.preview.node.PreviewScheduler scheduler) {
+        this.local = local;
+        this.remote = remote;
+        this.direct = direct;
+        this.manager = manager;
+        this.repository = repository;
+        this.scheduler = scheduler;
+    }
 
     public PreviewRoutingExecutor(
             LocalPreviewExecutor local,
@@ -31,11 +53,7 @@ public final class PreviewRoutingExecutor implements PreviewExecutor {
             PreviewNodeManager manager,
             PreviewNodeRepository repository,
             com.streamfusion.platform.media.preview.node.PreviewScheduler scheduler) {
-        this.local = local;
-        this.remote = remote;
-        this.manager = manager;
-        this.repository = repository;
-        this.scheduler = scheduler;
+        this(local, remote, null, manager, repository, scheduler);
     }
 
     @Override
@@ -51,16 +69,20 @@ public final class PreviewRoutingExecutor implements PreviewExecutor {
     @Override
     public void prepare(String id, SourceKey key, List<String> codecs, PreviewDeadline deadline) {
         var node = scheduler.reserve(id, key, codecs, deadline);
+        requestedCodecs.put(id, List.copyOf(codecs));
         if (node.local()) {
             local.prepare(id);
             local.allowTranscoding(id, repository.transcodeAllowed(id));
-        } else remote.prepared(id);
+        } else if (node.zlm() != null) direct.prepared(id);
+        else remote.prepared(id);
     }
 
     private PreviewExecutor route(String id) {
         var viewer = repository.viewer(id);
         if (viewer == null) throw new PreviewFailure("LEASE_EXPIRED");
-        return viewer.nodeId().equals("local") ? local : remote;
+        var node = repository.node(viewer.nodeId());
+        if (node == null) throw new PreviewFailure("NODE_IDENTITY_CHANGED");
+        return node.local() ? local : node.zlm() != null ? direct : remote;
     }
 
     @Override
@@ -70,7 +92,32 @@ public final class PreviewRoutingExecutor implements PreviewExecutor {
             Supplier<URI> resolver,
             Runnable checkpoint,
             PreviewDeadline deadline) {
-        route(id).attachSource(id, key, resolver, checkpoint, deadline);
+        var viewer = repository.viewer(id);
+        if (viewer == null) throw new PreviewFailure("LEASE_EXPIRED");
+        var node = repository.node(viewer.nodeId());
+        if (node == null || node.zlm() == null) {
+            route(id).attachSource(id, key, resolver, checkpoint, deadline);
+            return;
+        }
+        try {
+            direct.attachSource(id, key, resolver, checkpoint, deadline);
+        } catch (PreviewFailure failure) {
+            if (!ZlmDirectExecutor.CODEC_FALLBACK.equals(failure.reason())) throw failure;
+            // The direct pull has an exact persisted tuple. Only confirmed cleanup permits
+            // assigning the same source to another node.
+            direct.close(id, deadline);
+            scheduler.closed(id);
+            var codecs = requestedCodecs.get(id);
+            if (codecs == null) throw new PreviewFailure("SOURCE_REQUIRED");
+            var next = scheduler.reserve(id, key, codecs, deadline, Set.of(node.nodeId()));
+            if (next.local()) {
+                local.prepare(id);
+                local.allowTranscoding(id, repository.transcodeAllowed(id));
+            } else if (next.zlm() != null) {
+                direct.prepared(id);
+            } else remote.prepared(id);
+            route(id).attachSource(id, key, resolver, checkpoint, deadline);
+        }
     }
 
     @Override
@@ -114,17 +161,25 @@ public final class PreviewRoutingExecutor implements PreviewExecutor {
     @Override
     public void close(String id, PreviewDeadline deadline) {
         var viewer = repository.viewer(id);
-        if (viewer == null) return;
+        if (viewer == null) {
+            retries.remove(id);
+            requestedCodecs.remove(id);
+            return;
+        }
         synchronized (manager) {
             repository.state(id, "CLOSING");
         }
-        if (viewer.nodeId().equals("local")) {
+        var node = repository.node(viewer.nodeId());
+        if (node == null) throw new PreviewFailure("NODE_IDENTITY_CHANGED");
+        if (node.local()) {
             if (!scheduler.current(id)) local.requireRecovered();
             local.close(id, deadline);
-        } else remote.close(id, deadline, true);
+        } else if (node.zlm() != null) direct.close(id, deadline);
+        else remote.close(id, deadline, true);
         scheduler.closed(id);
         manager.invalidate(viewer.nodeId());
         retries.remove(id);
+        requestedCodecs.remove(id);
     }
 
     @Override
@@ -132,6 +187,7 @@ public final class PreviewRoutingExecutor implements PreviewExecutor {
         int total = local.occupiedTranscodes();
         for (var node : repository.nodes())
             if (!node.local()
+                    && node.zlm() == null
                     && (!repository.viewers(node.nodeId()).isEmpty()
                             || node.mode().equals("REMOTE")))
                 total +=

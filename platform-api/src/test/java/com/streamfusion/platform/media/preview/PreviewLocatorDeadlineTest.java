@@ -160,4 +160,15 @@ class PreviewLocatorDeadlineTest {
                 .hasMessage("CANCELLED");
         verifyNoInteractions(rules);
     }
+
+    @Test
+    void rejectedStoredDestinationReturnsAnActionablePreviewReason() {
+        when(adapter.resolve(any(), any(), any())).thenReturn(URI.create("rtsp://192.0.2.25/live"));
+        when(rules.host("192.0.2.25", "LAN")).thenThrow(CameraSourceRules.invalid());
+
+        assertThatThrownBy(() -> service.resolve(profile, authorization))
+                .isInstanceOf(PreviewFailure.class)
+                .hasMessage("DESTINATION_REJECTED");
+        verify(rules).host("192.0.2.25", "LAN");
+    }
 }

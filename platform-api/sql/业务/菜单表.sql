@@ -50,7 +50,8 @@ VALUES
     (1004, 1001, '菜单管理', 'PAGE', 'SystemMenus', '/system/menus', '/system/Menu', 'menu', 'menu', 2, TRUE, TRUE),
     (1005, 1001, '部门管理', 'PAGE', 'SystemDepartments', '/system/departments', '/system/Department', 'department', 'department', 3, TRUE, TRUE),
     (1006, 1008, '操作记录', 'PAGE', 'audit', '/monitor/Audit', '/monitor/Audit', 'audit', 'audit', 0, TRUE, TRUE),
-    (1007, 1008, '服务信息', 'PAGE', 'server', '/monitor/Server', '/monitor/Server', 'server', 'server', 1, TRUE, TRUE);
+    (1007, 1008, '节点管理', 'PAGE', 'server', '/monitor/Server', '/monitor/Server', 'server', 'server', 1, TRUE, TRUE),
+    (1011, 1008, '预览节点', 'PAGE', 'PreviewServiceNodes', '/monitor/PreviewServiceNodes', '/preview/Nodes', 'server', 'connection', 2, TRUE, TRUE);
 
 -- 监控面板初始菜单
 INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, icon, sort_order, visible, enabled)

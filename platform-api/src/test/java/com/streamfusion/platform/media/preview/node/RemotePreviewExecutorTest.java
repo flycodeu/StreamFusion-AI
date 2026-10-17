@@ -41,7 +41,7 @@ class RemotePreviewExecutorTest {
             var manager =
                     new PreviewNodeManager(
                             repository,
-                            new PreviewNodeProperties(config.toString()),
+                            new PreviewNodeProperties(config.toString(), ""),
                             new PreviewProperties(64, 64),
                             node.json);
             var registration = manager.register(manager.registration());
@@ -104,7 +104,7 @@ class RemotePreviewExecutorTest {
             var manager =
                     new PreviewNodeManager(
                             repository,
-                            new PreviewNodeProperties(""),
+                            new PreviewNodeProperties("", ""),
                             new PreviewProperties(64, 64),
                             node.json);
             var first = new RemotePreviewExecutor(repository, manager, node.json);
@@ -142,7 +142,7 @@ class RemotePreviewExecutorTest {
                     spy(
                             new PreviewNodeManager(
                                     repository,
-                                    new PreviewNodeProperties(""),
+                                    new PreviewNodeProperties("", ""),
                                     new PreviewProperties(64, 64),
                                     node.json));
             doAnswer(

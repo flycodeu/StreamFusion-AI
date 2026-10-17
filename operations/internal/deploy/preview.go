@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -188,7 +189,9 @@ func immutableJSON(file string, value any) error {
 	return atomicJSON(file, value)
 }
 
-// Credentials stay on the protected target and never enter controller jobs or browser responses.
+// Preview credentials are read from the protected target and never enter
+// controller jobs or browser responses. Only the dedicated service handoff may
+// briefly carry the machine token to Platform.
 func (x *executor) previewCall(r Release, path string, body any, dst any) error {
 	der, err := os.ReadFile(filepath.Join(x.previewIdentity(r), "node.der"))
 	if err != nil {
@@ -352,6 +355,48 @@ func (x *executor) previewRegistration(r Release) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{"connection": connection, "secureTransferFrom": filepath.Join(x.previewIdentity(r), "machine-token"), "instruction": fmt.Sprintf("安全复制 machine-token 到 Platform 的受保护文件，修改 tokenFile；注册 %s、检查并明确启用后，在原预览中心验证首帧。", r.Config.Preview.NodeID)}, nil
+}
+
+type PreviewConnection struct {
+	NodeID            string `json:"nodeId"`
+	Name              string `json:"name"`
+	ControlURI        string `json:"controlUri"`
+	CertificateSHA256 string `json:"certificateSha256"`
+	MediaAddress      string `json:"mediaAddress"`
+}
+
+type PreviewHandoff struct {
+	Connection   PreviewConnection `json:"connection"`
+	MachineToken string            `json:"machineToken"`
+}
+
+// This material is only returned through the executor's protected local/SSH
+// channel to the controller's dedicated Platform service endpoint.
+func (x *executor) previewHandoff(r Release) (PreviewHandoff, error) {
+	identity := x.previewIdentity(r)
+	for index, path := range []string{identity, filepath.Join(identity, "connection.json")} {
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 || index == 0 && !info.IsDir() || index == 1 && !info.Mode().IsRegular() {
+			return PreviewHandoff{}, errors.New("PREVIEW_IDENTITY_UNSAFE")
+		}
+	}
+	var connection struct {
+		PreviewConnection
+		TokenFile string `json:"tokenFile"`
+	}
+	if err := readJSON(filepath.Join(identity, "connection.json"), &connection); err != nil {
+		return PreviewHandoff{}, errors.New("PREVIEW_CONNECTION_UNAVAILABLE")
+	}
+	file := filepath.Join(identity, "machine-token")
+	info, err := os.Lstat(file)
+	if err != nil || !info.Mode().IsRegular() || runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 || info.Size() > 128 {
+		return PreviewHandoff{}, errors.New("PREVIEW_CREDENTIAL_UNAVAILABLE")
+	}
+	token, err := os.ReadFile(file)
+	if err != nil || !Hex.MatchString(strings.TrimSpace(string(token))) {
+		return PreviewHandoff{}, errors.New("PREVIEW_CREDENTIAL_UNAVAILABLE")
+	}
+	return PreviewHandoff{Connection: connection.PreviewConnection, MachineToken: strings.TrimSpace(string(token))}, nil
 }
 
 func (x *executor) previewClaimed(req Request) bool {

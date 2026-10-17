@@ -87,7 +87,7 @@ class AdminReadIntegrationTest extends SecureLoginSupport {
         mvc.perform(get("/api-docs/status"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
-        jdbc.update("DELETE FROM sys_role_menu WHERE menu_id IN (1006,1007,1009)");
+        jdbc.update("DELETE FROM sys_role_menu WHERE menu_id IN (1006,1007,1009,1011)");
         mvc.perform(get("/audit/page").session(session)).andExpect(status().isForbidden());
         mvc.perform(get("/server/status").session(session)).andExpect(status().isForbidden());
         mvc.perform(get("/api-docs/status").session(session))
@@ -198,7 +198,7 @@ class AdminReadIntegrationTest extends SecureLoginSupport {
                 mvc.perform(get("/server/status").session(session))
                         .andExpect(request().asyncStarted())
                         .andReturn();
-        jdbc.update("DELETE FROM sys_role_menu WHERE menu_id=1007");
+        jdbc.update("DELETE FROM sys_role_menu WHERE menu_id IN (1007,1011)");
         mvc.perform(asyncDispatch(pending))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("FORBIDDEN"));

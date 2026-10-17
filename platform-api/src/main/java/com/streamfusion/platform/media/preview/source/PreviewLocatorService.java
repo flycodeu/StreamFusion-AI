@@ -12,6 +12,7 @@ import com.streamfusion.platform.camera.pojo.entity.CameraEndpointEntity;
 import com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity;
 import com.streamfusion.platform.camera.service.CameraCryptoService;
 import com.streamfusion.platform.camera.service.CameraSourceRules;
+import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.media.preview.PreviewDeadline;
 import com.streamfusion.platform.media.preview.PreviewFailure;
 import jakarta.annotation.PreDestroy;
@@ -245,7 +246,7 @@ public class PreviewLocatorService {
 
     private String pin(String host, String policy, PreviewDeadline deadline) {
         deadline.check();
-        rules.host(host, policy);
+        allowedHost(host, policy);
         java.util.concurrent.Future<InetAddress[]> job;
         try {
             job = dns.submit(() -> InetAddress.getAllByName(host));
@@ -260,7 +261,7 @@ public class PreviewLocatorService {
             deadline.check();
             if (addresses.length == 0 || addresses.length > 16)
                 throw new PreviewFailure("DESTINATION_REJECTED");
-            for (var address : addresses) rules.host(address.getHostAddress(), policy);
+            for (var address : addresses) allowedHost(address.getHostAddress(), policy);
             return addresses[0].getHostAddress();
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
@@ -271,6 +272,14 @@ public class PreviewLocatorService {
             throw new PreviewFailure("DNS_UNAVAILABLE");
         } finally {
             job.cancel(true);
+        }
+    }
+
+    private void allowedHost(String host, String policy) {
+        try {
+            rules.host(host, policy);
+        } catch (BusinessException ex) {
+            throw new PreviewFailure("DESTINATION_REJECTED");
         }
     }
 

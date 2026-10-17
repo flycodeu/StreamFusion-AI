@@ -5,20 +5,22 @@ prefix=/opt/streamfusion-ops
 state=/var/lib/streamfusion-ops
 name=streamfusion-ops
 port=19090
-binary= sha256= password_file= apply=false
+binary= sha256= password_file= platform_token_file= apply=false
 help() {
   echo '用法: bash install-linux.sh --binary FILE --sha256 HASH [--apply]'
-  echo '可选: --prefix DIR --state DIR --name NAME --port PORT --password-file FILE'
+  echo '可选: --prefix DIR --state DIR --name NAME --port PORT --password-file FILE --platform-token-file FILE'
   echo '默认只展示计划。新装在本机隐藏输入密码，或提供0600密码文件。'
+  echo '--platform-token-file 是0700目录内的0600源文件，安装后复制到私有状态目录；重复安装须继续提供同一令牌。'
 }
 fail() { echo "$*" >&2; exit 1; }
 while (($#)); do
   case "$1" in
-    --binary|--sha256|--prefix|--state|--name|--port|--password-file)
+    --binary|--sha256|--prefix|--state|--name|--port|--password-file|--platform-token-file)
       (($# >= 2)) || fail '参数缺少值'
       case "$1" in
         --binary) binary=$2;; --sha256) sha256=$2;; --prefix) prefix=$2;;
         --state) state=$2;; --name) name=$2;; --port) port=$2;; --password-file) password_file=$2;;
+        --platform-token-file) platform_token_file=$2;;
       esac
       shift 2;;
     --apply) apply=true; shift;; -h|--help) help; exit 0;;
@@ -41,6 +43,22 @@ for path in "$prefix" "$state"; do
   [[ $path != / && $path != /opt && $path != /var && $path != /var/lib && $path != /usr && $path != /home ]] || fail '不能使用系统根目录'
 done
 [[ $prefix != "$state" && $state != "$prefix/"* && $prefix != "$state/"* ]] || fail '程序和状态目录不能相互包含'
+if [[ -n $platform_token_file ]]; then
+  [[ $platform_token_file == /* && $(realpath -m "$platform_token_file") == "$platform_token_file" ]] || fail 'Platform 服务令牌源路径须为规范绝对路径'
+  platform_token_dir=$(dirname "$platform_token_file")
+  [[ -d $platform_token_dir && ! -L $platform_token_dir && $(stat -c %a "$platform_token_dir") == 700 ]] || fail 'Platform 服务令牌源目录须为0700普通目录'
+  [[ -f $platform_token_file && ! -L $platform_token_file && $(stat -c %a "$platform_token_file") == 600 ]] || fail 'Platform 服务令牌源文件须为0600普通文件'
+  platform_token=$(head -c 64 "$platform_token_file")
+  [[ $platform_token =~ ^[a-f0-9]{64}$ ]] &&
+    { cmp -s "$platform_token_file" <(printf '%s' "$platform_token") || cmp -s "$platform_token_file" <(printf '%s\n' "$platform_token"); } ||
+    fail 'Platform 服务令牌须为64位小写十六进制，可带末尾换行'
+  platform_destination="$state/platform-service.token"
+  if [[ -e $platform_destination || -L $platform_destination ]]; then
+    [[ -f $platform_destination && ! -L $platform_destination && $(stat -c %a "$platform_destination") == 600 &&
+       $(stat -c %U "$platform_destination") == "$name" && $(stat -c %G "$platform_destination") == "$name" &&
+       $(cat "$platform_destination") == "$platform_token" ]] || fail '已安装的 Platform 服务令牌不一致或权限不安全，拒绝覆盖'
+  fi
+fi
 unit="/etc/systemd/system/$name.service"
 marker="$prefix/.ops-install"
 expected=$(printf 'schema=2\nversion=0.2.0\nname=%s\nprefix=%s\nstate=%s\nport=%s\nsha256=%s' "$name" "$prefix" "$state" "$port" "$sha256")
@@ -55,7 +73,7 @@ if id "$name" >/dev/null 2>&1; then
   IFS=: read -r _ _ uid gid _ account_home account_shell < <(getent passwd "$name")
   [[ $uid != 0 && $account_home == "$state" && $account_shell == /usr/sbin/nologin && $(id -G "$name") == "$gid" ]] || fail '现有账号归属或权限不符'
 fi
-unit_text=$(cat <<UNIT
+make_unit_text() { cat <<UNIT
 [Unit]
 Description=StreamFusion Ops local controller
 After=network.target
@@ -65,7 +83,7 @@ Type=simple
 User=$name
 Group=$name
 WorkingDirectory=$state
-ExecStart=$prefix/streamfusion-ops serve --state $state --listen 127.0.0.1:$port
+ExecStart=$prefix/streamfusion-ops serve --state $state --listen 127.0.0.1:$port$1
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -81,12 +99,23 @@ TimeoutStopSec=15
 [Install]
 WantedBy=multi-user.target
 UNIT
-)
-if [[ -e $unit ]]; then [[ ! -L $unit && $(cat "$unit") == "$unit_text" ]] || fail '服务单元内容不一致'; fi
+}
+platform_arg=
+[[ -z $platform_token_file ]] || platform_arg=" --platform-token-file $platform_destination"
+unit_text=$(make_unit_text "$platform_arg")
+baseline_unit_text=$(make_unit_text '')
+unit_changed=false
+if [[ -e $unit ]]; then
+  [[ ! -L $unit ]] || fail '服务单元不允许为符号链接'
+  if [[ $(cat "$unit") != "$unit_text" ]]; then
+    [[ -n $platform_token_file && $(cat "$unit") == "$baseline_unit_text" ]] || fail '服务单元内容不一致'
+    unit_changed=true
+  fi
+fi
 if [[ -e $prefix/streamfusion-ops ]]; then
   [[ ! -L $prefix/streamfusion-ops && $(sha256sum "$prefix/streamfusion-ops" | cut -d' ' -f1) == "$sha256" ]] || fail '已有二进制内容发生变化'
 fi
-printf '安装计划\n版本: 0.2.0\n程序: %s\n状态: %s\n单元及账号: %s\n地址: http://127.0.0.1:%s\n摘要: %s\n' "$prefix" "$state" "$name" "$port" "$sha256"
+printf '安装计划\n版本: 0.2.0\n程序: %s\n状态: %s\n单元及账号: %s\n地址: http://127.0.0.1:%s\nPlatform 目录: %s\n摘要: %s\n' "$prefix" "$state" "$name" "$port" "$([[ -n $platform_token_file ]] && echo 启用 || echo 关闭)" "$sha256"
 $apply || exit 0
 [[ $EUID == 0 ]] || fail '--apply 需要root'
 pending_binary= pending_unit= pending_password=
@@ -99,6 +128,9 @@ trap cleanup EXIT
 if ! id "$name" >/dev/null 2>&1; then useradd --system --user-group --home-dir "$state" --shell /usr/sbin/nologin "$name"; fi
 install -d -m 0755 "$prefix"
 install -d -m 0700 -o "$name" -g "$name" "$state"
+if [[ -n $platform_token_file && ! -e $platform_destination ]]; then
+  install -m 0600 -o "$name" -g "$name" "$platform_token_file" "$platform_destination"
+fi
 printf '%s\n' "$expected" > "$marker"; chmod 0600 "$marker"
 pending_binary=$(mktemp "$prefix/.binary-XXXXXX")
 install -m 0755 "$binary" "$pending_binary"
@@ -127,6 +159,7 @@ pending_unit=$(mktemp "/etc/systemd/system/.$name-XXXXXX")
 printf '%s\n' "$unit_text" > "$pending_unit"; chmod 0644 "$pending_unit"
 mv -T "$pending_unit" "$unit"; pending_unit=
 systemctl daemon-reload
+if $unit_changed && systemctl is-active --quiet "$name.service"; then systemctl restart "$name.service"; fi
 systemctl enable --now "$name.service"
 for attempt in {1..15}; do
   if systemctl is-active --quiet "$name.service" &&

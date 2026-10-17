@@ -29,6 +29,9 @@ type PreviewConfig struct {
 }
 
 func (c Config) Recipe() string {
+	if c.ZLM != nil {
+		return ZLMRecipe
+	}
 	if c.Preview != nil {
 		return PreviewRecipe
 	}
@@ -36,7 +39,7 @@ func (c Config) Recipe() string {
 }
 
 func ArchiveLimitFor(recipe string) int64 {
-	if recipe == PreviewRecipe {
+	if recipe == PreviewRecipe || recipe == ZLMRecipe {
 		return PreviewArchiveLimit
 	}
 	return ArchiveLimit
@@ -73,6 +76,13 @@ func ValidatePreviewTransition(candidate, baseline *Release, permit string) erro
 	}
 	if candidate.Config.Recipe() != baseline.Config.Recipe() {
 		return errors.New("RECIPE_CHANGE_FORBIDDEN")
+	}
+	if candidate.Config.ZLM != nil {
+		a, b := candidate.Config.ZLM, baseline.Config.ZLM
+		if a.APIPort != b.APIPort || a.RTCPort != b.RTCPort || a.MediaAddress != b.MediaAddress || candidate.Config.BindAddress != baseline.Config.BindAddress {
+			return errors.New("ZLM_IDENTITY_CHANGE_FORBIDDEN")
+		}
+		return nil
 	}
 	if candidate.Config.Preview == nil {
 		return nil

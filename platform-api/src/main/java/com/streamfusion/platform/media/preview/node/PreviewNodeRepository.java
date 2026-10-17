@@ -21,18 +21,40 @@ public class PreviewNodeRepository {
             String configVersion,
             long version,
             PreviewBudget budget,
-            int priority) {
+            int priority,
+            ZlmDirectConnection zlm) {
         public Node(
                 PreviewNodeConnection connection, String mode, String configVersion, long version) {
-            this(connection, mode, configVersion, version, PreviewBudget.defaults(64, 64), 100);
+            this(
+                    connection,
+                    mode,
+                    configVersion,
+                    version,
+                    PreviewBudget.defaults(64, 64),
+                    100,
+                    null);
+        }
+
+        public Node(
+                PreviewNodeConnection connection,
+                String mode,
+                String configVersion,
+                long version,
+                PreviewBudget budget,
+                int priority) {
+            this(connection, mode, configVersion, version, budget, priority, null);
         }
 
         public String nodeId() {
-            return connection == null ? "local" : connection.nodeId();
+            return zlm != null ? zlm.nodeId() : connection == null ? "local" : connection.nodeId();
         }
 
         public boolean local() {
-            return connection == null;
+            return connection == null && zlm == null;
+        }
+
+        public String kind() {
+            return local() ? "LOCAL" : zlm != null ? "ZLM_DIRECT" : "MANAGED";
         }
     }
 
@@ -54,7 +76,7 @@ public class PreviewNodeRepository {
     }
 
     public Node node() {
-        return nodes().stream().filter(n -> !n.local()).findFirst().orElse(null);
+        return nodes().stream().filter(n -> n.connection() != null).findFirst().orElse(null);
     }
 
     public Node node(String id) {
@@ -66,7 +88,7 @@ public class PreviewNodeRepository {
                 "SELECT * FROM preview_node ORDER BY id LIMIT 17",
                 (row, i) ->
                         new Node(
-                                row.getString("node_id").equals("local")
+                                !"MANAGED".equals(row.getString("node_kind"))
                                         ? null
                                         : new PreviewNodeConnection(
                                                 row.getString("node_id"),
@@ -95,7 +117,15 @@ public class PreviewNodeRepository {
                                         row.getLong("egress_kbps"),
                                         row.getLong("source_upper_kbps"),
                                         row.getLong("output_upper_kbps")),
-                                row.getInt("priority")));
+                                row.getInt("priority"),
+                                "ZLM_DIRECT".equals(row.getString("node_kind"))
+                                        ? new ZlmDirectConnection(
+                                                row.getString("node_id"),
+                                                row.getString("name"),
+                                                URI.create(row.getString("control_uri")),
+                                                Path.of(row.getString("token_path")),
+                                                row.getString("media_address"))
+                                        : null));
     }
 
     public void localConfiguration(String configuration, long version) {
@@ -122,6 +152,85 @@ public class PreviewNodeRepository {
                         id,
                         version)
                 != 1) throw new PreviewFailure("NODE_CONFIGURATION_CHANGED");
+    }
+
+    public void registerZlm(
+            ZlmDirectConnection connection,
+            PreviewBudget budget,
+            int priority,
+            String configVersion) {
+        if (nodes().size() >= 17) throw new PreviewFailure("NODE_REGISTRY_FULL");
+        sql.update(
+                "INSERT INTO preview_node(id,node_id,name,control_uri,token_path,media_address,node_kind,mode,config_version,priority,max_sources,max_viewers,max_transcodes,max_starting,ingress_kbps,egress_kbps,source_upper_kbps,output_upper_kbps,version) VALUES(?,?,?,?,?,?,'ZLM_DIRECT','LOCAL',?,?,?,?,?,?,?,?,?,?,0)",
+                sql.queryForObject("SELECT COALESCE(MAX(id),0)+1 FROM preview_node", Long.class),
+                connection.nodeId(),
+                connection.name(),
+                connection.apiUri().toString(),
+                connection.secretFile().toString(),
+                connection.mediaAddress(),
+                configVersion,
+                priority,
+                budget.maxSources(),
+                budget.maxViewers(),
+                budget.maxTranscodes(),
+                budget.maxStarting(),
+                budget.ingressKbps(),
+                budget.egressKbps(),
+                budget.sourceUpperKbps(),
+                budget.outputUpperKbps());
+    }
+
+    public void zlmPolicy(
+            String id,
+            String mode,
+            int priority,
+            PreviewBudget budget,
+            String configVersion,
+            long version) {
+        if (sql.update(
+                        "UPDATE preview_node SET mode=?,priority=?,max_sources=?,max_viewers=?,max_transcodes=?,max_starting=?,ingress_kbps=?,egress_kbps=?,source_upper_kbps=?,output_upper_kbps=?,config_version=COALESCE(?,config_version),version=version+1 WHERE node_id=? AND node_kind='ZLM_DIRECT' AND version=?",
+                        mode,
+                        priority,
+                        budget.maxSources(),
+                        budget.maxViewers(),
+                        budget.maxTranscodes(),
+                        budget.maxStarting(),
+                        budget.ingressKbps(),
+                        budget.egressKbps(),
+                        budget.sourceUpperKbps(),
+                        budget.outputUpperKbps(),
+                        configVersion,
+                        id,
+                        version)
+                != 1) throw new PreviewFailure("NODE_CONFIGURATION_CHANGED");
+    }
+
+    public void zlmCredential(String id, Path file, String configVersion, long version) {
+        if (sql.update(
+                        "UPDATE preview_node SET token_path=?,config_version=?,version=version+1 WHERE node_id=? AND node_kind='ZLM_DIRECT' AND mode<>'REMOTE' AND version=?",
+                        file.toString(),
+                        configVersion,
+                        id,
+                        version)
+                != 1) throw new PreviewFailure("NODE_CONFIGURATION_CHANGED");
+    }
+
+    public void deleteZlm(String id, long version) {
+        if (sql.update(
+                        "DELETE FROM preview_node WHERE node_id=? AND node_kind='ZLM_DIRECT' AND mode<>'REMOTE' AND version=?",
+                        id,
+                        version)
+                != 1) throw new PreviewFailure("NODE_CONFIGURATION_CHANGED");
+    }
+
+    public boolean hasOwnership(String id) {
+        return sql.queryForObject(
+                        "SELECT (SELECT COUNT(*) FROM preview_source WHERE node_id=?) + (SELECT COUNT(*) FROM preview_viewer WHERE node_id=?) + (SELECT COUNT(*) FROM preview_operation WHERE node_id=? AND state IN ('PENDING','UNKNOWN'))",
+                        Long.class,
+                        id,
+                        id,
+                        id)
+                > 0;
     }
 
     public void register(PreviewNodeConnection c, String configVersion, Long expected) {

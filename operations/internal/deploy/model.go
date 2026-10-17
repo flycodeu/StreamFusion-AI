@@ -24,6 +24,7 @@ func ValidRoot(root string) bool {
 
 type Config struct {
 	Preview                     *PreviewConfig `json:"preview,omitempty"`
+	ZLM                         *ZLMConfig     `json:"zlm,omitempty"`
 	InitialPasswordCredentialID string         `json:"initialPasswordCredentialId"`
 	InitialPasswordRevision     string         `json:"initialPasswordRevision"`
 	BindingIDs                  []string       `json:"bindingIds"`
@@ -39,6 +40,9 @@ type Config struct {
 }
 
 func (c Config) Validate() error {
+	if c.ZLM != nil {
+		return c.validateZLM()
+	}
 	if c.Preview != nil {
 		return c.validatePreview()
 	}

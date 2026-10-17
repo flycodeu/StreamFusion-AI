@@ -79,8 +79,21 @@ func (h *HTTP) addTarget(w http.ResponseWriter, r *http.Request, s *session) {
 		return
 	}
 	if count > 0 {
-		h.fail(w, r, 409, "TARGET_LIMIT", "首期各支持一个本机与一个SSH目标")
-		return
+		if in.Kind == "LOCAL" || count >= 16 {
+			h.fail(w, r, 409, "TARGET_LIMIT", "最多支持1个本机和16个SSH目标")
+			return
+		}
+	}
+	if in.Kind == "SSH" {
+		var duplicate int
+		if e = tx.QueryRow("SELECT count(*) FROM targets WHERE kind='SSH' AND address=? AND ssh_port=? AND install_root=?", in.Address, in.Port, in.InstallRoot).Scan(&duplicate); e != nil {
+			h.internal(w, r, e)
+			return
+		}
+		if duplicate != 0 {
+			h.fail(w, r, 409, "TARGET_DUPLICATE", "该服务器与安装目录已登记")
+			return
+		}
 	}
 	id := uuid.NewString()
 	if _, e = tx.Exec("INSERT INTO targets(id,name,install_root,kind,address,ssh_port,ssh_user,host_fingerprint,credential_id,credential_revision,created_at) VALUES(?,?,?,?,?,?,?,?,nullif(?,''),nullif(?,''),?)", id, strings.TrimSpace(in.Name), in.InstallRoot, in.Kind, in.Address, in.Port, in.User, in.Fingerprint, in.CredentialID, in.Revision, Now()); e == nil {

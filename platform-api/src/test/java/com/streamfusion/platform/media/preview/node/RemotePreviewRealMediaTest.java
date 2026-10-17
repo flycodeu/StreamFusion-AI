@@ -50,7 +50,7 @@ class RemotePreviewRealMediaTest {
         var manager =
                 new PreviewNodeManager(
                         repository,
-                        new PreviewNodeProperties(connectionFile.toString()),
+                        new PreviewNodeProperties(connectionFile.toString(), ""),
                         new PreviewProperties(64, 64),
                         json);
         var registered = manager.register(manager.registration());

@@ -180,7 +180,8 @@ VALUES
     (1004, 1001, '菜单管理', 'PAGE', 'SystemMenus', '/system/menus', '/system/Menu', 'menu', 'menu', 2, TRUE, TRUE),
     (1005, 1001, '部门管理', 'PAGE', 'SystemDepartments', '/system/departments', '/system/Department', 'department', 'department', 3, TRUE, TRUE),
     (1006, 1008, '操作记录', 'PAGE', 'audit', '/monitor/Audit', '/monitor/Audit', 'audit', 'audit', 0, TRUE, TRUE),
-    (1007, 1008, '服务信息', 'PAGE', 'server', '/monitor/Server', '/monitor/Server', 'server', 'server', 1, TRUE, TRUE);
+    (1007, 1008, '节点管理', 'PAGE', 'server', '/monitor/Server', '/monitor/Server', 'server', 'server', 1, TRUE, TRUE),
+    (1011, 1008, '预览节点', 'PAGE', 'PreviewServiceNodes', '/monitor/PreviewServiceNodes', '/preview/Nodes', 'server', 'connection', 2, TRUE, TRUE);
 
 -- 监控面板初始菜单
 INSERT INTO sys_menu (id, parent_id, name, type, route_name, path, component_key, module_key, icon, sort_order, visible, enabled)
@@ -841,6 +842,7 @@ CREATE TABLE preview_node (
     certificate_sha256 CHAR(64) NULL COMMENT '绑定证书指纹',
     token_path VARCHAR(1024) NULL COMMENT '平台本地机器凭据文件路径，不保存凭据',
     media_address VARCHAR(253) NULL COMMENT '浏览器可达的媒体公布地址',
+    node_kind VARCHAR(16) NOT NULL DEFAULT 'MANAGED' COMMENT 'LOCAL/MANAGED/ZLM_DIRECT',
     mode VARCHAR(16) NOT NULL DEFAULT 'LOCAL' COMMENT '期望模式LOCAL/REMOTE/DRAINING',
     config_version CHAR(64) NOT NULL COMMENT '登记时节点配置摘要',
     priority INT NOT NULL DEFAULT 100 COMMENT '升序调度，本机默认0',
@@ -855,9 +857,10 @@ CREATE TABLE preview_node (
     version BIGINT NOT NULL DEFAULT 0 COMMENT '并发版本',
     PRIMARY KEY (id),
     UNIQUE KEY uk_preview_node_identity (node_id),
-    CONSTRAINT ck_preview_node_mode CHECK (mode IN ('LOCAL','REMOTE','DRAINING'))
+    CONSTRAINT ck_preview_node_mode CHECK (mode IN ('LOCAL','REMOTE','DRAINING')),
+    CONSTRAINT ck_preview_node_kind CHECK (node_kind IN ('LOCAL','MANAGED','ZLM_DIRECT'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='本机及可选远程预览节点；预算不代表实测能力';
-INSERT INTO preview_node(id,node_id,name,mode,config_version,priority) VALUES(0,'local','本机','REMOTE','local',0);
+INSERT INTO preview_node(id,node_id,name,node_kind,mode,config_version,priority) VALUES(0,'local','本机','LOCAL','REMOTE','local',0);
 
 -- 预览源归属表.sql
 CREATE TABLE preview_source (

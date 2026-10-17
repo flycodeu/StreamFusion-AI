@@ -48,6 +48,10 @@ streamfusion:
 platform:
   preview-node:
     connection-file: ${SF_PREVIEW_NODE_CONNECTION_FILE:}
+    credential-directory: ${SF_PREVIEW_NODE_CREDENTIAL_DIRECTORY:}
+  preview-ops:
+    base-uri: ${SF_PREVIEW_OPS_BASE_URI:}
+    token-file: ${SF_PREVIEW_OPS_TOKEN_FILE:}
   preview:
     max-sessions: ${SF_PREVIEW_MAX_SESSIONS:64}
     max-transcodes: ${SF_PREVIEW_MAX_TRANSCODES:64}

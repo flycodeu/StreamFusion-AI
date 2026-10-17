@@ -43,8 +43,8 @@ func (h *HTTP) acceptImport(w http.ResponseWriter, r *http.Request, s *session) 
 	if in.Recipe == "" {
 		in.Recipe = "java-compose-v1"
 	}
-	if (in.Recipe != "java-compose-v1" && in.Recipe != deploy.PreviewRecipe) || !validName(in.Name) || !deploy.Hex.MatchString(in.SHA) || in.Size < 1 || in.Size > deploy.ArchiveLimitFor(in.Recipe) || len(in.IdempotencyKey) < 8 || len(in.IdempotencyKey) > 80 {
-		h.fail(w, r, 400, "IMPORT_INVALID", "请填写配方、名称、预期SHA-256与大小；Java上限512MiB，预览节点上限2GiB")
+	if (in.Recipe != "java-compose-v1" && in.Recipe != deploy.PreviewRecipe && in.Recipe != deploy.ZLMRecipe) || !validName(in.Name) || !deploy.Hex.MatchString(in.SHA) || in.Size < 1 || in.Size > deploy.ArchiveLimitFor(in.Recipe) || len(in.IdempotencyKey) < 8 || len(in.IdempotencyKey) > 80 {
+		h.fail(w, r, 400, "IMPORT_INVALID", "请填写配方、名称、预期SHA-256与大小；Java上限512MiB，媒体配方上限2GiB")
 		return
 	}
 	h.store.mu.Lock()

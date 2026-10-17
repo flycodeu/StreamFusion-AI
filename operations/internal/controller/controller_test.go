@@ -237,7 +237,7 @@ func TestStoreLockSchemaAndInitialAccount(t *testing.T) {
 	if err = s.InitAdmin("other", testPassword); err == nil {
 		t.Fatal("repeat initialization allowed")
 	}
-	s.DB.Exec("PRAGMA user_version=5")
+	s.DB.Exec("PRAGMA user_version=6")
 	s.Close()
 	if other, err := Open(dir); err == nil || !strings.Contains(err.Error(), "SCHEMA_TOO_NEW") {
 		if other != nil {

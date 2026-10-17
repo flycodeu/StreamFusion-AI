@@ -1,6 +1,6 @@
 # 后端外部配置
 
-复制 `application-local.yml.example` 为同目录的 `application-local.yml`，填写 MySQL、Redis及需要启用的相机配置，再使用 local profile 启动。实际文件被 Git 忽略，公开示例不包含可用凭据。完整安装步骤见[快速开始](../../README.md#快速开始)，数据库只需导入[完整初始化 SQL](../sql/streamfusion-mysql.sql)。
+复制 `application-local.yml.example` 为同目录的 `application-local.yml`，填写 MySQL、Redis及需要启用的相机配置，再使用 local profile 启动。实际文件被 Git 忽略，公开示例不包含可用凭据。完整安装步骤见[快速开始](../../README.md#快速开始)；完整初始化 SQL 仅用于空库，已有库须定向升级。
 
 ## 必需部署配置
 
@@ -26,6 +26,10 @@ platform:
 轮换先加入新 keyId 并切换 active-key-id；旧密钥必须保留到所有旧密文已迁移且旧创建回执已过期。当前未提供自动批量重加密工具，因此不能删除仍有数据引用的旧密钥。数据库备份必须与密钥备份配套，只有数据库无法恢复凭据。
 
 ## 预览配额与重启清理
+
+独立 ZLM 直连与原预览节点包是两种入口。Platform 可从 Ops 已发布的 ZLM 目录引入，也可在“预览节点”手工登记专用 ZLM 的内网 IP、HTTP API 端口和 secret。普通页面不要求节点 ID、控制 HTTPS 地址或证书指纹；这些是节点包高级配置。`SF_PREVIEW_NODE_CREDENTIAL_DIRECTORY` 必须是 Platform 可写、仅服务账号可读的绝对目录，ZLM secret 写入受保护文件且不回显。预检要求 ZLM `rtsp.directProxy=0`、`api.apiDebug=0`、`general.streamNoneReaderDelayMS>=20000`、有效 WebRTC 端口及媒体地址；`http.allow_ip_range` 按 Platform **实际出口 IP**设置，不能拿 ZLM 登记地址代替。Ops 配方见[独立 ZLM 安装说明](../../operations/zlm-direct/README.md)。直连首期只接 H.264 无转码流，转码预算固定 0；需转码时在清理确认后回到本机或节点包。浏览器 WebRTC 可达性需要另行试播。
+
+预览扩容时，Platform 可从已部署的 Ops 预览实例目录引入节点。默认关闭；本机预览不需要 Ops。启用时，在 Ops `serve` 添加 `--platform-token-file <受保护服务身份文件>`，Platform 设置 `SF_PREVIEW_OPS_BASE_URI`（Ops 地址）、`SF_PREVIEW_OPS_TOKEN_FILE`（同一服务身份文件在 Platform 上的绝对路径）和 `SF_PREVIEW_NODE_CREDENTIAL_DIRECTORY`（Platform 保存节点机器凭据的受保护绝对目录）。Ops 与 Platform 不在同一台机器时，应通过受保护通道分别提供身份文件；非回环地址必须使用受信任 HTTPS。页面只选择 Ops 已发布的预览实例，不显示服务身份或机器令牌；引入后仍需显式启用调度。节点部署步骤见[Ops 说明](../../operations/preview-nodes.md)。
 
 `SF_PREVIEW_MAX_SESSIONS` 为本机执行节点的观看会话上限，默认64，允许1～64；`SF_PREVIEW_MAX_TRANSCODES` 为本机独立转码输出预算，默认64，允许0～64，0禁止新转码。页面将连接和受控恢复按最多4路排队，取消窗口会移除待启动项；服务端也最多同时初始化4路预览，服务端等待计入18秒创建总期限，不同时启动64个拉流或转码进程。预算是准入配置，不是服务器承载保证；部署时应分别验证媒体服务、网络、编码器和浏览器解码。已有显式配置仍优先于默认值。
 
@@ -55,8 +59,8 @@ platform:
 
 按[节点部署说明](../preview-node/README.md)准备A/B。`SF_PREVIEW_NODE_CONNECTION_FILE`指向平台受保护目录的JSON，兼容单个连接对象或最多16个连接对象的数组；每项含nodeId、name、HTTPS控制地址、证书SHA256、mediaAddress及tokenFile绝对路径。机器凭据不进入数据库明文或页面；local保留给平台本机。
 
-服务信息中登记节点后，超级管理员设置优先级和预算并启用。默认本机priority=0、远程100，数字小的先用；新源容量不足再找其它节点。同源已有归属只复用原节点，已开始执行的请求与已有会话不跨机迁移。只停止受影响节点接收新预览、确认其资源归零后，才能更新地址/运行时/证书并重新登记。
+优先通过“监控面板 → 预览节点”按 Ops 的服务器和已发布实例引入；原受保护 JSON 文件与手工登记是高级兼容入口。登记后由超级管理员设置优先级和预算并启用。默认本机priority=0、远程100，数字小的先用；新源容量不足再找其它节点。同源已有归属只复用原节点，已开始执行的请求与已有会话不跨机迁移。只停止受影响节点接收新预览、确认其资源归零后，才能更新地址/运行时/证书并重新登记。
 
 当前节点默认源/观看码率上界8192kbps、入/出口预算各655360kbps，预占按上界×1.25；这些是可调估值，不是硬件承载结论。远程平台预算不可高于节点配置，码率上界必须一致。降低数量预算不终止已有观看；修改码率上界须先清空该节点。节点持续高负载或实测码率超界仅阻止新准入。
 
-平台累计5张预览责任表，启动只读校验；新增或升级数据库按SQL说明定向执行，单机升级同样需要结构更新。远程节点无MySQL/Redis依赖，S4 Ops批量部署尚未实施。
+平台累计5张预览责任表，启动只读校验；新增或升级数据库按SQL说明定向执行，单机升级同样需要结构更新。远程节点无MySQL/Redis依赖；Ops 支持逐个部署、升级与回退预览实例，尚无批量部署。
