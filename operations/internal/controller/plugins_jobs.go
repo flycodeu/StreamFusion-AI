@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -181,7 +182,7 @@ func (h *HTTP) processPlugin(ctx context.Context, id, raw string) {
 	h.ackResult(ctx, t, req, result)
 }
 
-// Only QUEUED plugin work can be cancelled. The worker claims RUNNING with a
+// Only QUEUED work can be cancelled. Every worker claims RUNNING with a
 // conditional update before target invocation, so cancellation cannot race a
 // target side effect or clear a RUNNING/UNKNOWN lock.
 func (h *HTTP) cancelPluginJob(w http.ResponseWriter, r *http.Request, s *session, id string) {
@@ -193,22 +194,27 @@ func (h *HTTP) cancelPluginJob(w http.ResponseWriter, r *http.Request, s *sessio
 		return
 	}
 	defer tx.Rollback()
-	var status, raw string
-	if e = tx.QueryRow("SELECT status,input_json FROM jobs WHERE id=? AND kind IN ('PLUGIN_INSTALL','PLUGIN_REMOVE')", id).Scan(&status, &raw); e != nil {
+	var status, phase, kind, raw string
+	var pending bool
+	if e = tx.QueryRow("SELECT status,phase,kind,input_json,target_ack_pending FROM jobs WHERE id=?", id).Scan(&status, &phase, &kind, &raw, &pending); e != nil {
 		h.opsError(w, r, e)
 		return
 	}
-	if status != "QUEUED" {
-		h.fail(w, r, 409, "PLUGIN_CANCEL_BLOCKED", "只可取消尚未执行的插件作业")
+	if status == "FAILED" && phase == "CANCELLED" {
+		h.cancelledJobResponse(w, r, id, kind)
+		return
+	}
+	if status != "QUEUED" || pending || phase == "UPLOADING" {
+		h.fail(w, r, 409, "PLUGIN_CANCEL_BLOCKED", "只可取消尚未执行或未上传中的排队作业；运行中和结果未确认时保留原责任")
 		return
 	}
 	var req deploy.Request
-	if deploy.StrictJSON([]byte(raw), &req) != nil {
+	if kind != "IMPORT" && deploy.StrictJSON([]byte(raw), &req) != nil {
 		h.internal(w, r, errors.New("INPUT_DAMAGED"))
 		return
 	}
 	_, e = tx.Exec("UPDATE jobs SET status='FAILED',phase='CANCELLED',error_code='JOB_CANCELLED',updated_at=? WHERE id=? AND status='QUEUED'", Now(), id)
-	if e == nil {
+	if e == nil && req.Plugin != nil {
 		_, e = tx.Exec("UPDATE plugin_installations SET status='FAILED',error_code='JOB_CANCELLED',version=version+1,updated_at=? WHERE id=? AND last_job_id=?", Now(), req.PluginInstallationID, id)
 	}
 	if e == nil {
@@ -223,6 +229,23 @@ func (h *HTTP) cancelPluginJob(w http.ResponseWriter, r *http.Request, s *sessio
 	if e != nil {
 		h.internal(w, r, e)
 		return
+	}
+	h.cancelledJobResponse(w, r, id, kind)
+}
+
+// Called only after cancellation is known to be durable. A cleanup failure does
+// not undo cancellation, and retrying the same cancel request retries cleanup.
+func (h *HTTP) cancelledJobResponse(w http.ResponseWriter, r *http.Request, id, kind string) {
+	if kind == "IMPORT" {
+		if !deploy.ID.MatchString(id) {
+			h.internal(w, r, errors.New("IMPORT_ID_INVALID"))
+			return
+		}
+		if err := os.Remove(h.store.uploadPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			h.logger.Printf("traceId=%s jobId=%s error=IMPORT_CANCEL_CLEANUP_FAILED", r.Context().Value(traceKey{}), id)
+			h.fail(w, r, 500, "IMPORT_CANCEL_CLEANUP_FAILED", "作业已取消，但上传临时文件清理失败；请检查磁盘并重试取消")
+			return
+		}
 	}
 	h.success(w, r, map[string]string{"jobId": id})
 }

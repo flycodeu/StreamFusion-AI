@@ -141,6 +141,24 @@ class LocalSchemaInspectionTest {
                             .isNotBlank();
                 }
             }
+            try (var rows =
+                    sql.executeQuery(
+                            "SELECT is_nullable FROM information_schema.columns "
+                                    + "WHERE table_schema=DATABASE() AND table_name='preview_node' "
+                                    + "AND column_name='zlm_install_path'")) {
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getString(1)).isEqualTo("YES");
+                assertThat(rows.next()).isFalse();
+            }
+            try (var rows =
+                    sql.executeQuery(
+                            "SELECT constraint_type FROM information_schema.table_constraints "
+                                    + "WHERE table_schema=DATABASE() AND table_name='preview_node' "
+                                    + "AND constraint_name='ck_preview_node_zlm_path'")) {
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getString(1)).isEqualTo("CHECK");
+                assertThat(rows.next()).isFalse();
+            }
         }
     }
 }

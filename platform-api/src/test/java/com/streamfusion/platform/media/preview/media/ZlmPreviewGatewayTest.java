@@ -51,6 +51,7 @@ class ZlmPreviewGatewayTest {
     private boolean retainMedia;
     private boolean failAddTranscode;
     private Object presenceResponseOverride;
+    private Object mediaResponseOverride;
     private long configDelayMillis;
     private long cleanupDelayMillis;
     private java.util.concurrent.ExecutorService handlers;
@@ -148,33 +149,35 @@ class ZlmPreviewGatewayTest {
                                                                         + "/"
                                                                         + params.get("stream")));
                                 case "getMediaList" ->
-                                        Map.of(
-                                                "code",
-                                                0,
-                                                "data",
-                                                closed.contains(params.get("stream"))
-                                                        ? List.of()
-                                                        : List.of(
-                                                                Map.of(
-                                                                        "bytesSpeed",
-                                                                        1000,
-                                                                        "totalReaderCount",
-                                                                        2,
-                                                                        "tracks",
-                                                                        List.of(
-                                                                                Map.of(
-                                                                                        "codec_type",
-                                                                                        0,
-                                                                                        "ready",
-                                                                                        true,
-                                                                                        "codec_id_name",
-                                                                                        "H265",
-                                                                                        "width",
-                                                                                        1920,
-                                                                                        "height",
-                                                                                        1080,
-                                                                                        "fps",
-                                                                                        25)))));
+                                        mediaResponseOverride != null
+                                                ? mediaResponseOverride
+                                                : Map.of(
+                                                        "code",
+                                                        0,
+                                                        "data",
+                                                        closed.contains(params.get("stream"))
+                                                                ? List.of()
+                                                                : List.of(
+                                                                        Map.of(
+                                                                                "bytesSpeed",
+                                                                                1000,
+                                                                                "totalReaderCount",
+                                                                                2,
+                                                                                "tracks",
+                                                                                List.of(
+                                                                                        Map.of(
+                                                                                                "codec_type",
+                                                                                                0,
+                                                                                                "ready",
+                                                                                                true,
+                                                                                                "codec_id_name",
+                                                                                                "H265",
+                                                                                                "width",
+                                                                                                1920,
+                                                                                                "height",
+                                                                                                1080,
+                                                                                                "fps",
+                                                                                                25)))));
                                 case "isMediaOnline" ->
                                         presenceResponseOverride != null
                                                 ? presenceResponseOverride
@@ -256,6 +259,67 @@ class ZlmPreviewGatewayTest {
                 .containsEntry("auto_close", "1")
                 .containsEntry("retry_count", "0");
         assertThat(opens.get(1).body).doesNotContain("user", "pass", "10.0.0.1");
+        assertThat(opens.get(0).params).containsEntry("enable_audio", "1");
+        assertThat(opens.get(1).params).containsEntry("enable_audio", "0");
+    }
+
+    @Test
+    void viewerForwardsOnlyReadyCompatibleAudioAndObservationRemainsVideoOnly() {
+        for (String codec : List.of("PCMA", "PCMU", "OPUS", "AAC", "unknown")) {
+            requests.clear();
+            mediaResponseOverride =
+                    Map.of(
+                            "code",
+                            0,
+                            "data",
+                            List.of(
+                                    Map.of(
+                                            "tracks",
+                                            List.of(
+                                                    Map.of(
+                                                            "codec_type",
+                                                            1,
+                                                            "ready",
+                                                            true,
+                                                            "codec_id_name",
+                                                            codec)))));
+            gateway.openViewer(
+                    stream(), APP, "a".repeat(32), PreviewDeadline.after(Duration.ofSeconds(5)));
+            var viewer =
+                    requests.stream()
+                            .filter(r -> r.api.equals("addStreamProxy"))
+                            .findFirst()
+                            .orElseThrow();
+            assertThat(viewer.params)
+                    .containsEntry(
+                            "enable_audio",
+                            List.of("PCMA", "PCMU", "OPUS").contains(codec) ? "1" : "0");
+        }
+        requests.clear();
+        mediaResponseOverride = Map.of("code", -1);
+        gateway.openViewer(
+                stream(), APP, "b".repeat(32), PreviewDeadline.after(Duration.ofSeconds(5)));
+        assertThat(
+                        requests.stream()
+                                .filter(r -> r.api.equals("addStreamProxy"))
+                                .findFirst()
+                                .orElseThrow()
+                                .params)
+                .containsEntry("enable_audio", "0");
+        requests.clear();
+        gateway.openObservation(
+                runtime,
+                APP,
+                "c".repeat(32),
+                URI.create("rtsp://127.0.0.1/live"),
+                PreviewDeadline.after(Duration.ofSeconds(5)));
+        assertThat(
+                        requests.stream()
+                                .filter(r -> r.api.equals("addStreamProxy"))
+                                .findFirst()
+                                .orElseThrow()
+                                .params)
+                .containsEntry("enable_audio", "0");
     }
 
     @Test

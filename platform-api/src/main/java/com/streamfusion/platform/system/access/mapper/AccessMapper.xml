@@ -58,7 +58,7 @@
         ORDER BY ur.user_id, r.code
     </select>
 
-    <sql id="activePageSource">
+    <sql id="pageRoleSource">
         FROM sys_menu m
         INNER JOIN sys_role_menu rm ON rm.menu_id = m.id
         INNER JOIN sys_role r ON r.id = rm.role_id
@@ -67,14 +67,23 @@
         LEFT JOIN sys_menu p2 ON p2.id = p1.parent_id
         LEFT JOIN sys_menu p3 ON p3.id = p2.parent_id
         LEFT JOIN sys_menu p4 ON p4.id = p3.parent_id
-        WHERE ur.user_id = #{userId}
-          AND r.status = 'ENABLED'
+    </sql>
+
+    <!-- One effective-page predicate for request authorization and read-only explanations. -->
+    <sql id="activePagePredicate">
+          r.status = 'ENABLED'
           AND m.type = 'PAGE' AND m.enabled = TRUE
           AND (p1.id IS NULL OR (p1.type = 'DIRECTORY' AND p1.enabled = TRUE))
           AND (p2.id IS NULL OR (p2.type = 'DIRECTORY' AND p2.enabled = TRUE))
           AND (p3.id IS NULL OR (p3.type = 'DIRECTORY' AND p3.enabled = TRUE))
           AND (p4.id IS NULL OR (p4.type = 'DIRECTORY' AND p4.enabled = TRUE))
           AND p4.parent_id IS NULL
+    </sql>
+
+    <sql id="activePageSource">
+        <include refid="pageRoleSource"/>
+        WHERE ur.user_id = #{userId}
+          AND <include refid="activePagePredicate"/>
     </sql>
 
     <select id="findModules" resultType="java.lang.String">

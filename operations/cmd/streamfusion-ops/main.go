@@ -38,6 +38,12 @@ func run(args []string) error {
 		}
 		return deploy.Execute(os.Stdin, os.Stdout)
 	}
+	if args[0] == "binding-probe" {
+		if len(args) != 1 {
+			return errors.New("NO_PROBE_ARGUMENTS")
+		}
+		return deploy.RunBindingProbe(os.Stdin, os.Stdout)
+	}
 	if args[0] == "target-init" {
 		f := flag.NewFlagSet("target-init", flag.ContinueOnError)
 		root := f.String("root", "", "新的受管目标目录")

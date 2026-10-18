@@ -68,14 +68,23 @@ func (c Config) Validate() error {
 }
 
 type Release struct {
-	ID            string    `json:"id"`
-	InstanceID    string    `json:"instanceId"`
-	ArtifactID    string    `json:"artifactId"`
-	ArchiveSHA256 string    `json:"archiveSha256"`
-	ByteSize      int64     `json:"byteSize"`
-	ImageID       string    `json:"imageId"`
-	Config        Config    `json:"config"`
-	Bindings      []Binding `json:"bindings,omitempty"`
+	RuntimeEnvironment *RuntimeEnvironment `json:"runtimeEnvironment,omitempty"`
+	ID                 string              `json:"id"`
+	InstanceID         string              `json:"instanceId"`
+	ArtifactID         string              `json:"artifactId"`
+	ArchiveSHA256      string              `json:"archiveSha256"`
+	ByteSize           int64               `json:"byteSize"`
+	ImageID            string              `json:"imageId"`
+	Config             Config              `json:"config"`
+	Bindings           []Binding           `json:"bindings,omitempty"`
+}
+type RuntimeEnvironment struct {
+	InstallationID string `json:"installationId"`
+	TargetID       string `json:"targetId"`
+	PluginVersion  string `json:"pluginVersion"`
+	ImageID        string `json:"imageId"`
+	ImageDigest    string `json:"imageDigest"`
+	RecipeRevision string `json:"recipeRevision"`
 }
 type Binding struct {
 	ID                 string `json:"id"`

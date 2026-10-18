@@ -11,6 +11,7 @@ const reservedRoots = new Set([
 
 /** API paths are canonical endpoint segments, never URLs or static resource paths. */
 export function isBusinessApiPath(path: unknown): path is string {
+  if (path === '/access-query/pages/export.xlsx') return true
   if (typeof path !== 'string' || !/^\/[A-Za-z][A-Za-z0-9_-]*(?:\/[A-Za-z0-9_-]+)*$/.test(path))
     return false
   const root = path.split('/')[1]

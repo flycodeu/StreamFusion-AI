@@ -57,7 +57,9 @@ public final class ZlmDirectGateway {
         }
     }
 
-    public void requireReady(ZlmDirectConnection connection, PreviewDeadline deadline) {
+    public record ListenerPorts(int rtcPort, Integer rtspPort) {}
+
+    public ListenerPorts requireReady(ZlmDirectConnection connection, PreviewDeadline deadline) {
         JsonNode configs = call(connection, "getServerConfig", Map.of(), deadline).path("data");
         if (!configs.isArray() || configs.isEmpty())
             throw new PreviewFailure("NODE_MEDIA_CONFIGURATION_INVALID");
@@ -71,6 +73,10 @@ public final class ZlmDirectGateway {
                 || config.path("http.allow_ip_range").asText().contains("0.0.0.0")
                 || config.path("http.allow_ip_range").asText().contains("*"))
             throw new PreviewFailure("NODE_MEDIA_CONFIGURATION_INVALID");
+        int rtspPort = config.path("rtsp.port").asInt(0);
+        return new ListenerPorts(
+                config.path("rtc.port").asInt(),
+                rtspPort > 0 && rtspPort <= 65535 ? rtspPort : null);
     }
 
     public String version(ZlmDirectConnection connection, PreviewDeadline deadline) {
@@ -86,6 +92,21 @@ public final class ZlmDirectGateway {
                 || version.codePoints().anyMatch(Character::isISOControl))
             throw new PreviewFailure("ZLM_INVALID_RESPONSE");
         return version;
+    }
+
+    /** A point-in-time empty-media check, not a persistent maintenance seal. */
+    public void requireIdle(ZlmDirectConnection connection, PreviewDeadline deadline) {
+        JsonNode result = call(connection, "getMediaList", Map.of(), deadline);
+        // Upstream WebApi.cpp appends data only when media exists. The deployed build
+        // therefore returns exactly {"code":0} for an empty unfiltered catalog.
+        // Do not interpret null, malformed data, or an arbitrary success envelope as empty.
+        if (result.isObject()
+                && result.size() == 1
+                && result.path("code").isIntegralNumber()
+                && result.path("code").intValue() == 0) return;
+        JsonNode media = result.path("data");
+        if (!media.isArray()) throw new PreviewFailure("ZLM_INVALID_RESPONSE");
+        if (!media.isEmpty()) throw new PreviewFailure("NODE_RESOURCES_ACTIVE");
     }
 
     /** ZLM epoll thread load is an observation, not host CPU or scheduling capacity. */
@@ -118,6 +139,15 @@ public final class ZlmDirectGateway {
 
     public void open(
             ZlmDirectConnection connection, Stream stream, URI source, PreviewDeadline deadline) {
+        open(connection, stream, source, deadline, true);
+    }
+
+    private void open(
+            ZlmDirectConnection connection,
+            Stream stream,
+            URI source,
+            PreviewDeadline deadline,
+            boolean audio) {
         if (source == null
                 || source.getScheme() == null
                 || !List.of("rtsp", "rtsps")
@@ -135,7 +165,7 @@ public final class ZlmDirectGateway {
         params.put("enable_mp4", "0");
         params.put("enable_ts", "0");
         params.put("enable_fmp4", "0");
-        params.put("enable_audio", "0");
+        params.put("enable_audio", audio ? "1" : "0");
         params.put("auto_close", "1");
         String key =
                 call(connection, "addStreamProxy", params, deadline)
@@ -162,7 +192,22 @@ public final class ZlmDirectGateway {
                 connection,
                 viewer,
                 URI.create("rtsp://127.0.0.1:" + rtspPort + "/" + source.app() + "/" + source.id()),
-                deadline);
+                deadline,
+                compatibleAudio(connection, source, deadline));
+    }
+
+    private boolean compatibleAudio(
+            ZlmDirectConnection connection, Stream source, PreviewDeadline deadline) {
+        var params = tuple(source);
+        params.put("schema", "rtsp");
+        try {
+            return com.streamfusion.platform.media.preview.media.PreviewAudioTracks.compatible(
+                    call(connection, "getMediaList", params, deadline.within(Duration.ofSeconds(1)))
+                            .path("data"));
+        } catch (PreviewFailure unavailable) {
+            deadline.check();
+            return false;
+        }
     }
 
     public PreviewModels.Stats stats(
@@ -334,6 +379,10 @@ public final class ZlmDirectGateway {
             if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || Files.size(path) > 512)
                 throw new IllegalArgumentException();
             String value = Files.readString(path, StandardCharsets.UTF_8);
+            // Protected credential files (including Ops handoff) use one line terminator.
+            // Accept only that terminator, not arbitrary trimming of an invalid secret.
+            if (value.endsWith("\r\n")) value = value.substring(0, value.length() - 2);
+            else if (value.endsWith("\n")) value = value.substring(0, value.length() - 1);
             if (value.isEmpty()
                     || value.length() > 256
                     || value.charAt(0) == ' '

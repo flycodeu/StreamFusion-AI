@@ -96,7 +96,7 @@ func TestSchemaThreePreviewMigrationPreservesArtifactsAndBackup(t *testing.T) {
 	defer restored.Close()
 	var version int
 	_ = restored.QueryRow("PRAGMA user_version").Scan(&version)
-	if version != 5 {
+	if version != SchemaVersion {
 		t.Fatal("restore did not apply current migration", version)
 	}
 }

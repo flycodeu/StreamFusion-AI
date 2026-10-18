@@ -61,14 +61,32 @@ public final class PreviewNodeAdministration {
     public PreviewNodeManager.View register(String nodeId, AuditContextDto context) {
         administrator();
         var candidate = manager.registration(nodeId);
-        return save("PREVIEW_NODE_REGISTER", () -> manager.register(candidate), context);
+        return save(
+                "PREVIEW_NODE_REGISTER",
+                () -> {
+                    requireManual(candidate.connection().nodeId());
+                    return manager.register(candidate);
+                },
+                context);
     }
 
     public PreviewNodeManager.View register(
             PreviewNodeManager.ConnectionInput input, AuditContextDto context) {
         administrator();
         var candidate = manager.registration(input);
-        return save("PREVIEW_NODE_REGISTER", () -> manager.register(candidate), context);
+        return save(
+                "PREVIEW_NODE_REGISTER",
+                () -> {
+                    requireManual(candidate.connection().nodeId());
+                    return manager.register(candidate);
+                },
+                context);
+    }
+
+    private void requireManual(String nodeId) {
+        var node = manager.administrativeNode(nodeId);
+        if (node != null && node.opsSource() != null)
+            throw new com.streamfusion.platform.media.preview.PreviewFailure("OPS_SYNC_REQUIRED");
     }
 
     public PreviewNodeManager.View importFromOps(
@@ -76,10 +94,23 @@ public final class PreviewNodeAdministration {
         administrator();
         var prepared = ops.prepare(selection, manager);
         try {
+            if (prepared.source() == null)
+                throw new com.streamfusion.platform.media.preview.PreviewFailure(
+                        "OPS_IDENTITY_REQUIRED");
             var result =
                     save(
                             "PREVIEW_NODE_OPS_IMPORT",
-                            () -> manager.register(prepared.registration()),
+                            () -> {
+                                var before =
+                                        manager.administrativeNode(
+                                                prepared.registration().connection().nodeId());
+                                if (before != null)
+                                    throw new com.streamfusion.platform.media.preview
+                                            .PreviewFailure("OPS_SYNC_REQUIRED");
+                                var registered = manager.register(prepared.registration());
+                                manager.attachOpsSource(registered.nodeId(), prepared.source());
+                                return manager.view();
+                            },
                             context);
             ops.discardPrevious(prepared, manager);
             return result;
@@ -91,12 +122,15 @@ public final class PreviewNodeAdministration {
 
     public PreviewNodeManager.View mode(String mode, long version, AuditContextDto context) {
         administrator();
+        if ("REMOTE".equals(mode)) ops.requireCurrent(manager.administrativeNode(null));
         var change = manager.checkMode(mode, version);
         return save("PREVIEW_NODE_MODE", () -> manager.changeMode(change), context);
     }
 
     public void policy(String nodeId, PreviewNodeManager.Policy policy, AuditContextDto context) {
         administrator();
+        if (policy != null && "REMOTE".equals(policy.mode()))
+            ops.requireCurrent(manager.administrativeNode(nodeId));
         var checked = manager.checkPolicy(nodeId, policy);
         synchronized (manager) {
             transactions.executeWithoutResult(

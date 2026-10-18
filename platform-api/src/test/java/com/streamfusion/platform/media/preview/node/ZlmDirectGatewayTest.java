@@ -9,17 +9,129 @@ import com.streamfusion.platform.media.preview.PreviewFailure;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class ZlmDirectGatewayTest {
     @TempDir Path directory;
+
+    @Test
+    void directViewerUsesObservedCompatibleAudioWithoutBreakingVideoOnlySources() throws Exception {
+        var json = new ObjectMapper();
+        var audio = new AtomicReference<>("PCMA");
+        var opens = new CopyOnWriteArrayList<Map<String, String>>();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext(
+                "/index/api/",
+                exchange -> {
+                    String action =
+                            exchange.getRequestURI().getPath().substring("/index/api/".length());
+                    String body =
+                            new String(
+                                    exchange.getRequestBody().readAllBytes(),
+                                    StandardCharsets.UTF_8);
+                    Map<String, String> form =
+                            java.util.Arrays.stream(body.split("&"))
+                                    .map(item -> item.split("=", 2))
+                                    .collect(
+                                            Collectors.toMap(
+                                                    item ->
+                                                            URLDecoder.decode(
+                                                                    item[0],
+                                                                    StandardCharsets.UTF_8),
+                                                    item ->
+                                                            URLDecoder.decode(
+                                                                    item.length > 1 ? item[1] : "",
+                                                                    StandardCharsets.UTF_8)));
+                    Object response;
+                    if ("getServerConfig".equals(action))
+                        response = Map.of("code", 0, "data", List.of(Map.of("rtsp.port", "8554")));
+                    else if ("getMediaList".equals(action))
+                        response =
+                                "ERROR".equals(audio.get())
+                                        ? Map.of("code", -1)
+                                        : Map.of(
+                                                "code",
+                                                0,
+                                                "data",
+                                                List.of(
+                                                        Map.of(
+                                                                "tracks",
+                                                                List.of(
+                                                                        Map.of(
+                                                                                "codec_type",
+                                                                                1,
+                                                                                "ready",
+                                                                                true,
+                                                                                "codec_id_name",
+                                                                                audio.get())))));
+                    else {
+                        opens.add(form);
+                        response =
+                                Map.of(
+                                        "code",
+                                        0,
+                                        "data",
+                                        Map.of(
+                                                "key",
+                                                "__defaultVhost__/"
+                                                        + form.get("app")
+                                                        + "/"
+                                                        + form.get("stream")));
+                    }
+                    byte[] bytes = json.writeValueAsBytes(response);
+                    exchange.sendResponseHeaders(200, bytes.length);
+                    try (var output = exchange.getResponseBody()) {
+                        output.write(bytes);
+                    }
+                });
+        server.start();
+        try {
+            Path secret = directory.resolve("audio.secret");
+            Files.writeString(secret, "short-secret");
+            var connection =
+                    new ZlmDirectConnection(
+                            "zlm-1234567890abcdef",
+                            URI.create("http://127.0.0.1:" + server.getAddress().getPort()),
+                            secret,
+                            "127.0.0.1");
+            var gateway = new ZlmDirectGateway(json);
+            var source = new ZlmDirectGateway.Stream("sf_preview_123456789abc", "1".repeat(32));
+            var viewer = new ZlmDirectGateway.Stream(source.app(), "2".repeat(32));
+            gateway.open(
+                    connection,
+                    source,
+                    URI.create("rtsp://127.0.0.1/live"),
+                    PreviewDeadline.after(Duration.ofSeconds(5)));
+            assertThat(opens.getFirst()).containsEntry("enable_audio", "1");
+            for (String codec : List.of("PCMA", "PCMU", "OPUS", "AAC", "unknown", "ERROR")) {
+                audio.set(codec);
+                opens.clear();
+                gateway.openViewer(
+                        connection, source, viewer, PreviewDeadline.after(Duration.ofSeconds(5)));
+                assertThat(opens).hasSize(1);
+                assertThat(opens.getFirst())
+                        .containsEntry(
+                                "enable_audio",
+                                List.of("PCMA", "PCMU", "OPUS").contains(codec) ? "1" : "0")
+                        .containsEntry(
+                                "url", "rtsp://127.0.0.1:8554/" + source.app() + "/" + source.id());
+            }
+        } finally {
+            server.stop(0);
+        }
+    }
 
     @Test
     void privateHttpZlmUsesServerSideSecretAndConfirmsExactCleanup() throws Exception {

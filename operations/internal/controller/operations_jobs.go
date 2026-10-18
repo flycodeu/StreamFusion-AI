@@ -82,7 +82,13 @@ func (h *HTTP) finishPendingAck(ctx context.Context) {
 func (h *HTTP) jobUnknown(id, code string) {
 	h.store.mu.Lock()
 	defer h.store.mu.Unlock()
-	_, _ = h.store.DB.Exec("UPDATE jobs SET status='UNKNOWN',error_code=?,updated_at=? WHERE id=?", code, Now(), id)
+	res, err := h.store.DB.Exec("UPDATE jobs SET status='UNKNOWN',error_code=?,updated_at=? WHERE id=? AND phase<>'CANCELLED'", code, Now(), id)
+	if err != nil {
+		return
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return
+	}
 	_, _ = h.store.DB.Exec("UPDATE plugin_installations SET status='UNKNOWN',error_code=?,updated_at=? WHERE last_job_id=?", code, Now(), id)
 }
 func (h *HTTP) processRelease(ctx context.Context, id, raw string) {
@@ -97,9 +103,12 @@ func (h *HTTP) processRelease(ctx context.Context, id, raw string) {
 		return
 	}
 	h.store.mu.Lock()
-	_, e = h.store.DB.Exec("UPDATE jobs SET status='RUNNING',phase='TARGET_EXECUTION',updated_at=? WHERE id=? AND status='QUEUED'", Now(), id)
+	claim, e := h.store.DB.Exec("UPDATE jobs SET status='RUNNING',phase='TARGET_EXECUTION',updated_at=? WHERE id=? AND status='QUEUED'", Now(), id)
 	h.store.mu.Unlock()
 	if e != nil {
+		return
+	}
+	if n, _ := claim.RowsAffected(); n != 1 {
 		return
 	}
 	execCtx, cancel := context.WithTimeout(ctx, 6*time.Minute)

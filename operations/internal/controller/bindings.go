@@ -94,10 +94,16 @@ func (h *HTTP) probeBinding(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	var in struct {
-		TargetID string `json:"targetId"`
+		TargetID   string `json:"targetId"`
+		InstanceID string `json:"instanceId"`
+		ReleaseID  string `json:"releaseId"`
 	}
 	if e = decode(w, r, &in); e != nil {
 		h.fail(w, r, 400, "INVALID_INPUT", e.Error())
+		return
+	}
+	if (in.InstanceID == "") != (in.ReleaseID == "") {
+		h.fail(w, r, 400, "PROBE_RELEASE_REQUIRED", "实例网络检查必须同时提供实例和当前发布版本")
 		return
 	}
 	t, e := h.store.readTarget(in.TargetID)
@@ -105,20 +111,66 @@ func (h *HTTP) probeBinding(w http.ResponseWriter, r *http.Request, id string) {
 		h.opsError(w, r, e)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	var candidate *deploy.Release
+	if in.InstanceID != "" {
+		i, err := h.store.readInstance(in.InstanceID)
+		if err != nil {
+			h.opsError(w, r, err)
+			return
+		}
+		if i.TargetID != t.ID || i.Current == "" || in.ReleaseID != i.Current {
+			h.fail(w, r, 409, "PROBE_RELEASE_CHANGED", "请选择此主机当前已发布实例并刷新版本")
+			return
+		}
+		release, err := h.store.readRelease(i.Current)
+		if err != nil {
+			h.opsError(w, r, err)
+			return
+		}
+		matched := false
+		for _, snapshot := range release.Bindings {
+			if deploy.Digest(snapshot) == deploy.Digest(b) {
+				matched = true
+			}
+		}
+		if !matched || release.Config.Recipe() != "java-compose-v1" {
+			h.fail(w, r, 409, "PROBE_BINDING_NOT_IN_RELEASE", "此依赖不在所选Java实例的冻结版本中")
+			return
+		}
+		if err := platformHandoffReady(h.store.DB, i.ID, t.ID, i.Current); err != nil {
+			h.fail(w, r, 409, err.Error(), "实例仍有未决作业或待ACK，请先核对")
+			return
+		}
+		candidate = &release
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	conn, e := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(b.Host, strconv.Itoa(b.Port)))
 	controller := e == nil
 	if conn != nil {
 		conn.Close()
 	}
-	var result map[string]any
-	e = h.store.callTarget(ctx, t, deploy.Request{Action: "BINDING_PROBE", Binding: &b}, "", &result)
+	var result deploy.BindingProbe
+	e = h.store.callTarget(ctx, t, deploy.Request{Action: "BINDING_PROBE", Binding: &b, Candidate: candidate}, "", &result)
 	targetReachable := false
 	if e == nil {
-		targetReachable, _ = result["reachable"].(bool)
+		targetReachable = result.Reachable
 	}
-	h.success(w, r, map[string]any{"controller": map[string]any{"layer": "TCP", "reachable": controller}, "targetHost": map[string]any{"layer": "TCP", "reachable": targetReachable, "executed": e == nil}, "applicationNetwork": nil, "authentication": nil, "observedAt": Now()})
+	if candidate != nil && e == nil {
+		if err := platformHandoffReady(h.store.DB, candidate.InstanceID, t.ID, candidate.ID); err != nil {
+			h.fail(w, r, 409, "PROBE_RELEASE_CHANGED", "检查期间实例版本或作业状态变化，请刷新后重试")
+			return
+		}
+		if result.ReleaseID != candidate.ID || result.CredentialRevision != b.CredentialRevision || result.ApplicationNetwork == nil || result.Authentication == nil {
+			h.fail(w, r, 409, "TARGET_PROBE_UPGRADE_REQUIRED", "目标执行器尚不支持实例网络认证检查，请升级执行器")
+			return
+		}
+	}
+	errorCode := ""
+	if e != nil {
+		errorCode = "TARGET_PROBE_UNAVAILABLE"
+	}
+	h.success(w, r, map[string]any{"controller": map[string]any{"layer": "TCP", "reachable": controller}, "targetHost": map[string]any{"layer": "TCP", "reachable": targetReachable, "executed": e == nil}, "applicationNetwork": result.ApplicationNetwork, "authentication": result.Authentication, "releaseId": result.ReleaseID, "credentialRevision": result.CredentialRevision, "errorCode": errorCode, "observedAt": Now()})
 }
 func (s *Store) releaseSecrets(req *deploy.Request) error {
 	req.Secrets = map[string]string{}

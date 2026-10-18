@@ -121,6 +121,14 @@ try:
         dialog.get_by_role("button", name="登记绑定", exact=True).click()
         dialog.wait_for(state="hidden")
         page.get_by_role("cell", name="REDIS", exact=True).wait_for()
+        source = page.get_by_label("检查来源：127.0.0.1", exact=True)
+        source.select_option(index=1)
+        assert page.get_by_label("实例网络：127.0.0.1", exact=True).input_value() == ""
+        page.get_by_role("button", name="TCP 检查", exact=True).click()
+        page.locator(".probe-result summary").wait_for()
+        page.locator(".probe-result summary").click()
+        assert page.get_by_text("未验证", exact=True).count() == 2
+        checks.append("UX-OPS-dependency-host-only-does-not-claim-authentication")
         page.get_by_role("button", name="应用实例", exact=True).click()
         page.get_by_role("button", name="新增实例", exact=True).click()
         dialog = page.get_by_role("dialog", name="实例配置草稿", exact=True)
@@ -138,6 +146,24 @@ try:
         page.get_by_text("暂无版本", exact=True).wait_for()
         page.get_by_role("dialog").get_by_role("button", name="Close this dialog").click()
         checks.extend(["I02-target-register", "I02-external-binding", "I02-instance-draft-and-reload", "I02-empty-release-history"])
+        page.get_by_role("button", name="制品", exact=True).click()
+        page.get_by_role("button", name="导入制品", exact=True).click()
+        dialog = page.get_by_role("dialog", name="导入制品", exact=True)
+        dialog.get_by_label("来源", exact=True).select_option("JAR")
+        assert dialog.get_by_label("配方", exact=True).is_disabled()
+        assert dialog.get_by_label("Java21 运行环境", exact=True).locator("option").count() == 1
+        dialog.screenshot(path=str(output / "jar-import-wide.png"))
+        dialog.get_by_label("来源", exact=True).select_option("DOCKER_ARCHIVE")
+        assert dialog.get_by_label("Java21 运行环境", exact=True).count() == 0
+        dialog.get_by_role("button", name="Close this dialog").click()
+        csrf = page.request.get(url + "/ops/api/v1/auth/csrf").json()["data"]["csrfToken"]
+        queued = page.request.post(url + "/ops/api/v1/artifact-imports", headers={"Origin": url, "X-CSRF-Token": csrf}, data={"name":"browser-cancel-input", "archiveSha256":"a"*64, "byteSize":1, "idempotencyKey":"browser-cancel-"+secrets.token_hex(8)})
+        assert queued.status == 202, queued.text()
+        page.get_by_role("button", name="发布作业", exact=True).click()
+        page.get_by_role("button", name="取消排队", exact=True).click()
+        page.get_by_role("cell", name="已取消", exact=True).wait_for()
+        assert page.get_by_role("button", name="取消排队", exact=True).count() == 0
+        checks.extend(["UX-OPS-JAR-fixed-recipe-ready-Java21-only", "UX-OPS-complete-image-no-JRE-override", "UX-OPS-real-queued-import-cancel"])
         page.get_by_role("button", name="控制器设置", exact=True).click()
         page.get_by_role("button", name="修改密码", exact=True).click()
         dialog = page.get_by_role("dialog", name="修改密码", exact=True)

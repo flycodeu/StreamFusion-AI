@@ -135,6 +135,17 @@ function loadPercent(value: unknown): number {
   return value
 }
 
+function parseOpsSource(value: unknown) {
+  const row = object(value)
+  return {
+    controllerId: string(row.controllerId),
+    targetId: string(row.targetId),
+    instanceId: string(row.instanceId),
+    releaseId: string(row.releaseId),
+    syncedAt: optionalString(row.syncedAt),
+  }
+}
+
 function parseZlmLoad(value: unknown) {
   const row = object(value)
   const networkThreadCount = integer(row.networkThreadCount)
@@ -183,6 +194,7 @@ export function parseCluster(value: unknown) {
         observation: row.observation == null ? null : object(row.observation),
         protection: row.protection == null ? null : object(row.protection),
         zlmLoad: row.zlmLoad == null ? null : parseZlmLoad(row.zlmLoad),
+        opsSource: row.opsSource == null ? null : parseOpsSource(row.opsSource),
       }
     }),
     registrationOptions: list(root.registrationOptions, (value) => {
@@ -210,6 +222,7 @@ export type DirectZlmInput = {
   apiHost: string
   apiPort: number
   mediaAddress: string
+  installPath: string | null
   secret: string
   priority: number
   budget: PreviewBudget
@@ -227,8 +240,12 @@ export function parseDirectZlmInstances(value: unknown) {
         name: string(row.name),
         apiHost: string(row.apiHost),
         apiPort: integer(row.apiPort),
+        rtcPort: row.rtcPort == null ? null : integer(row.rtcPort),
+        rtspPort: row.rtspPort == null ? null : integer(row.rtspPort),
+        portsObservedAt: optionalString(row.portsObservedAt),
         zlmVersion: optionalString(row.zlmVersion),
         mediaAddress: string(row.mediaAddress),
+        installPath: optionalString(row.installPath),
         mode: string(row.mode),
         version: integer(row.version),
         priority: integer(row.priority),
@@ -286,7 +303,7 @@ export async function createDirectZlmInstance(input: DirectZlmInput) {
 }
 export async function saveDirectZlmInstance(
   instance: DirectZlmInstance,
-  changes: Partial<Pick<DirectZlmInstance, 'mode' | 'priority' | 'budget'>>,
+  changes: Partial<Pick<DirectZlmInstance, 'mode' | 'priority' | 'budget' | 'installPath'>>,
 ) {
   requireApplied(
     await request({
@@ -296,6 +313,7 @@ export async function saveDirectZlmInstance(
         mode: changes.mode ?? instance.mode,
         priority: changes.priority ?? instance.priority,
         budget: changes.budget ?? instance.budget,
+        installPath: changes.installPath ?? instance.installPath,
         version: instance.version,
       },
       successStatus: 200,
@@ -337,6 +355,8 @@ export function parseOpsPreviewInstances(value: unknown) {
       const row = object(value)
       return {
         instanceId: string(row.instanceId),
+        controllerId: optionalString(row.controllerId),
+        targetId: optionalString(row.targetId),
         name: string(row.name),
         targetName: string(row.targetName),
         targetAddress: string(row.targetAddress),
@@ -363,10 +383,13 @@ export function parseOpsZlmInstances(value: unknown) {
       const row = object(value)
       return {
         instanceId: string(row.instanceId),
+        controllerId: optionalString(row.controllerId),
+        targetId: optionalString(row.targetId),
         name: string(row.name),
         targetName: string(row.targetName),
         targetAddress: string(row.targetAddress),
         installRoot: string(row.installRoot),
+        installPath: optionalString(row.installPath),
         releaseId: string(row.releaseId),
         apiUrl: string(row.apiUrl),
         mediaAddress: string(row.mediaAddress),
@@ -380,6 +403,60 @@ export function parseOpsZlmInstances(value: unknown) {
   }
 }
 export type OpsZlmInstances = ReturnType<typeof parseOpsZlmInstances>
+
+export type OpsSyncInput = {
+  controllerId: string
+  targetId: string
+  instanceId: string
+  releaseId: string
+  version: number
+  digest?: string
+}
+
+export function parseOpsSyncReview(value: unknown) {
+  const row = object(value)
+  return {
+    nodeId: string(row.nodeId),
+    version: integer(row.version),
+    previousSource: row.previousSource == null ? null : parseOpsSource(row.previousSource),
+    candidateSource: parseOpsSource(row.candidateSource),
+    previousConfigVersion: string(row.previousConfigVersion),
+    candidateConfigVersion: string(row.candidateConfigVersion),
+    previousName: string(row.previousName),
+    candidateName: string(row.candidateName),
+    previousInstallPath: optionalString(row.previousInstallPath),
+    candidateInstallPath: optionalString(row.candidateInstallPath),
+    retainedBudget: parseBudget(row.retainedBudget),
+    candidateLimit: parseBudget(row.candidateLimit),
+    credentialChanged: boolean(row.credentialChanged),
+    digest: string(row.digest),
+    checkedAt: string(row.checkedAt),
+  }
+}
+export type OpsSyncReview = ReturnType<typeof parseOpsSyncReview>
+
+export async function synchronizeOpsNode(nodeId: string, input: OpsSyncInput, apply = false) {
+  const result = await request({
+    path: `/preview-node/nodes/${encodeURIComponent(nodeId)}/ops-sync${apply ? '' : '/check'}`,
+    method: 'POST',
+    body: input,
+    successStatus: 200,
+    timeoutMs: 35000,
+    decode: (value) => {
+      const row = object(value)
+      return {
+        applied: boolean(row.applied),
+        reasonCode: optionalString(row.reasonCode),
+        review: row.review == null ? null : parseOpsSyncReview(row.review),
+      }
+    },
+  })
+  if (!result.data.applied || !result.data.review) {
+    const code = result.data.reasonCode ?? 'OPS_SYNC_REVIEW_REQUIRED'
+    throw new ApiRequestError(code, previewReason(code), result.meta)
+  }
+  return result.data.review
+}
 
 export async function getOpsZlmInstances(signal?: AbortSignal) {
   return (

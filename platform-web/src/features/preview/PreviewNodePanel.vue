@@ -37,6 +37,7 @@ import { sessionState } from '../../session/state'
 import { formatDateTime } from '../../utils/dateTime'
 import { previewReason } from './model'
 import ZlmNetworkLoad from './ZlmNetworkLoad.vue'
+import PreviewOpsSync from './PreviewOpsSync.vue'
 
 const props = withDefaults(defineProps<{ management?: boolean }>(), { management: false })
 const captureScope = usePageScope()
@@ -75,6 +76,7 @@ const directEditing = ref<{
   instance: DirectZlmInstance
   priority: number
   budget: DirectZlmInstance['budget']
+  installPath: string
 } | null>(null)
 const directCredential = ref<{ instance: DirectZlmInstance; secret: string } | null>(null)
 const directRemoving = ref<DirectZlmInstance | null>(null)
@@ -90,6 +92,7 @@ const configuredConnections = computed(() =>
   })),
 )
 const maintaining = ref<PreviewNodeStatus | null>(null)
+const synchronizing = ref<PreviewNodeStatus | null>(null)
 const maintenance = ref<PreviewMaintenance | null>(null)
 const maintenanceNames: Record<string, string> = {
   OPEN: '未封闭',
@@ -191,6 +194,7 @@ watch(
       directInstances.value = null
       directForm.value = null
       directCredential.value = null
+      synchronizing.value = null
     }
   },
   { immediate: true },
@@ -222,6 +226,7 @@ function openDirectForm() {
     apiHost: '',
     apiPort: 80,
     mediaAddress: '',
+    installPath: null,
     secret: '',
     priority: 100,
     budget: { ...defaultDirectBudget },
@@ -232,6 +237,7 @@ function saveDirectForm() {
   const input = {
     ...directForm.value,
     mediaAddress: directForm.value.mediaAddress || directForm.value.apiHost,
+    installPath: directForm.value.installPath?.trim() || null,
     budget: { ...directForm.value.budget },
   }
   directForm.value.secret = ''
@@ -242,7 +248,7 @@ function saveDirectForm() {
 }
 function updateDirect(
   instance: DirectZlmInstance,
-  changes: Partial<Pick<DirectZlmInstance, 'mode' | 'priority' | 'budget'>>,
+  changes: Partial<Pick<DirectZlmInstance, 'mode' | 'priority' | 'budget' | 'installPath'>>,
 ) {
   void run(async () => {
     await saveDirectZlmInstance(instance, changes)
@@ -300,10 +306,18 @@ async function refreshObservation() {
   }
 }
 
-function opsZlmRegistered(apiUrl: string) {
-  return (directInstances.value?.items ?? []).some(
-    (item) => `http://${item.apiHost}:${item.apiPort}` === apiUrl,
+function opsZlmStatus(item: OpsZlmInstances['items'][number]): 'linked' | 'occupied' | 'available' {
+  const linked = snapshot.value?.nodes.some(
+    (node) =>
+      node.opsSource?.controllerId === item.controllerId &&
+      node.opsSource?.targetId === item.targetId &&
+      node.opsSource?.instanceId === item.instanceId,
   )
+  if (linked) return 'linked'
+  const occupied = (directInstances.value?.items ?? []).some(
+    (node) => `http://${node.apiHost}:${node.apiPort}` === item.apiUrl,
+  )
+  return occupied ? 'occupied' : 'available'
 }
 
 async function loadOpsInstances() {
@@ -426,6 +440,11 @@ function openMaintenance(node: PreviewNodeStatus) {
   maintenance.value = null
   void maintain()
 }
+function synchronizedOps() {
+  synchronizing.value = null
+  void run()
+  void loadDirectInstances()
+}
 function maintain(action?: 'PREPARE' | 'RELEASE') {
   const node = maintaining.value
   if (!node) return
@@ -479,9 +498,10 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           </div>
         </div>
         <RequestError :error="directError" :advice="directAdvice" />
+        <p class="connection-hint">手工接入与 Ops 引入互不依赖；接入后需手动参与调度。</p>
         <details class="ops-zlm-catalog">
           <summary>
-            从 Ops 引入 ZLM<span v-if="opsZlmInstances?.items.length">
+            从 Ops 引入 ZLM（按需选择）<span v-if="opsZlmInstances?.items.length">
               · {{ opsZlmInstances.items.length }} 台可查看</span
             >
           </summary>
@@ -501,7 +521,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             <code>{{ opsZlmInstances.reasonCode }}</code>
           </p>
           <p v-else-if="opsZlmInstances && !opsZlmInstances.available" class="connection-empty">
-            尚未连接 Ops 实例目录，可手工接入已安装的 ZLM。
+            Ops 目录未配置；可继续手工接入。
           </p>
           <p v-else-if="opsZlmInstances && !opsZlmInstances.items.length" class="connection-empty">
             Ops 暂无已发布的 ZLM 实例。
@@ -515,21 +535,41 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
               <div class="connection-detail">
                 <div class="connection-name">
                   <strong>{{ item.name }}</strong>
-                  <ElTag :type="opsZlmRegistered(item.apiUrl) ? 'info' : 'warning'" effect="plain">
-                    {{ opsZlmRegistered(item.apiUrl) ? '已接入' : '可引入' }}
+                  <ElTag
+                    :type="opsZlmStatus(item) === 'available' ? 'warning' : 'info'"
+                    effect="plain"
+                  >
+                    {{
+                      opsZlmStatus(item) === 'linked'
+                        ? '已引入平台'
+                        : opsZlmStatus(item) === 'occupied'
+                          ? '地址已登记'
+                          : '未引入平台'
+                    }}
                   </ElTag>
                 </div>
                 <div class="connection-meta">
-                  <span>{{ item.targetName }} · {{ item.targetAddress }}</span>
-                  <span>API：{{ item.apiUrl }}</span>
+                  <span>服务器：{{ item.targetName }}</span>
+                  <span v-if="item.targetAddress">服务器地址：{{ item.targetAddress }}</span>
+                  <span>媒体地址：{{ item.mediaAddress }}</span>
+                </div>
+                <div class="connection-meta">
+                  <span>ZLM HTTP API：{{ item.apiUrl }}</span>
+                  <span>HTTP 端口：{{ item.apiPort }}</span>
+                  <span>RTC 端口：{{ item.rtcPort }}</span>
+                  <span>Ops 目标根目录：{{ item.installRoot }}</span>
+                  <span v-if="item.installPath">ZLM 发布目录：{{ item.installPath }}</span>
+                  <span>发布版本：{{ item.releaseId }}</span>
                 </div>
               </div>
               <ElButton
                 :disabled="
                   busy ||
                   opsZlmBusy ||
+                  !item.controllerId ||
+                  !item.targetId ||
                   !directInstances?.registrationAvailable ||
-                  opsZlmRegistered(item.apiUrl)
+                  opsZlmStatus(item) !== 'available'
                 "
                 @click="importZlmFromOps(item.instanceId, item.releaseId)"
                 >引入平台</ElButton
@@ -559,10 +599,29 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                 <ElTag effect="plain">{{ names[item.mode] || item.mode }}</ElTag>
               </div>
               <div class="connection-meta">
+                <span>服务地址：{{ item.apiHost }}</span>
                 <span>ZLM HTTP：{{ item.apiHost }}:{{ item.apiPort }}</span>
                 <span>媒体地址：{{ item.mediaAddress }}</span>
+                <span>安装位置：{{ item.installPath || '未登记' }}</span>
                 <span>ZLM 版本：{{ item.zlmVersion || '未检测' }}</span>
                 <span>实际状态 {{ names[item.state] || item.state }}</span>
+              </div>
+              <div class="connection-meta">
+                <span
+                  >RTC 端口：{{
+                    item.portsObservedAt && item.rtcPort != null ? item.rtcPort : '未核对'
+                  }}</span
+                >
+                <span
+                  >RTSP 端口：{{
+                    item.portsObservedAt && item.rtspPort != null ? item.rtspPort : '未核对'
+                  }}</span
+                >
+                <span
+                  >端口最近核对：{{
+                    item.portsObservedAt ? formatDateTime(item.portsObservedAt) : '未核对'
+                  }}</span
+                >
               </div>
               <div class="connection-meta">
                 <span>源流 {{ item.usage.sources }} / {{ item.budget.maxSources }}</span>
@@ -591,6 +650,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                     instance: item,
                     priority: item.priority,
                     budget: { ...item.budget },
+                    installPath: item.installPath || '',
                   }
                 "
                 >预算</ElButton
@@ -599,6 +659,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                 :disabled="
                   busy ||
                   !directInstances.registrationAvailable ||
+                  !!snapshot?.nodes.find((node) => node.nodeId === item.nodeId)?.opsSource ||
                   item.mode === 'REMOTE' ||
                   !directIdle(item)
                 "
@@ -632,7 +693,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           <code>{{ opsInstances.reasonCode }}</code>
         </p>
         <p v-else-if="opsInstances && !opsInstances.available" class="connection-empty">
-          尚未连接 Ops 实例目录。
+          Ops 目录未配置（可选）。
         </p>
         <p v-else-if="opsInstances && !opsInstances.items.length" class="connection-empty">
           Ops 暂无可引入的预览实例。
@@ -669,11 +730,15 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
               :disabled="
                 busy ||
                 opsBusy ||
-                snapshot.nodes.some((node) => node.nodeId === item.nodeId && node.mode === 'REMOTE')
+                !item.controllerId ||
+                !item.targetId ||
+                snapshot.nodes.some((node) => node.nodeId === item.nodeId)
               "
               @click="importFromOps(item.instanceId, item.releaseId)"
               >{{
-                snapshot.nodes.some((node) => node.nodeId === item.nodeId) ? '更新登记' : '引入节点'
+                snapshot.nodes.some((node) => node.nodeId === item.nodeId)
+                  ? '请从节点卡同步'
+                  : '引入节点'
               }}</ElButton
             >
           </div>
@@ -690,7 +755,9 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                 }}</ElTag>
               </div>
               <ElButton
-                :disabled="busy || item.registered?.mode === 'REMOTE'"
+                :disabled="
+                  busy || item.registered?.mode === 'REMOTE' || !!item.registered?.opsSource
+                "
                 @click="run(() => registerPreviewNode(item.nodeId))"
                 >{{ item.registered ? '重新导入' : '导入节点' }}</ElButton
               >
@@ -752,6 +819,13 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             <div v-if="node.nodeId !== 'local'">
               <dt>媒体地址</dt>
               <dd>{{ node.mediaAddress || '未登记' }}</dd>
+            </div>
+            <div v-if="node.opsSource">
+              <dt>Ops 已同步版本</dt>
+              <dd>
+                <code>{{ node.opsSource.releaseId }}</code> ·
+                {{ formatDateTime(node.opsSource.syncedAt) }}
+              </dd>
             </div>
             <div v-if="node.kind !== 'ZLM_DIRECT'">
               <dt>{{ node.nodeId === 'local' ? 'ZLM 版本' : '节点程序版本' }}</dt>
@@ -815,6 +889,12 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
               <template v-if="canManage">
                 <ElButton :disabled="busy" @click="edit(node)">预算与优先级</ElButton>
                 <ElButton
+                  v-if="node.opsSource"
+                  :disabled="busy || node.mode !== 'DRAINING'"
+                  @click="synchronizing = node"
+                  >同步 Ops 配置</ElButton
+                >
+                <ElButton
                   v-if="node.kind !== 'ZLM_DIRECT' && node.nodeId !== 'local'"
                   :disabled="busy"
                   @click="openMaintenance(node)"
@@ -831,19 +911,33 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                 >
               </template>
             </div>
-            <details
-              v-if="canManage && node.kind !== 'ZLM_DIRECT' && node.nodeId !== 'local'"
-              class="node-advanced"
-            >
+            <details v-if="canManage && node.nodeId !== 'local'" class="node-advanced">
               <summary>高级连接配置</summary>
-              <ElButton :disabled="busy || node.mode === 'REMOTE'" @click="openConnection(node)"
+              <ElButton
+                v-if="node.kind !== 'ZLM_DIRECT' && !node.opsSource"
+                :disabled="busy || node.mode === 'REMOTE'"
+                @click="openConnection(node)"
                 >手工修改连接</ElButton
               >
+              <ElButton
+                v-if="!node.opsSource"
+                :disabled="busy || node.mode !== 'DRAINING'"
+                @click="synchronizing = node"
+                >关联现有 Ops 实例</ElButton
+              >
+              <p v-else class="connection-empty">连接由 Ops 来源维护；修改配置请使用同步入口。</p>
             </details>
           </div>
         </article>
       </div>
     </div>
+    <PreviewOpsSync
+      v-if="synchronizing && canManage"
+      :key="synchronizing.nodeId"
+      :node="synchronizing"
+      @close="synchronizing = null"
+      @applied="synchronizedOps"
+    />
     <ElDialog
       :model-value="!!directForm"
       title="接入 ZLM"
@@ -853,7 +947,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
       @close="directForm = null"
     >
       <form v-if="directForm" class="budget-form" @submit.prevent="saveDirectForm">
-        <p class="connection-form-intro">填写 ZLM 的内网 HTTP API；接入后默认不参与调度。</p>
+        <p class="connection-form-intro">填写内网 HTTP API；安装位置仅用于登记。</p>
         <label>实例名称<input v-model.trim="directForm.name" maxlength="80" required /></label>
         <label
           >内网 IP<input v-model.trim="directForm.apiHost" placeholder="10.0.0.10" required
@@ -866,6 +960,13 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             max="65535"
             required
         /></label>
+        <label
+          >安装位置（选填）<input
+            v-model.trim="directForm.installPath"
+            maxlength="512"
+            placeholder="例如 /opt/zlm"
+          />
+        </label>
         <label
           >ZLM secret<input
             v-model="directForm.secret"
@@ -906,7 +1007,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
     </ElDialog>
     <ElDialog
       :model-value="!!directEditing"
-      title="ZLM 预算设置"
+      title="ZLM 配置与预算"
       width="min(620px, calc(100vw - 32px))"
       append-to-body
       destroy-on-close
@@ -919,9 +1020,17 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           updateDirect(directEditing.instance, {
             priority: directEditing.priority,
             budget: directEditing.budget,
+            installPath: directEditing.installPath.trim(),
           })
         "
       >
+        <label
+          >安装位置（选填）<input
+            v-model.trim="directEditing.installPath"
+            maxlength="512"
+            placeholder="例如 /opt/zlm"
+          />
+        </label>
         <label
           >优先级<input
             v-model.number="directEditing.priority"
@@ -1036,7 +1145,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
         <ol>
           <li>停止接新预览，等待已有观看关闭及资源释放。</li>
           <li>获取维护许可，在 Ops 对应预览实例的升级或回退计划中填写许可编号。</li>
-          <li>Ops 作业完成后检查节点；配置发生变化时重新导入登记，解除维护，再明确参与调度。</li>
+          <li>Ops 作业完成后检查节点；配置发生变化时同步 Ops 配置，解除维护，再明确参与调度。</li>
         </ol>
         <RequestError
           :error="error"

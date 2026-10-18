@@ -56,11 +56,11 @@ func (s *Store) readPlugin(id string) (pluginInstallation, error) {
 	return i, e
 }
 
-// P2 will add its environment relation query here when it has a consumer. P1
-// keeps the explicit count reserved for the same-purpose reference guard.
+// Count actual frozen artifacts and pending JAR-packaging work. Preserve the
+// historical explicit count as an additional conservative guard.
 func pluginReferences(q interface{ QueryRow(string, ...any) *sql.Row }, i pluginInstallation) (int, error) {
 	var n int
-	e := q.QueryRow("SELECT reference_count FROM plugin_installations WHERE id=?", i.ID).Scan(&n)
+	e := q.QueryRow(`SELECT reference_count + (SELECT count(*) FROM artifacts WHERE json_extract(runtime_environment_json,'$.installationId')=?) + (SELECT count(*) FROM jobs WHERE json_extract(CASE WHEN json_valid(input_json) THEN input_json ELSE '{}' END,'$.pluginInstallationId')=? AND status IN ('QUEUED','RUNNING','UNKNOWN')) FROM plugin_installations WHERE id=?`, i.ID, i.ID, i.ID).Scan(&n)
 	return n, e
 }
 

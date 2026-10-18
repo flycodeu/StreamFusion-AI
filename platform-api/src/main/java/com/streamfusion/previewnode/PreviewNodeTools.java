@@ -57,7 +57,9 @@ public final class PreviewNodeTools {
                 "cmd",
                 "%s -hide_banner -nostdin -nostats -rtsp_transport tcp -timeout 10000000 -threads 2 -i %s -map 0:v:0 -an -c:v libx264 -preset veryfast -tune zerolatency -threads 4 -pix_fmt yuv420p -profile:v baseline -bf 0 -g 40 -keyint_min 20 -sc_threshold 0 -crf 23 -maxrate 6M -bufsize 3M -f flv %s");
         set(values, "protocol", "paced_sender_ms", "20");
-        set(values, "protocol", "enable_audio", "0");
+        // Preserve source audio; each viewer gateway admits only observed compatible tracks.
+        // The RTMP/FLV video transcode intentionally keeps -an until separately validated.
+        set(values, "protocol", "enable_audio", "1");
         StringBuilder text = new StringBuilder();
         values.forEach(
                 (section, entries) -> {

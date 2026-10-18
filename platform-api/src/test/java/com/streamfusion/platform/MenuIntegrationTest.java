@@ -154,7 +154,7 @@ class MenuIntegrationTest extends SecureLoginSupport {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data").isEmpty());
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_role_menu", Integer.class))
-                .isEqualTo(14);
+                .isEqualTo(15);
         mvc.perform(get("/auth/me").session(auth.session()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.routes.length()").value(3));
@@ -190,7 +190,7 @@ class MenuIntegrationTest extends SecureLoginSupport {
                                         """))
                 .andExpect(status().isBadRequest());
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_menu", Integer.class))
-                .isEqualTo(17);
+                .isEqualTo(18);
 
         jdbc.update("DELETE FROM sys_role_menu WHERE role_id=1 AND menu_id=1004");
         mvc.perform(get("/menus").session(auth.session()))
@@ -245,7 +245,7 @@ class MenuIntegrationTest extends SecureLoginSupport {
         mvc.perform(get("/auth/me").session(auth.session()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.routes.length()").value(3))
-                .andExpect(jsonPath("$.data.modules.length()").value(10));
+                .andExpect(jsonPath("$.data.modules.length()").value(11));
     }
 
     @Test
@@ -269,7 +269,7 @@ class MenuIntegrationTest extends SecureLoginSupport {
         mvc.perform(get("/auth/me").session(auth.session()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.isSuperAdmin").value(true))
-                .andExpect(jsonPath("$.data.modules.length()").value(10))
+                .andExpect(jsonPath("$.data.modules.length()").value(11))
                 .andExpect(jsonPath("$.data.routes.length()").value(3));
         // Configuration remains manageable even when this service version cannot serve its module.
         mvc.perform(get("/menus").session(auth.session()))

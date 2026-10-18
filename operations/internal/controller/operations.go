@@ -46,11 +46,14 @@ type plan struct {
 	InputHash          string          `json:"inputHash"`
 }
 type importInput struct {
-	Recipe         string `json:"recipe,omitempty"`
-	Name           string `json:"name"`
-	SHA            string `json:"archiveSha256"`
-	Size           int64  `json:"byteSize"`
-	IdempotencyKey string `json:"idempotencyKey"`
+	SourceKind           string                     `json:"sourceKind,omitempty"`
+	PluginInstallationID string                     `json:"pluginInstallationId,omitempty"`
+	RuntimeEnvironment   *deploy.RuntimeEnvironment `json:"runtimeEnvironment,omitempty"`
+	Recipe               string                     `json:"recipe,omitempty"`
+	Name                 string                     `json:"name"`
+	SHA                  string                     `json:"archiveSha256"`
+	Size                 int64                      `json:"byteSize"`
+	IdempotencyKey       string                     `json:"idempotencyKey"`
 }
 
 func jsonText(v any) string { b, _ := json.Marshal(v); return string(b) }

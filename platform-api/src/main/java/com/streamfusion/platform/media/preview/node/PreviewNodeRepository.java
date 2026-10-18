@@ -22,7 +22,19 @@ public class PreviewNodeRepository {
             long version,
             PreviewBudget budget,
             int priority,
-            ZlmDirectConnection zlm) {
+            ZlmDirectConnection zlm,
+            OpsNodeSource opsSource) {
+        public Node(
+                PreviewNodeConnection connection,
+                String mode,
+                String configVersion,
+                long version,
+                PreviewBudget budget,
+                int priority,
+                ZlmDirectConnection zlm) {
+            this(connection, mode, configVersion, version, budget, priority, zlm, null);
+        }
+
         public Node(
                 PreviewNodeConnection connection, String mode, String configVersion, long version) {
             this(
@@ -125,7 +137,71 @@ public class PreviewNodeRepository {
                                                 URI.create(row.getString("control_uri")),
                                                 Path.of(row.getString("token_path")),
                                                 row.getString("media_address"))
-                                        : null));
+                                        : null,
+                                source(row)));
+    }
+
+    private OpsNodeSource source(ResultSet row) throws SQLException {
+        if (row.getString("ops_controller_id") == null) return null;
+        return new OpsNodeSource(
+                row.getString("ops_controller_id"),
+                row.getString("ops_target_id"),
+                row.getString("ops_instance_id"),
+                row.getString("ops_release_id"),
+                row.getTimestamp("ops_synced_at")
+                        .toLocalDateTime()
+                        .atZone(java.time.ZoneId.of("Asia/Shanghai"))
+                        .toInstant());
+    }
+
+    public void attachOpsSource(String id, OpsNodeSource source, long version) {
+        var duplicate =
+                nodes().stream()
+                        .filter(n -> !n.nodeId().equals(id) && source.sameInstance(n.opsSource()))
+                        .findFirst();
+        if (duplicate.isPresent()) throw new PreviewFailure("OPS_INSTANCE_ALREADY_LINKED");
+        if (sql.update(
+                        "UPDATE preview_node SET ops_controller_id=?,ops_target_id=?,ops_instance_id=?,ops_release_id=?,ops_synced_at=?,version=version+1 WHERE node_id=? AND version=? AND node_kind<>'LOCAL' AND mode<>'REMOTE'",
+                        source.controllerId(),
+                        source.targetId(),
+                        source.instanceId(),
+                        source.releaseId(),
+                        java.time.LocalDateTime.ofInstant(
+                                java.time.Instant.now(), java.time.ZoneId.of("Asia/Shanghai")),
+                        id,
+                        version)
+                != 1) throw new PreviewFailure("NODE_CONFIGURATION_CHANGED");
+    }
+
+    public void synchronizeManaged(
+            String id,
+            PreviewNodeConnection c,
+            String configuration,
+            OpsNodeSource source,
+            long version) {
+        register(c, configuration, version);
+        attachOpsSource(id, source, version + 1);
+    }
+
+    public void synchronizeZlm(
+            String id,
+            ZlmDirectConnection c,
+            String configuration,
+            OpsNodeSource source,
+            String installPath,
+            long version) {
+        if (sql.update(
+                        "UPDATE preview_node SET name=?,control_uri=?,token_path=?,media_address=?,zlm_install_path=?,config_version=?,version=version+1 WHERE node_id=? AND node_kind='ZLM_DIRECT' AND mode='DRAINING' AND version=?",
+                        c.name(),
+                        c.apiUri().toString(),
+                        c.secretFile().toString(),
+                        c.mediaAddress(),
+                        installPath,
+                        configuration,
+                        id,
+                        version)
+                != 1) throw new PreviewFailure("NODE_CONFIGURATION_CHANGED");
+        attachOpsSource(id, source, version + 1);
     }
 
     public void localConfiguration(String configuration, long version) {
@@ -159,15 +235,25 @@ public class PreviewNodeRepository {
             PreviewBudget budget,
             int priority,
             String configVersion) {
+        registerZlm(connection, budget, priority, configVersion, null);
+    }
+
+    public void registerZlm(
+            ZlmDirectConnection connection,
+            PreviewBudget budget,
+            int priority,
+            String configVersion,
+            String installPath) {
         if (nodes().size() >= 17) throw new PreviewFailure("NODE_REGISTRY_FULL");
         sql.update(
-                "INSERT INTO preview_node(id,node_id,name,control_uri,token_path,media_address,node_kind,mode,config_version,priority,max_sources,max_viewers,max_transcodes,max_starting,ingress_kbps,egress_kbps,source_upper_kbps,output_upper_kbps,version) VALUES(?,?,?,?,?,?,'ZLM_DIRECT','LOCAL',?,?,?,?,?,?,?,?,?,?,0)",
+                "INSERT INTO preview_node(id,node_id,name,control_uri,token_path,media_address,zlm_install_path,node_kind,mode,config_version,priority,max_sources,max_viewers,max_transcodes,max_starting,ingress_kbps,egress_kbps,source_upper_kbps,output_upper_kbps,version) VALUES(?,?,?,?,?,?,?,'ZLM_DIRECT','LOCAL',?,?,?,?,?,?,?,?,?,?,0)",
                 sql.queryForObject("SELECT COALESCE(MAX(id),0)+1 FROM preview_node", Long.class),
                 connection.nodeId(),
                 connection.name(),
                 connection.apiUri().toString(),
                 connection.secretFile().toString(),
                 connection.mediaAddress(),
+                installPath,
                 configVersion,
                 priority,
                 budget.maxSources(),
@@ -187,8 +273,19 @@ public class PreviewNodeRepository {
             PreviewBudget budget,
             String configVersion,
             long version) {
+        zlmPolicy(id, mode, priority, budget, configVersion, zlmInstallPath(id), version);
+    }
+
+    public void zlmPolicy(
+            String id,
+            String mode,
+            int priority,
+            PreviewBudget budget,
+            String configVersion,
+            String installPath,
+            long version) {
         if (sql.update(
-                        "UPDATE preview_node SET mode=?,priority=?,max_sources=?,max_viewers=?,max_transcodes=?,max_starting=?,ingress_kbps=?,egress_kbps=?,source_upper_kbps=?,output_upper_kbps=?,config_version=COALESCE(?,config_version),version=version+1 WHERE node_id=? AND node_kind='ZLM_DIRECT' AND version=?",
+                        "UPDATE preview_node SET mode=?,priority=?,max_sources=?,max_viewers=?,max_transcodes=?,max_starting=?,ingress_kbps=?,egress_kbps=?,source_upper_kbps=?,output_upper_kbps=?,config_version=COALESCE(?,config_version),zlm_install_path=?,version=version+1 WHERE node_id=? AND node_kind='ZLM_DIRECT' AND version=?",
                         mode,
                         priority,
                         budget.maxSources(),
@@ -200,9 +297,17 @@ public class PreviewNodeRepository {
                         budget.sourceUpperKbps(),
                         budget.outputUpperKbps(),
                         configVersion,
+                        installPath,
                         id,
                         version)
                 != 1) throw new PreviewFailure("NODE_CONFIGURATION_CHANGED");
+    }
+
+    public String zlmInstallPath(String id) {
+        return sql.queryForObject(
+                "SELECT zlm_install_path FROM preview_node WHERE node_id=? AND node_kind='ZLM_DIRECT'",
+                String.class,
+                id);
     }
 
     public void zlmCredential(String id, Path file, String configVersion, long version) {

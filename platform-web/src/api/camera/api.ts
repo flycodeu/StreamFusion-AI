@@ -45,13 +45,15 @@ export async function getCameras(query: {
     })
   ).data
 }
-export async function getCamera(cameraId: string): Promise<Camera> {
+export async function getCamera(cameraId: string, signal?: AbortSignal): Promise<Camera> {
   return (
     await request({
       path: `/cameras/${id(cameraId)}`,
       method: 'GET',
       successStatus: 200,
       decode: parseCamera,
+      timeoutMs: 10000,
+      signal,
     })
   ).data
 }

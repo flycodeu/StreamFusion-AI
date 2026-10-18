@@ -10,6 +10,8 @@ import {
   Grid,
   Folder,
   MoreFilled,
+  MuteNotification,
+  Headset,
 } from '@element-plus/icons-vue'
 import { getPreviewCatalog } from '../../api/preview/api'
 import { getGroupTree } from '../../api/camera-groups/api'
@@ -33,6 +35,9 @@ import PreviewCapacity from '../../features/preview/PreviewCapacity.vue'
 import PreviewSlotMenu from '../../features/preview/PreviewSlotMenu.vue'
 import PreviewDiagnosticsDialog from '../../features/preview/PreviewDiagnosticsDialog.vue'
 import { usePreviewSlots } from '../../features/preview/usePreviewSlots'
+import PreviewSavedViews from '../../features/preview/PreviewSavedViews.vue'
+import { captureView, resolveSavedView, type SavedView } from '../../features/preview/saved-views'
+import { sessionState } from '../../session/state'
 
 defineOptions({ name: 'PreviewCenter' })
 const route = useRoute(),
@@ -77,8 +82,157 @@ const {
   snapshot,
   firstFrame,
   trim,
+  muteAll,
+  toggleAudio,
+  unavailable,
+  clearIdentity,
+  slotRevision,
 } = usePreviewSlots()
+const openingView = ref(false)
+const retryingSlots = ref(new Set<number>())
+const retryRequests = new Map<number, globalThis.AbortController>()
+let viewSequence = 0,
+  viewAbort: globalThis.AbortController | null = null
+function cancelSavedRetries() {
+  for (const controller of retryRequests.values()) controller.abort()
+  retryRequests.clear()
+  retryingSlots.value.clear()
+}
+function missingChannel(cameraId: string): PreviewChannel {
+  return {
+    cameraId,
+    name: '收藏相机暂不可用',
+    deviceGroupKey: `c${cameraId}`,
+    deviceName: null,
+    groupId: null,
+    groupPath: null,
+    lifecycle: 'DISABLED',
+    profiles: [],
+  }
+}
+async function retrySlot(index: number) {
+  if (openingView.value || retryingSlots.value.has(index) || retryingSlots.value.size >= 4) return
+  const slot = slots[index]!
+  if (slot.error?.code === 'LEASE_RELEASE_FAILED') {
+    closeSlot(index)
+    return
+  }
+  if (!slot.channel || !slot.savedProfileId) {
+    await play(index)
+    return
+  }
+  const cameraId = slot.channel.cameraId,
+    profileId = slot.savedProfileId,
+    active = captureScope(),
+    revision = viewSequence,
+    controller = new globalThis.AbortController()
+  retryRequests.set(index, controller)
+  retryingSlots.value.add(index)
+  try {
+    const generation = await stop(index, false)
+    if (generation < 0 || !active() || controller.signal.aborted) return
+    slot.state = 'CONNECTING'
+    slot.error = null
+    const [target] = await resolveSavedView(
+      {
+        id: 'retry',
+        name: 'retry',
+        layout: layout.value,
+        updatedAt: new Date().toISOString(),
+        slots: [{ index, cameraId, profileId }],
+      },
+      controller.signal,
+    )
+    if (
+      !target ||
+      !active() ||
+      controller.signal.aborted ||
+      revision !== viewSequence ||
+      slotRevision(index) !== generation ||
+      slots[index]!.channel?.cameraId !== cameraId ||
+      slots[index]!.savedProfileId !== profileId
+    )
+      return
+    if (target.channel) await assign(index, target.channel, slot.usage, profileId)
+    else unavailable(index, missingChannel(cameraId), profileId, target.failure)
+  } finally {
+    if (retryRequests.get(index) === controller) {
+      retryRequests.delete(index)
+      retryingSlots.value.delete(index)
+    }
+  }
+}
+function currentView() {
+  return captureView(
+    layout.value,
+    slots.map((slot) => ({
+      channel: slot.channel,
+      profile:
+        slot.profile || (slot.savedProfileId ? { streamProfileId: slot.savedProfileId } : null),
+    })),
+  )
+}
+async function openView(view: SavedView) {
+  if (openingView.value || !sessionState.me) return
+  const revision = ++viewSequence,
+    active = captureScope()
+  cancelSavedRetries()
+  // A device-entry catalog may still be in flight and would otherwise auto-assign
+  // its channels after this explicit saved workspace has taken ownership.
+  sequence++
+  loading.value = false
+  globalThis.clearTimeout(searchTimer)
+  viewAbort?.abort()
+  const controller = new globalThis.AbortController()
+  viewAbort = controller
+  openingView.value = true
+  closeContext()
+  muteAll()
+  try {
+    const closed = await Promise.all(slots.map((_slot, index) => stop(index)))
+    if (!active() || revision !== viewSequence || controller.signal.aborted) return
+    if (closed.some((value) => value < 0)) {
+      ElMessage.info('原画面资源释放尚未确认，请重试关闭后再打开收藏')
+      return
+    }
+    const targets = await resolveSavedView(view, controller.signal)
+    if (!active() || revision !== viewSequence || controller.signal.aborted) return
+    if (!(await chooseLayout(view.layout))) return
+    maximizedSlot.value = null
+    activeSlot.value = 0
+    const restored = new Map(channels.value.map((channel) => [channel.cameraId, channel]))
+    const starts: Promise<void>[] = []
+    for (const target of targets) {
+      if (!active() || revision !== viewSequence || controller.signal.aborted) return
+      if (target.channel) {
+        restored.set(target.cameraId, target.channel)
+        starts.push(assign(target.index, target.channel, 'MAIN', target.profileId))
+      } else {
+        unavailable(target.index, missingChannel(target.cameraId), target.profileId, target.failure)
+      }
+    }
+    channels.value = [...restored.values()]
+    await Promise.all(starts)
+    if (active() && revision === viewSequence) {
+      const failed = targets.filter((target) => slots[target.index]?.state === 'ERROR').length
+      if (failed) ElMessage.info(`已应用收藏，${failed} 个窗口需重新选择或重试；其余按队列连接`)
+    }
+  } catch {
+    if (active() && revision === viewSequence && !controller.signal.aborted)
+      ElMessage.info('收藏未能完整打开，请保留当前画面并重试')
+  } finally {
+    if (viewAbort === controller) viewAbort = null
+    if (revision === viewSequence) openingView.value = false
+  }
+}
+function soundTitle(index: number) {
+  const slot = slots[index]!
+  if (slot.audio === 'BLOCKED') return '浏览器阻止发声，点击重试'
+  if (slot.audio !== 'AVAILABLE') return '尚未收到可播放音轨'
+  return slot.muted ? '打开声音（本页仅一路有声）' : '静音'
+}
 const slotCount = computed(() => layoutCount(layout.value))
+const workspaceOccupied = computed(() => slots.some((slot) => slot.channel || slot.player))
 const layoutDefinition = computed(() => getPreviewLayout(layout.value))
 const gridStyle = computed(() => ({
   '--layout-columns': layoutDefinition.value.columns,
@@ -109,6 +263,7 @@ let sequence = 0,
   statsTimer: ReturnType<typeof globalThis.setInterval> | undefined,
   searchTimer: ReturnType<typeof globalThis.setTimeout> | undefined
 function addChannel(channel: PreviewChannel) {
+  if (openingView.value) return
   if (channel.lifecycle !== 'ENABLED') {
     ElMessage.info('该通道未启用')
     return
@@ -137,6 +292,7 @@ function addChannel(channel: PreviewChannel) {
   )
 }
 function addDevice(deviceChannels: PreviewChannel[]) {
+  if (openingView.value) return
   if (deviceChannels.length === 1) addChannel(deviceChannels[0])
   else {
     const visibleSlots = slots.slice(0, slotCount.value)
@@ -268,6 +424,7 @@ function toggleMaximize(index: number) {
   maximizedSlot.value = maximizedSlot.value === index ? null : index
 }
 function closeSlot(index: number) {
+  if (openingView.value) return
   if (maximizedSlot.value === index) maximizedSlot.value = null
   void stop(index)
 }
@@ -282,6 +439,7 @@ function closeDiagnostics() {
   restoreFocus()
 }
 async function menuAction(action: PreviewMenuAction) {
+  if (openingView.value) return
   const index = context.value?.slot
   if (index == null) return
   closeContext(action !== 'diagnostics')
@@ -290,16 +448,18 @@ async function menuAction(action: PreviewMenuAction) {
     if (!(await snapshot(index))) ElMessage.info('当前还没有可抓取的画面')
   }
   if (action === 'maximize') toggleMaximize(index)
-  if (action === 'reconnect') void play(index)
+  if (action === 'reconnect') void retrySlot(index)
   if (action === 'close') closeSlot(index)
 }
 function menuChannel(cameraId: string) {
+  if (openingView.value) return
   const index = context.value?.slot,
     channel = channels.value.find((channel) => channel.cameraId === cameraId)
   closeContext()
   if (index != null && channel) void assign(index, channel, slots[index].usage)
 }
 function menuProfile(profileId: string) {
+  if (openingView.value) return
   const index = context.value?.slot
   closeContext()
   if (index != null) void switchProfile(index, profileId)
@@ -332,6 +492,11 @@ watch(search, () => {
 watch(
   () => [route.query.mode, route.query.device],
   async () => {
+    viewAbort?.abort()
+    cancelSavedRetries()
+    viewSequence++
+    openingView.value = false
+    muteAll()
     const revision = ++layoutSequence,
       active = captureScope()
     sequence++
@@ -346,6 +511,23 @@ watch(
     void load()
   },
 )
+watch(
+  () => [sessionState.me?.user.id, sessionState.epoch],
+  () => {
+    viewAbort?.abort()
+    cancelSavedRetries()
+    viewSequence++
+    sequence++
+    openingView.value = false
+    muteAll()
+    closeContext(false)
+    diagnosticFailure.value = null
+    channels.value = []
+    groups.value = []
+    void clearIdentity()
+  },
+  { flush: 'sync' },
+)
 watch(showStats, (visible) => {
   if (visible) void sampleStats()
 })
@@ -357,6 +539,10 @@ onMounted(() => {
   globalThis.document.addEventListener('keydown', dismissContext)
 })
 onBeforeUnmount(() => {
+  viewAbort?.abort()
+  cancelSavedRetries()
+  viewSequence++
+  muteAll()
   sequence++
   globalThis.clearTimeout(searchTimer)
   globalThis.clearInterval(statsTimer)
@@ -428,7 +614,10 @@ onBeforeUnmount(() => {
         </div>
       </header>
       <RequestError :error="error" />
-      <div v-if="deviceMode && !loading && !channels.length" class="device-empty">
+      <div
+        v-if="deviceMode && !loading && !channels.length && !workspaceOccupied"
+        class="device-empty"
+      >
         <ElEmpty description="暂无可见通道" />
       </div>
       <div v-else class="preview-canvas">
@@ -445,7 +634,7 @@ onBeforeUnmount(() => {
             :key="index"
             class="preview-tile"
             :class="{
-              occupied: slot.channel,
+              occupied: Boolean(slot.channel || slot.player),
               playing: slot.state === 'PLAYING',
               selected: activeSlot === index,
               maximized: maximizedSlot === index,
@@ -468,7 +657,7 @@ onBeforeUnmount(() => {
               v-if="slot.channel"
               :ref="(element) => setVideoRef(index, element)"
               autoplay
-              muted
+              :muted="slot.muted"
               playsinline
               @playing="firstFrame(index)"
             />
@@ -484,7 +673,10 @@ onBeforeUnmount(() => {
                 }}</span>
               </div>
             </div>
-            <div v-if="slot.channel && slot.state !== 'PLAYING'" class="tile-state">
+            <div
+              v-if="(slot.channel || slot.player) && slot.state !== 'PLAYING'"
+              class="tile-state"
+            >
               <VideoPlay v-if="slot.state !== 'ERROR'" class="state-icon" /><span>{{
                 slot.state === 'CLOSING' ? '正在关闭画面…' : slot.error?.message || '正在连接…'
               }}</span>
@@ -493,12 +685,24 @@ onBeforeUnmount(() => {
                   size="small"
                   text
                   type="primary"
-                  @click.stop="
-                    slot.error?.code === 'LEASE_RELEASE_FAILED' ? closeSlot(index) : play(index)
+                  :disabled="openingView || retryingSlots.has(index)"
+                  :loading="retryingSlots.has(index)"
+                  v-if="
+                    slot.profile ||
+                    slot.savedProfileId ||
+                    slot.error?.code === 'LEASE_RELEASE_FAILED'
                   "
+                  @click.stop="retrySlot(index)"
                   @dblclick.stop
-                  >{{ slot.error?.code === 'LEASE_RELEASE_FAILED' ? '重试关闭' : '重连' }}</ElButton
+                  >{{
+                    slot.error?.code === 'LEASE_RELEASE_FAILED'
+                      ? '重试关闭'
+                      : slot.savedProfileId
+                        ? '重新检查'
+                        : '重连'
+                  }}</ElButton
                 >
+                <span v-else class="tile-reselect">请从相机列表重新选择，或重试打开收藏</span>
                 <ElButton
                   v-if="slot.error"
                   size="small"
@@ -509,9 +713,22 @@ onBeforeUnmount(() => {
                 >
               </div>
             </div>
-            <div v-if="!slot.channel" class="tile-empty">
+            <div v-if="!slot.channel && !slot.player" class="tile-empty">
               <VideoPlay /><span>{{ index + 1 }}</span>
             </div>
+            <button
+              v-if="slot.channel"
+              class="tile-audio"
+              type="button"
+              :aria-label="soundTitle(index)"
+              :title="soundTitle(index)"
+              :aria-pressed="!slot.muted"
+              :disabled="openingView || slot.state !== 'PLAYING' || slot.audio === 'UNKNOWN'"
+              @click.stop="toggleAudio(index)"
+              @dblclick.stop
+            >
+              <MuteNotification v-if="slot.muted" /><Headset v-else />
+            </button>
             <button
               v-if="slot.channel && maximizedSlot === index"
               class="tile-fullscreen-exit"
@@ -536,11 +753,11 @@ onBeforeUnmount(() => {
               <MoreFilled />
             </button>
             <button
-              v-if="slot.channel"
+              v-if="slot.channel || slot.player"
               class="tile-close"
               type="button"
               :aria-label="slot.state === 'CLOSING' ? '正在关闭画面' : '关闭画面'"
-              :disabled="slot.state === 'CLOSING'"
+              :disabled="openingView || slot.state === 'CLOSING'"
               @click.stop="closeSlot(index)"
               @dblclick.stop
             >
@@ -568,7 +785,11 @@ onBeforeUnmount(() => {
             @click="showStats = !showStats"
             >码率信息</ElButton
           >
-          <PreviewLayoutPicker :model-value="layout" @update:model-value="chooseLayout" />
+          <PreviewSavedViews :busy="openingView" :current="currentView" @open="openView" />
+          <PreviewLayoutPicker
+            :model-value="layout"
+            @update:model-value="(value) => !openingView && chooseLayout(value)"
+          />
         </div>
       </footer>
     </main>

@@ -109,7 +109,7 @@ func TestPlatformCatalogAuthenticationAndVersionFence(t *testing.T) {
 	if err := json.Unmarshal(got.Body.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if len(envelope.Data.Items) != 1 || envelope.Data.Items[0].InstanceID != instanceID || envelope.Data.Items[0].ReleaseID != releaseID || envelope.Data.Items[0].MaxTranscodes != 64 {
+	if len(envelope.Data.Items) != 1 || envelope.Data.Items[0].ControllerID != s.controllerID() || envelope.Data.Items[0].TargetID != targetID || envelope.Data.Items[0].InstanceID != instanceID || envelope.Data.Items[0].ReleaseID != releaseID || envelope.Data.Items[0].MaxTranscodes != 64 {
 		t.Fatalf("wrong catalog: %+v", envelope.Data.Items)
 	}
 	if strings.Contains(got.Body.String(), "machineToken") || strings.Contains(got.Body.String(), "certificateSha256") {
@@ -120,6 +120,22 @@ func TestPlatformCatalogAuthenticationAndVersionFence(t *testing.T) {
 	}
 	if got = platformCall(t, b.h, "POST", "/platform/preview-instances/"+instanceID+"/handoff", serviceToken, map[string]string{"releaseId": releaseID, "unexpected": "value"}); got.Code != 400 {
 		t.Fatal("extra request field accepted", got.Code)
+	}
+	for _, state := range []struct {
+		status string
+		ack    int
+	}{{"QUEUED", 0}, {"RUNNING", 0}, {"UNKNOWN", 0}, {"SUCCEEDED", 1}, {"FAILED", 1}} {
+		jobID := uuid.NewString()
+		if _, err := s.DB.Exec("INSERT INTO jobs(id,actor_id,kind,target_id,instance_id,idempotency_key,request_hash,status,phase,input_json,target_ack_pending,trace_id,created_at,updated_at) SELECT ?,id,'PUBLISH',?,?,?,? ,?,'TEST','{}',?,'test',?,? FROM admins LIMIT 1", jobID, targetID, instanceID, jobID, hashToken(jobID), state.status, state.ack, Now(), Now()); err != nil {
+			t.Fatal(err)
+		}
+		got = platformCall(t, b.h, "POST", "/platform/preview-instances/"+instanceID+"/handoff", serviceToken, map[string]string{"releaseId": releaseID})
+		if got.Code != 409 || !strings.Contains(got.Body.String(), "HANDOFF_JOB_PENDING") {
+			t.Fatal("pending job not fenced", state, got.Code, got.Body.String())
+		}
+		if _, err := s.DB.Exec("DELETE FROM jobs WHERE id=?", jobID); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

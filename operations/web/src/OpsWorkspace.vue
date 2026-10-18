@@ -25,6 +25,19 @@ interface Artifact {
   archiveSha256: string;
   byteSize: number;
   available: boolean;
+  runtimeEnvironment?: RuntimeEnvironment | null;
+}
+interface RuntimeEnvironment {
+  installationId: string;
+  pluginVersion: string;
+  imageDigest: string;
+}
+interface RuntimeInstallation {
+  id: string;
+  targetId: string;
+  pluginKey: string;
+  pluginVersion: string;
+  status: string;
 }
 interface Credential {
   id: string;
@@ -82,10 +95,29 @@ interface Instance {
   observedAt: string;
 }
 interface Release {
+  runtimeEnvironment?: RuntimeEnvironment;
   id: string;
   imageId: string;
   artifactId: string;
   config: Config;
+  bindings?: Binding[];
+}
+interface ProbeLayer {
+  layer: string;
+  executed: boolean;
+  reachable: boolean;
+  authenticated: boolean;
+  errorCode?: string;
+}
+interface BindingProbeResult {
+  controller: ProbeLayer;
+  targetHost: ProbeLayer;
+  applicationNetwork: ProbeLayer | null;
+  authentication: ProbeLayer | null;
+  errorCode: string;
+  observedAt: string;
+  releaseId?: string;
+  credentialRevision?: string;
 }
 interface Plan {
   id: string;
@@ -115,6 +147,7 @@ const targets = ref<Target[]>([]),
   jobs = ref<Job[]>([]),
   credentials = ref<Credential[]>([]),
   bindings = ref<Binding[]>([]);
+const runtimeInstallations = ref<RuntimeInstallation[]>([]), importSource = ref("DOCKER_ARCHIVE"), importRuntime = ref("");
 const recipe = ref("java-compose-v1"),
   importRecipe = ref("java-compose-v1");
 const maintenancePermit = ref(""),
@@ -176,6 +209,8 @@ const busy = ref(false),
   dialog = ref(""),
   controllerId = ref(""),
   bindingProbeTargets = ref<Record<string, string>>({}),
+  bindingProbeInstances = ref<Record<string, string>>({}),
+  bindingProbeResults = ref<Record<string, BindingProbeResult>>({}),
   selected = ref<Instance>(),
   plan = ref<Plan>(),
   planInstance = ref<Instance>(),
@@ -286,13 +321,14 @@ async function act(fn: () => Promise<void>) {
   }
 }
 async function refresh() {
-  const [t, a, i, j, b, c] = await Promise.all([
+  const [t, a, i, j, b, c, environments] = await Promise.all([
     request<Target[]>("/targets"),
     request<Artifact[]>("/artifacts"),
     request<Instance[]>("/instances"),
     request<Job[]>("/jobs"),
     request<Binding[]>("/bindings"),
     request<Credential[]>("/credentials"),
+    request<RuntimeInstallation[]>("/plugin-installations"),
   ]);
   targets.value = t;
   for (const binding of b) {
@@ -305,6 +341,7 @@ async function refresh() {
   jobs.value = j;
   bindings.value = b;
   credentials.value = c;
+  runtimeInstallations.value = environments;
   if (detail.value) detail.value = j.find((x) => x.id === detail.value?.id);
 }
 function poll() {
@@ -408,15 +445,18 @@ async function bindingProbe(b: Binding) {
       (item) => item.id === bindingProbeTargets.value[b.id],
     );
     if (!target) throw new Error("请先选择检查来源主机");
-    const out = await request<{
-      controller: { reachable: boolean };
-      targetHost: { reachable: boolean };
-    }>("/bindings/" + b.id + "/probes", "POST", {
+    const instance = instances.value.find((item) => item.id === bindingProbeInstances.value[b.id] && item.targetId === target.id);
+    const out = await request<BindingProbeResult>("/bindings/" + b.id + "/probes", "POST", {
       targetId: target.id,
+      ...(instance ? {instanceId: instance.id, releaseId: instance.currentReleaseId} : {}),
     });
-    ElMessage.info(
-      `TCP：控制器${out.controller.reachable ? "可达" : "不可达"}，${target.name}${out.targetHost.reachable ? "可达" : "不可达"}；认证及应用网络未验证`,
-    );
+    bindingProbeResults.value[b.id] = out;
+  });
+}
+async function cancelJob(j: Job) {
+  await act(async () => {
+    await request(`/jobs/${j.id}/cancel`, "POST");
+    await refresh();
   });
 }
 function pickFile(e: Event) {
@@ -426,7 +466,7 @@ function pickFile(e: Event) {
 async function importArtifact() {
   await act(async () => {
     if (!file.value) throw new Error("请选择镜像归档");
-    const limit = importRecipe.value === "java-compose-v1" ? 512 : 2048;
+    const limit = importSource.value === "JAR" ? 128 : importRecipe.value === "java-compose-v1" ? 512 : 2048;
     if (file.value.size > limit * 1024 * 1024)
       throw new Error(`归档上限 ${limit} MiB`);
     uploadPhase.value = "受理导入";
@@ -436,6 +476,8 @@ async function importArtifact() {
       {
         name: importName.value,
         recipe: importRecipe.value,
+        sourceKind: importSource.value,
+        ...(importSource.value === "JAR" ? { pluginInstallationId: importRuntime.value } : {}),
         archiveSha256: importSHA.value.trim().toLowerCase(),
         byteSize: file.value.size,
         idempotencyKey: crypto.randomUUID(),
@@ -609,17 +651,34 @@ function credentialSelected(
               <td>{{ b.host }}:{{ b.port }}</td>
               <td>{{ b.database || "—" }}</td>
               <td>
-                <select v-model="bindingProbeTargets[b.id]" :aria-label="`检查来源：${b.host}`">
+                <select v-model="bindingProbeTargets[b.id]" :aria-label="`检查来源：${b.host}`" @change="bindingProbeInstances[b.id] = ''; delete bindingProbeResults[b.id]">
                   <option value="">选择主机</option>
                   <option v-for="t in targets" :key="t.id" :value="t.id">
                     {{ t.name }} · {{ t.address }}
                   </option>
                 </select>
+                <select v-model="bindingProbeInstances[b.id]" :aria-label="`实例网络：${b.host}`" @change="delete bindingProbeResults[b.id]">
+                  <option value="">仅检查主机 TCP</option>
+                  <option v-for="i in instances.filter(item => item.targetId === bindingProbeTargets[b.id] && item.currentReleaseId && !item.config.preview && !item.config.zlm)" :key="i.id" :value="i.id">{{ i.name }} · 当前已发布版本</option>
+                </select>
               </td>
               <td>
                 <button class="quiet" :disabled="busy || !bindingProbeTargets[b.id]" @click="bindingProbe(b)">
-                  TCP 检查
+                  {{ bindingProbeInstances[b.id] ? '检查实例连接' : 'TCP 检查' }}
                 </button>
+                <details v-if="bindingProbeResults[b.id]" class="probe-result">
+                  <summary>{{ bindingProbeResults[b.id].authentication?.authenticated ? '认证通过' : bindingProbeResults[b.id].authentication?.errorCode || bindingProbeResults[b.id].errorCode || '查看检查结果' }}</summary>
+                  <dl>
+                    <dt>控制器 TCP</dt><dd>{{ bindingProbeResults[b.id].controller.reachable ? '可达' : '不可达' }}</dd>
+                    <dt>目标主机 TCP</dt><dd>{{ !bindingProbeResults[b.id].targetHost.executed ? '未执行' : bindingProbeResults[b.id].targetHost.reachable ? '可达' : '不可达' }}</dd>
+                    <dt>实例网络</dt><dd>{{ !bindingProbeResults[b.id].applicationNetwork ? '未验证' : bindingProbeResults[b.id].applicationNetwork?.reachable ? '可达' : '不可达' }}</dd>
+                    <dt>最小认证</dt><dd>{{ !bindingProbeResults[b.id].authentication?.executed ? '未验证' : bindingProbeResults[b.id].authentication?.authenticated ? '通过' : bindingProbeResults[b.id].authentication?.errorCode || '未通过' }}</dd>
+                    <template v-if="bindingProbeResults[b.id].releaseId"><dt>冻结版本</dt><dd><code>{{ bindingProbeResults[b.id].releaseId }}</code></dd></template>
+                    <dt>检查时间</dt><dd>{{ time(bindingProbeResults[b.id].observedAt) }}</dd>
+                  </dl>
+                  <small v-if="bindingProbeResults[b.id].authentication?.errorCode === 'AUTH_TLS_REQUIRED'">该 MySQL 账号需要 TLS full-auth，当前探针未支持；没有发送明文密码，结果不代表密码错误或数据库不可用。</small>
+                  <small v-else-if="bindingProbeResults[b.id].errorCode || bindingProbeResults[b.id].authentication?.errorCode">核对目标执行器能力、实例当前版本与原作业/ACK；认证错误请检查所选凭据修订，不要以 TCP 可达判断密码正确。</small>
+                </details>
               </td>
             </tr>
           </tbody>
@@ -630,7 +689,7 @@ function credentialSelected(
       <div class="section-head">
         <h2>不可变镜像制品</h2>
         <button class="secondary" :disabled="busy" @click="dialog = 'import'">
-          导入镜像
+          导入制品
         </button>
       </div>
       <div v-if="!artifacts.length" class="empty">尚未导入制品</div>
@@ -640,6 +699,7 @@ function credentialSelected(
             <tr>
               <th>名称</th>
               <th>镜像身份</th>
+              <th>运行环境</th>
               <th>归档</th>
               <th>材料</th>
             </tr>
@@ -649,6 +709,13 @@ function credentialSelected(
               <td>{{ a.name }}</td>
               <td>
                 <code :title="a.imageId">{{ a.imageId.slice(0, 24) }}…</code>
+              </td>
+              <td>
+                <template v-if="a.runtimeEnvironment">
+                  Java {{ a.runtimeEnvironment.pluginVersion }}
+                  <code :title="a.runtimeEnvironment.imageDigest">{{ a.runtimeEnvironment.imageDigest.slice(0, 19) }}…</code>
+                </template>
+                <span v-else>镜像自带</span>
               </td>
               <td>
                 {{ (a.byteSize / 1048576).toFixed(1) }} MiB
@@ -848,6 +915,7 @@ function credentialSelected(
                   "
                 >
                   详情</button
+                ><button v-if="j.status === 'QUEUED' && j.phase !== 'UPLOADING' && !j.targetAckPending" class="quiet" :disabled="busy" @click="cancelJob(j)">取消排队</button
                 ><button
                   v-if="j.status === 'UNKNOWN' || j.targetAckPending"
                   class="quiet"
@@ -882,7 +950,7 @@ function credentialSelected(
           binding: '绑定已有依赖',
           instance: '实例配置草稿',
           registration: '预览节点登记与维护',
-          import: '导入镜像',
+          import: '导入制品',
           candidate: '选择候选',
           plan: '发布计划',
           history: '版本记录',
@@ -1133,18 +1201,26 @@ function credentialSelected(
       class="dialog-form"
       @submit.prevent="importArtifact"
     >
+      <label>来源<select v-model="importSource" aria-label="来源" @change="importRecipe = importSource === 'JAR' ? 'java-compose-v1' : importRecipe; file = undefined; importSHA = ''">
+        <option value="DOCKER_ARCHIVE">完整 Docker 镜像</option>
+        <option value="JAR">可执行 JAR + 已安装 Java21</option>
+      </select></label>
       <label
-        >配方<select v-model="importRecipe">
+        >配方<select v-model="importRecipe" aria-label="配方" :disabled="importSource === 'JAR'">
           <option value="java-compose-v1">Java 服务</option>
           <option value="preview-node-v1">预览节点</option>
           <option value="zlm-direct-v1">独立 ZLM</option>
         </select></label
       >
+      <label v-if="importSource === 'JAR'">Java21 运行环境<select v-model="importRuntime" aria-label="Java21 运行环境" required>
+        <option value="">选择已校验就绪环境</option>
+        <option v-for="runtime in runtimeInstallations.filter(item => item.pluginKey === 'java-runtime' && item.pluginVersion === '21-jre' && item.status === 'READY')" :key="runtime.id" :value="runtime.id">{{ targets.find(target => target.id === runtime.targetId)?.name || runtime.targetId }} · Java21</option>
+      </select></label>
       <label>名称<input v-model="importName" required /></label
       ><label
-        >Docker save 归档<input
+        >{{ importSource === 'JAR' ? '可执行 JAR' : 'Docker save 归档' }}<input
           type="file"
-          accept=".tar"
+          :accept="importSource === 'JAR' ? '.jar' : '.tar'"
           required
           @change="pickFile" /></label
       ><label
@@ -1154,7 +1230,9 @@ function credentialSelected(
           pattern="[a-fA-F0-9]{64}"
           spellcheck="false" /></label
       ><small>{{
-        importRecipe === "zlm-direct-v1"
+        importSource === "JAR"
+          ? "最大128MiB；验证SHA-256、Main-Class和Java21字节码边界。只添加固定JAR层，不执行上传代码；封装结果冻结运行环境，完整镜像不能替换JRE。"
+          : importRecipe === "zlm-direct-v1"
           ? "选择独立 ZLM 镜像归档，使用可信 SHA-256；单镜像 linux/amd64，最大 2GiB。"
           : importRecipe === "preview-node-v1"
           ? "选择 S4 节点包内 preview-node-image.tar，使用该文件的可信 SHA-256；最大 2GiB，须支持维护封闭。"
@@ -1209,6 +1287,9 @@ function credentialSelected(
         <dd>
           <code>{{ plan.baseline?.id || "停止未成功的候选" }}</code>
         </dd>
+        <template v-if="plan.candidate.runtimeEnvironment">
+          <dt>冻结运行环境</dt><dd>Java {{ plan.candidate.runtimeEnvironment.pluginVersion }} · <code>{{ plan.candidate.runtimeEnvironment.imageDigest }}</code></dd>
+        </template>
         <dt>端口</dt>
         <dd>
           {{ plan.candidate.config.bindAddress }}:{{
@@ -1251,6 +1332,7 @@ function credentialSelected(
         }}</strong
         ><code>{{ r.id }}</code
         ><small>{{ r.imageId }}</small>
+        <small v-if="r.runtimeEnvironment">Java {{ r.runtimeEnvironment.pluginVersion }} · {{ r.runtimeEnvironment.imageDigest }}</small>
         <details v-if="r.config.preview">
           <summary>冻结的节点配置</summary>
           <pre class="log-output">{{ JSON.stringify(r.config, null, 2) }}</pre>
@@ -1363,6 +1445,9 @@ function credentialSelected(
     12px/1.6 Consolas,
     monospace;
 }
+.probe-result { max-width: 320px; }
+.probe-result dl { display: grid; grid-template-columns: auto 1fr; gap: 8px; font-size: 12px; }
+.probe-result dd { margin: 0; overflow-wrap: anywhere; }
 .version-list article {
   padding: 16px 0;
   border-bottom: 1px solid #dce5ef;

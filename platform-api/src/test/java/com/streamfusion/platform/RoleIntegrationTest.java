@@ -87,7 +87,7 @@ class RoleIntegrationTest extends SecureLoginSupport {
                         node ->
                                 childCounts.put(
                                         node.path("id").asText(), node.path("children").size()));
-        assertThat(childCounts).containsEntry(systemRoot, 4).containsEntry(monitorRoot, 5);
+        assertThat(childCounts).containsEntry(systemRoot, 5).containsEntry(monitorRoot, 5);
         write(
                 put("/roles/" + roleId + "/menus"),
                 admin,
@@ -98,7 +98,7 @@ class RoleIntegrationTest extends SecureLoginSupport {
                                 "SELECT COUNT(*) FROM sys_role_menu WHERE role_id=?",
                                 Integer.class,
                                 Long.parseLong(roleId)))
-                .isEqualTo(4);
+                .isEqualTo(5);
         write(
                 put("/roles/" + roleId + "/menus"),
                 admin,
@@ -393,7 +393,7 @@ class RoleIntegrationTest extends SecureLoginSupport {
                                 "SELECT menu_id FROM sys_role_menu WHERE role_id=?",
                                 Long.class,
                                 Long.parseLong(newRole)))
-                .containsExactlyInAnyOrder(1002L, 1003L, 1004L, 1005L);
+                .containsExactlyInAnyOrder(1002L, 1003L, 1004L, 1005L, 1012L);
 
         write(
                 put("/roles/" + existingRole + "/menus"),

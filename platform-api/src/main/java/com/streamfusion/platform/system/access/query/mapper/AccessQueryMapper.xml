@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.streamfusion.platform.system.access.query.mapper.AccessQueryMapper">
+    <sql id="userColumns">u.id,u.username,u.nickname,u.status,u.must_change_password,u.locked_until</sql>
+    <sql id="userKeyword">
+        <if test="keyword != null">AND (LOWER(u.username) LIKE CONCAT('%',LOWER(#{keyword}),'%') ESCAPE '!' OR LOWER(u.nickname) LIKE CONCAT('%',LOWER(#{keyword}),'%') ESCAPE '!')</if>
+    </sql>
+    <select id="user" resultType="com.streamfusion.platform.system.access.query.AccessQueryRows$UserRow">
+        SELECT <include refid="userColumns"/> FROM sys_user u WHERE u.id=#{id}
+    </select>
+    <select id="users" resultType="com.streamfusion.platform.system.access.query.AccessQueryRows$UserRow">
+        SELECT <include refid="userColumns"/> FROM sys_user u WHERE 1=1 <include refid="userKeyword"/>
+        ORDER BY u.id LIMIT #{size} OFFSET #{offset}
+    </select>
+    <select id="userCount" resultType="long">SELECT COUNT(*) FROM sys_user u WHERE 1=1 <include refid="userKeyword"/></select>
+    <sql id="roleKeyword">
+        <if test="keyword != null">AND (LOWER(r.code) LIKE CONCAT('%',LOWER(#{keyword}),'%') ESCAPE '!' OR LOWER(r.name) LIKE CONCAT('%',LOWER(#{keyword}),'%') ESCAPE '!')</if>
+    </sql>
+    <sql id="roleOverviewColumns">
+        r.id,r.code,r.name,r.status,
+        (SELECT COUNT(*) FROM sys_user_role ur WHERE ur.role_id=r.id) AS user_count,
+        (SELECT COUNT(*) FROM sys_user_role ur JOIN sys_user u ON u.id=ur.user_id
+          WHERE ur.role_id=r.id AND r.status='ENABLED' AND u.status=1 AND u.must_change_password=FALSE) AS usable_user_count,
+        (SELECT COUNT(*) FROM sys_role_menu rm JOIN sys_menu m ON m.id=rm.menu_id AND m.type='PAGE'
+          WHERE rm.role_id=r.id) AS page_count
+    </sql>
+    <select id="roles" resultType="com.streamfusion.platform.system.access.query.AccessQueryRows$RoleRow">
+        SELECT <include refid="roleOverviewColumns"/> FROM sys_role r WHERE 1=1 <include refid="roleKeyword"/>
+        ORDER BY r.id LIMIT #{size} OFFSET #{offset}
+    </select>
+    <select id="roleCount" resultType="long">SELECT COUNT(*) FROM sys_role r WHERE 1=1 <include refid="roleKeyword"/></select>
+    <select id="role" resultType="com.streamfusion.platform.system.access.query.AccessQueryRows$RoleRow">
+        SELECT <include refid="roleOverviewColumns"/> FROM sys_role r WHERE r.id=#{id}
+    </select>
+    <select id="roleUsers" resultType="com.streamfusion.platform.system.access.query.AccessQueryRows$UserRow">
+        SELECT <include refid="userColumns"/> FROM sys_user u JOIN sys_user_role ur ON ur.user_id=u.id
+        WHERE ur.role_id=#{roleId} <include refid="userKeyword"/> ORDER BY u.id LIMIT #{size} OFFSET #{offset}
+    </select>
+    <select id="roleUserCount" resultType="long">
+        SELECT COUNT(*) FROM sys_user u JOIN sys_user_role ur ON ur.user_id=u.id
+        WHERE ur.role_id=#{roleId} <include refid="userKeyword"/>
+    </select>
+    <select id="rolePageIds" resultType="java.lang.Long">
+        SELECT rm.menu_id FROM sys_role_menu rm JOIN sys_menu m ON m.id=rm.menu_id AND m.type='PAGE'
+        WHERE rm.role_id=#{roleId} ORDER BY rm.menu_id LIMIT 1001
+    </select>
+    <select id="pageCounts" resultType="com.streamfusion.platform.system.access.query.AccessQueryRows$PageCountsRow">
+        SELECT m.id AS menu_id,
+          COUNT(DISTINCT rm.role_id) AS role_count,
+          COUNT(DISTINCT CASE WHEN r.status='ENABLED' THEN rm.role_id END) AS active_role_count,
+          COUNT(DISTINCT ur.user_id) AS user_count,
+          COUNT(DISTINCT CASE WHEN r.status='ENABLED' AND u.status=1 AND u.must_change_password=FALSE THEN ur.user_id END) AS eligible_user_count
+        FROM sys_menu m LEFT JOIN sys_role_menu rm ON rm.menu_id=m.id
+        LEFT JOIN sys_role r ON r.id=rm.role_id
+        LEFT JOIN sys_user_role ur ON ur.role_id=r.id
+        LEFT JOIN sys_user u ON u.id=ur.user_id
+        WHERE m.type='PAGE' AND m.id IN
+        <foreach collection="menuIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        GROUP BY m.id
+    </select>
+    <!-- Current eligible users only; one row per (PAGE, user), even with multiple active roles. 10001 detects overflow. -->
+    <select id="exportAssignments" resultType="com.streamfusion.platform.system.access.query.AccessQueryRows$ExportAssignmentRow">
+        SELECT DISTINCT rm.menu_id,u.id,u.username,u.nickname,u.status,u.must_change_password,u.locked_until
+        FROM sys_role_menu rm JOIN sys_menu m ON m.id=rm.menu_id AND m.type='PAGE'
+        JOIN sys_role r ON r.id=rm.role_id AND r.status='ENABLED'
+        JOIN sys_user_role ur ON ur.role_id=rm.role_id JOIN sys_user u ON u.id=ur.user_id
+        WHERE u.status=1 AND u.must_change_password=FALSE AND rm.menu_id IN
+        <foreach collection="menuIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY rm.menu_id,u.id LIMIT 10001
+    </select>
+    <!-- At most the existing 1000 PAGE nodes; aggregate counts, never the full relation matrix. -->
+    <select id="userGrants" resultType="com.streamfusion.platform.system.access.query.AccessQueryRows$GrantRow">
+        SELECT rm.menu_id,COUNT(*) AS source_count,SUM(CASE WHEN r.status='ENABLED' THEN 1 ELSE 0 END) AS active_source_count
+        FROM sys_user_role ur JOIN sys_role r ON r.id=ur.role_id JOIN sys_role_menu rm ON rm.role_id=r.id
+        JOIN sys_menu m ON m.id=rm.menu_id AND m.type='PAGE'
+        WHERE ur.user_id=#{userId} GROUP BY rm.menu_id ORDER BY rm.menu_id LIMIT 1001
+    </select>
+    <sql id="pageUserFilter">
+        WHERE 1=1
+        <if test="userId != null">AND u.id=#{userId}</if>
+        <!-- Only an explicitly selected single user may expose a missing grant, never a full matrix. -->
+        <if test="userId == null or !includeInactive">AND EXISTS(SELECT 1 FROM sys_user_role ur JOIN sys_role r ON r.id=ur.role_id
+            JOIN sys_role_menu rm ON rm.role_id=r.id WHERE ur.user_id=u.id AND rm.menu_id=#{menuId}
+            <if test="!includeInactive">AND r.status='ENABLED'</if>)</if>
+        <if test="!includeInactive">AND u.status=1 AND u.must_change_password=FALSE</if>
+        <include refid="userKeyword"/>
+    </sql>
+    <select id="pageUsers" resultType="com.streamfusion.platform.system.access.query.AccessQueryRows$UserRow">
+        SELECT <include refid="userColumns"/>,
+          (SELECT COUNT(*) FROM sys_user_role ur JOIN sys_role_menu rm ON rm.role_id=ur.role_id WHERE ur.user_id=u.id AND rm.menu_id=#{menuId}) AS source_count,
+          (SELECT COUNT(*) FROM sys_user_role ur JOIN sys_role r ON r.id=ur.role_id JOIN sys_role_menu rm ON rm.role_id=r.id WHERE ur.user_id=u.id AND rm.menu_id=#{menuId} AND r.status='ENABLED') AS active_source_count
+        FROM sys_user u <include refid="pageUserFilter"/>
+        ORDER BY u.id LIMIT #{size} OFFSET #{offset}
+    </select>
+    <select id="pageUserCount" resultType="long">SELECT COUNT(*) FROM sys_user u <include refid="pageUserFilter"/></select>
+    <sql id="pageRoleFilter">
+        WHERE EXISTS(SELECT 1 FROM sys_role_menu rm WHERE rm.role_id=r.id AND rm.menu_id=#{menuId})
+        <if test="userId != null">AND EXISTS(SELECT 1 FROM sys_user_role ur WHERE ur.role_id=r.id AND ur.user_id=#{userId})</if>
+        <if test="!includeInactive">AND r.status='ENABLED'</if>
+        <if test="keyword != null">AND (LOWER(r.code) LIKE CONCAT('%',LOWER(#{keyword}),'%') ESCAPE '!' OR LOWER(r.name) LIKE CONCAT('%',LOWER(#{keyword}),'%') ESCAPE '!')</if>
+    </sql>
+    <select id="pageRoles" resultType="com.streamfusion.platform.system.access.query.AccessQueryRows$RoleRow">
+        SELECT r.id,r.code,r.name,r.status,(SELECT COUNT(*) FROM sys_user_role ur WHERE ur.role_id=r.id) AS user_count
+        FROM sys_role r <include refid="pageRoleFilter"/> ORDER BY r.id LIMIT #{size} OFFSET #{offset}
+    </select>
+    <select id="pageRoleCount" resultType="long">SELECT COUNT(*) FROM sys_role r <include refid="pageRoleFilter"/></select>
+    <!-- Only three preview sources per returned subject; full sources use the paginated role API. -->
+    <select id="userPageSources" resultType="com.streamfusion.platform.system.access.query.AccessQueryRows$SourceRow">
+        SELECT subject_id,id,code,name,status FROM (
+            SELECT rm.menu_id AS subject_id,r.id,r.code,r.name,r.status,
+              ROW_NUMBER() OVER(PARTITION BY rm.menu_id ORDER BY CASE WHEN r.status='ENABLED' THEN 0 ELSE 1 END,r.id) AS source_rank
+            FROM sys_user_role ur JOIN sys_role r ON r.id=ur.role_id JOIN sys_role_menu rm ON rm.role_id=r.id
+            WHERE ur.user_id=#{userId} AND rm.menu_id IN <foreach collection="menuIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ) ranked WHERE source_rank &lt;= 3 ORDER BY subject_id,source_rank
+    </select>
+    <select id="pageUserSources" resultType="com.streamfusion.platform.system.access.query.AccessQueryRows$SourceRow">
+        SELECT subject_id,id,code,name,status FROM (
+            SELECT ur.user_id AS subject_id,r.id,r.code,r.name,r.status,
+              ROW_NUMBER() OVER(PARTITION BY ur.user_id ORDER BY CASE WHEN r.status='ENABLED' THEN 0 ELSE 1 END,r.id) AS source_rank
+            FROM sys_user_role ur JOIN sys_role r ON r.id=ur.role_id JOIN sys_role_menu rm ON rm.role_id=r.id
+            WHERE rm.menu_id=#{menuId} AND ur.user_id IN <foreach collection="userIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ) ranked WHERE source_rank &lt;= 3 ORDER BY subject_id,source_rank
+    </select>
+    <select id="moduleUsers" resultType="java.lang.Long">
+        SELECT DISTINCT ur.user_id
+        <include refid="com.streamfusion.platform.system.access.mapper.AccessMapper.pageRoleSource"/>
+        WHERE ur.user_id IN <foreach collection="userIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+          AND m.module_key=#{moduleKey}
+          AND <include refid="com.streamfusion.platform.system.access.mapper.AccessMapper.activePagePredicate"/>
+    </select>
+</mapper>

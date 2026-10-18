@@ -7,24 +7,36 @@ import { ApiRequestError } from '../../src/lib/http/error'
 import { node, nodes, renderer, text } from '../support/renderer'
 import type { Host } from '../support/renderer'
 import Center from '../../src/views/preview/Center.vue'
+import { sessionState } from '../../src/session/state'
+import type { AuthUser } from '../../src/api/auth/types'
+import type { SavedView } from '../../src/features/preview/saved-views'
 
-const api = vi.hoisted(() => ({ catalog: vi.fn(), groups: vi.fn() }))
+const api = vi.hoisted(() => ({
+  catalog: vi.fn(),
+  groups: vi.fn(),
+  camera: vi.fn(),
+  connect: vi.fn(),
+  close: vi.fn(),
+  query: {} as Record<string, string>,
+}))
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: {} }),
+  useRoute: () => ({ query: api.query }),
   useRouter: () => ({ push: vi.fn(), back: vi.fn() }),
 }))
 vi.mock('../../src/api/preview/api', () => ({ getPreviewCatalog: api.catalog }))
 vi.mock('../../src/api/camera-groups/api', () => ({ getGroupTree: api.groups }))
+vi.mock('../../src/api/camera/api', () => ({ getCamera: api.camera }))
 vi.mock('../../src/features/preview/player', () => ({
   createPreviewPlayer: (events: { lease: (lease: unknown) => void }) => ({
-    connect: async () => {
+    connect: async (input: unknown) => {
+      api.connect(input)
       events.lease({ leaseId: 'lease-1', cameraId: '1', streamProfileId: '11', state: 'READY' })
       throw new ApiRequestError('SIGNAL_REJECTED', '媒体连接被拒绝', {
         traceId: 'abcdef0123456789abcdef0123456789',
         timestamp: '2026-10-17T02:00:00Z',
       })
     },
-    close: async () => {},
+    close: api.close,
     stats: async () => null,
     recoverVideoError: async () => null,
   }),
@@ -70,6 +82,31 @@ vi.mock('../../src/features/preview/PreviewCapacity.vue', () => ({
 vi.mock('../../src/features/preview/PreviewLayoutPicker.vue', () => ({
   default: { render: () => null },
 }))
+const savedView: SavedView = {
+  id: 'local-1',
+  name: '测试收藏',
+  layout: '36',
+  updatedAt: '2026-10-18T00:00:00Z',
+  slots: [
+    { index: 0, cameraId: '1', profileId: '11' },
+    { index: 35, cameraId: '2', profileId: '21' },
+  ],
+}
+vi.mock('../../src/features/preview/PreviewSavedViews.vue', async () => {
+  const { defineComponent, h } = await import('vue')
+  return {
+    default: defineComponent({
+      props: ['busy', 'current'],
+      emits: ['open'],
+      setup(props, { emit }) {
+        return () =>
+          h('saved-views', { busy: props.busy, current: props.current }, [
+            h('button', { onClick: () => emit('open', savedView) }, '打开收藏测试'),
+          ])
+      },
+    }),
+  }
+})
 vi.mock('../../src/features/preview/PreviewSlotMenu.vue', async () => {
   const { defineComponent, h } = await import('vue')
   return {
@@ -146,6 +183,7 @@ async function add(root: Host) {
 }
 beforeEach(() => {
   vi.clearAllMocks()
+  api.query = {}
   vi.stubGlobal('HTMLElement', FocusTarget)
   vi.stubGlobal('HTMLVideoElement', class {})
   vi.stubGlobal('innerWidth', 1440)
@@ -158,11 +196,23 @@ beforeEach(() => {
     total: 500,
   })
   api.groups.mockResolvedValue([])
+  api.close.mockResolvedValue(undefined)
+  api.camera.mockImplementation(async (id: string) => ({
+    ...channel(id),
+    deviceId: '1',
+    profiles: channel(id).profiles.map((profile) => ({
+      ...profile,
+      usageHint: profile.usage,
+      locatorSummary: { configured: true },
+    })),
+  }))
+  sessionState.me = { user: { id: '1' } } as AuthUser
 })
 afterEach(() => {
   app?.unmount()
   app = null
   vi.unstubAllGlobals()
+  sessionState.me = null
 })
 
 describe('preview actions and diagnostics', () => {
@@ -224,5 +274,147 @@ describe('preview actions and diagnostics', () => {
     await (button(root, '关闭操作菜单').props.onClick as () => void)()
     await nextTick()
     expect(target.focus).toHaveBeenCalledOnce()
+  })
+  it('does not auto-restore and applies explicit saved positions through a single connection per profile', async () => {
+    const root = await mount()
+    expect(api.camera).not.toHaveBeenCalled()
+    expect(api.connect).not.toHaveBeenCalled()
+    await (button(root, '打开收藏测试').props.onClick as () => void)()
+    await vi.waitFor(() => expect(api.connect).toHaveBeenCalledTimes(2))
+    expect(api.camera).toHaveBeenCalledTimes(2)
+    expect(api.connect).toHaveBeenNthCalledWith(1, {
+      cameraId: '1',
+      profileId: '11',
+      usage: 'MAIN',
+    })
+    expect(api.connect).toHaveBeenNthCalledWith(2, {
+      cameraId: '2',
+      profileId: '21',
+      usage: 'MAIN',
+    })
+    const tiles = nodes(root).filter((item) => item.type === 'article')
+    expect(tiles).toHaveLength(36)
+    expect(text(tiles[0]!)).toContain('通道1')
+    expect(text(tiles[35]!)).toContain('通道2')
+    expect(text(tiles[1]!)).not.toContain('通道')
+  })
+  it('stops before lookup when old resources cannot be released and permits retry', async () => {
+    const root = await mount()
+    await add(root)
+    api.close.mockRejectedValueOnce(new Error('unconfirmed'))
+    await (button(root, '打开收藏测试').props.onClick as () => void)()
+    await vi.waitFor(() =>
+      expect(nodes(root).find((item) => item.type === 'saved-views')?.props.busy).toBe(false),
+    )
+    expect(api.camera).not.toHaveBeenCalled()
+    expect(api.connect).toHaveBeenCalledOnce()
+    expect(text(root)).toContain('释放未确认')
+    await (button(root, '打开收藏测试').props.onClick as () => void)()
+    await vi.waitFor(() => expect(api.connect).toHaveBeenCalledTimes(3))
+  })
+  it('keeps unavailable profiles and unauthorized cameras in place without silently switching streams', async () => {
+    api.camera.mockImplementation(async (id: string) => {
+      if (id === '2') throw new ApiRequestError('FORBIDDEN', '权限不足')
+      return { ...channel(id), deviceId: '1', profiles: [] }
+    })
+    const root = await mount()
+    await (button(root, '打开收藏测试').props.onClick as () => void)()
+    await vi.waitFor(() =>
+      expect(nodes(root).filter((item) => item.type === 'article')).toHaveLength(36),
+    )
+    expect(api.connect).not.toHaveBeenCalled()
+    const tiles = nodes(root).filter((item) => item.type === 'article')
+    expect(text(tiles[0]!)).toContain('重新检查')
+    expect(text(tiles[35]!)).toContain('收藏相机暂不可用')
+    expect(nodes(tiles[0]!).some((item) => item.type === 'button' && text(item) === '重连')).toBe(
+      false,
+    )
+  })
+  it('rejects duplicate opens and discards late saved-camera results on identity change', async () => {
+    const pending: (() => void)[] = []
+    api.camera.mockImplementation(
+      (id: string) =>
+        new Promise((resolve) =>
+          pending.push(() => resolve({ ...channel(id), deviceId: '1', profiles: [] })),
+        ),
+    )
+    const root = await mount()
+    const open = button(root, '打开收藏测试').props.onClick as () => void
+    open()
+    open()
+    await vi.waitFor(() => expect(api.camera).toHaveBeenCalledTimes(2))
+    sessionState.epoch++
+    pending.forEach((finish) => finish())
+    await nextTick()
+    await nextTick()
+    expect(api.connect).not.toHaveBeenCalled()
+    expect(text(root)).not.toContain('收藏相机暂不可用')
+    expect(nodes(root).filter((item) => item.type === 'article')).toHaveLength(4)
+  })
+  it('rechecks only the failed saved window and retains its exact profile', async () => {
+    api.camera.mockRejectedValue(new ApiRequestError('REQUEST_TIMEOUT', '查询超时'))
+    const root = await mount()
+    await (button(root, '打开收藏测试').props.onClick as () => void)()
+    await vi.waitFor(() =>
+      expect(nodes(root).filter((item) => item.type === 'article')).toHaveLength(36),
+    )
+    expect(api.connect).not.toHaveBeenCalled()
+    api.camera.mockImplementation(async (id: string) => ({
+      ...channel(id),
+      deviceId: '1',
+      profiles: channel(id).profiles.map((profile) => ({
+        ...profile,
+        usageHint: profile.usage,
+        locatorSummary: { configured: true },
+      })),
+    }))
+    const tile = nodes(root).filter((item) => item.type === 'article')[35]!
+    await (button(tile, '重新检查').props.onClick as (event: unknown) => void)({
+      stopPropagation: vi.fn(),
+    })
+    await vi.waitFor(() => expect(api.connect).toHaveBeenCalledOnce())
+    expect(api.camera).toHaveBeenCalledTimes(3)
+    expect(api.connect).toHaveBeenCalledWith({ cameraId: '2', profileId: '21', usage: 'MAIN' })
+  })
+  it('does not let a late device-entry catalog replace an explicitly opened saved workspace', async () => {
+    api.query = { mode: 'device', device: 'd1' }
+    let deliver!: (result: unknown) => void
+    api.catalog.mockReturnValueOnce(
+      new Promise((resolve) => {
+        deliver = resolve
+      }),
+    )
+    const root = node('root')
+    app = renderer.createApp(Center)
+    app.mount(root)
+    await nextTick()
+    expect(api.connect).not.toHaveBeenCalled()
+    await (button(root, '打开收藏测试').props.onClick as () => void)()
+    await vi.waitFor(() => expect(api.connect).toHaveBeenCalledTimes(2))
+    deliver({ items: [channel('3')], page: 1, size: 100, total: 1 })
+    await nextTick()
+    await nextTick()
+    const tiles = nodes(root).filter((item) => item.type === 'article')
+    expect(tiles).toHaveLength(36)
+    expect(text(tiles[35]!)).toContain('通道2')
+    expect(api.connect).toHaveBeenCalledTimes(2)
+  })
+  it('shows unavailable saved windows even when a device-entry catalog has no visible channels', async () => {
+    api.query = { mode: 'device', device: 'd1' }
+    api.catalog.mockResolvedValue({ items: [], page: 1, size: 100, total: 0 })
+    api.camera.mockRejectedValue(new ApiRequestError('FORBIDDEN', '权限不足'))
+    const root = node('root')
+    app = renderer.createApp(Center)
+    app.mount(root)
+    await nextTick()
+    await nextTick()
+    await (button(root, '打开收藏测试').props.onClick as () => void)()
+    await vi.waitFor(() =>
+      expect(nodes(root).filter((item) => item.type === 'article')).toHaveLength(36),
+    )
+    const tiles = nodes(root).filter((item) => item.type === 'article')
+    expect(text(tiles[0]!)).toContain('收藏相机暂不可用')
+    expect(text(tiles[35]!)).toContain('重新检查')
+    expect(api.connect).not.toHaveBeenCalled()
   })
 })

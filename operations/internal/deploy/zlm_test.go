@@ -55,6 +55,9 @@ func TestZLMDirectRecipeBoundaries(t *testing.T) {
 		}
 	}
 	ini := zlmINI("11111111-1111-4111-8111-111111111111", *good.ZLM, strings.Repeat("a", 64))
+	if !strings.Contains(ini, "enable_audio=1") || !strings.Contains(ini, "-an -c:v") {
+		t.Fatal("source audio must be preserved while video transcode remains video-only")
+	}
 	if !strings.Contains(ini, "allow_ip_range=127.0.0.1,::1,10.75.216.25") ||
 		!strings.Contains(ini, "externIP=10.75.216.216") ||
 		!strings.Contains(ini, "port=18000") ||

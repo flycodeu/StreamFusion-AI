@@ -21,7 +21,7 @@ import (
 )
 
 const Version = "0.2.0"
-const SchemaVersion = 5
+const SchemaVersion = 6
 
 //go:embed schema.sql
 var schema string
@@ -334,6 +334,31 @@ func Open(dir string) (*Store, error) {
 	}
 	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=5").Scan(&checksum); err != nil || checksum != hashToken(schemaV5) {
 		return nil, errors.New("SCHEMA_MISMATCH: 迁移5摘要不匹配")
+	}
+	if version > 0 && version <= 5 {
+		backupPath := filepath.Join(abs, "before-schema-6-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 5 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV6); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(6,?,?,?)", hashToken(schemaV6), Version, Now())
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=6").Scan(&checksum); err != nil || checksum != hashToken(schemaV6) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移6摘要不匹配")
 	}
 	if _, err = s.DB.Exec("DELETE FROM sessions WHERE expires_at<=? OR last_seen<?", time.Now().Unix(), time.Now().Add(-30*time.Minute).Unix()); err != nil {
 		return nil, err

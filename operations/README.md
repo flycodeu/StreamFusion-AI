@@ -89,7 +89,7 @@ cd web && pnpm build
 
 构建二进制后，Linux集成验收入口为 `sudo bash scripts/test-linux.sh /absolute/path/to/streamfusion-ops`；它使用唯一的测试单元、账号和目录，并在完成后清理。浏览器验收入口为 `python scripts/test-browser.py --binary ./streamfusion-ops.exe --output ../.run/ops-browser-new`，需要已有 Python/Playwright/Chromium，仅用于开发测试。
 
-看进程日志及状态目录下 `logs/controller.log`。目录锁冲突返回STATE_LOCKED；端口冲突返回LISTEN_FAILED；高版本数据库返回SCHEMA_TOO_NEW；缺少已有凭据密钥返回KEY_MISSING。现行Schema为4。首次升级Schema1/2前分别生成before-schema-2/3一致性归档，再事务升级，旧迁移摘要保持不变。旧程序拒绝打开高版本数据库；代码回退须用原密钥与对应升级前备份恢复到新目录。
+看进程日志及状态目录下 `logs/controller.log`。目录锁冲突返回STATE_LOCKED；端口冲突返回LISTEN_FAILED；高版本数据库返回SCHEMA_TOO_NEW；缺少已有凭据密钥返回KEY_MISSING。现行Schema为6；本次只增加制品的可空冻结运行环境快照和作业引用索引。每次增量升级前生成对应 `before-schema-N` 一致性归档，再事务升级，旧迁移摘要保持不变。旧程序拒绝打开高版本数据库；代码回退须用原密钥与对应升级前备份恢复到新目录。
 
 `STATE_LOCKED` 表示该目录仍被进程持有，锁文件存在本身不表示故障，不能通过删除它关闭服务。优先用 `stop --state`；旧版后台实例未提供本地关闭记录时返回 `STOP_UNAVAILABLE`，需核实监听端口、可执行文件和启动参数后关闭对应进程，随后使用新二进制。
 
@@ -103,7 +103,9 @@ cd web && pnpm build
 
 I02 当前实现本机/SSH Linux目标登记、固定 Java Compose 制品发布和应用回滚；S4另接入预览节点固定配方、维护许可与版本回退，操作见[预览节点维护](preview-nodes.md)，工程验证与负责人验收分开。Docker引擎自动安装、项目组合发布、源码构建及Jenkins尚未实现。I02仍需当前项目后端和真实第二台主机验收。Linux安装范围为Ubuntu24.04/systemd/amd64，Windows仅支持本机开发运行。
 
-插件中心提供内置 Java 17/21 JRE 与 Maven 3.9.11 + JDK 21 的 Docker 镜像环境，按固定摘要和配方预检、安装、校验、核对与卸载。成功返回前验证实际镜像与版本；未知作业保留目标锁。当前尚未将插件绑定到应用实例，也未提供任意下载 URL、脚本安装或自动安装 Docker。与平台的 ZLM/FFmpeg 只读检测职责分开。
+插件中心提供内置 Java 17/21 JRE 与 Maven 3.9.11 + JDK 21 的 Docker 镜像环境，按固定摘要和配方预检、安装、校验、核对与卸载。成功返回前验证实际镜像与版本；未知作业保留目标锁。Java 服务可上传可执行 JAR 并选择已就绪的 Java21：只读导出固定基础镜像、离线追加固定 JAR 层，生成同一条不可变制品/Release 链；排队作业和历史制品的真实引用阻止卸载环境。Java17/Maven 不能用作该 JAR 运行环境，完整镜像不提供替换 JRE 选项。未提供任意下载 URL、脚本安装、源码执行或自动安装 Docker。
+
+P2 / UX-OPS-DESIGN-01 本批补齐来源交接、JAR 固定封装、三层依赖检查与安全排队取消，工程实现和负责人验收分开。接口、迁移、复验步骤与本轮真实验证边界见 [Ops 补齐交付说明](ux-ops-implementation.md)。
 
 ```mermaid
 flowchart LR
@@ -130,7 +132,11 @@ sudo ./streamfusion-ops target-init \
 
 目标使用专用连接账号时，先审阅 `scripts/install-target.sh` 的计划，再显式 `--apply` 安装固定sudo策略。脚本不授予任意shell或docker命令。安装为systemd的本机控制器需显式提供 `--controller-unit`：这会为固定executor关闭NoNewPrivileges并增加该受管根写路径；默认控制器安装仍保持NoNewPrivileges=true。SSH目标无需此本机例外。
 
-页面“主机与依赖”登记目标后先执行“核对目标”。“制品”导入固定 Docker save 归档，归档必须是单个 `sfops/` 镜像、`linux/amd64`，并填写可信 SHA-256；导入完成后在“应用实例”保存 Java 配置草稿，再执行发布预检。每个发布作业都冻结制品、端口、配置、依赖凭据修订、健康路径和数据兼容标识。
+页面“主机与依赖”登记目标后先执行“核对目标”。“制品”可以导入固定 Docker save 归档，归档必须是单个 `sfops/` 镜像、`linux/amd64`，并填写可信 SHA-256；也可选择“可执行 JAR + 已安装 Java21”，上传最多128MiB的 JAR。导入完成后在“应用实例”保存 Java 配置草稿，再执行发布预检。每个发布作业都冻结制品、端口、配置、依赖凭据修订、健康路径、数据兼容标识，以及 JAR 制品可选的运行环境身份。
+
+依赖默认仍为外部服务；主机 TCP 检查不证明容器网络或密码可用。选定当前已发布的 Java 实例后，才从其真实容器网络命名空间执行有界 Redis AUTH/SELECT/PING 或 MySQL 握手/COM_PING，使用该 Release 冻结的凭据修订，不建库、不执行 SQL。探针不支持 TLS；MySQL `caching_sha2_password` full-auth 明确返回 `AUTH_TLS_REQUIRED`，不发送明文密码或信任未固定 RSA 公钥。Redis AUTH 仍使用绑定既有的普通 TCP 网络，不能当作加密传输能力。
+
+作业页“取消排队”仅处理未运行、无待 ACK 且非上传中的作业。运行中、`UNKNOWN` 或待 ACK 保留原锁与责任，不提供强杀/强制解锁；取消沿兼容状态 `FAILED / CANCELLED / JOB_CANCELLED` 记录。导入取消确认提交后清理该作业上传的临时文件；清理失败可重试原取消请求，不删除其他制品或运行材料。
 
 作业流程为“目标校验 → 归档校验/导入 → Compose 激活 → 实际容器身份 → 应用健康 → 控制器提交当前/上一成功版本 → 目标确认”。候选健康失败时自动停止候选并按冻结基线恢复；数据库内容不会随应用回滚。`UNKNOWN` 或目标确认未完成时，页面会保留锁并提供“核对/恢复”，不会因为超时自动重放。
 

@@ -54,7 +54,8 @@ public final class PreviewNodeManager {
     private final java.util.Map<String, Observation> observations =
             new java.util.concurrent.ConcurrentHashMap<>();
 
-    private record DirectObservation(String version, Instant at, String reason) {}
+    private record DirectObservation(
+            String version, ZlmDirectGateway.ListenerPorts ports, Instant at, String reason) {}
 
     private record DirectLoad(
             ZlmDirectConnection connection,
@@ -113,6 +114,16 @@ public final class PreviewNodeManager {
 
     public synchronized void localPrepared(String id) {
         localViewers.add(id);
+    }
+
+    PreviewNodeRepository.Node administrativeNode(String nodeId) {
+        return nodeId == null ? repository.node() : repository.node(nodeId);
+    }
+
+    public void attachOpsSource(String nodeId, OpsNodeSource source) {
+        if (source == null) return;
+        var node = repository.node(nodeId);
+        repository.attachOpsSource(nodeId, source, node.version());
     }
 
     public synchronized void localClosed(String id) {
@@ -194,14 +205,15 @@ public final class PreviewNodeManager {
         if (node.zlm() == null || zlm == null) throw new PreviewFailure("ZLM_UNAVAILABLE");
         try {
             var deadline = PreviewDeadline.after(Duration.ofSeconds(4));
-            zlm.requireReady(node.zlm(), deadline);
+            var ports = zlm.requireReady(node.zlm(), deadline);
             String version = zlm.version(node.zlm(), deadline);
             directObservations.put(
-                    node.nodeId(), new DirectObservation(version, Instant.now(), null));
+                    node.nodeId(), new DirectObservation(version, ports, Instant.now(), null));
             return version;
         } catch (PreviewFailure failure) {
             directObservations.put(
-                    node.nodeId(), new DirectObservation(null, Instant.now(), failure.reason()));
+                    node.nodeId(),
+                    new DirectObservation(null, null, Instant.now(), failure.reason()));
             throw failure;
         }
     }
@@ -253,6 +265,16 @@ public final class PreviewNodeManager {
     public String directVersion(String nodeId) {
         var observed = freshDirect(nodeId);
         return observed == null ? null : observed.version();
+    }
+
+    public ZlmDirectGateway.ListenerPorts directPorts(String nodeId) {
+        var observed = freshDirect(nodeId);
+        return observed == null ? null : observed.ports();
+    }
+
+    public Instant directPortsObservedAt(String nodeId) {
+        var observed = freshDirect(nodeId);
+        return observed == null || observed.ports() == null ? null : observed.at();
     }
 
     private ZlmDirectGateway.NetworkThreadLoad directLoad(PreviewNodeRepository.Node node) {
@@ -552,7 +574,8 @@ public final class PreviewNodeManager {
             ZlmDirectGateway.NetworkThreadLoad zlmLoad,
             PreviewControl.Snapshot observation,
             com.streamfusion.platform.media.preview.execution.PreviewAdmissionProtection.Observation
-                    protection) {}
+                    protection,
+            OpsNodeSource opsSource) {}
 
     public java.util.List<NodeStatus> statuses(
             com.streamfusion.platform.media.preview.node.PreviewScheduler scheduler) {
@@ -619,7 +642,8 @@ public final class PreviewNodeManager {
                                     snapshot,
                                     n.local()
                                             ? scheduler.localProtection()
-                                            : snapshot == null ? null : snapshot.protection());
+                                            : snapshot == null ? null : snapshot.protection(),
+                                    n.opsSource());
                         })
                 .toList();
     }

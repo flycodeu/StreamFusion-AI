@@ -170,7 +170,11 @@ describe('preview node contracts', () => {
           name: 'ZLM A',
           apiHost: '10.0.0.10',
           apiPort: 8080,
+          rtcPort: 8000,
+          rtspPort: 8554,
+          portsObservedAt: '2026-10-18T12:00:00Z',
           mediaAddress: '10.0.0.10',
+          installPath: '/srv/zlm',
           mode: 'LOCAL',
           version: 1,
           priority: 100,
@@ -191,6 +195,10 @@ describe('preview node contracts', () => {
       ],
     })
     expect(parsed.items[0]?.apiHost).toBe('10.0.0.10')
+    expect(parsed.items[0]?.rtcPort).toBe(8000)
+    expect(parsed.items[0]?.rtspPort).toBe(8554)
+    expect(parsed.items[0]?.portsObservedAt).toBe('2026-10-18T12:00:00Z')
+    expect(parsed.items[0]?.installPath).toBe('/srv/zlm')
     expect(parsed.items[0]?.budget.maxTranscodes).toBe(0)
     expect(JSON.stringify(parsed)).not.toContain('must-never-appear')
   })

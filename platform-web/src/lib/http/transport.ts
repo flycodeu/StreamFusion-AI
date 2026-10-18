@@ -21,7 +21,9 @@ function prepare(options: TransportOptions): { url: string; headers: Headers; bo
     if (typeof value === 'number' && !Number.isFinite(value)) invalid()
     query.set(key, String(value))
   }
-  const headers = new Headers({ Accept: 'application/json' })
+  const headers = new Headers({
+    Accept: options.responseType === 'file' ? '*/*' : 'application/json',
+  })
   if (ifMatch !== undefined) headers.set('If-Match', ifMatch)
   if (csrf !== undefined) {
     // Only dedicated CSRF headers may come from the session coordinator.

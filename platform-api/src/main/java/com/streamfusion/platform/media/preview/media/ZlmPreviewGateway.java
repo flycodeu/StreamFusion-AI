@@ -67,7 +67,7 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
     public Stream open(
             ActiveZlm runtime, String app, String id, URI source, PreviewDeadline deadline) {
         proxyConfig(runtime, deadline, false);
-        return addProxy(runtime, app, id, source, deadline, false);
+        return addProxy(runtime, app, id, source, deadline, false, true);
     }
 
     @Override
@@ -76,7 +76,7 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
         if (!app.matches("sf_preview_[a-f0-9]{12}") || !id.matches("[a-f0-9]{32}"))
             throw new PreviewFailure("CLEANUP_DESTINATION_REJECTED");
         proxyConfig(runtime, deadline, true);
-        return addProxy(runtime, app, id, source, deadline, true);
+        return addProxy(runtime, app, id, source, deadline, true, false);
     }
 
     @Override
@@ -101,7 +101,25 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
                 id,
                 URI.create("rtsp://" + host + ":" + port + "/" + app + "/" + upstream.id()),
                 deadline,
-                false);
+                false,
+                compatibleAudio(upstream, deadline));
+    }
+
+    private boolean compatibleAudio(Stream source, PreviewDeadline deadline) {
+        var params = tuple(source.app(), source.id());
+        params.put("schema", "rtsp");
+        try {
+            return PreviewAudioTracks.compatible(
+                    call(
+                                    source.runtime(),
+                                    "getMediaList",
+                                    params,
+                                    deadline.within(Duration.ofSeconds(1)))
+                            .path("data"));
+        } catch (PreviewFailure unavailable) {
+            deadline.check();
+            return false;
+        }
     }
 
     private JsonNode proxyConfig(ActiveZlm runtime, PreviewDeadline deadline, boolean observation) {
@@ -142,7 +160,8 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
             String id,
             URI source,
             PreviewDeadline deadline,
-            boolean observation) {
+            boolean observation,
+            boolean audio) {
         var params = tuple(app, id);
         params.put("url", source.toASCIIString());
         params.put("retry_count", "0");
@@ -156,7 +175,7 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
         params.put("enable_mp4", "0");
         params.put("enable_ts", "0");
         params.put("enable_fmp4", "0");
-        params.put("enable_audio", "0");
+        params.put("enable_audio", audio ? "1" : "0");
         // The lease manager closes explicitly; this is also a crash-safety fallback.
         // Its verified grace period exceeds the whole 18s create budget, including local attach.
         params.put("auto_close", "1");

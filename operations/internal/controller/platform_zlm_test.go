@@ -23,6 +23,17 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+func TestZLMCatalogSeparatesManagementAndMediaAddresses(t *testing.T) {
+	release := deploy.Release{ID: "release-a", Config: deploy.Config{
+		BindAddress: "10.20.0.10",
+		ZLM:         &deploy.ZLMConfig{APIPort: 18080, RTCPort: 18000, MediaAddress: "10.20.0.20"},
+	}}
+	entry := zlmCatalogEntry(instance{ID: "instance-a"}, target{ID: "target-a", InstallRoot: "/opt/zlm"}, release)
+	if entry.APIURL != "http://10.20.0.10:18080" || entry.MediaAddress != "10.20.0.20" {
+		t.Fatalf("management and media addresses were conflated: %+v", entry)
+	}
+}
+
 func TestPlatformZLMCatalogAndAuthenticatedHandoff(t *testing.T) {
 	s, b := setup(t)
 	const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -160,10 +171,10 @@ func TestPlatformZLMCatalogAndAuthenticatedHandoff(t *testing.T) {
 	if err := json.Unmarshal(got.Body.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if len(envelope.Data.Items) != 1 || envelope.Data.Items[0].APIURL != "http://10.75.216.216:18080" || envelope.Data.Items[0].MaxTranscodes != 0 {
+	if len(envelope.Data.Items) != 1 || envelope.Data.Items[0].ControllerID != s.controllerID() || envelope.Data.Items[0].TargetID != targetID || envelope.Data.Items[0].APIURL != "http://10.75.216.216:18080" || envelope.Data.Items[0].MaxTranscodes != 0 || envelope.Data.Items[0].InstallPath != filepath.Join("/opt/zlm-node-a", "instances", instanceID, "releases", releaseID) {
 		t.Fatalf("wrong ZLM catalog: %+v", envelope.Data.Items)
 	}
-	if strings.Contains(got.Body.String(), "apiSecret") || strings.Contains(got.Body.String(), config.ZLM.SecretCredentialID) {
+	if strings.Contains(got.Body.String(), "apiSecret") || strings.Contains(got.Body.String(), apiSecret) || envelope.Data.Items[0].CredentialRevision != config.ZLM.SecretCredentialID+":"+config.ZLM.SecretRevision {
 		t.Fatal("catalog exposed protected credential")
 	}
 	if got = platformCall(t, b.h, "POST", "/platform/zlm-instances/"+instanceID+"/handoff", token, map[string]string{"releaseId": uuid.NewString()}); got.Code != http.StatusConflict || !strings.Contains(got.Body.String(), "RELEASE_CHANGED") {
@@ -180,7 +191,7 @@ func TestPlatformZLMCatalogAndAuthenticatedHandoff(t *testing.T) {
 		t.Helper()
 		select {
 		case request := <-requests:
-			if request.Action != "INSPECT" || request.Candidate == nil || request.Candidate.ID != releaseID || request.Secrets[secretCredential+":1"] != apiSecret {
+			if request.Action != "ZLM_HANDOFF" || request.Candidate == nil || request.Candidate.ID != releaseID || request.Secrets[secretCredential+":1"] != apiSecret {
 				t.Fatal("handoff did not inspect the selected release with its protected credential")
 			}
 		case <-time.After(time.Second):
@@ -196,16 +207,17 @@ func TestPlatformZLMCatalogAndAuthenticatedHandoff(t *testing.T) {
 	assertInspect()
 	var handoff struct {
 		Data struct {
-			InstanceID string              `json:"instanceId"`
-			ReleaseID  string              `json:"releaseId"`
-			Connection platformZLMInstance `json:"connection"`
-			APISecret  string              `json:"apiSecret"`
+			InstanceID         string              `json:"instanceId"`
+			ReleaseID          string              `json:"releaseId"`
+			CredentialRevision string              `json:"credentialRevision"`
+			Connection         platformZLMInstance `json:"connection"`
+			APISecret          string              `json:"apiSecret"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(got.Body.Bytes(), &handoff); err != nil {
 		t.Fatal(err)
 	}
-	if handoff.Data.InstanceID != instanceID || handoff.Data.ReleaseID != releaseID || !reflect.DeepEqual(handoff.Data.Connection, envelope.Data.Items[0]) || handoff.Data.APISecret != apiSecret {
+	if handoff.Data.InstanceID != instanceID || handoff.Data.ReleaseID != releaseID || handoff.Data.CredentialRevision != envelope.Data.Items[0].CredentialRevision || !reflect.DeepEqual(handoff.Data.Connection, envelope.Data.Items[0]) || handoff.Data.APISecret != apiSecret {
 		t.Fatalf("handoff differs from the selected published catalog entry: %+v", handoff.Data.Connection)
 	}
 }

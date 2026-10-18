@@ -97,11 +97,16 @@ export function parseFileResponse(raw: RawHttpResponse): ApiResult<unknown> {
   if (!raw.file || raw.status !== 200 || raw.file.size > 100 * 1024 * 1024)
     throw invalidResponse(responseContext(raw))
   const type = raw.headers.contentType?.split(';')[0]?.trim().toLowerCase()
-  const name = /^attachment; filename="(audit-[1-9][0-9]*\.(?:csv|jsonl))"$/.exec(
+  const name = /^attachment; filename="([a-z0-9][a-z0-9.-]*)"$/.exec(
     raw.headers.contentDisposition ?? '',
   )?.[1]
-  if (!name || !['text/csv', 'application/x-ndjson'].includes(type ?? ''))
-    throw invalidResponse(responseContext(raw))
+  const auditFile =
+    /^audit-[1-9][0-9]*\.(?:csv|jsonl)$/.test(name ?? '') &&
+    ['text/csv', 'application/x-ndjson'].includes(type ?? '')
+  const accessExcel =
+    /^access-pages-\d{8}-\d{6}\.xlsx$/.test(name ?? '') &&
+    type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  if (!name || (!auditFile && !accessExcel)) throw invalidResponse(responseContext(raw))
   return {
     data: { blob: raw.file, name },
     meta: {

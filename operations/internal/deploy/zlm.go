@@ -145,7 +145,7 @@ log=/dev/null
 
 [protocol]
 paced_sender_ms=20
-enable_audio=0
+enable_audio=1
 `, secret, strings.ReplaceAll(instanceID, "-", ""), strings.Join(z.PlatformSourceIPs, ","), z.RTCPort, z.RTCPort, z.MediaAddress)
 }
 

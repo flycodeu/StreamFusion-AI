@@ -136,6 +136,9 @@ class PreviewNodeAuthorizationTest extends CameraTestSupport {
         write(post("/preview-node/register"), reader, Map.of(), 403);
         write(post("/preview-node/connections"), reader, Map.of(), 403);
         write(post("/preview-node/ops-import"), reader, Map.of(), 403);
+        write(post("/preview-node/nodes/a/ops-sync/check"), reader, Map.of(), 403);
+        write(post("/preview-node/nodes/a/ops-sync"), reader, Map.of(), 403);
+        write(post("/preview-node/nodes/a/ops-sync/check"), csrf(null), Map.of(), 401);
         mvc.perform(get("/preview-node/ops-instances")).andExpect(status().isUnauthorized());
         write(put("/preview-node/mode"), reader, Map.of("mode", "REMOTE", "version", 0), 403);
         write(post("/preview-node/reconcile"), reader, Map.of(), 403);

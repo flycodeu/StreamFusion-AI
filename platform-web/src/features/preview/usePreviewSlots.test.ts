@@ -45,11 +45,27 @@ const lease: PreviewLease = {
   transcoded: false,
 }
 let players: PreviewPlayer[], callbacks: PlayerEvents[]
+function media(audio = true, video = true): MediaStream {
+  return {
+    getAudioTracks: () => (audio ? [{ readyState: 'live' }] : []),
+    getVideoTracks: () => (video ? [{ readyState: 'live' }] : []),
+  } as unknown as MediaStream
+}
 beforeEach(() => {
   vi.useFakeTimers()
   players = []
   callbacks = []
-  vi.stubGlobal('HTMLVideoElement', class extends EventTarget {})
+  vi.stubGlobal(
+    'HTMLVideoElement',
+    class extends EventTarget {
+      srcObject: MediaStream | null = null
+      readyState = 2
+      videoWidth = 1280
+      videoHeight = 720
+      muted = true
+      play = vi.fn().mockResolvedValue(undefined)
+    },
+  )
   vi.stubGlobal('HTMLElement', class {})
   vi.mocked(createPreviewPlayer).mockImplementation((events) => {
     const player = {
@@ -182,8 +198,9 @@ describe('preview slot lifetime and first frame', () => {
   })
   it('acknowledges a browser video frame and removes its frame timeout', async () => {
     const preview = usePreviewSlots()
+    preview.setVideoRef(0, new HTMLVideoElement())
     await preview.assign(0, channel('1'), 'MAIN')
-    callbacks[0]?.stream({} as MediaStream)
+    callbacks[0]?.stream(media())
     preview.firstFrame(0)
     expect(preview.slots[0]!.state).toBe('PLAYING')
     await vi.advanceTimersByTimeAsync(20000)
@@ -263,11 +280,11 @@ describe('preview slot lifetime and first frame', () => {
     Object.defineProperty(video, 'error', { value: { code: 3 } })
     preview.setVideoRef(0, video)
     await preview.assign(0, channel('1'), 'MAIN')
-    callbacks[0]!.stream({} as MediaStream)
+    callbacks[0]!.stream(media())
     preview.firstFrame(0)
     vi.mocked(players[0]!.recoverVideoError).mockImplementationOnce(async () => {
       callbacks[0]!.state('CONNECTING')
-      callbacks[0]!.stream({} as MediaStream)
+      callbacks[0]!.stream(media())
       return { ...lease, leaseId: 'lease-2', transcoded: true }
     })
     video.dispatchEvent(new Event('error'))
@@ -399,5 +416,155 @@ describe('preview slot lifetime and first frame', () => {
     expect(preview.slots[0]!.error).toBeNull()
     expect(preview.slots[0]!.lease?.leaseId).toBe('lease-1')
     expect(preview.slots[0]!.channel?.cameraId).toBe('2')
+  })
+
+  it('does not treat audio-only playing as a video frame or cancel the first-frame deadline', async () => {
+    const preview = usePreviewSlots()
+    const video = new HTMLVideoElement()
+    preview.setVideoRef(0, video)
+    await preview.assign(0, channel('1'), 'MAIN')
+    callbacks[0]!.stream(media(true, false))
+    expect(preview.slots[0]!.audio).toBe('AVAILABLE')
+    preview.firstFrame(0)
+    expect(preview.slots[0]!.state).toBe('CONNECTING')
+    await vi.advanceTimersByTimeAsync(20000)
+    expect(preview.slots[0]!.error?.code).toBe('FIRST_FRAME_TIMEOUT')
+  })
+  it('requires a presented video frame where requestVideoFrameCallback is supported', async () => {
+    const preview = usePreviewSlots(),
+      video = new HTMLVideoElement()
+    let rendered!: VideoFrameRequestCallback
+    video.requestVideoFrameCallback = vi.fn((callback) => {
+      rendered = callback
+      return 7
+    })
+    video.cancelVideoFrameCallback = vi.fn()
+    preview.setVideoRef(0, video)
+    await preview.assign(0, channel('1'), 'MAIN')
+    callbacks[0]!.stream(media())
+    preview.firstFrame(0)
+    expect(preview.slots[0]!.state).toBe('CONNECTING')
+    rendered(1, {} as VideoFrameCallbackMetadata)
+    expect(preview.slots[0]!.state).toBe('PLAYING')
+    await vi.advanceTimersByTimeAsync(20000)
+    expect(preview.slots[0]!.state).toBe('PLAYING')
+  })
+  it('requires decoded video dimensions and detaches pending frame observers on close', async () => {
+    const preview = usePreviewSlots(),
+      video = new HTMLVideoElement()
+    Object.defineProperty(video, 'videoWidth', { value: 0 })
+    video.requestVideoFrameCallback = vi.fn().mockReturnValue(8)
+    video.cancelVideoFrameCallback = vi.fn()
+    preview.setVideoRef(0, video)
+    await preview.assign(0, channel('1'), 'MAIN')
+    callbacks[0]!.stream(media())
+    preview.firstFrame(0, true)
+    expect(preview.slots[0]!.state).toBe('CONNECTING')
+    await preview.stop(0)
+    expect(video.cancelVideoFrameCallback).toHaveBeenCalledWith(8)
+  })
+  it('starts muted, enables only one viewer locally and never creates a lease when toggling sound', async () => {
+    const preview = usePreviewSlots(),
+      first = new HTMLVideoElement(),
+      second = new HTMLVideoElement()
+    preview.setVideoRef(0, first)
+    preview.setVideoRef(1, second)
+    await preview.assign(0, channel('1'), 'MAIN')
+    await preview.assign(1, channel('2'), 'MAIN')
+    callbacks[0]!.stream(media())
+    callbacks[1]!.stream(media())
+    preview.firstFrame(0)
+    preview.firstFrame(1)
+    expect(first.muted).toBe(true)
+    expect(second.muted).toBe(true)
+    await preview.toggleAudio(0)
+    expect(first.muted).toBe(false)
+    await preview.toggleAudio(1)
+    expect(first.muted).toBe(true)
+    expect(second.muted).toBe(false)
+    expect(createPreviewPlayer).toHaveBeenCalledTimes(2)
+    expect(players[0]!.connect).toHaveBeenCalledOnce()
+    expect(players[1]!.connect).toHaveBeenCalledOnce()
+    await preview.stop(1)
+    expect(second.muted).toBe(true)
+  })
+  it('keeps video playing on sound rejection and ignores a late rejection after another viewer is enabled', async () => {
+    const preview = usePreviewSlots(),
+      first = new HTMLVideoElement(),
+      second = new HTMLVideoElement()
+    preview.setVideoRef(0, first)
+    preview.setVideoRef(1, second)
+    await preview.assign(0, channel('1'), 'MAIN')
+    await preview.assign(1, channel('2'), 'MAIN')
+    callbacks[0]!.stream(media())
+    callbacks[1]!.stream(media())
+    preview.firstFrame(0)
+    preview.firstFrame(1)
+    vi.mocked(first.play).mockRejectedValueOnce(new Error('NotAllowedError'))
+    await preview.toggleAudio(0)
+    expect(preview.slots[0]).toMatchObject({ state: 'PLAYING', muted: true, audio: 'BLOCKED' })
+    expect(first.play).toHaveBeenCalledTimes(2)
+    let reject!: (reason: Error) => void
+    vi.mocked(first.play).mockReturnValueOnce(
+      new Promise((_resolve, failure) => {
+        reject = failure
+      }),
+    )
+    const pending = preview.toggleAudio(0)
+    await preview.toggleAudio(1)
+    reject(new Error('late rejection'))
+    await pending
+    expect(preview.slots[1]).toMatchObject({ state: 'PLAYING', muted: false, audio: 'AVAILABLE' })
+    expect(second.muted).toBe(false)
+  })
+  it('mutes an ended audio track and preserves working video without reconnecting', async () => {
+    const preview = usePreviewSlots(),
+      video = new HTMLVideoElement()
+    preview.setVideoRef(0, video)
+    await preview.assign(0, channel('1'), 'MAIN')
+    callbacks[0]!.stream(media())
+    preview.firstFrame(0)
+    await preview.toggleAudio(0)
+    callbacks[0]!.stream(media(false))
+    expect(preview.slots[0]).toMatchObject({ state: 'PLAYING', muted: true, audio: 'UNKNOWN' })
+    expect(video.muted).toBe(true)
+    expect(players[0]!.connect).toHaveBeenCalledOnce()
+  })
+  it('uses the exact stored profile in one connection and does not fall back when it no longer exists', async () => {
+    const preview = usePreviewSlots(),
+      target = channel('1')
+    target.profiles.push({ ...target.profiles[0]!, streamProfileId: '2', usage: 'SUB' })
+    await preview.assign(0, target, 'MAIN', '2')
+    expect(players[0]!.connect).toHaveBeenCalledExactlyOnceWith({
+      cameraId: '1',
+      profileId: '2',
+      usage: 'SUB',
+    })
+    await preview.assign(1, target, 'MAIN', 'missing')
+    expect(preview.slots[1]).toMatchObject({
+      state: 'ERROR',
+      profile: null,
+      savedProfileId: 'missing',
+      error: { code: 'PROFILE_UNAVAILABLE', streamProfileId: 'missing' },
+    })
+    expect(players).toHaveLength(1)
+  })
+  it('clears old account metadata immediately but keeps an unconfirmed player for release retry', async () => {
+    const preview = usePreviewSlots()
+    await preview.assign(0, channel('1'), 'MAIN')
+    vi.mocked(players[0]!.close).mockRejectedValueOnce(new Error('unconfirmed'))
+    const clearing = preview.clearIdentity()
+    expect(preview.slots[0]).toMatchObject({
+      channel: null,
+      profile: null,
+      lease: null,
+      muted: true,
+    })
+    await clearing
+    expect(preview.slots[0]!.error?.code).toBe('LEASE_RELEASE_FAILED')
+    expect(preview.slots[0]!.error?.cameraId).toBeNull()
+    expect(preview.slots[0]!.player).not.toBeNull()
+    await preview.stop(0)
+    expect(preview.slots[0]!.player).toBeNull()
   })
 })

@@ -20,6 +20,14 @@ func ValidateArchive(filename, expected string, size int64) (string, error) {
 }
 
 func ValidateRecipeArchive(filename, expected string, size int64, recipe string) (string, error) {
+	return validateImageArchive(filename, expected, size, recipe, false)
+}
+
+func ValidateRuntimeArchive(filename, expected string, size int64) (string, error) {
+	return validateImageArchive(filename, expected, size, "java-compose-v1", true)
+}
+
+func validateImageArchive(filename, expected string, size int64, recipe string, runtimeBase bool) (string, error) {
 	if recipe != "java-compose-v1" && recipe != PreviewRecipe && recipe != ZLMRecipe {
 		return "", errors.New("RECIPE_UNSUPPORTED")
 	}
@@ -103,7 +111,10 @@ func ValidateRecipeArchive(filename, expected string, size int64, recipe string)
 	} else if recipe == ZLMRecipe {
 		tagPattern = `^streamfusion/zlm-direct:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$`
 	}
-	if json.Unmarshal(small["manifest.json"], &manifest) != nil || len(manifest) != 1 || len(manifest[0].RepoTags) != 1 || !regexp.MustCompile(tagPattern).MatchString(manifest[0].RepoTags[0]) || len(manifest[0].Layers) < 1 {
+	if json.Unmarshal(small["manifest.json"], &manifest) != nil || len(manifest) != 1 || len(manifest[0].Layers) < 1 {
+		return "", errors.New("ARCHIVE_SINGLE_MANAGED_IMAGE_REQUIRED")
+	}
+	if !runtimeBase && (len(manifest[0].RepoTags) != 1 || !regexp.MustCompile(tagPattern).MatchString(manifest[0].RepoTags[0])) {
 		return "", errors.New("ARCHIVE_SINGLE_MANAGED_IMAGE_REQUIRED")
 	}
 	m := manifest[0]

@@ -30,6 +30,7 @@ public class PreviewNodeController {
     private final ZlmDirectService zlm;
     private final PreviewScheduler scheduler;
     private final PreviewNodeMaintenanceService maintenance;
+    private final PreviewOpsSynchronization synchronization;
     private final com.streamfusion.platform.media.preview.execution.PreviewRoutingExecutor routing;
 
     @GetMapping
@@ -182,6 +183,37 @@ public class PreviewNodeController {
             boolean applied,
             String reasonCode,
             com.streamfusion.platform.media.preview.control.PreviewMaintenance.State maintenance) {}
+
+    public record SyncResult(
+            boolean applied, String reasonCode, PreviewOpsSynchronization.Review review) {}
+
+    @PostMapping("/nodes/{nodeId}/ops-sync/check")
+    public R<SyncResult> inspectSync(
+            @PathVariable String nodeId, @RequestBody PreviewOpsSynchronization.Input input) {
+        administrator();
+        try {
+            return R.success(new SyncResult(true, null, synchronization.inspect(nodeId, input)));
+        } catch (PreviewFailure failure) {
+            return R.success(new SyncResult(false, failure.reason(), null));
+        }
+    }
+
+    @PostMapping("/nodes/{nodeId}/ops-sync")
+    public R<SyncResult> applySync(
+            @PathVariable String nodeId,
+            @RequestBody PreviewOpsSynchronization.Input input,
+            HttpServletRequest request) {
+        administrator();
+        try {
+            return R.success(
+                    new SyncResult(
+                            true,
+                            null,
+                            synchronization.apply(nodeId, input, AuditContextDto.from(request))));
+        } catch (PreviewFailure failure) {
+            return R.success(new SyncResult(false, failure.reason(), null));
+        }
+    }
 
     @PutMapping("/nodes/{nodeId}")
     public R<PolicyResult> policy(

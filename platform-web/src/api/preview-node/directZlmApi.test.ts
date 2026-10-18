@@ -17,8 +17,12 @@ const instance: DirectZlmInstance = {
   name: 'ZLM A',
   apiHost: '10.0.0.10',
   apiPort: 8080,
+  rtcPort: 8000,
+  rtspPort: 8554,
+  portsObservedAt: '2026-10-18T12:00:00Z',
   zlmVersion: 'v1',
   mediaAddress: '10.0.0.10',
+  installPath: '/opt/zlm',
   mode: 'LOCAL',
   version: 3,
   priority: 100,
@@ -59,6 +63,7 @@ it('sends the ZLM secret only in the create request', async () => {
     apiHost: '10.0.0.10',
     apiPort: 8080,
     mediaAddress: '10.0.0.10',
+    installPath: '/opt/zlm',
     secret: 'once-only',
     priority: 100,
     budget: instance.budget,
@@ -67,7 +72,7 @@ it('sends the ZLM secret only in the create request', async () => {
     expect.objectContaining({
       path: '/preview-node/zlm-instances',
       method: 'POST',
-      body: expect.objectContaining({ secret: 'once-only' }),
+      body: expect.objectContaining({ secret: 'once-only', installPath: '/opt/zlm' }),
     }),
   )
 })
@@ -78,10 +83,27 @@ it('updates a direct instance with its version and without a stored secret', asy
     expect.objectContaining({
       path: '/preview-node/zlm-instances/zlm-a',
       method: 'PUT',
-      body: { mode: 'REMOTE', priority: 100, budget: instance.budget, version: 3 },
+      body: {
+        mode: 'REMOTE',
+        priority: 100,
+        budget: instance.budget,
+        installPath: '/opt/zlm',
+        version: 3,
+      },
     }),
   )
   expect(JSON.stringify(api.request.mock.calls)).not.toContain('secret')
+})
+
+it('sends an edited install path through the versioned direct instance update', async () => {
+  await saveDirectZlmInstance(instance, { installPath: '/srv/zlm-new' })
+  expect(api.request).toHaveBeenCalledWith(
+    expect.objectContaining({
+      path: '/preview-node/zlm-instances/zlm-a',
+      method: 'PUT',
+      body: expect.objectContaining({ installPath: '/srv/zlm-new', version: 3 }),
+    }),
+  )
 })
 
 it('uses a separate credential operation and versioned removal', async () => {
@@ -115,6 +137,7 @@ it('reads the Ops ZLM catalog and imports only the selected published release', 
           targetName: 'A',
           targetAddress: '10.0.0.10',
           installRoot: '/opt/zlm',
+          installPath: '/opt/zlm/instances/zlm-one/releases/release-a',
           releaseId: 'release-a',
           apiUrl: 'http://10.0.0.10:8080',
           mediaAddress: '10.0.0.10',
@@ -130,6 +153,7 @@ it('reads the Ops ZLM catalog and imports only the selected published release', 
   })
   const listing = await getOpsZlmInstances()
   expect(listing.items).toHaveLength(1)
+  expect(listing.items[0]?.installPath).toBe('/opt/zlm/instances/zlm-one/releases/release-a')
   expect(JSON.stringify(listing)).not.toContain('secret')
   expect(api.request).toHaveBeenCalledWith(
     expect.objectContaining({

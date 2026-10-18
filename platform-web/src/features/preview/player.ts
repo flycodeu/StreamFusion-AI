@@ -92,6 +92,7 @@ class WebRtcPreviewPlayer implements PreviewPlayer {
   private recoveryPending: Promise<PreviewLease> | null = null
   private renewTimer: ReturnType<typeof setTimeout> | undefined
   private connectTimer: ReturnType<typeof setTimeout> | undefined
+  private readonly trackListeners = new Map<MediaStreamTrack, () => void>()
   constructor(private readonly events: PlayerEvents) {}
 
   async connect(input: PreviewInput): Promise<PreviewLease> {
@@ -155,8 +156,14 @@ class WebRtcPreviewPlayer implements PreviewPlayer {
     const stream = new MediaStream()
     peer.ontrack = (event) => {
       if (this.closed || this.peer !== peer) return
-      if (!stream.getTracks().some((track) => track.id === event.track.id))
+      if (!stream.getTracks().some((track) => track.id === event.track.id)) {
         stream.addTrack(event.track)
+        const ended = () => {
+          if (!this.closed && this.peer === peer) this.events.stream(stream)
+        }
+        event.track.addEventListener('ended', ended)
+        this.trackListeners.set(event.track, ended)
+      }
       this.events.stream(stream)
     }
     peer.onconnectionstatechange = () => {
@@ -249,6 +256,9 @@ class WebRtcPreviewPlayer implements PreviewPlayer {
   private disconnect(): void {
     clearTimeout(this.renewTimer)
     clearTimeout(this.connectTimer)
+    for (const [track, listener] of this.trackListeners)
+      track.removeEventListener('ended', listener)
+    this.trackListeners.clear()
     if (this.peer) {
       this.peer.ontrack = null
       this.peer.onconnectionstatechange = null

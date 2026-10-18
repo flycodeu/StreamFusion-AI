@@ -16,6 +16,9 @@ const api = vi.hoisted(() => ({
   deleteDirectZlmInstance: vi.fn(),
   getOpsPreviewInstances: vi.fn(),
   importOpsPreviewInstance: vi.fn(),
+  getOpsZlmInstances: vi.fn().mockResolvedValue({ available: false, reasonCode: null, items: [] }),
+  importOpsZlmInstance: vi.fn(),
+  synchronizeOpsNode: vi.fn(),
   previewNodeAction: vi.fn(),
   savePreviewNode: vi.fn(),
   registerPreviewNode: vi.fn(),
@@ -94,6 +97,7 @@ const value = (): PreviewCluster => ({
       observation: null,
       protection: null,
       zlmLoad: null,
+      opsSource: null,
     },
   ],
   registrationOptions: [],
@@ -138,6 +142,7 @@ beforeEach(() => {
   api.getPreviewNodes.mockResolvedValue(value())
   api.getDirectZlmInstances.mockResolvedValue({ registrationAvailable: true, items: [] })
   api.getOpsPreviewInstances.mockResolvedValue({ available: false, reasonCode: null, items: [] })
+  api.getOpsZlmInstances.mockResolvedValue({ available: false, reasonCode: null, items: [] })
 })
 afterEach(() => {
   app?.unmount()
@@ -205,8 +210,12 @@ it('shows a simple ZLM entry and existing direct instances without revealing cre
         name: 'ZLM A',
         apiHost: '10.0.0.10',
         apiPort: 8080,
+        rtcPort: 8000,
+        rtspPort: 8554,
+        portsObservedAt: '2026-10-18T12:00:00Z',
         zlmVersion: 'v1',
         mediaAddress: '10.0.0.10',
+        installPath: '/srv/zlm',
         mode: 'LOCAL',
         version: 2,
         priority: 100,
@@ -222,10 +231,116 @@ it('shows a simple ZLM entry and existing direct instances without revealing cre
   expect(text(root)).toContain('直连 ZLM')
   expect(buttons(root).map(text)).toContain('接入 ZLM')
   expect(text(root)).toContain('ZLM HTTP：10.0.0.10:8080')
+  expect(text(root)).toContain('RTC 端口：8000')
+  expect(text(root)).toContain('RTSP 端口：8554')
+  expect(text(root)).toContain('端口最近核对：')
+  expect(text(root)).toContain('安装位置：/srv/zlm')
   expect(text(root)).toContain('ZLM 版本：v1')
   expect(text(root)).toContain('ZLM A')
   expect(text(root)).not.toContain('ZLM secret')
   expect(api.getDirectZlmInstances).toHaveBeenCalledOnce()
+})
+it('keeps Ops installations outside Platform until explicitly imported and shows known connection facts', async () => {
+  sessionState.me = administrator()
+  api.getOpsZlmInstances.mockResolvedValue({
+    available: true,
+    reasonCode: null,
+    items: [
+      {
+        instanceId: 'ops-zlm-a',
+        controllerId: 'controller-a',
+        targetId: 'target-a',
+        name: 'Ops ZLM A',
+        targetName: '服务器 A',
+        targetAddress: '10.0.0.20',
+        installRoot: '/srv/media',
+        installPath: '/srv/media/instances/ops-zlm-a/releases/release-a',
+        releaseId: 'release-a',
+        apiUrl: 'http://10.0.0.20:8080',
+        mediaAddress: '10.0.0.20',
+        apiPort: 8080,
+        rtcPort: 8000,
+        maxSources: 64,
+        maxViewers: 64,
+        maxTranscodes: 0,
+      },
+    ],
+  })
+  api.importOpsZlmInstance.mockResolvedValue(undefined)
+  const root = await mount(true)
+  expect(text(root)).toContain('未引入平台')
+  expect(text(root)).toContain('服务器地址：10.0.0.20')
+  expect(text(root)).toContain('HTTP 端口：8080')
+  expect(text(root)).toContain('RTC 端口：8000')
+  expect(text(root)).toContain('Ops 目标根目录：/srv/media')
+  expect(text(root)).toContain('ZLM 发布目录：/srv/media/instances/ops-zlm-a/releases/release-a')
+  expect(api.importOpsZlmInstance).not.toHaveBeenCalled()
+  await (buttons(root).find((button) => text(button) === '引入平台')!.props.onClick as () => void)()
+  await settle()
+  expect(api.importOpsZlmInstance).toHaveBeenCalledWith('ops-zlm-a', 'release-a')
+})
+it('does not mistake a manually registered API address for an imported Ops instance', async () => {
+  sessionState.me = administrator()
+  api.getOpsZlmInstances.mockResolvedValue({
+    available: true,
+    reasonCode: null,
+    items: [
+      {
+        instanceId: 'ops-zlm-a',
+        controllerId: 'controller-a',
+        targetId: 'target-a',
+        name: 'Ops ZLM A',
+        targetName: '服务器 A',
+        targetAddress: '10.0.0.20',
+        installRoot: '/srv/media',
+        installPath: '/srv/media/instances/ops-zlm-a/releases/release-a',
+        releaseId: 'release-a',
+        apiUrl: 'http://10.0.0.20:8080',
+        mediaAddress: '10.0.0.20',
+        apiPort: 8080,
+        rtcPort: 8000,
+        maxSources: 64,
+        maxViewers: 64,
+        maxTranscodes: 0,
+      },
+    ],
+  })
+  api.getDirectZlmInstances.mockResolvedValue({
+    registrationAvailable: true,
+    items: [
+      {
+        nodeId: 'zlm-manual',
+        name: '手工节点',
+        apiHost: '10.0.0.20',
+        apiPort: 8080,
+        rtcPort: null,
+        rtspPort: null,
+        portsObservedAt: null,
+        zlmVersion: null,
+        mediaAddress: '10.0.0.20',
+        installPath: null,
+        mode: 'LOCAL',
+        version: 0,
+        priority: 100,
+        budget: { ...value().nodes[0]!.budget, maxTranscodes: 0 },
+        usage: { ...value().nodes[0]!.usage, sources: 0, viewers: 0, transcodes: 0 },
+        state: 'READY',
+        reasonCode: null,
+        observedAt: null,
+      },
+    ],
+  })
+  const root = await mount(true)
+  expect(text(root)).toContain('地址已登记')
+  expect(text(root)).not.toContain('已引入平台')
+  expect(buttons(root).find((button) => text(button) === '引入平台')!.props.disabled).toBe(true)
+})
+it('states that an absent Ops directory is optional for manual ZLM registration', async () => {
+  sessionState.me = administrator()
+  const root = await mount(true)
+  expect(text(root)).toContain('Ops 目录未配置；可继续手工接入')
+  expect(buttons(root).find((button) => text(button) === '接入 ZLM')!.props.disabled).toBe(false)
+  expect(api.importOpsZlmInstance).not.toHaveBeenCalled()
 })
 it('explains server-side credential storage failures without asking for manual setup', async () => {
   sessionState.me = administrator()
@@ -288,7 +403,7 @@ it('offers direct instance configuration only when protected credentials are ava
   await (buttons(root).find((button) => text(button) === '检查节点')!.props.onClick as () => void)()
   await settle()
   expect(buttons(root).find((button) => text(button) === '手工登记')!.props.disabled).toBe(false)
-  expect(text(root)).toContain('尚未连接 Ops 实例目录')
+  expect(text(root)).toContain('Ops 目录未配置（可选）')
   expect(text(root)).toContain('接入节点包')
   expect(text(root)).toContain('手工登记节点包')
 })

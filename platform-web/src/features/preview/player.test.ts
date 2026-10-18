@@ -70,6 +70,42 @@ afterEach(() => {
   vi.useRealTimers()
 })
 describe('native WebRTC preview adapter', () => {
+  it('observes audio ending without failing video and removes track listeners on close', async () => {
+    class Track extends EventTarget {
+      id = 'audio-1'
+      readyState = 'live'
+      kind = 'audio'
+    }
+    vi.stubGlobal(
+      'MediaStream',
+      class {
+        tracks: Track[] = []
+        getTracks() {
+          return this.tracks
+        }
+        addTrack(track: Track) {
+          this.tracks.push(track)
+        }
+      },
+    )
+    const callbacks = events(),
+      player = createPreviewPlayer(callbacks)
+    await player.connect({ cameraId: '1', profileId: '2', usage: 'MAIN' })
+    const peer = MockPeer.instances[0]!,
+      track = new Track()
+    const remove = vi.spyOn(track, 'removeEventListener')
+    ;(peer.ontrack as (event: unknown) => void)({ track })
+    expect(callbacks.stream).toHaveBeenCalledOnce()
+    track.readyState = 'ended'
+    track.dispatchEvent(new Event('ended'))
+    expect(callbacks.stream).toHaveBeenCalledTimes(2)
+    expect(callbacks.failed).not.toHaveBeenCalled()
+    await player.close()
+    expect(remove).toHaveBeenCalledWith('ended', expect.any(Function))
+    track.dispatchEvent(new Event('ended'))
+    expect(callbacks.stream).toHaveBeenCalledTimes(2)
+    expect(api.exchangeWebRtc).toHaveBeenCalledOnce()
+  })
   it('preserves diagnostics from HTTP success with an unavailable lease without starting WebRTC', async () => {
     vi.mocked(api.createPreviewLease).mockResolvedValueOnce({
       ...lease,

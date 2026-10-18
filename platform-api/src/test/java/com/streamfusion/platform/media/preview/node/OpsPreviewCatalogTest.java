@@ -320,6 +320,94 @@ class OpsPreviewCatalogTest {
     }
 
     @Test
+    void currentBindingRequiresStableEmbeddedIdentityCurrentReleaseAndNoPendingJob()
+            throws Exception {
+        Path serviceToken = directory.resolve("ops-current-token");
+        writeProtectedServiceToken(serviceToken);
+        Path machineToken = directory.resolve("node.token");
+        Files.writeString(machineToken, "a".repeat(64));
+        var response = new AtomicReference<>("success");
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext(
+                "/ops/api/v1/platform/preview-instances/instance-a/handoff",
+                request -> {
+                    var state = response.get();
+                    String body;
+                    int status;
+                    if (state.startsWith("HANDOFF_")) {
+                        status = 409;
+                        body = "{\"code\":\"" + state + "\"}";
+                    } else {
+                        status = 200;
+                        body =
+                                "{\"code\":\"SUCCESS\",\"data\":{\"controllerId\":\"controller-a\",\"targetId\":\"target-a\","
+                                        + "\"instanceId\":\"instance-a\",\"releaseId\":\""
+                                        + (state.equals("release") ? "release-b" : "release-a")
+                                        + "\","
+                                        + "\"machineToken\":\""
+                                        + "a".repeat(64)
+                                        + "\",\"connection\":{\"controllerId\":\"controller-a\",\"targetId\":\""
+                                        + (state.equals("identity") ? "target-other" : "target-a")
+                                        + "\",\"nodeId\":\"node-a\","
+                                        + "\"controlUri\":\"https://127.0.0.1:18443\",\"mediaAddress\":\"127.0.0.1\","
+                                        + "\"certificateSha256\":\""
+                                        + "a".repeat(64)
+                                        + "\"}}}";
+                    }
+                    byte[] encoded = body.getBytes(StandardCharsets.UTF_8);
+                    request.sendResponseHeaders(status, encoded.length);
+                    try (var output = request.getResponseBody()) {
+                        output.write(encoded);
+                    }
+                });
+        server.start();
+        try {
+            var catalog =
+                    new OpsPreviewCatalog(
+                            new OpsPreviewCatalogProperties(
+                                    "http://127.0.0.1:" + server.getAddress().getPort(),
+                                    serviceToken.toString()),
+                            new PreviewNodeProperties("", directory.toString()),
+                            json);
+            var bound =
+                    new PreviewNodeRepository.Node(
+                            new PreviewNodeConnection(
+                                    "node-a",
+                                    "A",
+                                    java.net.URI.create("https://127.0.0.1:18443"),
+                                    "a".repeat(64),
+                                    machineToken,
+                                    "127.0.0.1"),
+                            "DRAINING",
+                            "a",
+                            0,
+                            com.streamfusion.platform.media.preview.control.PreviewBudget.defaults(
+                                    64, 64),
+                            100,
+                            null,
+                            new OpsNodeSource(
+                                    "controller-a", "target-a", "instance-a", "release-a", null));
+            catalog.requireCurrent(bound);
+            response.set("identity");
+            assertThatThrownBy(() -> catalog.requireCurrent(bound))
+                    .hasMessage("OPS_RESPONSE_INVALID");
+            response.set("release");
+            assertThatThrownBy(() -> catalog.requireCurrent(bound))
+                    .hasMessage("OPS_RELEASE_CHANGED");
+            for (String code : java.util.List.of("HANDOFF_JOB_PENDING", "HANDOFF_TARGET_LOCKED")) {
+                response.set(code);
+                assertThatThrownBy(() -> catalog.requireCurrent(bound))
+                        .hasMessage("OPS_JOB_PENDING");
+            }
+            response.set("HANDOFF_STATE_UNAVAILABLE");
+            assertThatThrownBy(() -> catalog.requireCurrent(bound))
+                    .hasMessage("OPS_HANDOFF_UNAVAILABLE");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void rejectsServiceTokenReadableByAnotherWindowsPrincipal() throws Exception {
         var token = directory.resolve("ops-service-token");
         writeProtectedServiceToken(token);

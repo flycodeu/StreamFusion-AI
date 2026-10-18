@@ -41,6 +41,25 @@ describe('authenticated file responses', () => {
     expect(result.data.blob).toBeInstanceOf(Blob)
     expect(fetcher.mock.calls[0]?.[1].credentials).toBe('same-origin')
   })
+  it('accepts only the dedicated permission-query Excel attachment shape', async () => {
+    vi.stubEnv('DEV', true)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('PK', {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition': 'attachment; filename="access-pages-20261018-204500.xlsx"',
+            'X-Trace-Id': 'a'.repeat(32),
+          },
+        }),
+      ),
+    )
+    const result = await client()({ ...input, path: '/access-query/pages/export.xlsx' })
+    expect(result.data.name).toBe('access-pages-20261018-204500.xlsx')
+    expect(result.data.blob).toBeInstanceOf(Blob)
+  })
   it('retains normal authorization handling for JSON download errors', async () => {
     vi.stubGlobal(
       'fetch',
@@ -76,5 +95,20 @@ describe('authenticated file responses', () => {
       ),
     )
     await expect(client()(input)).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('PK', {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/html',
+            'Content-Disposition': 'attachment; filename="access-pages-20261018-204500.xlsx"',
+          },
+        }),
+      ),
+    )
+    await expect(
+      client()({ ...input, path: '/access-query/pages/export.xlsx' }),
+    ).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
   })
 })

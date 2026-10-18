@@ -97,7 +97,7 @@ func TestSchemaTwoUpgradePreservesPendingLocks(t *testing.T) {
 
 // A real SSH transport with a controlled executor reply exercises the HTTP,
 // store, scheduler and ACK paths. It does not claim real Docker acceptance.
-func pluginSSHFixture(t *testing.T, s *Store, b *browser, supportsPlugins bool) string {
+func pluginSSHFixture(t *testing.T, s *Store, b *browser, supportsPlugins bool, extensions ...func(deploy.Request) ([]byte, bool)) string {
 	t.Helper()
 	_, clientKey, _ := ed25519.GenerateKey(rand.Reader)
 	pk, e := x509.MarshalPKCS8PrivateKey(clientKey)
@@ -154,6 +154,19 @@ func pluginSSHFixture(t *testing.T, s *Store, b *browser, supportsPlugins bool) 
 							ch.Close()
 							continue
 						}
+						handled := false
+						for _, extension := range extensions {
+							if raw, ok := extension(req); ok {
+								ch.Write(raw)
+								handled = true
+								break
+							}
+						}
+						if handled {
+							ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+							ch.Close()
+							continue
+						}
 						mu.Lock()
 						var out any
 						switch req.Action {
@@ -162,7 +175,11 @@ func pluginSSHFixture(t *testing.T, s *Store, b *browser, supportsPlugins bool) 
 							if supportsPlugins {
 								catalog = deploy.Digest(plugin.All())
 							}
-							out = map[string]string{"dockerVersion": "27.5.1", "composeVersion": "2.32.4", "platform": "linux/amd64", "pendingJobId": "", "pluginCatalogHash": catalog}
+							jarRecipe := ""
+							if supportsPlugins {
+								jarRecipe = "java-jar-v1"
+							}
+							out = map[string]string{"dockerVersion": "27.5.1", "composeVersion": "2.32.4", "platform": "linux/amd64", "pendingJobId": "", "pluginCatalogHash": catalog, "javaJarRecipe": jarRecipe}
 						case "PLUGIN_INSTALL", "PLUGIN_REMOVE":
 							p := req.Plugin
 							res := deploy.Result{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID, JobID: req.JobID, InputHash: req.InputHash, Status: "SUCCEEDED", Phase: "RECORDED", ImageID: "sha256:" + strings.Repeat("a", 64), PluginKey: p.Key, PluginVersion: p.Version, PluginKind: p.Kind, PluginImageDigest: p.Digest, Platform: p.Platform, Health: "PLUGIN_READY", ObservedVersion: "tested version", ObservedAt: Now()}

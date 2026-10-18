@@ -53,7 +53,14 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 			return
 		}
 		p.Candidate = deploy.Release{ID: uuid.NewString(), InstanceID: id, ArtifactID: in.ArtifactID, Config: i.Config}
-		e = h.store.DB.QueryRow("SELECT archive_sha256,byte_size,image_id FROM artifacts WHERE id=?", in.ArtifactID).Scan(&p.Candidate.ArchiveSHA256, &p.Candidate.ByteSize, &p.Candidate.ImageID)
+		var environment string
+		e = h.store.DB.QueryRow("SELECT archive_sha256,byte_size,image_id,coalesce(runtime_environment_json,'') FROM artifacts WHERE id=?", in.ArtifactID).Scan(&p.Candidate.ArchiveSHA256, &p.Candidate.ByteSize, &p.Candidate.ImageID, &environment)
+		if e == nil && environment != "" {
+			var snapshot deploy.RuntimeEnvironment
+			if e = deploy.StrictJSON([]byte(environment), &snapshot); e == nil {
+				p.Candidate.RuntimeEnvironment = &snapshot
+			}
+		}
 	}
 	if p.Kind == "PUBLISH" {
 		for _, bindingID := range p.Candidate.Config.BindingIDs {
@@ -110,6 +117,7 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 		PendingJobID  string `json:"pendingJobId"`
 		PreviewRecipe string `json:"previewRecipe"`
 		ZLMRecipe     string `json:"zlmRecipe"`
+		JavaJarRecipe string `json:"javaJarRecipe"`
 	}
 	if json.Unmarshal(probeResult, &targetFact) != nil || targetFact.PendingJobID != "" {
 		h.fail(w, r, 409, "TARGET_PENDING", "目标仍有未决作业，禁止从旧备份或新计划绕过")
@@ -121,6 +129,10 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 	}
 	if p.Candidate.Config.ZLM != nil && targetFact.ZLMRecipe != deploy.ZLMRecipe {
 		h.fail(w, r, 409, "TARGET_ZLM_RECIPE_REQUIRED", "目标执行器不支持独立 ZLM 配方，请先更新执行器")
+		return
+	}
+	if p.Candidate.RuntimeEnvironment != nil && targetFact.JavaJarRecipe != "java-jar-v1" {
+		h.fail(w, r, 409, "TARGET_JAR_RECIPE_REQUIRED", "目标执行器不支持冻结运行环境的JAR制品，请先升级执行器")
 		return
 	}
 	p.InputHash = deploy.Digest(p)

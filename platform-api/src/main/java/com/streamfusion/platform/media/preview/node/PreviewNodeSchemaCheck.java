@@ -19,6 +19,8 @@ public final class PreviewNodeSchemaCheck implements ApplicationRunner {
     public void run(ApplicationArguments args) {
         try {
             sql.queryForList(
+                    "SELECT node_kind,ops_controller_id,ops_target_id,ops_instance_id,ops_release_id,ops_synced_at,zlm_install_path FROM preview_node WHERE 1=0");
+            sql.queryForList(
                     "SELECT id,node_id,name,control_uri,certificate_sha256,token_path,media_address,mode,config_version,version,priority,max_sources,max_viewers,max_transcodes,max_starting,ingress_kbps,egress_kbps,source_upper_kbps,output_upper_kbps FROM preview_node WHERE 1=0");
             sql.queryForList(
                     "SELECT viewer_id,node_id,boot_id,config_version,profile_id,connection_key,state,output_key,egress_kbps,is_starting FROM preview_viewer WHERE 1=0");
@@ -30,7 +32,8 @@ public final class PreviewNodeSchemaCheck implements ApplicationRunner {
                     "SELECT operation_id,node_id,viewer_id,action,command_digest,deadline_at,state,reason_code FROM preview_operation WHERE 1=0");
         } catch (org.springframework.dao.DataAccessException failure) {
             throw new IllegalStateException(
-                    "预览 S3 表结构缺失；备份后按预览节点部署说明执行五表增量升级，禁止重放初始化 SQL。", failure);
+                    "预览节点表结构缺失；备份后核对五表、node_kind及preview-node目录中的Ops来源和ZLM安装路径定向升级，禁止重放初始化 SQL。",
+                    failure);
         }
     }
 }

@@ -15,7 +15,7 @@ import (
 )
 
 func (h *HTTP) listArtifacts(w http.ResponseWriter, r *http.Request) {
-	rows, e := h.store.DB.Query("SELECT id,name,archive_sha256,byte_size,image_id,created_at,recipe FROM artifacts ORDER BY created_at DESC LIMIT 100")
+	rows, e := h.store.DB.Query("SELECT id,name,archive_sha256,byte_size,image_id,created_at,recipe,coalesce(runtime_environment_json,'null') FROM artifacts ORDER BY created_at DESC LIMIT 100")
 	if e != nil {
 		h.internal(w, r, e)
 		return
@@ -23,14 +23,14 @@ func (h *HTTP) listArtifacts(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var id, name, sha, image, created, recipe string
+		var id, name, sha, image, created, recipe, environment string
 		var size int64
-		if e = rows.Scan(&id, &name, &sha, &size, &image, &created, &recipe); e != nil {
+		if e = rows.Scan(&id, &name, &sha, &size, &image, &created, &recipe, &environment); e != nil {
 			h.internal(w, r, e)
 			return
 		}
 		_, e := os.Stat(h.store.artifactPath(id))
-		out = append(out, map[string]any{"id": id, "name": name, "archiveSha256": sha, "byteSize": size, "imageId": image, "platform": "linux/amd64", "available": e == nil, "createdAt": created, "recipe": recipe})
+		out = append(out, map[string]any{"id": id, "name": name, "archiveSha256": sha, "byteSize": size, "imageId": image, "platform": "linux/amd64", "available": e == nil, "createdAt": created, "recipe": recipe, "runtimeEnvironment": json.RawMessage(environment)})
 	}
 	h.success(w, r, out)
 }
@@ -42,6 +42,29 @@ func (h *HTTP) acceptImport(w http.ResponseWriter, r *http.Request, s *session) 
 	}
 	if in.Recipe == "" {
 		in.Recipe = "java-compose-v1"
+	}
+	if in.RuntimeEnvironment != nil || (in.SourceKind != "" && in.SourceKind != "DOCKER_ARCHIVE" && in.SourceKind != "JAR") {
+		h.fail(w, r, 400, "IMPORT_SOURCE_INVALID", "请选择完整镜像或固定Java21 JAR封装，不能提交自定义环境快照")
+		return
+	}
+	if in.SourceKind == "JAR" {
+		if in.Recipe != "java-compose-v1" || in.Size > deploy.JarLimit {
+			h.fail(w, r, 400, "JAR_SIZE_OR_RECIPE_INVALID", "JAR只支持Java服务，最大128MiB")
+			return
+		}
+		i, err := h.store.readPlugin(in.PluginInstallationID)
+		if err != nil {
+			h.opsError(w, r, err)
+			return
+		}
+		if _, err := installationDefinition(i); err != nil || i.Status != "READY" || i.Key != "java-runtime" || i.PluginVersion != "21-jre" {
+			h.fail(w, r, 409, "JAVA21_ENVIRONMENT_REQUIRED", "请选择已校验就绪的Java21运行环境，Java17与Maven不能作为应用运行环境")
+			return
+		}
+		in.RuntimeEnvironment = &deploy.RuntimeEnvironment{InstallationID: i.ID, TargetID: i.TargetID, PluginVersion: i.PluginVersion, ImageID: i.ImageID, ImageDigest: i.ImageDigest, RecipeRevision: i.RecipeRevision}
+	} else if in.PluginInstallationID != "" {
+		h.fail(w, r, 400, "IMAGE_RUNTIME_OVERRIDE_FORBIDDEN", "完整镜像已包含JRE，不能重新绑定运行环境")
+		return
 	}
 	if (in.Recipe != "java-compose-v1" && in.Recipe != deploy.PreviewRecipe && in.Recipe != deploy.ZLMRecipe) || !validName(in.Name) || !deploy.Hex.MatchString(in.SHA) || in.Size < 1 || in.Size > deploy.ArchiveLimitFor(in.Recipe) || len(in.IdempotencyKey) < 8 || len(in.IdempotencyKey) > 80 {
 		h.fail(w, r, 400, "IMPORT_INVALID", "请填写配方、名称、预期SHA-256与大小；Java上限512MiB，媒体配方上限2GiB")
@@ -55,6 +78,19 @@ func (h *HTTP) acceptImport(w http.ResponseWriter, r *http.Request, s *session) 
 		return
 	}
 	defer tx.Rollback()
+	if in.RuntimeEnvironment != nil {
+		i, err := scanPlugin(tx.QueryRow("SELECT "+pluginColumns+" FROM plugin_installations WHERE id=?", in.PluginInstallationID))
+		if err != nil || i.Status != "READY" || i.ImageID != in.RuntimeEnvironment.ImageID || i.ImageDigest != in.RuntimeEnvironment.ImageDigest {
+			h.fail(w, r, 409, "JAVA21_ENVIRONMENT_CHANGED", "运行环境已变化，请刷新后重新选择")
+			return
+		}
+		var jobStatus string
+		var pending bool
+		if err := tx.QueryRow("SELECT status,target_ack_pending FROM jobs WHERE id=?", i.LastJobID).Scan(&jobStatus, &pending); err != nil || (jobStatus != "SUCCEEDED" && jobStatus != "FAILED") || pending {
+			h.fail(w, r, 409, "JAVA21_ENVIRONMENT_PENDING", "请先核对运行环境原作业与ACK")
+			return
+		}
+	}
 	raw := jsonText(in)
 	var id, hash string
 	e = tx.QueryRow("SELECT id,request_hash FROM jobs WHERE actor_id=? AND kind='IMPORT' AND idempotency_key=?", s.AdminID, in.IdempotencyKey).Scan(&id, &hash)
@@ -168,9 +204,16 @@ func (h *HTTP) processImport(id, raw string) {
 		return
 	}
 	h.store.mu.Lock()
-	_, e := h.store.DB.Exec("UPDATE jobs SET status='RUNNING',phase='VERIFY',updated_at=? WHERE id=? AND status='QUEUED'", Now(), id)
+	claim, e := h.store.DB.Exec("UPDATE jobs SET status='RUNNING',phase='VERIFY',updated_at=? WHERE id=? AND status='QUEUED' AND phase='VERIFY'", Now(), id)
 	h.store.mu.Unlock()
 	if e != nil {
+		return
+	}
+	if n, _ := claim.RowsAffected(); n != 1 {
+		return
+	}
+	if in.SourceKind == "JAR" {
+		h.processJarImport(id, in)
 		return
 	}
 	if in.Recipe == "" {

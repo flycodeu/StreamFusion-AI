@@ -2,37 +2,44 @@ package controller
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"time"
 
 	"github.com/streamfusion-ai/operations/internal/deploy"
 )
 
 type platformZLMInstance struct {
-	InstanceID    string `json:"instanceId"`
-	Name          string `json:"name"`
-	TargetName    string `json:"targetName"`
-	TargetAddress string `json:"targetAddress"`
-	InstallRoot   string `json:"installRoot"`
-	ReleaseID     string `json:"releaseId"`
-	APIURL        string `json:"apiUrl"`
-	MediaAddress  string `json:"mediaAddress"`
-	APIPort       int    `json:"apiPort"`
-	RTCPort       int    `json:"rtcPort"`
-	MaxSources    int    `json:"maxSources"`
-	MaxViewers    int    `json:"maxViewers"`
-	MaxTranscodes int    `json:"maxTranscodes"`
+	ControllerID       string `json:"controllerId"`
+	TargetID           string `json:"targetId"`
+	InstanceID         string `json:"instanceId"`
+	Name               string `json:"name"`
+	TargetName         string `json:"targetName"`
+	TargetAddress      string `json:"targetAddress"`
+	InstallRoot        string `json:"installRoot"`
+	InstallPath        string `json:"installPath"`
+	ReleaseID          string `json:"releaseId"`
+	CredentialRevision string `json:"credentialRevision,omitempty"`
+	APIURL             string `json:"apiUrl"`
+	MediaAddress       string `json:"mediaAddress"`
+	APIPort            int    `json:"apiPort"`
+	RTCPort            int    `json:"rtcPort"`
+	MaxSources         int    `json:"maxSources"`
+	MaxViewers         int    `json:"maxViewers"`
+	MaxTranscodes      int    `json:"maxTranscodes"`
 }
 
 func zlmCatalogEntry(i instance, t target, r deploy.Release) platformZLMInstance {
 	z := r.Config.ZLM
 	return platformZLMInstance{
-		InstanceID: i.ID, Name: i.Name, TargetName: t.Name,
-		TargetAddress: t.Address, InstallRoot: t.InstallRoot, ReleaseID: r.ID,
-		APIURL:       fmt.Sprintf("http://%s:%d", z.MediaAddress, z.APIPort),
+		InstanceID: i.ID, TargetID: t.ID, Name: i.Name, TargetName: t.Name,
+		TargetAddress: t.Address, InstallRoot: t.InstallRoot,
+		InstallPath: filepath.Join(t.InstallRoot, "instances", i.ID, "releases", r.ID), ReleaseID: r.ID,
+		CredentialRevision: z.SecretCredentialID + ":" + z.SecretRevision,
+		// The management API is bound on the host address. MediaAddress is the
+		// browser-facing publish address and may differ behind NAT.
+		APIURL:       fmt.Sprintf("http://%s:%d", r.Config.BindAddress, z.APIPort),
 		MediaAddress: z.MediaAddress, APIPort: z.APIPort, RTCPort: z.RTCPort,
 		MaxSources: z.MaxSources, MaxViewers: z.MaxViewers, MaxTranscodes: 0,
 	}
@@ -81,7 +88,9 @@ func (h *HTTP) platformZLMInstances(w http.ResponseWriter, r *http.Request) {
 			h.internal(w, r, e)
 			return
 		}
-		items = append(items, zlmCatalogEntry(i, target, release))
+		entry := zlmCatalogEntry(i, target, release)
+		entry.ControllerID = h.store.controllerID()
+		items = append(items, entry)
 	}
 	h.success(w, r, map[string]any{"items": items})
 }
@@ -113,10 +122,14 @@ func (h *HTTP) platformZLMHandoff(w http.ResponseWriter, r *http.Request, id str
 		h.opsError(w, r, err)
 		return
 	}
+	if err = platformHandoffReady(h.store.DB, id, target.ID, input.ReleaseID); err != nil {
+		h.fail(w, r, 409, err.Error(), "实例或目标仍有未决作业、待确认结果或版本变化，请先核对原作业")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	var actual deploy.Result
-	if err = h.store.callTarget(ctx, target, deploy.Request{Action: "INSPECT", Candidate: &release, TraceID: r.Context().Value(traceKey{}).(string)}, "", &actual); err != nil || actual.Health != "APPLICATION_READY" || actual.ReleaseID != release.ID || actual.ConfigHash != deploy.Digest(release.Config) {
+	if err = h.store.callTarget(ctx, target, deploy.Request{Action: "ZLM_HANDOFF", Candidate: &release, TraceID: r.Context().Value(traceKey{}).(string)}, "", &actual); err != nil || actual.Health != "APPLICATION_READY" || actual.ReleaseID != release.ID || actual.ConfigHash != deploy.Digest(release.Config) {
 		h.auditPlatformHandoff(r, id, "FAILED")
 		h.fail(w, r, 409, "ZLM_HANDOFF_UNAVAILABLE", "目标实例未就绪，请核对 Ops 目标和实例状态")
 		return
@@ -136,12 +149,8 @@ func (h *HTTP) platformZLMHandoff(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	defer tx.Rollback()
-	var current string
-	if err = tx.QueryRow("SELECT coalesce(current_release_id,'') FROM instances WHERE id=?", id).Scan(&current); errors.Is(err, sql.ErrNoRows) || err == nil && current != input.ReleaseID {
-		h.fail(w, r, 409, "RELEASE_CHANGED", "发布版本已变化，请刷新实例目录")
-		return
-	} else if err != nil {
-		h.internal(w, r, err)
+	if err = platformHandoffReady(tx, id, target.ID, input.ReleaseID); err != nil {
+		h.fail(w, r, 409, err.Error(), "交接期间版本或作业状态已变化，请刷新后核对")
 		return
 	}
 	if err = auditTx(tx, "platform-service", "ZLM_HANDOFF", id+":"+input.ReleaseID, "SUCCESS", r.Context().Value(traceKey{}).(string)); err == nil {
@@ -152,5 +161,6 @@ func (h *HTTP) platformZLMHandoff(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	connection := zlmCatalogEntry(i, target, release)
-	h.success(w, r, map[string]any{"instanceId": id, "releaseId": input.ReleaseID, "connection": connection, "apiSecret": string(secret)})
+	connection.ControllerID = h.store.controllerID()
+	h.success(w, r, map[string]any{"controllerId": connection.ControllerID, "targetId": target.ID, "instanceId": id, "releaseId": input.ReleaseID, "credentialRevision": connection.CredentialRevision, "connection": connection, "apiSecret": string(secret)})
 }

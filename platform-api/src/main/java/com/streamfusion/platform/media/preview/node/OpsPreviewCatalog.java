@@ -57,7 +57,9 @@ public final class OpsPreviewCatalog {
             String mediaAddress,
             int maxSources,
             int maxViewers,
-            int maxTranscodes) {}
+            int maxTranscodes,
+            String controllerId,
+            String targetId) {}
 
     public record Listing(boolean available, String reasonCode, List<Instance> items) {}
 
@@ -69,6 +71,7 @@ public final class OpsPreviewCatalog {
             String targetName,
             String targetAddress,
             String installRoot,
+            String installPath,
             String releaseId,
             String apiUrl,
             String mediaAddress,
@@ -76,14 +79,20 @@ public final class OpsPreviewCatalog {
             int rtcPort,
             int maxSources,
             int maxViewers,
-            int maxTranscodes) {}
+            int maxTranscodes,
+            String controllerId,
+            String targetId,
+            String credentialRevision) {}
 
     public record ZlmListing(boolean available, String reasonCode, List<ZlmInstance> items) {}
 
     public record ZlmHandoff(ZlmInstance connection, String apiSecret) {}
 
     public record Prepared(
-            PreviewNodeManager.Registration registration, Path tokenFile, Path previousTokenFile) {}
+            PreviewNodeManager.Registration registration,
+            Path tokenFile,
+            Path previousTokenFile,
+            OpsNodeSource source) {}
 
     public boolean configured() {
         return !ops.baseUri().isBlank() && !ops.tokenFile().isBlank();
@@ -110,6 +119,11 @@ public final class OpsPreviewCatalog {
                         || value.maxTranscodes() < 0)
                     throw new PreviewFailure("OPS_RESPONSE_INVALID");
                 result.add(value);
+                OpsNodeSource.optional(
+                        value.controllerId(),
+                        value.targetId(),
+                        value.instanceId(),
+                        value.releaseId());
             }
             return new Listing(true, null, List.copyOf(result));
         } catch (PreviewFailure failure) {
@@ -134,6 +148,8 @@ public final class OpsPreviewCatalog {
                 || !selection.releaseId().equals(handoff.path("releaseId").asText()))
             throw new PreviewFailure("OPS_RELEASE_CHANGED");
         JsonNode connection = handoff.path("connection");
+        if (!java.util.Objects.equals(source(handoff, selection), source(connection, selection)))
+            throw new PreviewFailure("OPS_RESPONSE_INVALID");
         String nodeId = connection.path("nodeId").asText();
         String machineToken = handoff.path("machineToken").asText();
         if (!identity(nodeId) || nodeId.equals("local") || !machineToken.matches("[a-f0-9]{64}"))
@@ -155,7 +171,11 @@ public final class OpsPreviewCatalog {
         }
         writeProtectedSecret(token, machineToken);
         try {
-            return new Prepared(manager.registration(candidate), token, manager.credential(nodeId));
+            return new Prepared(
+                    manager.registration(candidate),
+                    token,
+                    manager.credential(nodeId),
+                    source(handoff, selection));
         } catch (RuntimeException failure) {
             discard(token);
             throw failure;
@@ -201,6 +221,13 @@ public final class OpsPreviewCatalog {
                 || !secret.equals(secret.strip())
                 || secret.chars().anyMatch(ch -> ch < 32 || ch > 126))
             throw new PreviewFailure("OPS_RESPONSE_INVALID");
+        OpsNodeSource declared = source(handoff, selection);
+        OpsNodeSource embedded = source(connection);
+        if (!java.util.Objects.equals(declared, embedded))
+            throw new PreviewFailure("OPS_RESPONSE_INVALID");
+        if (!java.util.Objects.equals(
+                nullableText(handoff.path("credentialRevision")), connection.credentialRevision()))
+            throw new PreviewFailure("OPS_RESPONSE_INVALID");
         return new ZlmHandoff(connection, secret);
     }
 
@@ -215,6 +242,12 @@ public final class OpsPreviewCatalog {
                     || value.name().length() > 80
                     || value.targetName() == null
                     || value.targetName().isBlank()
+                    || (value.installPath() != null
+                            && (value.installPath().length() > 512
+                                    || !value.installPath().startsWith("/")
+                                    || value.installPath()
+                                            .codePoints()
+                                            .anyMatch(Character::isISOControl)))
                     || value.apiUrl() == null
                     || value.mediaAddress() == null
                     || value.maxSources() < 1
@@ -233,11 +266,104 @@ public final class OpsPreviewCatalog {
                 throw new PreviewFailure("OPS_RESPONSE_INVALID");
             ZlmDirectConnection.privateIpv4(api.getHost());
             ZlmDirectConnection.privateIpv4(value.mediaAddress());
+            OpsNodeSource.optional(
+                    value.controllerId(), value.targetId(), value.instanceId(), value.releaseId());
+            if (value.credentialRevision() != null
+                    && !value.credentialRevision().matches("[A-Za-z0-9_-]{1,64}:[1-9][0-9]{0,18}"))
+                throw new PreviewFailure("OPS_RESPONSE_INVALID");
             return value;
         } catch (PreviewFailure known) {
             throw known;
         } catch (Exception invalid) {
             throw new PreviewFailure("OPS_RESPONSE_INVALID");
+        }
+    }
+
+    public OpsNodeSource source(ZlmInstance instance) {
+        return OpsNodeSource.optional(
+                instance.controllerId(),
+                instance.targetId(),
+                instance.instanceId(),
+                instance.releaseId());
+    }
+
+    private OpsNodeSource source(JsonNode handoff, Selection selection) {
+        return OpsNodeSource.optional(
+                nullableText(handoff.path("controllerId")), nullableText(handoff.path("targetId")),
+                selection.instanceId(), selection.releaseId());
+    }
+
+    private String nullableText(JsonNode value) {
+        return value.isNull() || value.isMissingNode() ? null : value.asText();
+    }
+
+    /** Re-check the current successful deployment without writing or exposing its credentials. */
+    public void requireCurrent(PreviewNodeRepository.Node node) {
+        if (node == null || node.opsSource() == null) return;
+        if (!configured()) throw new PreviewFailure("OPS_NOT_CONFIGURED");
+        var source = node.opsSource();
+        var selected = new Selection(source.instanceId(), source.releaseId());
+        var handoff =
+                exchange(
+                        "POST",
+                        (node.zlm() == null ? "preview-instances/" : "zlm-instances/")
+                                + selected.instanceId()
+                                + "/handoff",
+                        selected.releaseId());
+        if (!source.sameInstance(source(handoff, selected))
+                || !selected.instanceId().equals(handoff.path("instanceId").asText())
+                || !selected.releaseId().equals(handoff.path("releaseId").asText()))
+            throw new PreviewFailure("OPS_RELEASE_CHANGED");
+        JsonNode connection = handoff.path("connection");
+        if (!source.sameInstance(source(connection, selected)))
+            throw new PreviewFailure("OPS_RESPONSE_INVALID");
+        if (node.zlm() == null) {
+            if (!node.nodeId().equals(connection.path("nodeId").asText())
+                    || !node.connection()
+                            .controlUri()
+                            .toString()
+                            .equals(connection.path("controlUri").asText())
+                    || !node.connection()
+                            .mediaAddress()
+                            .equals(connection.path("mediaAddress").asText())
+                    || !node.connection()
+                            .certificateSha256()
+                            .equals(connection.path("certificateSha256").asText()))
+                throw new PreviewFailure("OPS_CONNECTION_CHANGED");
+            try {
+                if (!java.security.MessageDigest.isEqual(
+                        com.streamfusion.platform.media.preview.control.PreviewControlTls.secret(
+                                        node.connection().tokenFile())
+                                .getBytes(java.nio.charset.StandardCharsets.US_ASCII),
+                        handoff.path("machineToken")
+                                .asText()
+                                .getBytes(java.nio.charset.StandardCharsets.US_ASCII)))
+                    throw new PreviewFailure("OPS_CONNECTION_CHANGED");
+            } catch (IllegalStateException invalid) {
+                throw new PreviewFailure("NODE_TOKEN_INVALID");
+            }
+        } else if (!node.zlm().apiUri().toString().equals(connection.path("apiUrl").asText())
+                || !node.zlm().mediaAddress().equals(connection.path("mediaAddress").asText())
+                || !selected.instanceId().equals(connection.path("instanceId").asText())
+                || !selected.releaseId().equals(connection.path("releaseId").asText())
+                || !java.util.Objects.equals(
+                        nullableText(handoff.path("credentialRevision")),
+                        nullableText(connection.path("credentialRevision")))) {
+            throw new PreviewFailure("OPS_CONNECTION_CHANGED");
+        } else {
+            try {
+                if (Files.size(node.zlm().secretFile()) > 512
+                        || !java.security.MessageDigest.isEqual(
+                                Files.readString(node.zlm().secretFile())
+                                        .strip()
+                                        .getBytes(java.nio.charset.StandardCharsets.US_ASCII),
+                                handoff.path("apiSecret")
+                                        .asText()
+                                        .getBytes(java.nio.charset.StandardCharsets.US_ASCII)))
+                    throw new PreviewFailure("OPS_CONNECTION_CHANGED");
+            } catch (java.io.IOException invalid) {
+                throw new PreviewFailure("NODE_TOKEN_INVALID");
+            }
         }
     }
 
@@ -387,6 +513,9 @@ public final class OpsPreviewCatalog {
                                         "OPS_RELEASE_CHANGED";
                                 case "PREVIEW_HANDOFF_UNAVAILABLE", "ZLM_HANDOFF_UNAVAILABLE" ->
                                         "OPS_HANDOFF_UNAVAILABLE";
+                                case "HANDOFF_JOB_PENDING", "HANDOFF_TARGET_LOCKED" ->
+                                        "OPS_JOB_PENDING";
+                                case "HANDOFF_STATE_UNAVAILABLE" -> "OPS_HANDOFF_UNAVAILABLE";
                                 case "ZLM_SECRET_UNAVAILABLE" -> "OPS_CREDENTIAL_INVALID";
                                 default -> "OPS_RESPONSE_INVALID";
                             });

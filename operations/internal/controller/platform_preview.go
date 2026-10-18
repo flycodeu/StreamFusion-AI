@@ -14,6 +14,8 @@ import (
 )
 
 type platformPreviewInstance struct {
+	ControllerID  string `json:"controllerId"`
+	TargetID      string `json:"targetId"`
 	InstanceID    string `json:"instanceId"`
 	Name          string `json:"name"`
 	TargetName    string `json:"targetName"`
@@ -119,7 +121,7 @@ func (h *HTTP) platformPreviewInstances(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		p := release.Config.Preview
-		items = append(items, platformPreviewInstance{instance.ID, instance.Name, target.Name, target.Address, target.InstallRoot, release.ID, p.NodeID, "https://" + p.ControlHost + ":9443", p.MediaAddress, p.MaxSources, p.MaxViewers, p.MaxTranscodes})
+		items = append(items, platformPreviewInstance{ControllerID: h.store.controllerID(), TargetID: target.ID, InstanceID: instance.ID, Name: instance.Name, TargetName: target.Name, TargetAddress: target.Address, InstallRoot: target.InstallRoot, ReleaseID: release.ID, NodeID: p.NodeID, ControlURI: "https://" + p.ControlHost + ":9443", MediaAddress: p.MediaAddress, MaxSources: p.MaxSources, MaxViewers: p.MaxViewers, MaxTranscodes: p.MaxTranscodes})
 	}
 	h.success(w, r, map[string]any{"items": items})
 }
@@ -155,6 +157,10 @@ func (h *HTTP) platformPreviewHandoff(w http.ResponseWriter, r *http.Request, id
 		h.opsError(w, r, err)
 		return
 	}
+	if err = platformHandoffReady(h.store.DB, id, target.ID, input.ReleaseID); err != nil {
+		h.fail(w, r, 409, err.Error(), "实例或目标仍有未决作业、待确认结果或版本变化，请先核对原作业")
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	var material deploy.PreviewHandoff
@@ -177,12 +183,8 @@ func (h *HTTP) platformPreviewHandoff(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 	defer tx.Rollback()
-	var current string
-	if err = tx.QueryRow("SELECT coalesce(current_release_id,'') FROM instances WHERE id=?", id).Scan(&current); errors.Is(err, sql.ErrNoRows) || err == nil && current != input.ReleaseID {
-		h.fail(w, r, 409, "RELEASE_CHANGED", "发布版本已变化，请刷新实例目录")
-		return
-	} else if err != nil {
-		h.internal(w, r, err)
+	if err = platformHandoffReady(tx, id, target.ID, input.ReleaseID); err != nil {
+		h.fail(w, r, 409, err.Error(), "交接期间版本或作业状态已变化，请刷新后核对")
 		return
 	}
 	if err = auditTx(tx, "platform-service", "PREVIEW_HANDOFF", id+":"+input.ReleaseID, "SUCCESS", r.Context().Value(traceKey{}).(string)); err == nil {
@@ -192,7 +194,38 @@ func (h *HTTP) platformPreviewHandoff(w http.ResponseWriter, r *http.Request, id
 		h.internal(w, r, err)
 		return
 	}
-	h.success(w, r, map[string]any{"instanceId": id, "releaseId": input.ReleaseID, "connection": material.Connection, "machineToken": material.MachineToken})
+	connection := struct {
+		deploy.PreviewConnection
+		ControllerID string `json:"controllerId"`
+		TargetID     string `json:"targetId"`
+	}{material.Connection, h.store.controllerID(), target.ID}
+	h.success(w, r, map[string]any{"controllerId": connection.ControllerID, "targetId": target.ID, "instanceId": id, "releaseId": input.ReleaseID, "connection": connection, "machineToken": material.MachineToken})
+}
+
+// Rechecked before target I/O and in the final short transaction. This fences
+// local changes; it does not promise atomicity with a later independent Ops job.
+func platformHandoffReady(q interface{ QueryRow(string, ...any) *sql.Row }, instanceID, targetID, releaseID string) error {
+	var current, actualTarget string
+	if err := q.QueryRow("SELECT coalesce(current_release_id,''),target_id FROM instances WHERE id=?", instanceID).Scan(&current, &actualTarget); err != nil {
+		return errors.New("RELEASE_CHANGED")
+	}
+	if current != releaseID || actualTarget != targetID {
+		return errors.New("RELEASE_CHANGED")
+	}
+	var pending int
+	if err := q.QueryRow("SELECT count(*) FROM jobs WHERE (target_id=? OR instance_id=?) AND (status IN ('QUEUED','RUNNING','UNKNOWN') OR target_ack_pending=1)", targetID, instanceID).Scan(&pending); err != nil {
+		return errors.New("HANDOFF_STATE_UNAVAILABLE")
+	}
+	if pending != 0 {
+		return errors.New("HANDOFF_JOB_PENDING")
+	}
+	if err := q.QueryRow("SELECT count(*) FROM operation_locks WHERE resource_key IN (?,?)", "target:"+targetID, "instance:"+instanceID).Scan(&pending); err != nil {
+		return errors.New("HANDOFF_STATE_UNAVAILABLE")
+	}
+	if pending != 0 {
+		return errors.New("HANDOFF_TARGET_LOCKED")
+	}
+	return nil
 }
 
 func (h *HTTP) auditPlatformHandoff(r *http.Request, id, result string) {

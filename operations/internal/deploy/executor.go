@@ -332,6 +332,11 @@ func validateRelease(r *Release) error {
 	if len(r.Bindings) > 2 {
 		return errors.New("BINDING_LIMIT")
 	}
+	if environment := r.RuntimeEnvironment; environment != nil {
+		if r.Config.Recipe() != "java-compose-v1" || !ID.MatchString(environment.InstallationID) || !ID.MatchString(environment.TargetID) || environment.PluginVersion != "21-jre" || environment.RecipeRevision != "java-runtime-v1" || !Hex.MatchString(strings.TrimPrefix(environment.ImageID, "sha256:")) || !Hex.MatchString(strings.TrimPrefix(environment.ImageDigest, "sha256:")) {
+			return errors.New("RUNTIME_ENVIRONMENT_INVALID")
+		}
+	}
 	if (r.Config.Preview != nil || r.Config.ZLM != nil) && len(r.Bindings) != 0 {
 		return errors.New("PREVIEW_BINDING_FORBIDDEN")
 	}
@@ -404,17 +409,20 @@ func Execute(input io.Reader, output io.Writer) error {
 		} else if _, e := os.Lstat(filepath.Join(root, "pending.json")); !os.IsNotExist(e) {
 			return errors.New("TARGET_PENDING_DAMAGED")
 		}
-		return json.NewEncoder(output).Encode(map[string]any{"owner": x.owner, "dockerVersion": strings.TrimSpace(string(v)), "composeVersion": strings.TrimSpace(string(c)), "platform": "linux/amd64", "pendingJobId": pendingJob, "dockerRootDir": storageRoot, "dockerAvailableBytes": free, "pluginCatalogHash": pluginCatalogHash(), "previewRecipe": PreviewRecipe, "zlmRecipe": ZLMRecipe})
+		return json.NewEncoder(output).Encode(map[string]any{"owner": x.owner, "dockerVersion": strings.TrimSpace(string(v)), "composeVersion": strings.TrimSpace(string(c)), "platform": "linux/amd64", "pendingJobId": pendingJob, "dockerRootDir": storageRoot, "dockerAvailableBytes": free, "pluginCatalogHash": pluginCatalogHash(), "previewRecipe": PreviewRecipe, "zlmRecipe": ZLMRecipe, "javaJarRecipe": "java-jar-v1"})
+	}
+	if req.Action == "JAVA_RUNTIME_EXPORT" {
+		return x.exportRuntime(req, output)
 	}
 	if req.Action == "BINDING_PROBE" {
 		if req.Binding == nil || req.Binding.Validate() != nil {
 			return errors.New("BINDING_INVALID")
 		}
-		conn, e := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(context.Background(), "tcp", net.JoinHostPort(req.Binding.Host, strconv.Itoa(req.Binding.Port)))
-		if conn != nil {
-			conn.Close()
+		value, err := x.bindingProbe(req)
+		if err != nil {
+			return err
 		}
-		return json.NewEncoder(output).Encode(map[string]any{"reachable": e == nil, "observedAt": stamp()})
+		return json.NewEncoder(output).Encode(value)
 	}
 	if req.Action == "PREVIEW_REGISTRATION" {
 		if validateRelease(req.Candidate) != nil || req.Candidate.Config.Preview == nil {
@@ -433,6 +441,11 @@ func Execute(input io.Reader, output io.Writer) error {
 		if validateRelease(req.Candidate) != nil || req.Candidate.Config.Preview == nil {
 			return errors.New("PREVIEW_RELEASE_REQUIRED")
 		}
+		lock, err := x.handoffLock()
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
 		if _, e = x.inspected(*req.Candidate); e != nil {
 			return e
 		}
@@ -441,6 +454,21 @@ func Execute(input io.Reader, output io.Writer) error {
 			return err
 		}
 		return json.NewEncoder(output).Encode(value)
+	}
+	if req.Action == "ZLM_HANDOFF" {
+		if validateRelease(req.Candidate) != nil || req.Candidate.Config.ZLM == nil {
+			return errors.New("ZLM_RELEASE_REQUIRED")
+		}
+		lock, err := x.handoffLock()
+		if err != nil {
+			return err
+		}
+		defer lock.Close()
+		actual, err := x.zlmObserved(*req.Candidate)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(actual)
 	}
 	if req.Action == "INSPECT" || req.Action == "LOGS" {
 		if e = validateRelease(req.Candidate); e != nil {

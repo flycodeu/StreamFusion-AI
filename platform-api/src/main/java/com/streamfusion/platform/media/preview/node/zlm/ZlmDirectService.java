@@ -40,11 +40,13 @@ public final class ZlmDirectService {
             String apiHost,
             int apiPort,
             String mediaAddress,
+            String installPath,
             String secret,
             Integer priority,
             PreviewBudget budget) {}
 
-    public record Policy(String mode, int priority, PreviewBudget budget, long version) {}
+    public record Policy(
+            String mode, int priority, PreviewBudget budget, long version, String installPath) {}
 
     public record Credential(String secret, long version) {}
 
@@ -54,6 +56,10 @@ public final class ZlmDirectService {
             String apiHost,
             int apiPort,
             String mediaAddress,
+            String installPath,
+            Integer rtcPort,
+            Integer rtspPort,
+            Instant portsObservedAt,
             String mode,
             long version,
             int priority,
@@ -127,6 +133,7 @@ public final class ZlmDirectService {
         administrator();
         var handedOff = ops.zlmHandoff(selection);
         var instance = handedOff.connection();
+        if (ops.source(instance) == null) throw new PreviewFailure("OPS_IDENTITY_REQUIRED");
         URI api = URI.create(instance.apiUrl());
         create(
                 new Input(
@@ -134,6 +141,7 @@ public final class ZlmDirectService {
                         api.getHost(),
                         api.getPort(),
                         instance.mediaAddress(),
+                        instance.installPath(),
                         handedOff.apiSecret(),
                         100,
                         new PreviewBudget(
@@ -146,14 +154,24 @@ public final class ZlmDirectService {
                                 8192,
                                 8192)),
                 context,
-                "PREVIEW_ZLM_OPS_IMPORT");
+                "PREVIEW_ZLM_OPS_IMPORT",
+                ops.source(instance));
     }
 
     private void create(Input input, AuditContextDto context, String action) {
+        create(input, context, action, null);
+    }
+
+    private void create(
+            Input input,
+            AuditContextDto context,
+            String action,
+            com.streamfusion.platform.media.preview.node.OpsNodeSource source) {
         administrator();
         if (input == null) throw new PreviewFailure("ZLM_REGISTRATION_INVALID");
         String id = newNodeId();
         String secret = requireSecret(input.secret());
+        String installPath = normalizeInstallPath(input.installPath());
         int priority = input.priority() == null ? 100 : input.priority();
         PreviewBudget budget =
                 input.budget() == null ? PreviewBudget.defaults(64, 0) : input.budget();
@@ -195,7 +213,9 @@ public final class ZlmDirectService {
                                                                 .apiUri()
                                                                 .equals(connection.apiUri())))
                             throw new PreviewFailure("NODE_ALREADY_REGISTERED");
-                        repository.registerZlm(connection, budget, priority, configVersion);
+                        repository.registerZlm(
+                                connection, budget, priority, configVersion, installPath);
+                        if (source != null) repository.attachOpsSource(id, source, 0);
                         return null;
                     },
                     context);
@@ -215,7 +235,17 @@ public final class ZlmDirectService {
         requirePolicy(policy.priority(), policy.budget());
         if (node.version() != policy.version())
             throw new PreviewFailure("NODE_CONFIGURATION_CHANGED");
-        if ("REMOTE".equals(policy.mode())) requireReady(node.zlm());
+        String previousInstallPath = repository.zlmInstallPath(id);
+        String installPath =
+                policy.installPath() == null
+                        ? previousInstallPath
+                        : normalizeInstallPath(policy.installPath());
+        if (!java.util.Objects.equals(installPath, previousInstallPath)
+                && "REMOTE".equals(node.mode())) throw new PreviewFailure("NODE_DRAIN_REQUIRED");
+        if ("REMOTE".equals(policy.mode())) {
+            ops.requireCurrent(node);
+            requireReady(node.zlm());
+        }
         save(
                 "PREVIEW_ZLM_POLICY",
                 id,
@@ -236,6 +266,7 @@ public final class ZlmDirectService {
                             policy.priority(),
                             policy.budget(),
                             null,
+                            installPath,
                             policy.version());
                     return null;
                 },
@@ -245,6 +276,7 @@ public final class ZlmDirectService {
     public void credential(String id, Credential credential, AuditContextDto context) {
         administrator();
         var node = requireNode(id);
+        if (node.opsSource() != null) throw new PreviewFailure("OPS_SYNC_REQUIRED");
         if (credential == null || node.version() != credential.version())
             throw new PreviewFailure("NODE_CONFIGURATION_CHANGED");
         String secret = requireSecret(credential.secret());
@@ -267,6 +299,8 @@ public final class ZlmDirectService {
                     node.zlm().name(),
                     () -> {
                         var latest = requireNode(id);
+                        if (latest.opsSource() != null)
+                            throw new PreviewFailure("OPS_SYNC_REQUIRED");
                         requireIdle(latest, credential.version());
                         repository.zlmCredential(id, file, revision(), credential.version());
                         return null;
@@ -321,12 +355,17 @@ public final class ZlmDirectService {
 
     private Item item(PreviewNodeRepository.Node node, PreviewNodeManager.NodeStatus state) {
         var connection = node.zlm();
+        var ports = manager.directPorts(node.nodeId());
         return new Item(
                 node.nodeId(),
                 connection.name(),
                 connection.apiUri().getHost(),
                 connection.apiUri().getPort(),
                 connection.mediaAddress(),
+                repository.zlmInstallPath(node.nodeId()),
+                ports == null ? null : ports.rtcPort(),
+                ports == null ? null : ports.rtspPort(),
+                manager.directPortsObservedAt(node.nodeId()),
                 node.mode(),
                 node.version(),
                 node.priority(),
@@ -366,8 +405,46 @@ public final class ZlmDirectService {
         return value;
     }
 
+    private static String normalizeInstallPath(String value) {
+        if (value == null) return null;
+        String path = value.strip();
+        if (path.isEmpty()) return null;
+        if (path.length() > 512 || path.codePoints().anyMatch(Character::isISOControl))
+            throw new PreviewFailure("ZLM_REGISTRATION_INVALID");
+        return path;
+    }
+
     private Path secretPath(String id) {
         return credentials.directory().resolve("." + id + "-" + UUID.randomUUID() + ".secret");
+    }
+
+    public ZlmDirectConnection prepareOpsConnection(
+            String id, OpsPreviewCatalog.ZlmHandoff handoff) {
+        var instance = handoff.connection();
+        URI api = URI.create(instance.apiUrl());
+        Path file = secretPath(id);
+        var candidate =
+                connection(
+                        id,
+                        instance.name(),
+                        api.getHost(),
+                        api.getPort(),
+                        instance.mediaAddress(),
+                        file);
+        OpsPreviewCatalog.writeProtectedSecret(file, requireSecret(handoff.apiSecret()));
+        try {
+            requireReady(candidate);
+            return candidate;
+        } catch (RuntimeException failure) {
+            discard(file);
+            throw failure;
+        }
+    }
+
+    public void discardOpsCredential(Path file) {
+        if (repository.nodes().stream()
+                .anyMatch(n -> n.zlm() != null && n.zlm().secretFile().equals(file))) return;
+        discardOwned(file);
     }
 
     private void discardOwned(Path path) {
