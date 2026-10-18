@@ -93,6 +93,7 @@ const value = (): PreviewCluster => ({
       desiredConfigVersion: 'c',
       observation: null,
       protection: null,
+      zlmLoad: null,
     },
   ],
   registrationOptions: [],
@@ -142,6 +143,24 @@ afterEach(() => {
   app?.unmount()
   sessionState.me = null
   sessionState.epoch++
+  vi.useRealTimers()
+})
+it('refreshes ZLM observations only while a direct instance is registered', async () => {
+  vi.useFakeTimers()
+  const root = await mount()
+  expect(api.getPreviewNodes).toHaveBeenCalledOnce()
+  await vi.advanceTimersByTimeAsync(45_000)
+  expect(api.getPreviewNodes).toHaveBeenCalledOnce()
+  expect(text(root)).not.toContain('网络线程负载')
+
+  const configured = value()
+  configured.nodes[0] = { ...configured.nodes[0]!, kind: 'ZLM_DIRECT' }
+  api.getPreviewNodes.mockResolvedValue(configured)
+  await (buttons(root).find((button) => text(button) === '检查节点')!.props.onClick as () => void)()
+  await settle()
+  const reads = api.getPreviewNodes.mock.calls.length
+  await vi.advanceTimersByTimeAsync(15_000)
+  expect(api.getPreviewNodes).toHaveBeenCalledTimes(reads + 1)
 })
 it('shows registered nodes immediately and keeps write controls hidden for a reader', async () => {
   const root = await mount()
@@ -231,6 +250,32 @@ it('shows the direct ZLM API address in read-only node status without agent-only
   expect(text(root)).not.toContain('节点控制地址未登记')
   expect(buttons(root).map(text)).not.toContain('维护许可')
 })
+it('shows fresh ZLM network-thread load as an observation and unknown when absent', async () => {
+  const configured = value()
+  configured.nodes[0] = {
+    ...configured.nodes[0]!,
+    nodeId: 'zlm-a',
+    kind: 'ZLM_DIRECT',
+    zlmApiAddress: 'http://10.0.0.10:8080',
+    zlmLoad: {
+      networkThreadCount: 4,
+      averageNetworkThreadLoadPercent: 23.5,
+      peakNetworkThreadLoadPercent: 41.2,
+      observedAt: new Date().toISOString(),
+    },
+  }
+  api.getPreviewNodes.mockResolvedValue(configured)
+  const root = await mount()
+  expect(text(root)).toContain('网络线程负载')
+  expect(text(root)).toContain('平均 23.5%')
+  expect(text(root)).toContain('峰值 41.2%')
+  expect(text(root)).toContain('4 个线程')
+  expect(text(root)).toContain('不代表可接纳预览数')
+  configured.nodes[0]!.zlmLoad = null
+  await (buttons(root).find((button) => text(button) === '检查节点')!.props.onClick as () => void)()
+  await settle()
+  expect(text(root)).toContain('暂无数据')
+})
 it('offers direct instance configuration only when protected credentials are available', async () => {
   sessionState.me = administrator()
   const configured = value()
@@ -244,9 +289,8 @@ it('offers direct instance configuration only when protected credentials are ava
   await settle()
   expect(buttons(root).find((button) => text(button) === '手工登记')!.props.disabled).toBe(false)
   expect(text(root)).toContain('尚未连接 Ops 实例目录')
-  expect(text(root)).toContain('一般从 Ops 引入即可，连接信息会自动登记')
-  expect(text(root)).toContain('节点控制地址不是 ZLM HTTP API')
-  expect(text(root)).toContain('自签名 HTTPS 控制口，无需公网证书')
+  expect(text(root)).toContain('接入节点包')
+  expect(text(root)).toContain('手工登记节点包')
 })
 it('imports a deployed Ops instance by identity and release without asking for connection secrets', async () => {
   sessionState.me = administrator()

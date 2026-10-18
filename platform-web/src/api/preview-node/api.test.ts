@@ -93,6 +93,37 @@ describe('preview node contracts', () => {
         registrationOptions: [],
       }),
     ).toThrow()
+    const load = {
+      networkThreadCount: 4,
+      averageNetworkThreadLoadPercent: 23.5,
+      peakNetworkThreadLoadPercent: 41.25,
+      observedAt: '2026-10-18T00:00:00Z',
+    }
+    expect(
+      parseCluster({ nodes: [{ ...node, zlmLoad: load }], registrationOptions: [] }).nodes[0]
+        ?.zlmLoad,
+    ).toEqual(load)
+    const roundedLoad = {
+      ...load,
+      averageNetworkThreadLoadPercent: 99.90000000000002,
+      peakNetworkThreadLoadPercent: 99.9,
+    }
+    expect(
+      parseCluster({ nodes: [{ ...node, zlmLoad: roundedLoad }], registrationOptions: [] }).nodes[0]
+        ?.zlmLoad,
+    ).toEqual(roundedLoad)
+    expect(() =>
+      parseCluster({
+        nodes: [{ ...node, zlmLoad: { ...load, peakNetworkThreadLoadPercent: 101 } }],
+        registrationOptions: [],
+      }),
+    ).toThrow()
+    expect(() =>
+      parseCluster({
+        nodes: [{ ...node, zlmLoad: { ...load, observedAt: 'invalid' } }],
+        registrationOptions: [],
+      }),
+    ).toThrow()
   })
   it('accepts the Ops catalog identity and capacity without retaining credentials', () => {
     const catalog = parseOpsPreviewInstances({

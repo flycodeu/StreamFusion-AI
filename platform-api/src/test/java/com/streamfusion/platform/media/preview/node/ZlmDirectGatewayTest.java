@@ -1,9 +1,11 @@
 package com.streamfusion.platform.media.preview.node;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.streamfusion.platform.media.preview.PreviewDeadline;
+import com.streamfusion.platform.media.preview.PreviewFailure;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -12,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -24,6 +27,9 @@ class ZlmDirectGatewayTest {
         Files.writeString(secret, "existing-short-secret", StandardCharsets.UTF_8);
         var streamOnline = new AtomicBoolean();
         var authorized = new AtomicBoolean(true);
+        var threadResponse =
+                new AtomicReference<>(
+                        "{\"code\":0,\"data\":[{\"load\":20,\"delay\":0},{\"load\":60,\"delay\":1}]}");
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext(
                 "/index/api/",
@@ -47,6 +53,7 @@ class ZlmDirectGatewayTest {
                                         "{\"code\":0,\"data\":[{\"rtsp.directProxy\":\"0\",\"general.streamNoneReaderDelayMS\":30000,\"rtc.port\":8000,\"rtsp.port\":8554,\"rtc.externIP\":\"127.0.0.1\",\"api.apiDebug\":\"0\",\"http.allow_ip_range\":\"127.0.0.1\"}]}";
                                 case "version" ->
                                         "{\"code\":0,\"data\":{\"commitHash\":\"de04a56\",\"buildTime\":\"2026-10-10T21:29:04\"}}";
+                                case "getThreadsLoad" -> threadResponse.get();
                                 case "addStreamProxy" -> {
                                     streamOnline.set(true);
                                     yield "{\"code\":0,\"data\":{\"key\":\"__defaultVhost__/sf_preview_123456789abc/1234567890abcdef1234567890abcdef\"}}";
@@ -83,6 +90,20 @@ class ZlmDirectGatewayTest {
             gateway.requireReady(connection, deadline);
             assertThat(gateway.version(connection, deadline))
                     .isEqualTo("de04a56 (2026-10-10T21:29:04)");
+            var load = gateway.networkThreadLoad(connection, deadline);
+            assertThat(load.networkThreadCount()).isEqualTo(2);
+            assertThat(load.averageNetworkThreadLoadPercent()).isEqualTo(40);
+            assertThat(load.peakNetworkThreadLoadPercent()).isEqualTo(60);
+            assertThat(load.observedAt()).isNotNull();
+            threadResponse.set("{\"code\":0,\"data\":[{\"load\":101}]}");
+            assertThatThrownBy(() -> gateway.networkThreadLoad(connection, deadline))
+                    .isInstanceOf(PreviewFailure.class)
+                    .hasMessage("ZLM_INVALID_RESPONSE");
+            threadResponse.set(
+                    "{\"code\":0,\"data\":[{\"load\":99.9},{\"load\":99.9},{\"load\":99.9}]}");
+            var fractional = gateway.networkThreadLoad(connection, deadline);
+            assertThat(fractional.averageNetworkThreadLoadPercent())
+                    .isLessThanOrEqualTo(fractional.peakNetworkThreadLoadPercent());
             var stream =
                     new ZlmDirectGateway.Stream(
                             "sf_preview_123456789abc", "1234567890abcdef1234567890abcdef");

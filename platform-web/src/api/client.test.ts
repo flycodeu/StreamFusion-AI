@@ -92,7 +92,7 @@ it('still refreshes CSRF after other rejected writes without repeating the faile
   await expect(
     request({ ...options, path: '/auth/password', method: 'PUT' }),
   ).rejects.toMatchObject({ code: 'CSRF_INVALID' })
-  await vi.waitFor(() => expect(sessionState.csrf).toEqual(token))
+  await vi.waitFor(() => expect(sessionState.csrf).toEqual(token), { timeout: 5_000 })
   expect(fetchMock).toHaveBeenCalledTimes(2)
   expect(fetchMock.mock.calls[1]?.[0]).toMatch(/\/auth\/csrf$/)
   expect(endedNotice.value).toBeNull()

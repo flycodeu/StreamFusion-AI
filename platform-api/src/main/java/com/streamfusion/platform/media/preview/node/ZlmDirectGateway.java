@@ -31,6 +31,7 @@ import org.springframework.stereotype.Component;
 @Component
 public final class ZlmDirectGateway {
     private static final String VHOST = "__defaultVhost__";
+    private static final int MAX_OBSERVED_THREADS = 256;
     private final HttpClient http =
             HttpClient.newBuilder()
                     .connectTimeout(Duration.ofSeconds(3))
@@ -85,6 +86,34 @@ public final class ZlmDirectGateway {
                 || version.codePoints().anyMatch(Character::isISOControl))
             throw new PreviewFailure("ZLM_INVALID_RESPONSE");
         return version;
+    }
+
+    /** ZLM epoll thread load is an observation, not host CPU or scheduling capacity. */
+    public record NetworkThreadLoad(
+            int networkThreadCount,
+            double averageNetworkThreadLoadPercent,
+            double peakNetworkThreadLoadPercent,
+            Instant observedAt) {}
+
+    public NetworkThreadLoad networkThreadLoad(
+            ZlmDirectConnection connection, PreviewDeadline deadline) {
+        JsonNode threads = call(connection, "getThreadsLoad", Map.of(), deadline).path("data");
+        if (!threads.isArray() || threads.isEmpty() || threads.size() > MAX_OBSERVED_THREADS)
+            throw new PreviewFailure("ZLM_INVALID_RESPONSE");
+        double total = 0;
+        double peak = 0;
+        for (JsonNode thread : threads) {
+            JsonNode value = thread.path("load");
+            if (!value.isNumber()) throw new PreviewFailure("ZLM_INVALID_RESPONSE");
+            double load = value.asDouble();
+            if (!Double.isFinite(load) || load < 0 || load > 100)
+                throw new PreviewFailure("ZLM_INVALID_RESPONSE");
+            total += load;
+            peak = Math.max(peak, load);
+        }
+        // Floating-point summation can put the mean a fraction above an identical peak.
+        return new NetworkThreadLoad(
+                threads.size(), Math.min(peak, total / threads.size()), peak, Instant.now());
     }
 
     public void open(

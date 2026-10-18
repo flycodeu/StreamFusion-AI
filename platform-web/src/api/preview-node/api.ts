@@ -129,6 +129,27 @@ export function parseBudget(value: unknown) {
     outputUpperKbps: integer(row.outputUpperKbps),
   }
 }
+function loadPercent(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100)
+    throw new Error('loadPercent')
+  return value
+}
+
+function parseZlmLoad(value: unknown) {
+  const row = object(value)
+  const networkThreadCount = integer(row.networkThreadCount)
+  const averageNetworkThreadLoadPercent = loadPercent(row.averageNetworkThreadLoadPercent)
+  const peakNetworkThreadLoadPercent = loadPercent(row.peakNetworkThreadLoadPercent)
+  const observedAt = string(row.observedAt)
+  if (networkThreadCount < 1 || !Number.isFinite(Date.parse(observedAt))) throw new Error('zlmLoad')
+  return {
+    networkThreadCount,
+    averageNetworkThreadLoadPercent,
+    peakNetworkThreadLoadPercent,
+    observedAt,
+  }
+}
+
 export function parseCluster(value: unknown) {
   const root = object(value)
   return {
@@ -161,6 +182,7 @@ export function parseCluster(value: unknown) {
         desiredConfigVersion: string(row.desiredConfigVersion),
         observation: row.observation == null ? null : object(row.observation),
         protection: row.protection == null ? null : object(row.protection),
+        zlmLoad: row.zlmLoad == null ? null : parseZlmLoad(row.zlmLoad),
       }
     }),
     registrationOptions: list(root.registrationOptions, (value) => {

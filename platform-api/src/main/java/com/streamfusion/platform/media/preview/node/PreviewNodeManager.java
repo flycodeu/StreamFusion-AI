@@ -5,13 +5,20 @@ import com.streamfusion.platform.media.preview.PreviewDeadline;
 import com.streamfusion.platform.media.preview.PreviewFailure;
 import com.streamfusion.platform.media.preview.PreviewProperties;
 import com.streamfusion.platform.media.preview.control.PreviewControl;
+import jakarta.annotation.PreDestroy;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import org.springframework.stereotype.Service;
 
 /**
@@ -49,8 +56,30 @@ public final class PreviewNodeManager {
 
     private record DirectObservation(String version, Instant at, String reason) {}
 
+    private record DirectLoad(
+            ZlmDirectConnection connection,
+            ZlmDirectGateway.NetworkThreadLoad load,
+            Instant checkedAt) {}
+
     private final java.util.Map<String, DirectObservation> directObservations =
             new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, DirectLoad> directLoads = new ConcurrentHashMap<>();
+    private final Set<String> loadPending = new HashSet<>();
+    private final Object loadLock = new Object();
+    private final Map<String, Long> loadEpochs = new HashMap<>();
+    private final ThreadPoolExecutor loadWorkers =
+            new ThreadPoolExecutor(
+                    2,
+                    2,
+                    0,
+                    TimeUnit.SECONDS,
+                    new ArrayBlockingQueue<>(16),
+                    task -> {
+                        var thread = new Thread(task, "preview-zlm-load");
+                        thread.setDaemon(true);
+                        return thread;
+                    },
+                    new ThreadPoolExecutor.AbortPolicy());
 
     public PreviewNodeManager(
             PreviewNodeRepository repository,
@@ -125,8 +154,10 @@ public final class PreviewNodeManager {
         for (var node : repository.nodes()) {
             if (node.local()) continue;
             try {
-                if (node.zlm() != null) inspectDirect(node);
-                else inspect(node, PreviewDeadline.after(Duration.ofSeconds(4)));
+                if (node.zlm() != null) {
+                    inspectDirect(node);
+                    observeDirectLoad(node);
+                } else inspect(node, PreviewDeadline.after(Duration.ofSeconds(4)));
             } catch (PreviewFailure ignored) {
             }
         }
@@ -151,6 +182,12 @@ public final class PreviewNodeManager {
     public void invalidate(String nodeId) {
         observations.remove(nodeId);
         directObservations.remove(nodeId);
+        synchronized (loadLock) {
+            // An in-flight sample must not repopulate a cache invalidated by a connection edit.
+            if (loadPending.contains(nodeId)) loadEpochs.merge(nodeId, 1L, Long::sum);
+            else loadEpochs.remove(nodeId);
+            directLoads.remove(nodeId);
+        }
     }
 
     public String inspectDirect(PreviewNodeRepository.Node node) {
@@ -169,13 +206,72 @@ public final class PreviewNodeManager {
         }
     }
 
+    private void observeDirectLoad(PreviewNodeRepository.Node node) {
+        var previous = directLoads.get(node.nodeId());
+        if (previous != null
+                && previous.connection().equals(node.zlm())
+                && previous.checkedAt().isAfter(Instant.now().minusSeconds(10))) return;
+        long epoch;
+        synchronized (loadLock) {
+            if (!loadPending.add(node.nodeId())) return;
+            epoch = loadEpochs.getOrDefault(node.nodeId(), 0L);
+        }
+        try {
+            loadWorkers.execute(
+                    () -> {
+                        ZlmDirectGateway.NetworkThreadLoad load;
+                        try {
+                            load =
+                                    zlm.networkThreadLoad(
+                                            node.zlm(),
+                                            PreviewDeadline.after(Duration.ofSeconds(2)));
+                        } catch (RuntimeException unavailable) {
+                            load = null;
+                        }
+                        synchronized (loadLock) {
+                            if (epoch == loadEpochs.getOrDefault(node.nodeId(), 0L))
+                                directLoads.put(
+                                        node.nodeId(),
+                                        new DirectLoad(node.zlm(), load, Instant.now()));
+                            loadPending.remove(node.nodeId());
+                            loadEpochs.remove(node.nodeId());
+                        }
+                    });
+        } catch (java.util.concurrent.RejectedExecutionException full) {
+            synchronized (loadLock) {
+                loadPending.remove(node.nodeId());
+                loadEpochs.remove(node.nodeId());
+            }
+        }
+    }
+
+    @PreDestroy
+    public void closeLoadWorkers() {
+        loadWorkers.shutdownNow();
+    }
+
     public String directVersion(String nodeId) {
+        var observed = freshDirect(nodeId);
+        return observed == null ? null : observed.version();
+    }
+
+    private ZlmDirectGateway.NetworkThreadLoad directLoad(PreviewNodeRepository.Node node) {
+        var observed = directLoads.get(node.nodeId());
+        return freshDirect(node.nodeId()) == null
+                        || observed == null
+                        || !observed.connection().equals(node.zlm())
+                        || observed.checkedAt().isBefore(Instant.now().minusSeconds(15))
+                ? null
+                : observed.load();
+    }
+
+    private DirectObservation freshDirect(String nodeId) {
         var observed = directObservations.get(nodeId);
         return observed == null
                         || observed.reason() != null
                         || observed.at().isBefore(Instant.now().minusSeconds(15))
                 ? null
-                : observed.version();
+                : observed;
     }
 
     public Instant directObservedAt(String nodeId) {
@@ -453,6 +549,7 @@ public final class PreviewNodeManager {
             String mediaAddress,
             String desiredConfigVersion,
             String zlmVersion,
+            ZlmDirectGateway.NetworkThreadLoad zlmLoad,
             PreviewControl.Snapshot observation,
             com.streamfusion.platform.media.preview.execution.PreviewAdmissionProtection.Observation
                     protection) {}
@@ -518,6 +615,7 @@ public final class PreviewNodeManager {
                                                     : n.connection().mediaAddress(),
                                     n.configVersion(),
                                     directVersion(n.nodeId()),
+                                    n.zlm() == null ? null : directLoad(n),
                                     snapshot,
                                     n.local()
                                             ? scheduler.localProtection()

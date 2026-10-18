@@ -151,10 +151,6 @@ func (h *HTTP) platformZLMHandoff(w http.ResponseWriter, r *http.Request, id str
 		h.internal(w, r, err)
 		return
 	}
-	connection := map[string]any{
-		"apiUrl": fmt.Sprintf("http://%s:%d", z.MediaAddress, z.APIPort),
-		"mediaAddress": z.MediaAddress, "apiPort": z.APIPort, "rtcPort": z.RTCPort,
-		"maxSources": z.MaxSources, "maxViewers": z.MaxViewers, "maxTranscodes": 0,
-	}
+	connection := zlmCatalogEntry(i, target, release)
 	h.success(w, r, map[string]any{"instanceId": id, "releaseId": input.ReleaseID, "connection": connection, "apiSecret": string(secret)})
 }

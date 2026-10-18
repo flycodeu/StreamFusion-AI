@@ -36,12 +36,16 @@ import { usePageScope } from '../../composables/usePageScope'
 import { sessionState } from '../../session/state'
 import { formatDateTime } from '../../utils/dateTime'
 import { previewReason } from './model'
+import ZlmNetworkLoad from './ZlmNetworkLoad.vue'
 
 const props = withDefaults(defineProps<{ management?: boolean }>(), { management: false })
 const captureScope = usePageScope()
 const snapshot = ref<PreviewCluster | null>(null),
   busy = ref(false),
   error = ref<unknown>(null)
+const displayClock = ref(Date.now())
+const snapshotRefreshedAt = ref(0)
+let lastObservationAttemptAt = Date.now()
 const localZlm = ref<MediaRuntimeCandidate | null>(null)
 const opsInstances = ref<OpsPreviewInstances | null>(null)
 const opsZlmInstances = ref<OpsZlmInstances | null>(null)
@@ -137,16 +141,31 @@ let runtimeController: globalThis.AbortController | undefined
 let opsController: globalThis.AbortController | undefined
 let opsZlmController: globalThis.AbortController | undefined
 let directController: globalThis.AbortController | undefined
+let observationController: globalThis.AbortController | undefined
+let observationTimer: ReturnType<typeof globalThis.setInterval> | undefined
 onBeforeUnmount(() => {
   controller?.abort()
   runtimeController?.abort()
   opsController?.abort()
   opsZlmController?.abort()
   directController?.abort()
+  observationController?.abort()
+  if (observationTimer) globalThis.clearInterval(observationTimer)
 })
 onMounted(() => {
   void run()
   void loadLocalZlm()
+  observationTimer = globalThis.setInterval(() => {
+    displayClock.value = Date.now()
+    if (
+      !busy.value &&
+      snapshot.value?.nodes.some((node) => node.kind === 'ZLM_DIRECT') &&
+      displayClock.value - lastObservationAttemptAt >= 15_000
+    ) {
+      lastObservationAttemptAt = displayClock.value
+      void refreshObservation()
+    }
+  }, 5000)
 })
 watch(
   canManage,
@@ -253,6 +272,34 @@ function directIdle(instance: DirectZlmInstance) {
   )
 }
 
+function liveZlmLoad(node: PreviewNodeStatus | undefined) {
+  if (displayClock.value - snapshotRefreshedAt.value > 20_000) return null
+  return node?.zlmLoad ?? null
+}
+
+function directZlmLoad(nodeId: string) {
+  return liveZlmLoad(snapshot.value?.nodes.find((node) => node.nodeId === nodeId))
+}
+
+async function refreshObservation() {
+  if (observationController) return
+  const active = captureScope()
+  const nextController = new globalThis.AbortController()
+  observationController = nextController
+  try {
+    const value = await getPreviewNodes(nextController.signal)
+    if (active() && !busy.value && observationController === nextController) {
+      snapshot.value = value
+      snapshotRefreshedAt.value = Date.now()
+      lastObservationAttemptAt = snapshotRefreshedAt.value
+    }
+  } catch {
+    // The last reading expires in the UI if the read-only refresh fails.
+  } finally {
+    if (observationController === nextController) observationController = undefined
+  }
+}
+
 function opsZlmRegistered(apiUrl: string) {
   return (directInstances.value?.items ?? []).some(
     (item) => `http://${item.apiHost}:${item.apiPort}` === apiUrl,
@@ -321,6 +368,8 @@ async function loadLocalZlm() {
 }
 async function run(operation?: () => Promise<unknown>) {
   if (busy.value) return
+  observationController?.abort()
+  observationController = undefined
   const active = captureScope()
   controller = new globalThis.AbortController()
   busy.value = true
@@ -330,6 +379,8 @@ async function run(operation?: () => Promise<unknown>) {
     const value = await getPreviewNodes(controller.signal)
     if (active()) {
       snapshot.value = value
+      snapshotRefreshedAt.value = Date.now()
+      lastObservationAttemptAt = snapshotRefreshedAt.value
       if (maintaining.value)
         maintaining.value = value.nodes.find((n) => n.nodeId === maintaining.value?.nodeId) ?? null
       editing.value = null
@@ -428,9 +479,14 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           </div>
         </div>
         <RequestError :error="directError" :advice="directAdvice" />
-        <div class="ops-zlm-catalog">
+        <details class="ops-zlm-catalog">
+          <summary>
+            从 Ops 引入 ZLM<span v-if="opsZlmInstances?.items.length">
+              · {{ opsZlmInstances.items.length }} 台可查看</span
+            >
+          </summary>
           <div class="connection-heading">
-            <h4>Ops 已安装</h4>
+            <h4>已发布实例</h4>
             <ElButton :loading="opsZlmBusy" @click="loadOpsZlmInstances()">刷新</ElButton>
           </div>
           <RequestError
@@ -464,10 +520,8 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                   </ElTag>
                 </div>
                 <div class="connection-meta">
-                  <span>服务器：{{ item.targetName }}</span>
-                  <span>地址：{{ item.targetAddress }}</span>
+                  <span>{{ item.targetName }} · {{ item.targetAddress }}</span>
                   <span>API：{{ item.apiUrl }}</span>
-                  <span>源流 {{ item.maxSources }} · 观看 {{ item.maxViewers }}</span>
                 </div>
               </div>
               <ElButton
@@ -482,7 +536,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
               >
             </article>
           </div>
-        </div>
+        </details>
         <p v-if="directBusy && !directInstances" class="connection-empty">正在读取 ZLM 实例…</p>
         <p
           v-else-if="directInstances && !directInstances.registrationAvailable"
@@ -508,14 +562,14 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                 <span>ZLM HTTP：{{ item.apiHost }}:{{ item.apiPort }}</span>
                 <span>媒体地址：{{ item.mediaAddress }}</span>
                 <span>ZLM 版本：{{ item.zlmVersion || '未检测' }}</span>
-                <span>状态：{{ names[item.state] || item.state }}</span>
+                <span>实际状态 {{ names[item.state] || item.state }}</span>
               </div>
               <div class="connection-meta">
                 <span>源流 {{ item.usage.sources }} / {{ item.budget.maxSources }}</span>
                 <span>观看 {{ item.usage.viewers }} / {{ item.budget.maxViewers }}</span>
                 <span>转码 {{ item.usage.transcodes }} / {{ item.budget.maxTranscodes }}</span>
-                <span>优先级 {{ item.priority }}</span>
               </div>
+              <ZlmNetworkLoad :load="directZlmLoad(item.nodeId)" />
               <p v-if="item.reasonCode" class="node-reason">
                 {{ previewReason(item.reasonCode) }} <code>{{ item.reasonCode }}</code>
               </p>
@@ -539,7 +593,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                     budget: { ...item.budget },
                   }
                 "
-                >预算设置</ElButton
+                >预算</ElButton
               >
               <ElButton
                 :disabled="
@@ -549,7 +603,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                   !directIdle(item)
                 "
                 @click="directCredential = { instance: item, secret: '' }"
-                >更新密钥</ElButton
+                >密钥</ElButton
               >
               <ElButton
                 :disabled="busy || item.mode === 'REMOTE' || !directIdle(item)"
@@ -560,9 +614,10 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           </article>
         </div>
       </section>
-      <section v-if="canManage" class="node-guide" aria-label="接入预览节点">
+      <details v-if="canManage" class="node-guide node-package-guide" aria-label="接入预览节点">
+        <summary>接入节点包</summary>
         <div class="connection-heading">
-          <h3>从 Ops 引入</h3>
+          <h3>Ops 已安装</h3>
           <div class="node-actions">
             <ElButton :loading="opsBusy" @click="loadOpsInstances()">刷新实例</ElButton>
           </div>
@@ -603,12 +658,11 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
               </div>
               <div class="connection-meta">
                 <span>安装位置：{{ item.installRoot }}</span>
-              </div>
-              <div class="connection-meta">
                 <span>发布版本：{{ item.releaseId }}</span>
-                <span>源流 {{ item.maxSources }}</span>
-                <span>观看 {{ item.maxViewers }}</span>
-                <span>转码 {{ item.maxTranscodes }}</span>
+                <span
+                  >源流 {{ item.maxSources }} · 观看 {{ item.maxViewers }} · 转码
+                  {{ item.maxTranscodes }}</span
+                >
               </div>
             </div>
             <ElButton
@@ -644,11 +698,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           </div>
         </details>
         <details class="connection-extra">
-          <summary>高级：手工登记节点</summary>
-          <p class="connection-empty">
-            一般从 Ops 引入即可，连接信息会自动登记。节点控制地址不是 ZLM HTTP API；内网 IP 可由 Ops
-            生成自签名 HTTPS 控制口，无需公网证书。
-          </p>
+          <summary>手工登记节点包</summary>
           <p v-if="!snapshot.directRegistrationAvailable" class="connection-empty">
             须先配置 Platform 受保护的机器凭据目录。
           </p>
@@ -658,7 +708,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             >手工登记</ElButton
           >
         </details>
-      </section>
+      </details>
       <div class="node-list">
         <article
           v-for="node in management
@@ -756,6 +806,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                 {{ node.budget.egressKbps / 1000 }} Mbps</span
               >
             </div>
+            <ZlmNetworkLoad v-if="node.kind === 'ZLM_DIRECT'" :load="liveZlmLoad(node)" />
             <p v-if="node.reasonCode" class="node-reason">
               {{ previewReason(node.reasonCode) }} <code>{{ node.reasonCode }}</code>
             </p>
@@ -802,9 +853,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
       @close="directForm = null"
     >
       <form v-if="directForm" class="budget-form" @submit.prevent="saveDirectForm">
-        <p class="connection-form-intro">
-          填写内网 ZLM HTTP API，并允许 Platform 实际出口 IP 访问。接入后默认不参与调度。
-        </p>
+        <p class="connection-form-intro">填写 ZLM 的内网 HTTP API；接入后默认不参与调度。</p>
         <label>实例名称<input v-model.trim="directForm.name" maxlength="80" required /></label>
         <label
           >内网 IP<input v-model.trim="directForm.apiHost" placeholder="10.0.0.10" required
@@ -852,7 +901,6 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             </label>
           </div>
         </details>
-        <p>secret 仅用于本次提交，页面不回显已保存的值。</p>
         <ElButton native-type="submit" :loading="busy">检查并接入</ElButton>
       </form>
     </ElDialog>
@@ -941,8 +989,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
     >
       <form v-if="connection" class="budget-form" @submit.prevent="saveConnection">
         <p class="connection-form-intro">
-          从 Ops 引入时，连接信息会自动登记，无需填写此表单。这里的节点控制地址不是 ZLM HTTP
-          API；内网 IP 可由 Ops 生成自签名 HTTPS 控制口，无需公网证书。
+          节点控制地址不是 ZLM HTTP API；可用内网自签名 HTTPS 控制口，无需公网证书。
         </p>
         <label
           >节点 ID<input
@@ -972,10 +1019,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             maxlength="64"
             required
         /></label>
-        <p>
-          机器凭据须预先存放在 Platform 受保护目录，文件名为“节点
-          ID.token”。页面不会接收或显示令牌。登记前会检查节点身份和资源；成功后仍需手动启用调度。
-        </p>
+        <p>凭据文件须预先存放在 Platform 受保护目录，文件名为“节点 ID.token”。</p>
         <ElButton native-type="submit" :loading="busy">检查并登记</ElButton>
       </form>
     </ElDialog>
@@ -1228,6 +1272,21 @@ dd {
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
 }
+.ops-zlm-catalog > summary,
+.node-package-guide > summary {
+  cursor: pointer;
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+.ops-zlm-catalog > .connection-heading,
+.node-package-guide > .connection-heading {
+  margin-top: 12px;
+}
+.ops-zlm-catalog > summary span {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
 .ops-zlm-catalog h4 {
   margin: 0;
   color: var(--el-text-color-primary);
@@ -1241,7 +1300,6 @@ dd {
   overflow-wrap: anywhere;
 }
 .connection-heading,
-.connection-row,
 .connection-name {
   display: flex;
   align-items: center;
@@ -1262,21 +1320,26 @@ dd {
   margin-top: 10px;
 }
 .connection-row {
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
   padding: 10px 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
 }
 .connection-detail {
   min-width: 0;
-  flex: 1 1 280px;
 }
 .direct-row {
-  align-items: flex-start;
+  align-items: center;
 }
 .direct-actions {
   justify-content: flex-end;
-  flex: 0 1 350px;
+  max-width: 360px;
+}
+.node-package-guide {
+  padding-bottom: 2px;
 }
 .connection-meta {
   display: flex;
@@ -1415,6 +1478,15 @@ dd {
   }
   .direct-actions {
     justify-content: flex-start;
+  }
+}
+@media (max-width: 800px) {
+  .connection-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .direct-actions {
+    justify-content: flex-start;
+    max-width: none;
   }
 }
 @container node-card (max-width: 1024px) {

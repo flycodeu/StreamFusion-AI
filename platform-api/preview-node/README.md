@@ -1,6 +1,6 @@
-# 按需预览节点包（S4工程实现）
+# 预览节点包：构建与部署
 
-只装本机即可预览；需要更多容量时，在A/B各安装同一节点包并登记。平台负责鉴权、源归属和预算，节点只运行预览控制、ZLM和FFmpeg，无业务数据库、Redis或算法模块。已有观看始终留在原节点。每节点观看/转码默认和上限仍64，单页最多64格，实际承载须按目标码流压测。
+本机足够时无需部署节点包。扩容时可在 A/B 各安装一份：Platform 负责鉴权、连接、源归属、预算和预览下发；本包运行预览控制、ZLM 和 FFmpeg，不接业务数据库、Redis 或算法模块。已有观看不迁移，每节点观看/转码配置上限为 64，实际承载须按目标码流压测。专用 ZLM 也可单独安装，再由 Platform 直连接入，不要求安装本节点包。
 
 ## Ops部署与维护
 
@@ -17,7 +17,7 @@ Java21下运行`./mvnw verify`，得到平台包和`*-preview-node.jar`。Linux�
   zlmediakit/zlmediakit@sha256:实际摘要 eclipse-temurin@sha256:实际摘要
 ```
 
-输出离线镜像、镜像ID、上游摘要、Compose、配置/预检脚本、两种平台升级SQL及SHA256SUMS。目标机不编译或在线拉镜像。A/B分别准备Ubuntu24.04/amd64、Docker Engine、Compose插件、Python3，并校准时钟。平台须能访问控制地址，节点须能访问准许的RTSP目标，浏览器须能访问节点媒体IPv4。
+输出离线镜像、镜像 ID、上游摘要、Compose、配置/预检脚本、平台升级 SQL 和 SHA256SUMS。目标机不编译或在线拉镜像。A/B 分别准备 Ubuntu 24.04/amd64、Docker Engine、Compose 插件、Python 3，并校准时钟。平台须能访问节点控制地址，节点须能访问准许的 RTSP 目标，浏览器须能访问节点公布的媒体 IPv4 和 18000/TCP、UDP；控制口连通不能证明首帧。
 
 在每台节点的独立包目录执行：
 
@@ -29,7 +29,7 @@ sudo python3 configure.py --node-id preview-a --name '预览 A' \
 # B使用不同node-id/IP；多个相机端点重复--allow。
 ```
 
-把`.env`的PREVIEW_BIND_IP设为实际接口，并按节点能力配置容器CPU/内存。执行`sudo ./preflight.sh`后`docker compose up -d`。仅公布9443/TCP控制、18000/TCP+UDP媒体；管理API仅回环，容器安装出入站白名单后降权运行。不要改host网络、挂Docker socket、特权运行或额外发布管理端口。已有config不会被生成器覆盖。
+示例地址须换成实际节点和相机 IP。把 `.env` 的 `PREVIEW_BIND_IP` 设为实际接口，并按节点能力配置容器 CPU/内存。执行 `sudo ./preflight.sh` 后 `docker compose up -d`。仅公布 9443/TCP 控制、18000/TCP+UDP 媒体；ZLM 管理 API 仅允许容器回环访问，且不映射到宿主机。`configure.py` 遇到已存在的 `config` 会拒绝运行，不会重写身份文件；升级应走维护流程，不要重跑生成器。不要改 host 网络、挂 Docker socket、特权运行或额外发布管理端口。
 
 ## 预算怎样设置
 
@@ -37,15 +37,13 @@ sudo python3 configure.py --node-id preview-a --name '预览 A' \
 
 平台可将预算调低，不能超过远程节点已应用配置，码率上界须两侧一致。持续CPU/内存≥95%各3次或实测码率连续超上界会暂停新预览；低于85%恢复阈值各3次后恢复。媒体轮询有界且不拉新流，诊断JSON显示观测值/原因。保护不终止或迁移旧会话；未知观测不冒充空闲。
 
-## 平台数据库与登记
+## 平台数据库与手工登记
 
-从已运行的 S3/S4 数据库升级到独立 ZLM 直连时，先备份并停 Platform，再核对 `preview_node` 尚无 `node_kind`，执行[一次性增量脚本](upgrade-zlm-direct.sql)。脚本仅增加节点类型字段、把本机标为 `LOCAL`，并补齐“预览节点”菜单与超管关系；远端旧节点默认 `MANAGED`，不重建任何表。脚本不可盲目重复执行；已有库禁止重放完整初始化。启动后检查节点列表、原预览和新直连入口。
+节点自身不需要平台数据库。已有 Platform 库升级前须先备份、排空预览并停服务：没有预览表时使用 `platform-upgrade.sql`；S2 三表升 S3 时使用 `platform-s2-to-s3.sql`；从 S3/S4 加入独立 ZLM 类型时使用[定向增量脚本](upgrade-zlm-direct.sql)。每份脚本只适用于对应起点，先核对表结构，失败后检查再继续，不能重放完整初始化或盲目重试。新库按[SQL 指南](../sql/README.md)安装。
 
-先备份并排空全部预览，停止平台。已有库若完全没有preview表，执行`platform-upgrade.sql`仅新增5表；已有S2三表则执行`platform-s2-to-s3.sql`定向ALTER并新增Source/Output。升级会拒绝活动观看或未知操作。MySQL DDL不具备整段事务回滚，报错即停并核对，不盲目重跑；新库使用完整初始化，已有库禁止重放。启动只读检查，节点本身不需要数据库。
+Ops 发布的实例从 Platform 的 Ops 目录直接引入；以下仅适用于上述手工安装。安全复制各节点的 `platform-registration` 文件到平台保护目录，分别修改 `connection.json` 的 `tokenFile` 为平台绝对路径。`SF_PREVIEW_NODE_CONNECTION_FILE` 可指向单个连接对象或 A/B 对象数组，最多 16 个远程节点；`local` 是本机保留身份。凭据不放页面、数据库明文或交付材料。
 
-安全复制各节点`platform-registration`文件到平台保护目录，分别修改connection.json的tokenFile为平台绝对路径。`SF_PREVIEW_NODE_CONNECTION_FILE`可指向单个连接对象或A/B对象数组的JSON，最多16个远程；local是本机保留身份。凭据不放页面、数据库明文或交付材料。
-
-在“服务信息 → 媒体环境 → 预览执行节点”登记各节点，设置优先级和预算后启用。默认本机0、远程100，数字小的先选；同级先使用已有负载节点，再按nodeId排序。无需关闭其它节点的观看。新源在当前候选容量不足时检查下一节点；同源已有归属只复用原节点，观看或出口满时返回原因，不跨机重复拉。
+在“监控面板 → 预览节点”登记各节点，设置优先级和预算后启用。默认本机 0、远程 100，数字小的先选；同级优先已有观看的节点，再按 nodeId 排序。新源在候选容量不足时检查下一节点；同源已有归属只复用原节点，观看或出口满时返回原因，不跨机重复拉。ZLM 网络线程负载仅展示，不参与调度。
 
 检查节点只读取控制/配置，不代替首帧。原预览中心完成试播；浏览器媒体直达所分配节点，平台代理控制和SDP。S2包缺少S3预算字段，须升级后才能启用S3调度。
 

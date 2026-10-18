@@ -107,7 +107,7 @@ public final class PreviewScheduler {
                 } else if (candidate.zlm() != null) {
                     if (direct == null) throw new PreviewFailure("NODE_UNAVAILABLE");
                     direct.requireAvailable(candidate, deadline.within(Duration.ofSeconds(3)));
-                    nodeBoot = "zlm-" + candidate.nodeId().substring(4) + "0000000000000000";
+                    nodeBoot = directBootId(candidate);
                 } else {
                     // Observations are cached for at most 15 seconds; a failed observation
                     // invalidates the cache.
@@ -150,7 +150,7 @@ public final class PreviewScheduler {
                 node.local()
                         ? boot
                         : node.zlm() != null
-                                ? "zlm-" + node.nodeId().substring(4) + "0000000000000000"
+                                ? directBootId(node)
                                 : cached == null ? null : cached.bootId();
         if (nodeBoot == null) throw new PreviewFailure("NODE_RECONCILING");
         if (!node.local() && node.zlm() == null) requireSnapshot(node, cached);
@@ -179,6 +179,10 @@ public final class PreviewScheduler {
         // rows.
         if (snapshot.occupiedTranscodes() > ledger.usage(node.nodeId()).transcodes())
             throw new PreviewFailure("NODE_UNOWNED_RESOURCES");
+    }
+
+    private static String directBootId(PreviewNodeRepository.Node node) {
+        return "zlm-" + node.nodeId().substring(4) + "0000000000000000";
     }
 
     public String localState() {
