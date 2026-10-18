@@ -32,8 +32,11 @@ class PreviewNodeDirectRegistrationTest {
 
             var registered = manager.register(manager.registration(input));
             assertThat(registered.mode()).isEqualTo("LOCAL");
-            assertThat(repository.node("test-a").connection().tokenFile())
-                    .isEqualTo(secrets.resolve("test-a.token"));
+            assertThat(
+                            Files.isSameFile(
+                                    repository.node("test-a").connection().tokenFile(),
+                                    secrets.resolve("test-a.token")))
+                    .isTrue();
             assertThat(repository.node("test-a").mode()).isEqualTo("LOCAL");
 
             assertThatThrownBy(() -> manager.registration(input))
