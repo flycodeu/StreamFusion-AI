@@ -19,7 +19,7 @@ class ZlmDirectCredentialsTest {
 
         assertThat(storage.available()).isTrue();
         assertThat(storage.directory())
-                .isEqualTo(home.resolve(".streamfusion/preview-zlm-secrets"));
+                .isEqualTo(home.resolve(".streamfusion/preview-zlm-secrets").toRealPath());
         assertThat(Files.isDirectory(storage.directory())).isTrue();
         try (var files = Files.list(storage.directory())) {
             assertThat(files).isEmpty();

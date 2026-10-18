@@ -123,9 +123,15 @@ class PreviewSchedulerTest {
             register(a, "a");
             register(b, "b");
             List<String> ids = new ArrayList<>();
-            for (int i = 1; i <= 20; i++) ids.add(open(i));
+            for (int i = 1; i <= 20; i++) {
+                // Production nodes refresh media health periodically; the fixture has no ticker.
+                a.service.tick();
+                b.service.tick();
+                ids.add(open(i));
+            }
             assertThat(ledger.usage("a").sources()).isEqualTo(12);
             assertThat(ledger.usage("b").sources()).isEqualTo(8);
+            a.service.tick();
             String shared = open(1);
             ids.add(shared);
             assertThat(repository.viewer(shared).nodeId()).isEqualTo("a");
