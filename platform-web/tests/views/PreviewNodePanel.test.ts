@@ -227,12 +227,12 @@ it('shows a simple ZLM entry and existing direct instances without revealing cre
   expect(text(root)).not.toContain('ZLM secret')
   expect(api.getDirectZlmInstances).toHaveBeenCalledOnce()
 })
-it('keeps direct ZLM registration unavailable until the protected credential directory exists', async () => {
+it('explains server-side credential storage failures without asking for manual setup', async () => {
   sessionState.me = administrator()
   api.getDirectZlmInstances.mockResolvedValue({ registrationAvailable: false, items: [] })
   const root = await mount(true)
   expect(buttons(root).find((button) => text(button) === '接入 ZLM')!.props.disabled).toBe(true)
-  expect(text(root)).toContain('请先配置 Platform 受保护的预览节点凭据目录')
+  expect(text(root)).toContain('平台密钥存储不可用，请检查服务账号权限')
 })
 it('shows the direct ZLM API address in read-only node status without agent-only controls', async () => {
   const configured = value()
@@ -283,7 +283,7 @@ it('offers direct instance configuration only when protected credentials are ava
   const root = await mount(true)
   const create = buttons(root).find((button) => text(button) === '手工登记')!
   expect(create.props.disabled).toBe(true)
-  expect(text(root)).toContain('受保护的机器凭据目录')
+  expect(text(root)).toContain('节点包需要预置机器令牌')
   configured.directRegistrationAvailable = true
   await (buttons(root).find((button) => text(button) === '检查节点')!.props.onClick as () => void)()
   await settle()

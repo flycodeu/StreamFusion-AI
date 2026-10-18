@@ -43,9 +43,10 @@ const channels = ref<PreviewChannel[]>([]),
   loading = ref(false),
   error = ref<unknown>(null),
   search = ref('')
-const layout = ref<PreviewLayout>('16'),
+const layout = ref<PreviewLayout>('4'),
   showStats = ref(false),
   catalogOpen = ref(false),
+  maximizedSlot = ref<number | null>(null),
   page = ref(1),
   total = ref(0)
 const selectedDevice = computed(() =>
@@ -68,13 +69,11 @@ let menuTrigger: globalThis.HTMLElement | null = null,
 const {
   slots,
   setVideoRef,
-  setTileRef,
   assign,
   play,
   stop,
   switchProfile,
   sampleStats,
-  fullscreen,
   snapshot,
   firstFrame,
   trim,
@@ -171,6 +170,7 @@ async function chooseLayout(value: PreviewLayout): Promise<boolean> {
   layout.value = value
   const count = layoutCount(value)
   activeSlot.value = Math.min(activeSlot.value, count - 1)
+  if (maximizedSlot.value !== null && maximizedSlot.value >= count) maximizedSlot.value = null
   return true
 }
 async function load(append = false) {
@@ -257,7 +257,19 @@ function tileKeydown(event: globalThis.KeyboardEvent, index: number) {
   if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) {
     event.preventDefault()
     openMore(event, index)
-  } else if (event.key === 'Enter') activeSlot.value = index
+  } else if (event.key === 'Enter') {
+    event.preventDefault()
+    activeSlot.value = index
+    toggleMaximize(index)
+  }
+}
+function toggleMaximize(index: number) {
+  if (!slots[index]?.channel) return
+  maximizedSlot.value = maximizedSlot.value === index ? null : index
+}
+function closeSlot(index: number) {
+  if (maximizedSlot.value === index) maximizedSlot.value = null
+  void stop(index)
 }
 function showDiagnostics(index: number, event?: globalThis.MouseEvent) {
   const failure = slots[index].error
@@ -277,10 +289,9 @@ async function menuAction(action: PreviewMenuAction) {
   if (action === 'snapshot') {
     if (!(await snapshot(index))) ElMessage.info('当前还没有可抓取的画面')
   }
-  if (action === 'fullscreen')
-    await fullscreen(index).catch(() => ElMessage.info('当前浏览器无法进入全屏'))
+  if (action === 'maximize') toggleMaximize(index)
   if (action === 'reconnect') void play(index)
-  if (action === 'close') void stop(index)
+  if (action === 'close') closeSlot(index)
 }
 function menuChannel(cameraId: string) {
   const index = context.value?.slot,
@@ -309,6 +320,7 @@ function dismissContext(event: globalThis.KeyboardEvent) {
   if (event.key === 'Escape') {
     if (context.value) closeContext()
     catalogOpen.value = false
+    maximizedSlot.value = null
   }
 }
 watch(search, () => {
@@ -329,7 +341,8 @@ watch(
       loading.value = false
       return
     }
-    layout.value = deviceMode.value ? '1' : '16'
+    layout.value = deviceMode.value ? '1' : '4'
+    maximizedSlot.value = null
     void load()
   },
 )
@@ -430,12 +443,12 @@ onBeforeUnmount(() => {
           <article
             v-for="(slot, index) in slots.slice(0, slotCount)"
             :key="index"
-            :ref="(element) => setTileRef(index, element)"
             class="preview-tile"
             :class="{
               occupied: slot.channel,
               playing: slot.state === 'PLAYING',
               selected: activeSlot === index,
+              maximized: maximizedSlot === index,
               lead: Boolean(layoutDefinition.leadSpan) && index === 0,
             }"
             tabindex="0"
@@ -449,6 +462,7 @@ onBeforeUnmount(() => {
             @focusin="activeSlot = index"
             @keydown="tileKeydown($event, index)"
             @contextmenu="openContext($event, index)"
+            @dblclick="toggleMaximize(index)"
           >
             <video
               v-if="slot.channel"
@@ -472,15 +486,25 @@ onBeforeUnmount(() => {
             </div>
             <div v-if="slot.channel && slot.state !== 'PLAYING'" class="tile-state">
               <VideoPlay v-if="slot.state !== 'ERROR'" class="state-icon" /><span>{{
-                slot.error?.message || '正在连接…'
+                slot.state === 'CLOSING' ? '正在关闭画面…' : slot.error?.message || '正在连接…'
               }}</span>
               <div v-if="slot.state === 'ERROR'" class="tile-error-actions">
-                <ElButton size="small" text type="primary" @click.stop="play(index)">重连</ElButton>
+                <ElButton
+                  size="small"
+                  text
+                  type="primary"
+                  @click.stop="
+                    slot.error?.code === 'LEASE_RELEASE_FAILED' ? closeSlot(index) : play(index)
+                  "
+                  @dblclick.stop
+                  >{{ slot.error?.code === 'LEASE_RELEASE_FAILED' ? '重试关闭' : '重连' }}</ElButton
+                >
                 <ElButton
                   v-if="slot.error"
                   size="small"
                   text
                   @click.stop="showDiagnostics(index, $event)"
+                  @dblclick.stop
                   >排查信息</ElButton
                 >
               </div>
@@ -488,6 +512,16 @@ onBeforeUnmount(() => {
             <div v-if="!slot.channel" class="tile-empty">
               <VideoPlay /><span>{{ index + 1 }}</span>
             </div>
+            <button
+              v-if="slot.channel && maximizedSlot === index"
+              class="tile-fullscreen-exit"
+              type="button"
+              aria-label="退出大屏"
+              @click.stop="toggleMaximize(index)"
+              @dblclick.stop
+            >
+              退出大屏
+            </button>
             <button
               v-if="slot.channel"
               class="tile-more"
@@ -497,6 +531,7 @@ onBeforeUnmount(() => {
               aria-controls="preview-slot-menu"
               :aria-expanded="context?.slot === index"
               @click.stop="openMore($event, index)"
+              @dblclick.stop
             >
               <MoreFilled />
             </button>
@@ -504,8 +539,10 @@ onBeforeUnmount(() => {
               v-if="slot.channel"
               class="tile-close"
               type="button"
-              aria-label="关闭画面"
-              @click.stop="stop(index)"
+              :aria-label="slot.state === 'CLOSING' ? '正在关闭画面' : '关闭画面'"
+              :disabled="slot.state === 'CLOSING'"
+              @click.stop="closeSlot(index)"
+              @dblclick.stop
             >
               <Close />
             </button>

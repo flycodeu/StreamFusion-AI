@@ -118,7 +118,7 @@ function keydown(event: globalThis.KeyboardEvent) {
       </ElSelect>
     </div>
     <button type="button" :disabled="!playing" @click="emit('action', 'snapshot')">抓图</button>
-    <button type="button" @click="emit('action', 'fullscreen')">全屏</button>
+    <button type="button" @click="emit('action', 'maximize')">大屏</button>
     <button type="button" @click="emit('action', 'reconnect')">重新连接</button>
     <button v-if="failed" type="button" @click="emit('action', 'diagnostics')">排查信息</button>
     <button type="button" @click="emit('action', 'close')">关闭预览</button>

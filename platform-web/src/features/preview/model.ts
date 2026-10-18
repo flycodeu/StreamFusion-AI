@@ -2,7 +2,7 @@ import type { PreviewChannel, PreviewProfile } from '../../api/preview/types'
 import type { MenuRoute } from '../../api/auth/types'
 
 export type StreamUsage = 'MAIN' | 'SUB'
-export type PreviewMenuAction = 'snapshot' | 'fullscreen' | 'reconnect' | 'close' | 'diagnostics'
+export type PreviewMenuAction = 'snapshot' | 'maximize' | 'reconnect' | 'close' | 'diagnostics'
 export interface PreviewDevice {
   key: string
   name: string
@@ -23,7 +23,13 @@ export function selectProfile(channel: PreviewChannel, usage: StreamUsage): Prev
   return (
     channel.profiles.find(
       (profile) => profile.enabled && profile.configured && profile.usage === usage,
-    ) ?? null
+    ) ??
+    // A manually registered RTSP stream has no MAIN/SUB classification. It remains playable
+    // from the default device view without silently substituting a known main for a missing sub.
+    channel.profiles.find(
+      (profile) => profile.enabled && profile.configured && profile.usage === 'UNKNOWN',
+    ) ??
+    null
   )
 }
 export function groupCatalog(channels: PreviewChannel[]): PreviewGroup[] {
@@ -93,7 +99,7 @@ export function previewReason(code: string | null): string {
     NODE_IDENTITY_CHANGED: '预览节点已重启或身份变化，请重连并核对节点',
     NODE_OPERATION_PENDING: '节点操作结果待核对，请稍后重试关闭',
     NODE_REGISTRATION_MISSING: '请先配置平台的预览节点登记文件',
-    NODE_CREDENTIAL_DIRECTORY_MISSING: '请先配置 Platform 的受保护机器凭据目录',
+    NODE_CREDENTIAL_DIRECTORY_MISSING: '平台密钥存储不可用，请检查服务账号权限',
     NODE_REGISTRATION_INVALID: '预览节点登记信息无效，请核对地址、证书指纹与受保护凭据文件',
     OPS_UNAVAILABLE: '无法读取 Ops 实例目录，请检查 Ops 服务和平台连接配置',
     OPS_CONFIGURATION_INVALID: 'Ops 连接配置无效，请检查平台服务端设置',

@@ -116,11 +116,33 @@ export async function renewPreviewLease(leaseId: string) {
   )
 }
 export async function deletePreviewLease(leaseId: string) {
-  await request({
-    path: `/preview/leases/${encodeURIComponent(leaseId)}`,
-    method: 'DELETE',
-    successStatus: 200,
-    timeoutMs: 15000,
-    decode: empty,
-  })
+  // The server treats DELETE by lease ID as idempotent. A lost receipt or a
+  // still-running cleanup must be confirmed before this slot can be reused.
+  const retryDelays = [500, 1500, 9000]
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await request({
+        path: `/preview/leases/${encodeURIComponent(leaseId)}`,
+        method: 'DELETE',
+        successStatus: 200,
+        timeoutMs: 15000,
+        decode: empty,
+      })
+      return
+    } catch (cause) {
+      if (
+        attempt >= retryDelays.length ||
+        !(cause instanceof ApiRequestError) ||
+        !(
+          cause.code === 'NETWORK_ERROR' ||
+          cause.code === 'REQUEST_TIMEOUT' ||
+          (cause.code === 'INVALID_RESPONSE' && cause.status === 200) ||
+          cause.status === 429 ||
+          (cause.status !== undefined && cause.status >= 500)
+        )
+      )
+        throw cause
+      await new Promise((resolve) => globalThis.setTimeout(resolve, retryDelays[attempt]))
+    }
+  }
 }

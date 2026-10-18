@@ -40,6 +40,11 @@ describe('preview catalog selection', () => {
     expect(selectProfile(channel('1'), 'SUB')).toBeNull()
     expect(selectProfile(channel('1'), 'MAIN')?.streamProfileId).toBe('11')
   })
+  it('plays a manually registered stream whose usage is unknown', () => {
+    const manual = channel('1')
+    manual.profiles[0]!.usage = 'UNKNOWN'
+    expect(selectProfile(manual, 'SUB')?.streamProfileId).toBe('11')
+  })
   it('keeps one physical camera even when its channels have different groups', () => {
     const second = { ...channel('2'), groupPath: '园区 / 北门' }
     const result = groupCatalog([channel('1'), second])

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createPreviewLease, exchangeWebRtc, getPreviewCapacity, renewPreviewLease } from './api'
+import {
+  createPreviewLease,
+  deletePreviewLease,
+  exchangeWebRtc,
+  getPreviewCapacity,
+  renewPreviewLease,
+} from './api'
 import { clearIdentity, sessionState } from '../../session/state'
 
 const input = {
@@ -145,6 +151,42 @@ describe('preview creation receipt recovery', () => {
     await expect(exchangeWebRtc('lease-1', 'offer')).rejects.toMatchObject({
       code: 'NETWORK_ERROR',
     })
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+})
+
+describe('preview deletion receipt recovery', () => {
+  it('confirms the same lease after a lost response and cleanup still pending', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('network'))
+      .mockResolvedValueOnce(response(null, 503, 'DEPENDENCY_UNAVAILABLE'))
+      .mockResolvedValueOnce(response(null, 503, 'DEPENDENCY_UNAVAILABLE'))
+      .mockResolvedValueOnce(response(null, 200))
+    vi.stubGlobal('fetch', fetchMock)
+    const closing = deletePreviewLease('lease-1')
+    await vi.advanceTimersByTimeAsync(11000)
+    await expect(closing).resolves.toBeUndefined()
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    for (const [path, request] of fetchMock.mock.calls) {
+      expect(path).toBe('/api/preview/leases/lease-1')
+      expect(request.method).toBe('DELETE')
+    }
+  })
+
+  it('keeps cleanup unconfirmed after bounded retries and does not replay authorization failures', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn().mockResolvedValue(response(null, 503, 'DEPENDENCY_UNAVAILABLE'))
+    vi.stubGlobal('fetch', fetchMock)
+    const closing = deletePreviewLease('lease-1')
+    const rejected = expect(closing).rejects.toMatchObject({ status: 503 })
+    await vi.advanceTimersByTimeAsync(11000)
+    await rejected
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+
+    fetchMock.mockClear().mockResolvedValue(response(null, 403, 'ACCESS_DENIED'))
+    await expect(deletePreviewLease('lease-1')).rejects.toMatchObject({ status: 403 })
     expect(fetchMock).toHaveBeenCalledOnce()
   })
 })

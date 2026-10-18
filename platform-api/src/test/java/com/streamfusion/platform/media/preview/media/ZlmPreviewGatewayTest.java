@@ -36,6 +36,7 @@ class ZlmPreviewGatewayTest {
     private MediaRuntimeService.ActiveZlm runtime;
     private ZlmPreviewGateway gateway;
     private boolean failDelete;
+    private boolean failAddProxy;
     private String directProxy = "0";
     private String noneReaderDelay = "20000";
     @TempDir Path directory;
@@ -134,16 +135,18 @@ class ZlmPreviewGatewayTest {
                                                         "data",
                                                         Map.of("key", key(params.get("dst_url"))));
                                 case "addStreamProxy" ->
-                                        Map.of(
-                                                "code",
-                                                0,
-                                                "data",
-                                                Map.of(
-                                                        "key",
-                                                        "__defaultVhost__/"
-                                                                + params.get("app")
-                                                                + "/"
-                                                                + params.get("stream")));
+                                        failAddProxy
+                                                ? Map.of("code", -1)
+                                                : Map.of(
+                                                        "code",
+                                                        0,
+                                                        "data",
+                                                        Map.of(
+                                                                "key",
+                                                                "__defaultVhost__/"
+                                                                        + params.get("app")
+                                                                        + "/"
+                                                                        + params.get("stream")));
                                 case "getMediaList" ->
                                         Map.of(
                                                 "code",
@@ -322,6 +325,16 @@ class ZlmPreviewGatewayTest {
         assertThat(open.params).doesNotContainKey("media_timeout_ms");
         assertThat(open.params.get("secret")).isEqualTo("api-secret");
         assertThat(open.params.get("url")).isEqualTo("rtsp://user:pass@10.0.0.1/live");
+    }
+
+    @Test
+    void definitiveProxyRejectionDoesNotHoldAnUncertainOpenFence() {
+        failAddProxy = true;
+        assertThatThrownBy(() -> gateway.open(runtime, APP, ID, URI.create("rtsp://10.0.0.1/live")))
+                .hasMessage("ZLM_REQUEST_FAILED");
+        failAddProxy = false;
+        gateway.close(stream(), null, PreviewDeadline.after(Duration.ofSeconds(5)));
+        assertThat(requests).extracting(Request::api).contains("delStreamProxy", "close_streams");
     }
 
     @Test

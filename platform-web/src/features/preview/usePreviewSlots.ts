@@ -20,7 +20,7 @@ export interface PreviewSlot {
   lease: PreviewLease | null
   player: PreviewPlayer | null
   stats: PreviewStats | null
-  state: 'EMPTY' | 'CONNECTING' | 'PLAYING' | 'ERROR'
+  state: 'EMPTY' | 'CONNECTING' | 'PLAYING' | 'CLOSING' | 'ERROR'
   error: PreviewFailure | null
 }
 export function usePreviewSlots() {
@@ -38,7 +38,6 @@ export function usePreviewSlots() {
   )
   const videoRefs = new Map<number, HTMLVideoElement>()
   const streams = new Map<number, MediaStream>()
-  const tileRefs = new Map<number, HTMLElement>()
   const revisions = new Map<number, number>()
   const frameTimers = new Map<number, ReturnType<typeof setTimeout>>()
   const videoErrors = new Map<number, { video: HTMLVideoElement; listener: () => void }>()
@@ -106,10 +105,6 @@ export function usePreviewSlots() {
       videoErrors.set(index, { video: value, listener })
     } else videoRefs.delete(index)
   }
-  function setTileRef(index: number, value: unknown) {
-    if (value instanceof HTMLElement) tileRefs.set(index, value)
-    else tileRefs.delete(index)
-  }
   async function stop(index: number, clear = true): Promise<number> {
     const slot = slots[index]
     if (!slot) return -1
@@ -124,6 +119,10 @@ export function usePreviewSlots() {
     streams.delete(index)
     const video = videoRefs.get(index)
     if (video) video.srcObject = null
+    if (player) {
+      slot.state = 'CLOSING'
+      slot.error = null
+    }
     try {
       await player?.close()
     } catch (cause) {
@@ -320,9 +319,6 @@ export function usePreviewSlots() {
       slots.slice(count).every((slot) => !slot.channel && !slot.player)
     )
   }
-  async function fullscreen(index: number): Promise<void> {
-    await tileRefs.get(index)?.requestFullscreen()
-  }
   async function snapshot(index: number): Promise<boolean> {
     const video = videoRefs.get(index)
     if (!video || video.readyState < 2 || !video.videoWidth) return false
@@ -350,13 +346,11 @@ export function usePreviewSlots() {
   return {
     slots,
     setVideoRef,
-    setTileRef,
     assign,
     play,
     stop,
     switchProfile,
     sampleStats,
-    fullscreen,
     snapshot,
     firstFrame,
     trim,

@@ -163,7 +163,15 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
         String identity = runtime.apiBase() + "/" + app + "/" + id;
         if (uncertainOpens.size() >= 256) throw new PreviewFailure("PREVIEW_BUSY");
         uncertainOpens.put(identity, System.nanoTime() + TimeUnit.SECONDS.toNanos(30));
-        JsonNode result = call(runtime, "addStreamProxy", params, deadline);
+        JsonNode result;
+        try {
+            result = call(runtime, "addStreamProxy", params, deadline);
+        } catch (PreviewFailure rejected) {
+            // A definite ZLM rejection cannot publish a late proxy. Keep the fence only for
+            // timeout/transport ambiguity, where a request may still complete after our call.
+            if ("ZLM_REQUEST_FAILED".equals(rejected.reason())) uncertainOpens.remove(identity);
+            throw rejected;
+        }
         String key = result.path("data").path("key").asText();
         if (!key.equals(VHOST + "/" + app + "/" + id))
             throw new PreviewFailure("ZLM_INVALID_RESPONSE");

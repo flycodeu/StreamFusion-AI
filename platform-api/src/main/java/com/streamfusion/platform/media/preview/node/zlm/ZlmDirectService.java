@@ -69,7 +69,7 @@ public final class ZlmDirectService {
     private final PreviewNodeRepository repository;
     private final PreviewNodeManager manager;
     private final PreviewScheduler scheduler;
-    private final PreviewNodeProperties properties;
+    private final ZlmDirectCredentials credentials;
     private final ZlmDirectGateway gateway;
     private final CurrentUserService current;
     private final AccessService access;
@@ -94,7 +94,7 @@ public final class ZlmDirectService {
         this.repository = repository;
         this.manager = manager;
         this.scheduler = scheduler;
-        this.properties = properties;
+        this.credentials = new ZlmDirectCredentials(properties);
         this.gateway = gateway;
         this.current = current;
         this.access = access;
@@ -116,7 +116,7 @@ public final class ZlmDirectService {
                         .filter(node -> node.zlm() != null)
                         .map(node -> item(node, states.get(node.nodeId())))
                         .toList();
-        return new Listing(manager.directRegistrationAvailable(), items);
+        return new Listing(credentials.available(), items);
     }
 
     public void create(Input input, AuditContextDto context) {
@@ -367,18 +367,12 @@ public final class ZlmDirectService {
     }
 
     private Path secretPath(String id) {
-        try {
-            if (!manager.directRegistrationAvailable()) throw new IllegalArgumentException();
-            Path directory = Path.of(properties.credentialDirectory()).toRealPath();
-            return directory.resolve("." + id + "-" + UUID.randomUUID() + ".secret");
-        } catch (Exception invalid) {
-            throw new PreviewFailure("NODE_CREDENTIAL_DIRECTORY_MISSING");
-        }
+        return credentials.directory().resolve("." + id + "-" + UUID.randomUUID() + ".secret");
     }
 
     private void discardOwned(Path path) {
         try {
-            Path directory = Path.of(properties.credentialDirectory()).toRealPath();
+            Path directory = credentials.directory();
             if (path.getParent().toRealPath().equals(directory)
                     && path.getFileName()
                             .toString()

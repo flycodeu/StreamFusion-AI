@@ -27,7 +27,7 @@ platform:
 
 ## 预览配额与重启清理
 
-独立 ZLM 直连与原预览节点包是两种入口。Platform 可从 Ops 已发布的 ZLM 目录引入，也可在“预览节点”手工登记专用 ZLM 的内网 IP、HTTP API 端口和 secret。普通页面不要求节点 ID、控制 HTTPS 地址或证书指纹；这些是节点包高级配置。`SF_PREVIEW_NODE_CREDENTIAL_DIRECTORY` 必须是 Platform 可写、仅服务账号可读的绝对目录，ZLM secret 写入受保护文件且不回显。预检要求 ZLM `rtsp.directProxy=0`、`api.apiDebug=0`、`general.streamNoneReaderDelayMS>=20000`、有效 WebRTC 端口及媒体地址；`http.allow_ip_range` 按 Platform **实际出口 IP**设置，不能拿 ZLM 登记地址代替。Ops 配方见[独立 ZLM 安装说明](../../operations/zlm-direct/README.md)。直连首期只接 H.264 无转码流，转码预算固定 0；需转码时在清理确认后回到本机或节点包。浏览器 WebRTC 可达性需要另行试播。
+独立 ZLM 直连与原预览节点包是两种入口。Platform 可从 Ops 已发布的 ZLM 目录引入，也可在“预览节点”手工登记专用 ZLM 的内网 IP、HTTP API 端口和 secret。普通页面不要求节点 ID、控制 HTTPS 地址或证书指纹；这些是节点包高级配置。直连 ZLM 的 secret 由 Platform 写入服务账号私有目录 `~/.streamfusion/preview-zlm-secrets`，首次使用自动创建，不回显，也不依赖节点包的机器令牌目录。此目录含持久接入密钥，须备份且不要当临时日志清理。若设置 `SF_PREVIEW_NODE_CREDENTIAL_DIRECTORY`，则改用该绝对目录，目录须预先存在且允许 Platform 写入；它也供节点包高级登记和 Ops 引入使用。预检要求 ZLM `rtsp.directProxy=0`、`api.apiDebug=0`、`general.streamNoneReaderDelayMS>=20000`、有效 WebRTC 端口及媒体地址；`http.allow_ip_range` 按 Platform **实际出口 IP**设置，不能拿 ZLM 登记地址代替。Ops 配方见[独立 ZLM 安装说明](../../operations/zlm-direct/README.md)。直连首期只接 H.264 无转码流，转码预算固定 0；需转码时在清理确认后回到本机或节点包。浏览器 WebRTC 可达性需要另行试播。
 
 预览扩容时，Platform 可从已部署的 Ops 预览实例目录引入节点。默认关闭；本机预览不需要 Ops。启用时，在 Ops `serve` 添加 `--platform-token-file <受保护服务身份文件>`，Platform 设置 `SF_PREVIEW_OPS_BASE_URI`（Ops 地址）、`SF_PREVIEW_OPS_TOKEN_FILE`（同一服务身份文件在 Platform 上的绝对路径）和 `SF_PREVIEW_NODE_CREDENTIAL_DIRECTORY`（Platform 保存节点机器凭据的受保护绝对目录）。Ops 与 Platform 不在同一台机器时，应通过受保护通道分别提供身份文件；非回环地址必须使用受信任 HTTPS。页面只选择 Ops 已发布的预览实例，不显示服务身份或机器令牌；引入后仍需显式启用调度。节点部署步骤见[Ops 说明](../../operations/preview-nodes.md)。
 

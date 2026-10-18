@@ -170,6 +170,21 @@ describe('preview actions and diagnostics', () => {
     const root = await mount()
     expect(text(root)).toContain('已加载 1 台')
     expect(text(root)).toContain('共 500 个通道')
+    expect(nodes(root).filter((item) => item.type === 'article')).toHaveLength(4)
+  })
+  it('maximizes an occupied tile on double click and restores it from the visible control', async () => {
+    const root = await mount()
+    await add(root)
+    let tile = nodes(root).find((item) => item.type === 'article')!
+    await (tile.props.onDblclick as () => void)()
+    await nextTick()
+    tile = nodes(root).find((item) => item.type === 'article')!
+    expect(tile.props.class).toContain('maximized')
+    const exit = nodes(root).find((item) => item.props['aria-label'] === '退出大屏')!
+    await (exit.props.onClick as (event: unknown) => void)({ stopPropagation: vi.fn() })
+    await nextTick()
+    tile = nodes(root).find((item) => item.type === 'article')!
+    expect(tile.props.class).not.toContain('maximized')
   })
   it('opens the same action menu through the explicit button and preserves diagnostics', async () => {
     const root = await mount()

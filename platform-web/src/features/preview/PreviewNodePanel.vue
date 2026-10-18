@@ -61,7 +61,7 @@ const directAdvice = computed(() => {
   if (!(failure instanceof ApiRequestError)) return undefined
   if (failure.status === 403) return '请核对超级管理员权限及当前 Platform 服务版本。'
   if (failure.code === 'NODE_CREDENTIAL_DIRECTORY_MISSING')
-    return '请配置 Platform 受保护的预览节点凭据目录。'
+    return '平台无法保存 ZLM 密钥，请检查服务账号的私有存储权限。'
   if (failure.code === 'ZLM_UNAVAILABLE')
     return '请检查 ZLM 地址、端口及 Platform 的实际出口 IP 是否被允许访问。'
   if (failure.code === 'ZLM_REQUEST_FAILED' || failure.code === 'ZLM_UNAUTHORIZED')
@@ -542,7 +542,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           v-else-if="directInstances && !directInstances.registrationAvailable"
           class="connection-empty"
         >
-          请先配置 Platform 受保护的预览节点凭据目录，再接入 ZLM。
+          平台密钥存储不可用，请检查服务账号权限。
         </p>
         <p v-if="directInstances && !directInstances.items.length" class="connection-empty">
           尚未接入 ZLM 实例。
@@ -700,7 +700,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
         <details class="connection-extra">
           <summary>手工登记节点包</summary>
           <p v-if="!snapshot.directRegistrationAvailable" class="connection-empty">
-            须先配置 Platform 受保护的机器凭据目录。
+            节点包需要预置机器令牌；可先从 Ops 引入，或由管理员配置节点包凭据目录。
           </p>
           <ElButton
             :disabled="busy || !snapshot.directRegistrationAvailable"
@@ -1147,7 +1147,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
 }
 .node-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 720px));
   gap: 16px;
   margin-top: 16px;
 }
@@ -1155,11 +1155,11 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
   container-name: node-card;
   container-type: inline-size;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 390px);
-  column-gap: 24px;
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   min-width: 0;
   width: 100%;
+  max-width: 720px;
   box-sizing: border-box;
   padding: 18px;
   border: 1px solid var(--border-subtle);
@@ -1187,7 +1187,7 @@ small,
 }
 .node-metrics {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin: 0 0 14px;
 }
@@ -1197,7 +1197,8 @@ small,
 .node-identity {
   margin: 0;
   display: grid;
-  gap: 6px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
   align-content: start;
 }
 .node-state {
@@ -1206,14 +1207,18 @@ small,
 }
 .node-operational {
   min-width: 0;
-  padding-left: 24px;
-  border-left: 1px solid var(--border-subtle);
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
 }
 .node-identity > div {
   display: grid;
   grid-template-columns: 100px minmax(0, 1fr);
   gap: 10px;
   align-items: center;
+}
+.node-identity > div:has(.node-ports) {
+  grid-column: 1 / -1;
 }
 .node-identity dd {
   overflow-wrap: break-word;
@@ -1230,8 +1235,9 @@ small,
 }
 .node-bandwidth {
   display: grid;
-  gap: 2px;
-  margin: 0 0 16px;
+  grid-template-columns: auto repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+  margin: 0 0 10px;
 }
 .node-bandwidth > span:first-child {
   color: var(--el-text-color-primary);
@@ -1489,17 +1495,15 @@ dd {
     max-width: none;
   }
 }
-@container node-card (max-width: 1024px) {
-  .node-identity,
-  .node-operational {
-    grid-column: 1 / -1;
+@container node-card (max-width: 680px) {
+  .node-identity {
+    grid-template-columns: minmax(0, 1fr);
   }
-  .node-operational {
-    margin-top: 16px;
-    padding-top: 16px;
-    padding-left: 0;
-    border-top: 1px solid var(--border-subtle);
-    border-left: 0;
+  .node-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .node-bandwidth {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>
