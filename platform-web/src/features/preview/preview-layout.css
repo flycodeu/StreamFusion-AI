@@ -138,7 +138,6 @@
   border-radius: 0;
   background: #090e14;
 }
-.preview-tile.maximized .tile-close,
 .preview-tile.maximized .tile-more {
   visibility: hidden;
   pointer-events: none;
@@ -231,6 +230,20 @@
 }
 .tile-fullscreen-exit:hover,
 .tile-fullscreen-exit:focus-visible {
+  background: #111d2ce8;
+}
+.preview-tile.maximized .tile-close {
+  top: 12px;
+  right: 102px;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  border-color: #ffffff52;
+  background: #111d2cb8;
+  color: #fff;
+}
+.preview-tile.maximized .tile-close:hover,
+.preview-tile.maximized .tile-close:focus-visible {
   background: #111d2ce8;
 }
 .tile-more {
