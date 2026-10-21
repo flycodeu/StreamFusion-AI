@@ -142,6 +142,9 @@ func TestJavaRuntimeExportIsReadOnlyAndChecksFrozenInstallation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(x.root, "runtime-image-id"), []byte(result.ImageID), 0600); err != nil {
+		t.Fatal(err)
+	}
 	code := `#!/usr/bin/python3
 import json,pathlib,sys
 root=pathlib.Path(__file__).parent
@@ -150,7 +153,7 @@ p=root/'export-calls.json'
 calls=json.loads(p.read_text()) if p.exists() else []
 calls.append(a);p.write_text(json.dumps(calls))
 if a[:2]==['image','inspect']:
- print('sha256:'+'a'*64+'|linux/amd64|'+a[-1])
+ print((root/'runtime-image-id').read_text().strip()+'|linux/amd64|'+a[-1])
 elif a[0]=='run': print('openjdk version "21.0.10"')
 elif a[:2]==['image','save']: sys.stdout.buffer.write(b'verified-runtime-archive')
 else: sys.exit(1)
