@@ -35,7 +35,7 @@ func pluginExecutorFixture(t *testing.T) *executor {
 	}
 	bin := filepath.Join(root, "docker-fixture")
 	code := `#!/usr/bin/python3
-import json, pathlib, sys
+import hashlib, json, pathlib, sys
 root=pathlib.Path(__file__).parent
 f=root/'docker-state.json'
 s=json.loads(f.read_text()) if f.exists() else {'images':{},'calls':[]}
@@ -43,20 +43,22 @@ a=sys.argv[3:]
 s['calls'].append(a)
 mode=(root/'mode').read_text().strip() if (root/'mode').exists() else ''
 def save(): f.write_text(json.dumps(s))
+def image_id(image): return 'sha256:'+hashlib.sha256(image.encode()).hexdigest()
 if a[:2]==['image','inspect']:
     image=a[-1]
     if image not in s['images']:
         save(); print('Error: No such image',file=sys.stderr);sys.exit(1)
     digest=image.split('@')[1]
     if mode=='digest': digest='sha256:'+'b'*64
-    if '--format' in a: print('sha256:'+'a'*64+'|linux/amd64|'+image.split('@')[0]+'@'+digest)
+    if '--format' in a: print(image_id(image)+'|linux/amd64|'+image.split('@')[0]+'@'+digest)
     else: print('[]')
 elif a[0]=='info': print(root)
 elif a[0]=='pull':
     if mode=='pull': save();sys.exit(1)
     s['images'][a[-1]]=True
 elif a[0]=='run':
-    image=a[-2]
+    image=next((ref for ref in s['images'] if image_id(ref)==a[-2]),'')
+    if not image: save();sys.exit(1)
     if mode=='version': print('unexpected version')
     elif 'maven' in image: print('Apache Maven 3.9.11\nJava version: 21.0.10')
     elif ':17-' in image: print('openjdk version "17.0.18"')
@@ -145,6 +147,9 @@ func TestPluginExecutorInstallStatusAckAndRemove(t *testing.T) {
 	ackPluginTest(t, x, r, result)
 	r17 := pluginTestRequest(x, "17-jre", "PLUGIN_INSTALL")
 	result17 := runPluginTest(t, x, r17)
+	if result17.Status != "SUCCEEDED" || !strings.Contains(result17.ObservedVersion, `openjdk version "17.`) {
+		t.Fatal(result17)
+	}
 	ackPluginTest(t, x, r17, result17)
 	maven := pluginTestRequest(x, "21-jre", "PLUGIN_INSTALL")
 	d, _ := plugin.Find("maven-jdk-build", "3.9.11-jdk-21")

@@ -19,12 +19,14 @@ func targetUpgradeFixture(t *testing.T) (string, Owner) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || os.Geteuid() != 0 {
 		t.Skip("Linux root protected-directory upgrade fixture")
 	}
-	root, err := os.MkdirTemp("/opt", "sfops-upgrade-test-")
+	// Hosted runners may make /opt writable by the runner account. Exercise
+	// the production boundary under protected ancestors, without changing /opt.
+	root, err := os.MkdirTemp("/var/lib", "sfops-upgrade-test-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if filepath.Dir(root) != "/opt" || !strings.HasPrefix(filepath.Base(root), "sfops-upgrade-test-") {
+		if filepath.Dir(root) != "/var/lib" || !strings.HasPrefix(filepath.Base(root), "sfops-upgrade-test-") {
 			t.Fatal("unsafe test cleanup path")
 		}
 		if err := os.RemoveAll(root); err != nil {
