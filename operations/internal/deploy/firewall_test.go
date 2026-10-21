@@ -43,6 +43,22 @@ func TestFirewallValidationAndManagementProtection(t *testing.T) {
 			t.Fatal("Docker port promised UFW control")
 		}
 	}
+	for _, protocol := range []string{"tcp", "udp"} {
+		other := "udp"
+		if protocol == "udp" {
+			other = "tcp"
+		}
+		rule, snapshot := c, s
+		rule.Rule.Protocol = protocol
+		snapshot.DockerPorts = "media\t0.0.0.0:8080->80/" + other
+		if e := validateFirewallEffect(rule, snapshot); e != nil {
+			t.Fatal("different Docker transport blocked independent rule", protocol, e)
+		}
+		snapshot.DockerPorts = "media\t0.0.0.0:8080->80/" + protocol
+		if validateFirewallEffect(rule, snapshot) == nil {
+			t.Fatal("same transport publication accepted", protocol)
+		}
+	}
 	bad := s
 	bad.DockerCode = "DOCKER_PORTS_UNAVAILABLE"
 	if validateFirewallEffect(c, bad) == nil {

@@ -167,8 +167,11 @@ func validateFirewallEffect(c FirewallChange, s FirewallSnapshot) error {
 		return errors.New("DOCKER_PORT_OWNERSHIP_UNCONFIRMED")
 	}
 	if c.Operation == "ADD" {
-		published := regexp.MustCompile(`:([0-9]+)(?:-([0-9]+))?->`)
+		published := regexp.MustCompile(`:([0-9]+)(?:-([0-9]+))?->[0-9]+(?:-[0-9]+)?/(tcp|udp)`)
 		for _, m := range published.FindAllStringSubmatch(s.DockerPorts, -1) {
+			if m[3] != c.Rule.Protocol {
+				continue
+			}
 			start, _ := strconv.Atoi(m[1])
 			end := start
 			if m[2] != "" {
