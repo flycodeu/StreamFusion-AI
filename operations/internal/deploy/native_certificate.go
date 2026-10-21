@@ -16,23 +16,31 @@ import (
 // ZLM loads a certificate even with HTTPS disabled; WebRTC uses its fingerprint
 // for DTLS. Generate an instance key rather than shipping a shared sample key.
 func createNativeCertificate(filename, name string, gid int) error {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	data, err := nativeCertificatePEM(name)
 	if err != nil {
 		return err
 	}
+	return serviceFile(filename, data, gid, true)
+}
+
+func nativeCertificatePEM(name string) ([]byte, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
+	}
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	now := time.Now().UTC()
 	cert := &x509.Certificate{SerialNumber: serial, Subject: pkix.Name{CommonName: name}, NotBefore: now.Add(-5 * time.Minute), NotAfter: now.AddDate(5, 0, 0), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}, BasicConstraintsValid: true}
 	der, err := x509.CreateCertificate(rand.Reader, cert, cert, &key.PublicKey, key)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	data := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	data = append(data, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})...)
-	return serviceFile(filename, data, gid, true)
+	return data, nil
 }
 
 func validateNativeCertificate(filename string) error {

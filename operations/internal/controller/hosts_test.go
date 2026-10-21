@@ -89,12 +89,9 @@ func hostSSHServer(t *testing.T, s *Store, b *browser, executorAvailable, docker
 						for _, extension := range extensions {
 							if data, ok := extension(payload.Command); ok {
 								request.Reply(true, nil)
-								if payload.Command == "/bin/sh -s" {
-									// A real shell consumes the probe script before exit.
-									// Closing early races SSH's stdin copier and can turn
-									// successful fixture output into a transport failure.
-									_, _ = io.Copy(io.Discard, io.LimitReader(ch, 1<<20))
-								}
+								// Both shell probes and target-exec consume stdin before
+								// exit. An early fixture close races SSH's stdin copier.
+								_, _ = io.Copy(io.Discard, io.LimitReader(ch, 1<<20))
 								ch.Write(data)
 								ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
 								ch.Close()
@@ -134,6 +131,7 @@ func hostSSHServer(t *testing.T, s *Store, b *browser, executorAvailable, docker
 							ch.Close()
 							continue
 						}
+						_, _ = io.Copy(io.Discard, io.LimitReader(ch, 1<<20))
 						json.NewEncoder(ch).Encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: envelope.ControllerID, TargetID: envelope.TargetID}, "dockerAvailable": dockerAvailable, "softwareLifecycleVersion": 1, "platform": "linux/amd64"})
 						ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
 						ch.Close()
