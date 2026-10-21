@@ -21,7 +21,7 @@ import (
 )
 
 const Version = "0.2.0"
-const SchemaVersion = 6
+const SchemaVersion = 12
 
 //go:embed schema.sql
 var schema string
@@ -359,6 +359,211 @@ func Open(dir string) (*Store, error) {
 	}
 	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=6").Scan(&checksum); err != nil || checksum != hashToken(schemaV6) {
 		return nil, errors.New("SCHEMA_MISMATCH: 迁移6摘要不匹配")
+	}
+	if version > 0 && version <= 6 {
+		backupPath := filepath.Join(abs, "before-schema-7-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 6 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV7); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(7,?,?,?)", hashToken(schemaV7), Version, Now())
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=7").Scan(&checksum); err != nil || checksum != hashToken(schemaV7) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移7摘要不匹配")
+	}
+	if version > 0 && version <= 7 {
+		backupPath := filepath.Join(abs, "before-schema-8-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 7 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV8); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(8,?,?,?)", hashToken(schemaV8), Version, Now())
+		}
+		if e == nil {
+			rows, checkErr := tx.Query("PRAGMA foreign_key_check")
+			if checkErr != nil {
+				e = checkErr
+			} else {
+				if rows.Next() {
+					e = errors.New("SCHEMA_FOREIGN_KEY_INVALID")
+				} else {
+					e = rows.Err()
+				}
+				rows.Close()
+			}
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=8").Scan(&checksum); err != nil || checksum != hashToken(schemaV8) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移8摘要不匹配")
+	}
+	if version > 0 && version <= 8 {
+		backupPath := filepath.Join(abs, "before-schema-9-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 8 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV9); e == nil {
+			e = migrateObservationIdentities(tx)
+		}
+		if e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(9,?,?,?)", hashToken(schemaV9), Version, Now())
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=9").Scan(&checksum); err != nil || checksum != hashToken(schemaV9) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移9摘要不匹配")
+	}
+	if version > 0 && version <= 9 {
+		backupPath := filepath.Join(abs, "before-schema-10-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 9 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV10); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(10,?,?,?)", hashToken(schemaV10), Version, Now())
+		}
+		if e == nil {
+			rows, checkErr := tx.Query("PRAGMA foreign_key_check")
+			if checkErr != nil {
+				e = checkErr
+			} else {
+				if rows.Next() {
+					e = errors.New("SCHEMA_FOREIGN_KEY_INVALID")
+				} else {
+					e = rows.Err()
+				}
+				rows.Close()
+			}
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=10").Scan(&checksum); err != nil || checksum != hashToken(schemaV10) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移10摘要不匹配")
+	}
+	if version > 0 && version <= 10 {
+		backupPath := filepath.Join(abs, "before-schema-11-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 10 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV11); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(11,?,?,?)", hashToken(schemaV11), Version, Now())
+		}
+		if e == nil {
+			rows, checkErr := tx.Query("PRAGMA foreign_key_check")
+			if checkErr != nil {
+				e = checkErr
+			} else {
+				if rows.Next() {
+					e = errors.New("SCHEMA_FOREIGN_KEY_INVALID")
+				} else {
+					e = rows.Err()
+				}
+				rows.Close()
+			}
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=11").Scan(&checksum); err != nil || checksum != hashToken(schemaV11) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移11摘要不匹配")
+	}
+	if version > 0 && version <= 11 {
+		backupPath := filepath.Join(abs, "before-schema-12-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 11 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV12); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(12,?,?,?)", hashToken(schemaV12), Version, Now())
+		}
+		if e == nil {
+			rows, checkErr := tx.Query("PRAGMA foreign_key_check")
+			if checkErr != nil {
+				e = checkErr
+			} else {
+				if rows.Next() {
+					e = errors.New("SCHEMA_FOREIGN_KEY_INVALID")
+				} else {
+					e = rows.Err()
+				}
+				rows.Close()
+			}
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=12").Scan(&checksum); err != nil || checksum != hashToken(schemaV12) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移12摘要不匹配")
 	}
 	if _, err = s.DB.Exec("DELETE FROM sessions WHERE expires_at<=? OR last_seen<?", time.Now().Unix(), time.Now().Add(-30*time.Minute).Unix()); err != nil {
 		return nil, err

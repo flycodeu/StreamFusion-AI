@@ -67,8 +67,8 @@ func TestSchemaOneUpgradeKeepsIdentityAndRestorableBackup(t *testing.T) {
 func TestTargetsDraftValidationAndImmutableBindings(t *testing.T) {
 	s, b := setup(t)
 	b.login()
-	tgt := dataOf(t, b.call("POST", "/targets", map[string]any{"name": "local", "installRoot": "/opt/test-target"}, 201))["id"].(string)
-	b.call("POST", "/targets", map[string]any{"name": "second", "installRoot": "/opt/second-target"}, 409)
+	tgt := dataOf(t, b.call("POST", "/hosts", map[string]any{"kind": "LOCAL", "name": "local", "installRoot": "/opt/test-target"}, 201))["id"].(string)
+	b.call("POST", "/hosts", map[string]any{"kind": "LOCAL", "name": "second", "installRoot": "/opt/second-target"}, 409)
 	config := deploy.Config{Environment: "test", BindAddress: "127.0.0.1", HostPort: 18080, ContainerPort: 8080, MemoryMiB: 512, HealthPath: "/actuator/health", HealthSeconds: 10, DataCompatibility: "v1", BindingIDs: []string{}}
 	in := map[string]any{"name": "java", "targetId": tgt, "config": config}
 	id := dataOf(t, b.call("POST", "/instances", in, 200))["id"].(string)
@@ -94,7 +94,7 @@ func TestTargetsDraftValidationAndImmutableBindings(t *testing.T) {
 func TestResultCommitOnlyOnceAndProtectsNewDraft(t *testing.T) {
 	s, b := setup(t)
 	b.login()
-	tid := dataOf(t, b.call("POST", "/targets", map[string]any{"name": "local", "installRoot": "/opt/test-target"}, 201))["id"].(string)
+	tid := dataOf(t, b.call("POST", "/hosts", map[string]any{"kind": "LOCAL", "name": "local", "installRoot": "/opt/test-target"}, 201))["id"].(string)
 	conf := deploy.Config{Environment: "test", BindAddress: "127.0.0.1", HostPort: 18080, ContainerPort: 8080, MemoryMiB: 512, HealthPath: "/actuator/health", HealthSeconds: 10, DataCompatibility: "v1"}
 	iid := dataOf(t, b.call("POST", "/instances", map[string]any{"name": "java", "targetId": tid, "config": conf}, 200))["id"].(string)
 	aid, rid, pid, jid := uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString()
@@ -133,7 +133,7 @@ func TestResultCommitOnlyOnceAndProtectsNewDraft(t *testing.T) {
 		t.Fatal("job detail differs from committed result")
 	}
 	b.call("GET", "/plans/"+pid, nil, 200)
-	b.call("GET", "/targets/"+tid, nil, 200)
+	b.call("GET", "/hosts/"+tid, nil, 200)
 	b.call("GET", "/instances/"+iid, nil, 200)
 	w := b.call("POST", "/plans/"+pid+"/submit", map[string]string{"idempotencyKey": "different-submit-key"}, 409)
 	var envelope Envelope

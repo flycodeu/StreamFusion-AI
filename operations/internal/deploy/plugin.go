@@ -200,7 +200,15 @@ func pluginResult(req Request, d plugin.Definition) Result {
 func (x *executor) inspectPlugin(d plugin.Definition) (string, error) {
 	out, e := x.docker("image", "inspect", "--format", `{{.Id}}|{{.Os}}/{{.Architecture}}|{{join .RepoDigests ","}}`, d.Image+"@"+d.Digest)
 	if e != nil {
-		return "", errors.New("PLUGIN_IMAGE_MISSING")
+		fixed := toolImageForPlugin(d)
+		if fixed == "" {
+			return "", errors.New("PLUGIN_IMAGE_MISSING")
+		}
+		check, err := x.docker("image", "inspect", "--format", `{{.Id}}|{{.Os}}/{{.Architecture}}`, fixed)
+		if err != nil || strings.TrimSpace(string(check)) != fixed+"|"+d.Platform {
+			return "", errors.New("PLUGIN_DIGEST_MISMATCH")
+		}
+		return fixed, nil
 	}
 	parts := strings.SplitN(strings.TrimSpace(string(out)), "|", 3)
 	if len(parts) != 3 || len(parts[0]) != 71 || !Hex.MatchString(strings.TrimPrefix(parts[0], "sha256:")) || parts[1] != d.Platform {
@@ -213,7 +221,11 @@ func (x *executor) inspectPlugin(d plugin.Definition) (string, error) {
 		}
 	}
 	if !found {
-		return "", errors.New("PLUGIN_DIGEST_MISMATCH")
+		// docker save/load can retain the immutable config image ID while
+		// dropping RepoDigests. Only the three built-in pinned tools qualify.
+		if fixed := toolImageForPlugin(d); fixed == "" || parts[0] != fixed {
+			return "", errors.New("PLUGIN_DIGEST_MISMATCH")
+		}
 	}
 	return parts[0], nil
 }
@@ -238,7 +250,7 @@ func (x *executor) probePlugin(d plugin.Definition) (Result, error) {
 		return result, e
 	}
 	result.ImageID = imageID
-	out, e := x.docker("run", "--rm", "--pull", "never", "--network", "none", "--read-only", "--user", "65534:65534", "--workdir", "/tmp", "--tmpfs", "/tmp:rw,noexec,nosuid,size=32m", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--memory", "256m", "--cpus", "1", "--pids-limit", "64", "--env", "HOME=/tmp", "--entrypoint", d.Command, d.Image+"@"+d.Digest, d.Argument)
+	out, e := x.docker("run", "--rm", "--pull", "never", "--network", "none", "--read-only", "--user", "65534:65534", "--workdir", "/tmp", "--tmpfs", "/tmp:rw,noexec,nosuid,size=32m", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--memory", "256m", "--cpus", "1", "--pids-limit", "64", "--env", "HOME=/tmp", "--entrypoint", d.Command, imageID, d.Argument)
 	text := strings.TrimSpace(string(out))
 	if e != nil || len(text) > 8192 || !plugin.VersionMatches(d, text) {
 		return result, errors.New("PLUGIN_VERSION_CHECK_FAILED")

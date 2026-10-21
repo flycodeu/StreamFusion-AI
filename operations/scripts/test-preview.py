@@ -146,13 +146,15 @@ def main():
     try:
         login()
         controller = api('/settings')['controllerId']
-        tid = api('/targets', 'POST', {'name': 'S4 isolated', 'installRoot': str(target)}, 201)['id']
+        tid = api('/hosts', 'POST', {'name': 'S4 isolated', 'kind': 'LOCAL', 'installRoot': str(target)}, 201)['id']
         subprocess.run([binary, 'target-init', '--root', str(target), '--controller-id', controller, '--target-id', tid,
             '--docker-binary', str(lab / 'docker/docker'), '--docker-socket', str(lab / 'docker.sock')], check=True)
         plugins = target / 'docker-config/cli-plugins'
         plugins.mkdir(parents=True, mode=0o700)
         shutil.copy2(lab / 'docker-compose', plugins / 'docker-compose')
-        assert api(f'/targets/{tid}/probes', 'POST', {})['previewRecipe'] == 'preview-node-v1'
+        host = api(f'/hosts/{tid}/checks', 'POST', {})
+        assert host['capabilities']['mutation']['status'] == 'AVAILABLE'
+        assert host['capabilities']['docker']['status'] == 'AVAILABLE'
         passed('protected executor and fixed preview recipe preflight')
         a, b, c = [upload(v) for v in ('A', 'B', 'C')]
         config = {'environment': 'preview', 'profile': '', 'bindAddress': args.node_ip, 'hostPort': 9443, 'containerPort': 9443,

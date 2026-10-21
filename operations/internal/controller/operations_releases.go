@@ -108,6 +108,11 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 		h.internal(w, r, e)
 		return
 	}
+	if t.Maintenance {
+		h.fail(w, r, 409, "HOST_MAINTENANCE", "主机维护中，请恢复后再创建变更计划")
+		return
+	}
+	p.HostVersion = t.Version
 	probeResult, e := h.probe(t)
 	if e != nil {
 		h.fail(w, r, 409, "TARGET_NOT_READY", "目标执行器或Docker未就绪")
@@ -152,6 +157,15 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 	}
 	if version != p.ExpectedVersion || gen != p.ExpectedGeneration {
 		h.fail(w, r, 409, "VERSION_CONFLICT", "预检期间配置已变化，请重新预检")
+		return
+	}
+	var hostVersion string
+	if e = tx.QueryRow("SELECT CAST(version AS TEXT) FROM targets WHERE id=?", p.TargetID).Scan(&hostVersion); e != nil {
+		h.internal(w, r, e)
+		return
+	}
+	if hostVersion != p.HostVersion {
+		h.fail(w, r, 409, "HOST_CHANGED", "主机配置已变化，请重新预检")
 		return
 	}
 	_, e = tx.Exec("INSERT INTO operation_plans VALUES(?,?,?,?,?)", p.ID, id, jsonText(p), p.ExpiresAt, Now())
@@ -227,6 +241,19 @@ func (h *HTTP) submitPlan(w http.ResponseWriter, r *http.Request, s *session, id
 	}
 	if time.Now().After(expiry) || version != p.ExpectedVersion || gen != p.ExpectedGeneration {
 		h.fail(w, r, 409, "PLAN_STALE", "计划已过期或实例变化，请重新预检")
+		return
+	}
+	var hostVersion string
+	if e = hostMutationAllowed(tx, p.TargetID); e != nil {
+		h.fail(w, r, 409, "HOST_MAINTENANCE", "主机维护中，请恢复后重新预检")
+		return
+	}
+	if e = tx.QueryRow("SELECT CAST(version AS TEXT) FROM targets WHERE id=?", p.TargetID).Scan(&hostVersion); e != nil {
+		h.internal(w, r, e)
+		return
+	}
+	if hostVersion != p.HostVersion {
+		h.fail(w, r, 409, "HOST_CHANGED", "主机配置已变化，请重新预检")
 		return
 	}
 	var count int
@@ -416,7 +443,7 @@ func (h *HTTP) reconcile(w http.ResponseWriter, r *http.Request, id string, reco
 		return
 	}
 	action := "STATUS"
-	if recover && req.Plugin == nil {
+	if recover && req.Firewall == nil && req.Plugin == nil && req.Software == nil && req.Installation == nil {
 		action = "RECOVER"
 	}
 	query := req
@@ -427,10 +454,34 @@ func (h *HTTP) reconcile(w http.ResponseWriter, r *http.Request, id string, reco
 		return
 	}
 	if result.Status == "UNKNOWN" {
+		if req.Firewall != nil {
+			if e = h.recordPendingFirewallResult(id, req, result); e != nil {
+				h.fail(w, r, 409, "FIREWALL_EVIDENCE_MISMATCH", "防火墙核对回执身份或证据不一致，保留原作业")
+				return
+			}
+			if result.Phase == "FIREWALL_AWAITING_CONFIRM" {
+				h.success(w, r, map[string]string{"jobId": id})
+				return
+			}
+			h.fail(w, r, 409, "FIREWALL_RECONCILE_REQUIRED", "防火墙结果尚未确认；等待目标恢复或从控制台核对规则，再核对原作业，不会重复执行")
+			return
+		}
+		if req.Software != nil || req.Installation != nil {
+			h.fail(w, r, 409, "SOFTWARE_RECONCILE_REQUIRED", "目标状态尚未确认；请继续核对，不会重新发送启停操作")
+			return
+		}
 		h.fail(w, r, 409, "RECOVERY_REQUIRED", "结果尚未确认，相关变更已锁定；可按冻结基线恢复")
 		return
 	}
-	if req.Plugin != nil {
+	if req.Firewall != nil {
+		e = h.commitFirewallResult(id, req, result)
+	} else if req.Reconfiguration != nil {
+		e = h.commitSoftwareConfigurationResult(id, req, result)
+	} else if req.Installation != nil {
+		e = h.commitSoftwareInstallResult(id, req, result)
+	} else if req.Software != nil {
+		e = h.commitSoftwareResult(id, req, result)
+	} else if req.Plugin != nil {
 		e = h.commitPluginResult(id, req, result)
 	} else {
 		e = h.commitResult(id, req, result)

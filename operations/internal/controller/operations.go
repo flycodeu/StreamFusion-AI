@@ -13,11 +13,14 @@ import (
 
 type target struct {
 	sshTarget
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	InstallRoot string          `json:"installRoot"`
-	Observation json.RawMessage `json:"observation"`
-	ObservedAt  string          `json:"observedAt"`
+	ID           string           `json:"id"`
+	Name         string           `json:"name"`
+	InstallRoot  string           `json:"installRoot"`
+	Observation  json.RawMessage  `json:"observation"`
+	ObservedAt   string           `json:"observedAt"`
+	Version      string           `json:"version"`
+	Maintenance  bool             `json:"maintenance"`
+	Capabilities hostCapabilities `json:"capabilities"`
 }
 type instance struct {
 	ID            string          `json:"id"`
@@ -39,6 +42,7 @@ type plan struct {
 	TargetID           string          `json:"targetId"`
 	InstanceID         string          `json:"instanceId"`
 	ExpectedVersion    string          `json:"expectedVersion"`
+	HostVersion        string          `json:"hostVersion"`
 	ExpectedGeneration string          `json:"expectedGeneration"`
 	Candidate          deploy.Release  `json:"candidate"`
 	Baseline           *deploy.Release `json:"baseline"`
@@ -73,11 +77,7 @@ func (s *Store) controllerID() string {
 	return id
 }
 func (s *Store) readTarget(id string) (target, error) {
-	var t target
-	var raw string
-	e := s.DB.QueryRow("SELECT id,name,install_root,observation_json,observed_at,kind,address,ssh_port,ssh_user,host_fingerprint,coalesce(credential_id,''),coalesce(CAST(credential_revision AS TEXT),'') FROM targets WHERE id=?", id).Scan(&t.ID, &t.Name, &t.InstallRoot, &raw, &t.ObservedAt, &t.Kind, &t.Address, &t.Port, &t.User, &t.Fingerprint, &t.CredentialID, &t.Revision)
-	t.Observation = json.RawMessage(raw)
-	return t, e
+	return scanHost(s.DB.QueryRow("SELECT "+hostColumns+" FROM targets WHERE id=?", id))
 }
 func (s *Store) readInstance(id string) (instance, error) {
 	var i instance
@@ -102,6 +102,21 @@ func (s *Store) artifactPath(id string) string { return filepath.Join(s.Dir, "pa
 func (s *Store) uploadPath(id string) string   { return filepath.Join(s.Dir, "packages", id+".partial") }
 
 func (h *HTTP) operationsRoute(w http.ResponseWriter, r *http.Request, s *session, path string) bool {
+	if h.firewallRoute(w, r, s, path) {
+		return true
+	}
+	if h.softwareInstallRoute(w, r, s, path) {
+		return true
+	}
+	if h.observationRoute(w, r, s, path) {
+		return true
+	}
+	if h.softwareRoute(w, r, s, path) {
+		return true
+	}
+	if h.hostsRoute(w, r, s, path) {
+		return true
+	}
 	if h.bindingsRoute(w, r, s, path) {
 		return true
 	}
@@ -111,12 +126,6 @@ func (h *HTTP) operationsRoute(w http.ResponseWriter, r *http.Request, s *sessio
 		return true
 	case "GET /plugin-installations":
 		h.listPluginInstallations(w, r)
-		return true
-	case "GET /targets":
-		h.listTargets(w, r)
-		return true
-	case "POST /targets":
-		h.addTarget(w, r, s)
 		return true
 	case "GET /instances":
 		h.listInstances(w, r)
@@ -140,7 +149,7 @@ func (h *HTTP) operationsRoute(w http.ResponseWriter, r *http.Request, s *sessio
 		case "GET plugins versions":
 			h.listPluginVersions(w, r, p[1])
 			return true
-		case "POST targets plugin-install-plans":
+		case "POST hosts plugin-install-plans":
 			h.createPluginPlan(w, r, s, p[1])
 			return true
 		case "POST plugin-install-plans submit":
@@ -184,14 +193,6 @@ func (h *HTTP) operationsRoute(w http.ResponseWriter, r *http.Request, s *sessio
 				h.success(w, r, json.RawMessage(raw))
 			}
 			return true
-		case "targets":
-			t, e := h.store.readTarget(p[1])
-			if e != nil {
-				h.opsError(w, r, e)
-			} else {
-				h.success(w, r, t)
-			}
-			return true
 		case "instances":
 			i, e := h.store.readInstance(p[1])
 			if e != nil {
@@ -206,20 +207,6 @@ func (h *HTTP) operationsRoute(w http.ResponseWriter, r *http.Request, s *sessio
 		switch r.Method + " " + p[0] + " " + p[2] {
 		case "POST bindings probes":
 			h.probeBinding(w, r, p[1])
-			return true
-		case "POST targets probes":
-			t, e := h.store.readTarget(p[1])
-			if e != nil {
-				h.opsError(w, r, e)
-				return true
-			}
-			out, e := h.probe(t)
-			if e != nil {
-				h.fail(w, r, 409, "TARGET_NOT_READY", "目标执行器、身份或Docker不可用，请核对目标安装与控制器日志")
-				h.logger.Printf("traceId=%s targetId=%s probe=%v", r.Context().Value(traceKey{}), t.ID, e)
-			} else {
-				h.success(w, r, out)
-			}
 			return true
 		case "POST instances plans":
 			h.createPlan(w, r, s, p[1])

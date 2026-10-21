@@ -8,6 +8,8 @@ import (
 	"path"
 	"regexp"
 	"strings"
+
+	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
 const Version = "0.2.0"
@@ -19,7 +21,7 @@ var rootPattern = regexp.MustCompile(`^/(opt|srv|var/lib)/[a-zA-Z0-9_./-]+$`)
 var profilePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{0,40}$`)
 
 func ValidRoot(root string) bool {
-	return rootPattern.MatchString(root) && path.Clean(root) == root && len(root) > 10 && !strings.Contains(root, "..")
+	return len(root) <= 240 && rootPattern.MatchString(root) && path.Clean(root) == root && len(root) > 10 && !strings.Contains(root, "..")
 }
 
 type Config struct {
@@ -108,24 +110,29 @@ func (b Binding) Validate() error {
 }
 
 type Request struct {
-	MaintenancePermit    string            `json:"maintenancePermit,omitempty"`
-	ProtocolVersion      int               `json:"protocolVersion"`
-	ExecutorVersion      string            `json:"executorVersion"`
-	ControllerID         string            `json:"controllerId"`
-	TargetID             string            `json:"targetId"`
-	JobID                string            `json:"jobId"`
-	TraceID              string            `json:"traceId"`
-	Action               string            `json:"action"`
-	InputHash            string            `json:"inputHash"`
-	Candidate            *Release          `json:"candidate,omitempty"`
-	Baseline             *Release          `json:"baseline,omitempty"`
-	ResultHash           string            `json:"resultHash,omitempty"`
-	DeadlineAt           string            `json:"deadlineAt,omitempty"`
-	Binding              *Binding          `json:"binding,omitempty"`
-	Plugin               *PluginRequest    `json:"plugin,omitempty"`
-	PluginInstallationID string            `json:"pluginInstallationId,omitempty"`
-	PluginOperation      string            `json:"pluginOperation,omitempty"`
-	Secrets              map[string]string `json:"secrets,omitempty"`
+	Firewall             *FirewallChange               `json:"firewall,omitempty"`
+	Reconfiguration      *serviceinstall.ChangeRequest `json:"reconfiguration,omitempty"`
+	Installation         *serviceinstall.Request       `json:"installation,omitempty"`
+	MaintenancePermit    string                        `json:"maintenancePermit,omitempty"`
+	ProtocolVersion      int                           `json:"protocolVersion"`
+	ExecutorVersion      string                        `json:"executorVersion"`
+	ControllerID         string                        `json:"controllerId"`
+	TargetID             string                        `json:"targetId"`
+	JobID                string                        `json:"jobId"`
+	TraceID              string                        `json:"traceId"`
+	Action               string                        `json:"action"`
+	InputHash            string                        `json:"inputHash"`
+	Candidate            *Release                      `json:"candidate,omitempty"`
+	Baseline             *Release                      `json:"baseline,omitempty"`
+	ResultHash           string                        `json:"resultHash,omitempty"`
+	DeadlineAt           string                        `json:"deadlineAt,omitempty"`
+	Binding              *Binding                      `json:"binding,omitempty"`
+	Plugin               *PluginRequest                `json:"plugin,omitempty"`
+	PluginInstallationID string                        `json:"pluginInstallationId,omitempty"`
+	PluginOperation      string                        `json:"pluginOperation,omitempty"`
+	Software             *SoftwareRequest              `json:"software,omitempty"`
+	SoftwareOperation    string                        `json:"softwareOperation,omitempty"`
+	Secrets              map[string]string             `json:"secrets,omitempty"`
 }
 type PluginRequest struct {
 	Key            string `json:"key"`
@@ -147,29 +154,33 @@ type Owner struct {
 	DockerBinary    string `json:"dockerBinary"`
 }
 type Result struct {
-	Preview           *PreviewObservation `json:"preview,omitempty"`
-	ProtocolVersion   int                 `json:"protocolVersion"`
-	ExecutorVersion   string              `json:"executorVersion"`
-	ControllerID      string              `json:"controllerId"`
-	TargetID          string              `json:"targetId"`
-	JobID             string              `json:"jobId"`
-	InputHash         string              `json:"inputHash"`
-	Status            string              `json:"status"`
-	Phase             string              `json:"phase"`
-	ErrorCode         string              `json:"errorCode"`
-	ReleaseID         string              `json:"releaseId"`
-	ImageID           string              `json:"imageId"`
-	ConfigHash        string              `json:"configHash"`
-	ContainerID       string              `json:"containerId"`
-	Health            string              `json:"health"`
-	PluginKey         string              `json:"pluginKey,omitempty"`
-	PluginVersion     string              `json:"pluginVersion,omitempty"`
-	PluginKind        string              `json:"pluginKind,omitempty"`
-	PluginImageDigest string              `json:"pluginImageDigest,omitempty"`
-	ObservedVersion   string              `json:"observedVersion,omitempty"`
-	Platform          string              `json:"platform,omitempty"`
-	ObservedAt        string              `json:"observedAt"`
-	Ack               bool                `json:"ack"`
+	FirewallConfirmBy string                   `json:"firewallConfirmBy,omitempty"`
+	Firewall          *FirewallSnapshot        `json:"firewall,omitempty"`
+	Installation      *serviceinstall.Evidence `json:"installation,omitempty"`
+	Software          *SoftwareObservation     `json:"software,omitempty"`
+	Preview           *PreviewObservation      `json:"preview,omitempty"`
+	ProtocolVersion   int                      `json:"protocolVersion"`
+	ExecutorVersion   string                   `json:"executorVersion"`
+	ControllerID      string                   `json:"controllerId"`
+	TargetID          string                   `json:"targetId"`
+	JobID             string                   `json:"jobId"`
+	InputHash         string                   `json:"inputHash"`
+	Status            string                   `json:"status"`
+	Phase             string                   `json:"phase"`
+	ErrorCode         string                   `json:"errorCode"`
+	ReleaseID         string                   `json:"releaseId"`
+	ImageID           string                   `json:"imageId"`
+	ConfigHash        string                   `json:"configHash"`
+	ContainerID       string                   `json:"containerId"`
+	Health            string                   `json:"health"`
+	PluginKey         string                   `json:"pluginKey,omitempty"`
+	PluginVersion     string                   `json:"pluginVersion,omitempty"`
+	PluginKind        string                   `json:"pluginKind,omitempty"`
+	PluginImageDigest string                   `json:"pluginImageDigest,omitempty"`
+	ObservedVersion   string                   `json:"observedVersion,omitempty"`
+	Platform          string                   `json:"platform,omitempty"`
+	ObservedAt        string                   `json:"observedAt"`
+	Ack               bool                     `json:"ack"`
 }
 
 func StrictJSON(data []byte, dst any) error {

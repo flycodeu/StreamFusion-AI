@@ -67,7 +67,7 @@ func executableJarFixture(t *testing.T) []byte {
 
 func readyJavaRuntime(t *testing.T, s *Store, b *browser, tid, version string) string {
 	t.Helper()
-	p := dataOf(t, b.call("POST", "/targets/"+tid+"/plugin-install-plans", map[string]string{"pluginKey": "java-runtime", "version": version, "recipeRevision": "java-runtime-v1"}, 200))
+	p := dataOf(t, b.call("POST", "/hosts/"+tid+"/plugin-install-plans", map[string]string{"pluginKey": "java-runtime", "version": version, "recipeRevision": "java-runtime-v1"}, 200))
 	j := dataOf(t, b.call("POST", "/plugin-install-plans/"+p["id"].(string)+"/submit", map[string]string{"idempotencyKey": uuid.NewString()}, 202))
 	jobID := j["jobId"].(string)
 	var raw string

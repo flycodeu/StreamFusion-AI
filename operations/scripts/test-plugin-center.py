@@ -117,10 +117,10 @@ def main():
 
     try:
         start()
-        target_id = api("/targets", "POST", {"name": "plugin acceptance", "installRoot": str(target)}, 201)["data"]["id"]
+        target_id = api("/hosts", "POST", {"name": "plugin acceptance", "kind": "LOCAL", "installRoot": str(target)}, 201)["data"]["id"]
         definitions = api("/plugins")["data"]
         java17 = next(d for d in definitions if d["version"] == "17-jre")
-        missing = api("/targets/" + target_id + "/plugin-install-plans", "POST", {
+        missing = api("/hosts/" + target_id + "/plugin-install-plans", "POST", {
             "pluginKey": java17["key"], "version": java17["version"], "recipeRevision": java17["recipeRevision"]}, 409)
         assert missing["code"] == "DOCKER_NOT_READY", missing
         checks.append("uninstalled-executor-blocked")
@@ -132,7 +132,7 @@ def main():
         docker_call("pull", "--platform", "linux/amd64", java17_ref)
         ids = {}
         for definition in definitions:
-            plan = api("/targets/" + target_id + "/plugin-install-plans", "POST", {
+            plan = api("/hosts/" + target_id + "/plugin-install-plans", "POST", {
                 "pluginKey": definition["key"], "version": definition["version"], "recipeRevision": definition["recipeRevision"]})["data"]
             key = str(uuid.uuid4())
             accepted = api("/plugin-install-plans/" + plan["id"] + "/submit", "POST", {"idempotencyKey": key}, 202)["data"]

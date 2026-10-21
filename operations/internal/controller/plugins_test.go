@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -150,7 +151,16 @@ func pluginSSHFixture(t *testing.T, s *Store, b *browser, supportsPlugins bool, 
 						}
 						q.Reply(true, nil)
 						var req deploy.Request
-						if json.NewDecoder(bufio.NewReader(ch)).Decode(&req) != nil {
+						reader := bufio.NewReader(ch)
+						decoder := json.NewDecoder(reader)
+						if decoder.Decode(&req) != nil {
+							ch.Close()
+							continue
+						}
+						// Consume the complete request stream, including any test
+						// archive, before closing the channel with a receipt. An
+						// early close can race the client's stdin writer into EOF.
+						if _, e := io.Copy(io.Discard, io.MultiReader(decoder.Buffered(), reader)); e != nil {
 							ch.Close()
 							continue
 						}
@@ -170,7 +180,9 @@ func pluginSSHFixture(t *testing.T, s *Store, b *browser, supportsPlugins bool, 
 						mu.Lock()
 						var out any
 						switch req.Action {
-						case "PROBE":
+						case "CAPABILITIES":
+							out = map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "dockerAvailable": true, "dockerEngineAvailable": true, "softwareLifecycleVersion": 1, "platform": "linux/amd64"}
+						case "PROBE", "TOOL_PROBE":
 							catalog := ""
 							if supportsPlugins {
 								catalog = deploy.Digest(plugin.All())
@@ -210,7 +222,13 @@ func pluginSSHFixture(t *testing.T, s *Store, b *browser, supportsPlugins bool, 
 			}()
 		}
 	}()
-	id := dataOf(t, b.call("POST", "/targets", map[string]any{"name": "plugin Linux", "installRoot": "/opt/plugin-test", "kind": "SSH", "address": "127.0.0.1", "sshPort": listener.Addr().(*net.TCPAddr).Port, "sshUser": "test", "hostFingerprint": ssh.FingerprintSHA256(hostSigner.PublicKey()), "credentialId": cred["id"], "credentialRevision": "1"}, 201))["id"].(string)
+	connection := map[string]any{"address": "127.0.0.1", "sshPort": listener.Addr().(*net.TCPAddr).Port, "sshUser": "test", "credentialId": cred["id"]}
+	discovered := dataOf(t, b.call("POST", "/hosts/fingerprint", connection, 200))
+	connection["name"] = "plugin Linux"
+	connection["installRoot"] = "/opt/plugin-test"
+	connection["kind"] = "SSH"
+	connection["fingerprintToken"] = discovered["fingerprintToken"]
+	id := dataOf(t, b.call("POST", "/hosts", connection, 201))["id"].(string)
 	return id
 }
 
@@ -221,9 +239,9 @@ func TestPluginCenterPlansJobsAndReferenceProtection(t *testing.T) {
 	b.call("GET", "/plugins", nil, 200)
 	b.call("GET", "/plugins/java-runtime/versions", nil, 200)
 	b.call("GET", "/plugins/unknown/versions", nil, 404)
-	b.call("POST", "/targets/"+tid+"/plugin-install-plans", map[string]string{"pluginKey": "java-runtime", "version": "21-jre", "recipeRevision": "java-runtime-v1", "image": "bad"}, 400)
+	b.call("POST", "/hosts/"+tid+"/plugin-install-plans", map[string]string{"pluginKey": "java-runtime", "version": "21-jre", "recipeRevision": "java-runtime-v1", "image": "bad"}, 400)
 	create := func(key, version, revision string) string {
-		return dataOf(t, b.call("POST", "/targets/"+tid+"/plugin-install-plans", map[string]string{"pluginKey": key, "version": version, "recipeRevision": revision}, 200))["id"].(string)
+		return dataOf(t, b.call("POST", "/hosts/"+tid+"/plugin-install-plans", map[string]string{"pluginKey": key, "version": version, "recipeRevision": revision}, 200))["id"].(string)
 	}
 	var installationID, jobID string
 	for n, version := range []string{"21-jre", "17-jre"} {
@@ -283,12 +301,12 @@ func TestPluginCenterPlansJobsAndReferenceProtection(t *testing.T) {
 func TestPluginDockerNotReadyAndHashValidation(t *testing.T) {
 	s, b := setup(t)
 	b.login()
-	tid := dataOf(t, b.call("POST", "/targets", map[string]any{"name": "uninstalled", "installRoot": "/opt/not-installed"}, 201))["id"].(string)
-	w := b.call("POST", "/targets/"+tid+"/plugin-install-plans", map[string]string{"pluginKey": "java-runtime", "version": "21-jre", "recipeRevision": "java-runtime-v1"}, 409)
+	tid := dataOf(t, b.call("POST", "/hosts", map[string]any{"kind": "LOCAL", "name": "uninstalled", "installRoot": "/opt/not-installed"}, 201))["id"].(string)
+	w := b.call("POST", "/hosts/"+tid+"/plugin-install-plans", map[string]string{"pluginKey": "java-runtime", "version": "21-jre", "recipeRevision": "java-runtime-v1"}, 409)
 	var response Envelope
 	json.Unmarshal(w.Body.Bytes(), &response)
-	if response.Code != "DOCKER_NOT_READY" {
-		t.Fatal(response.Code)
+	if response.Code != "LINUX_TARGET_REQUIRED" && response.Code != "EXECUTOR_MISSING" && response.Code != "SUDO_UNAVAILABLE" && response.Code != "SUDO_AUTHORIZATION_REQUIRED" && response.Code != "EXECUTOR_CALL_FAILED" {
+		t.Fatal("missing execution prerequisites were not classified", response.Code)
 	}
 	var count int
 	s.DB.QueryRow("SELECT count(*) FROM jobs").Scan(&count)
@@ -302,7 +320,7 @@ func TestPluginCancellationAndRestartReconciliation(t *testing.T) {
 	b.login()
 	tid := pluginSSHFixture(t, s, b, true)
 	accept := func(key string) (string, string) {
-		p := dataOf(t, b.call("POST", "/targets/"+tid+"/plugin-install-plans", map[string]string{"pluginKey": "java-runtime", "version": "21-jre", "recipeRevision": "java-runtime-v1"}, 200))
+		p := dataOf(t, b.call("POST", "/hosts/"+tid+"/plugin-install-plans", map[string]string{"pluginKey": "java-runtime", "version": "21-jre", "recipeRevision": "java-runtime-v1"}, 200))
 		j := dataOf(t, b.call("POST", "/plugin-install-plans/"+p["id"].(string)+"/submit", map[string]string{"idempotencyKey": key}, 202))
 		return j["jobId"].(string), j["pluginInstallationId"].(string)
 	}
@@ -364,7 +382,7 @@ func TestPluginOldExecutorBlockedBeforeSubmission(t *testing.T) {
 	s, b := setup(t)
 	b.login()
 	tid := pluginSSHFixture(t, s, b, false)
-	w := b.call("POST", "/targets/"+tid+"/plugin-install-plans", map[string]string{"pluginKey": "java-runtime", "version": "21-jre", "recipeRevision": "java-runtime-v1"}, 409)
+	w := b.call("POST", "/hosts/"+tid+"/plugin-install-plans", map[string]string{"pluginKey": "java-runtime", "version": "21-jre", "recipeRevision": "java-runtime-v1"}, 409)
 	var response Envelope
 	json.Unmarshal(w.Body.Bytes(), &response)
 	if response.Code != "PLUGIN_EXECUTOR_UPGRADE_REQUIRED" {

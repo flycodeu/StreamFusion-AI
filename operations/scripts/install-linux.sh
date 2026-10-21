@@ -13,6 +13,8 @@ help() {
   echo '--platform-token-file 是0700目录内的0600源文件，安装后复制到私有状态目录；重复安装须继续提供同一令牌。'
 }
 fail() { echo "$*" >&2; exit 1; }
+script_directory=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. "$script_directory/target-materials.sh"
 while (($#)); do
   case "$1" in
     --binary|--sha256|--prefix|--state|--name|--port|--password-file|--platform-token-file)
@@ -115,7 +117,10 @@ fi
 if [[ -e $prefix/streamfusion-ops ]]; then
   [[ ! -L $prefix/streamfusion-ops && $(sha256sum "$prefix/streamfusion-ops" | cut -d' ' -f1) == "$sha256" ]] || fail '已有二进制内容发生变化'
 fi
+target_script=$(target_materials_source "$binary" "$script_directory")
+target_materials_preflight "$prefix" "$sha256" "$target_script"
 printf '安装计划\n版本: 0.2.0\n程序: %s\n状态: %s\n单元及账号: %s\n地址: http://127.0.0.1:%s\nPlatform 目录: %s\n摘要: %s\n' "$prefix" "$state" "$name" "$port" "$([[ -n $platform_token_file ]] && echo 启用 || echo 关闭)" "$sha256"
+printf 'Linux目标准备材料（只读）: %s/release/0.2.0\n' "$prefix"
 $apply || exit 0
 [[ $EUID == 0 ]] || fail '--apply 需要root'
 pending_binary= pending_unit= pending_password=
@@ -155,6 +160,7 @@ else
   mv -T "$pending_binary" "$prefix/streamfusion-ops"
 fi
 pending_binary=
+target_materials_install "$prefix" "$binary" "$sha256" "$target_script"
 pending_unit=$(mktemp "/etc/systemd/system/.$name-XXXXXX")
 printf '%s\n' "$unit_text" > "$pending_unit"; chmod 0644 "$pending_unit"
 mv -T "$pending_unit" "$unit"; pending_unit=

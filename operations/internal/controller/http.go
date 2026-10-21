@@ -32,17 +32,20 @@ type session struct {
 	Generation                    int
 }
 type HTTP struct {
-	store         *Store
-	origin        *url.URL
-	assets        http.Handler
-	started       time.Time
-	logger        *log.Logger
-	rateMu        sync.Mutex
-	rateStart     time.Time
-	attempts      int
-	hashSlots     chan struct{}
-	dummyHash     []byte
-	platformToken []byte
+	store            *Store
+	origin           *url.URL
+	assets           http.Handler
+	started          time.Time
+	logger           *log.Logger
+	rateMu           sync.Mutex
+	rateStart        time.Time
+	attempts         int
+	hashSlots        chan struct{}
+	dummyHash        []byte
+	platformToken    []byte
+	hostCheckSlots   chan struct{}
+	observationMu    sync.Mutex
+	observationHosts map[string]struct{}
 }
 type Envelope struct {
 	Code      string `json:"code"`
@@ -61,7 +64,7 @@ func NewHTTP(s *Store, origin string, assets http.Handler, logger *log.Logger) (
 	if err != nil {
 		return nil, err
 	}
-	return &HTTP{store: s, origin: u, assets: assets, started: time.Now(), logger: logger, hashSlots: make(chan struct{}, 2), dummyHash: dummy}, nil
+	return &HTTP{store: s, origin: u, assets: assets, started: time.Now(), logger: logger, hashSlots: make(chan struct{}, 2), dummyHash: dummy, hostCheckSlots: make(chan struct{}, 4)}, nil
 }
 
 // ConfigurePlatformTokenFile enables the server-to-server preview catalog.

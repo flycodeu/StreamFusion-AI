@@ -62,7 +62,7 @@ func (h *HTTP) listPluginInstallations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for n := range out {
-		out[n].ReferenceCount, e = pluginReferences(h.store.DB, out[n])
+		out[n].ReferenceCount, e = pluginRemovalReferences(h.store.DB, out[n])
 		if e != nil {
 			h.internal(w, r, e)
 			return
@@ -81,7 +81,14 @@ func (h *HTTP) getPluginInstallation(w http.ResponseWriter, r *http.Request, id 
 }
 
 func (h *HTTP) pluginTargetReady(w http.ResponseWriter, r *http.Request, t target) (string, bool) {
-	out, e := h.probe(t)
+	if t.Maintenance {
+		h.fail(w, r, 409, "HOST_MAINTENANCE", "主机维护中，请恢复后再提交变更")
+		return "", false
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	var out json.RawMessage
+	e := h.store.callTarget(ctx, t, deploy.Request{Action: "TOOL_PROBE"}, "", &out)
 	var fact struct {
 		Platform   string `json:"platform"`
 		Docker     string `json:"dockerVersion"`
@@ -90,8 +97,13 @@ func (h *HTTP) pluginTargetReady(w http.ResponseWriter, r *http.Request, t targe
 		DockerRoot string `json:"dockerRootDir"`
 		Catalog    string `json:"pluginCatalogHash"`
 	}
-	if e != nil || json.Unmarshal(out, &fact) != nil || fact.Docker == "" || fact.Compose == "" {
-		h.fail(w, r, 409, "DOCKER_NOT_READY", "目标 Docker 或执行器未就绪，请在主机与依赖中检查目标")
+	if e != nil {
+		code, message := h.executorFailure(ctx, t, e)
+		h.fail(w, r, 409, code, message)
+		return "", false
+	}
+	if json.Unmarshal(out, &fact) != nil || fact.Docker == "" {
+		h.fail(w, r, 409, "DOCKER_ENGINE_UNAVAILABLE", "工具安装需要可用的Docker Engine，无需Compose；请检查Engine和目标执行器版本")
 		return "", false
 	}
 	if fact.Platform != "linux/amd64" {
@@ -107,6 +119,9 @@ func (h *HTTP) pluginTargetReady(w http.ResponseWriter, r *http.Request, t targe
 		return "", false
 	}
 	fact.Pending = ""
+	// Compose is unrelated to preparing a Java/Maven tool image. Installing it
+	// between preflight and submit must not invalidate this tool plan.
+	fact.Compose = ""
 	return deploy.Digest(fact), true
 }
 
@@ -347,7 +362,7 @@ func (h *HTTP) verifyPluginInstallation(w http.ResponseWriter, r *http.Request, 
 
 func (h *HTTP) pluginJobLogs(w http.ResponseWriter, r *http.Request, id string) {
 	var raw string
-	if e := h.store.DB.QueryRow("SELECT input_json FROM jobs WHERE id=? AND kind IN ('PLUGIN_INSTALL','PLUGIN_REMOVE')", id).Scan(&raw); e != nil {
+	if e := h.store.DB.QueryRow("SELECT input_json FROM jobs WHERE id=? AND (kind IN ('PLUGIN_INSTALL','PLUGIN_REMOVE') OR kind LIKE 'SOFTWARE_%' OR kind='FIREWALL_CHANGE')", id).Scan(&raw); e != nil {
 		h.opsError(w, r, e)
 		return
 	}
@@ -356,17 +371,30 @@ func (h *HTTP) pluginJobLogs(w http.ResponseWriter, r *http.Request, id string) 
 		h.internal(w, r, errors.New("INPUT_DAMAGED"))
 		return
 	}
+	if req.Firewall != nil || req.Software != nil && req.Reconfiguration == nil {
+		var phase, status, code, updated string
+		if e := h.store.DB.QueryRow("SELECT phase,status,error_code,updated_at FROM jobs WHERE id=?", id).Scan(&phase, &status, &code, &updated); e != nil {
+			h.opsError(w, r, e)
+			return
+		}
+		h.success(w, r, map[string]any{"text": "作业执行回执\njobId=" + id + "\nphase=" + phase + "\nstatus=" + status + "\nerrorCode=" + code + "\nupdatedAt=" + updated, "limited": false, "source": "JOB_RECEIPT"})
+		return
+	}
 	t, e := h.store.readTarget(req.TargetID)
 	if e != nil {
 		h.opsError(w, r, e)
 		return
 	}
 	req.Action = "PLUGIN_LOGS"
+	if req.Installation != nil || req.Reconfiguration != nil {
+		req.Action = "SOFTWARE_INSTALL_LOGS"
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	var logs struct {
 		Text    string `json:"text"`
 		Limited bool   `json:"limited"`
+		Source  string `json:"source,omitempty"`
 	}
 	if e = h.store.callTarget(ctx, t, req, "", &logs); e != nil {
 		h.fail(w, r, 409, "PLUGIN_LOG_UNAVAILABLE", "目标日志暂不可用，请核对目标连接和原作业")

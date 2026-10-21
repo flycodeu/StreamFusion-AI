@@ -5,13 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/streamfusion-ai/operations/internal/deploy"
@@ -53,12 +51,16 @@ func (s *Store) callTarget(ctx context.Context, t target, req deploy.Request, ar
 		}
 		return deploy.StrictJSON(out.Bytes(), dst)
 	}
-	cmd := exec.CommandContext(ctx, "/usr/bin/sudo", "-n", filepath.Join(t.InstallRoot, "executor"), "target-exec")
+	command, args := "/usr/bin/sudo", []string{"-n", filepath.Join(t.InstallRoot, "executor"), "target-exec"}
+	if os.Geteuid() == 0 {
+		command, args = filepath.Join(t.InstallRoot, "executor"), []string{"target-exec"}
+	}
+	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Stdin = input
 	cmd.Stdout = out
 	cmd.Stderr = errOut
 	if e := cmd.Run(); e != nil {
-		return fmt.Errorf("TARGET_CALL_FAILED: %s", strings.TrimSpace(errOut.String()))
+		return classifyExecutorInvocation(e, errOut.String())
 	}
 	return deploy.StrictJSON(out.Bytes(), dst)
 }
@@ -81,10 +83,20 @@ func (b *limitedOutput) Write(p []byte) (int, error) {
 func (h *HTTP) probe(t target) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	return h.probeContext(ctx, t)
+}
+func (h *HTTP) probeContext(ctx context.Context, t target) (json.RawMessage, error) {
 	var out json.RawMessage
 	e := h.store.callTarget(ctx, t, deploy.Request{Action: "PROBE"}, "", &out)
 	if e == nil {
-		_, e = h.store.DB.Exec("UPDATE targets SET observation_json=?,observed_at=? WHERE id=?", string(out), Now(), t.ID)
+		res, err := h.store.DB.Exec("UPDATE targets SET observation_json=?,observed_at=? WHERE id=? AND CAST(version AS TEXT)=?", string(out), Now(), t.ID, t.Version)
+		e = err
+		if e == nil {
+			n, _ := res.RowsAffected()
+			if n != 1 {
+				e = errors.New("HOST_CHANGED")
+			}
+		}
 	}
 	return out, e
 }

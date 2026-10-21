@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/streamfusion-ai/operations/internal/deploy"
+	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
 func (s *Store) readBinding(id string) (deploy.Binding, error) {
@@ -174,6 +175,60 @@ func (h *HTTP) probeBinding(w http.ResponseWriter, r *http.Request, id string) {
 }
 func (s *Store) releaseSecrets(req *deploy.Request) error {
 	req.Secrets = map[string]string{}
+	if req.Installation != nil {
+		mutating := req.Action == "SOFTWARE_INSTALL" || req.Action == "SOFTWARE_INSTALL_CHECK"
+		if mutating {
+			if err := s.checkInstallSecrets(req.Installation.Definition, req.Installation.Config); err != nil {
+				return err
+			}
+		}
+		for _, ref := range installCredentials(req.Installation.Config) {
+			secret, err := s.secret(ref.ID, ref.Revision, ref.Kind)
+			if err != nil {
+				if mutating {
+					return err
+				}
+				continue
+			}
+			req.Secrets[ref.ID+":"+ref.Revision] = string(secret)
+		}
+	}
+	if req.Reconfiguration != nil {
+		required := req.Action == "SOFTWARE_CONFIGURE" || req.Action == "SOFTWARE_CONFIGURE_CHECK"
+		for _, config := range []serviceinstall.Config{req.Reconfiguration.Previous.Config, req.Reconfiguration.Config} {
+			if required {
+				if err := s.checkInstallSecrets(req.Reconfiguration.Previous.Definition, config); err != nil {
+					return err
+				}
+			}
+			for _, ref := range installCredentials(config) {
+				secret, err := s.secret(ref.ID, ref.Revision, ref.Kind)
+				if err != nil {
+					if required {
+						return err
+					}
+					continue
+				}
+				req.Secrets[ref.ID+":"+ref.Revision] = string(secret)
+			}
+		}
+	}
+	// Lifecycle stop/detach and receipt acknowledgement do not require the
+	// initialization credential to remain available. Resolve it best-effort
+	// solely to redact any known values from target output.
+	if req.Software != nil && req.Software.Ownership != nil {
+		var raw string
+		if err := s.DB.QueryRow("SELECT installation_json FROM software_instances WHERE id=?", req.Software.ID).Scan(&raw); err == nil {
+			var installed serviceinstall.Request
+			if deploy.StrictJSON([]byte(raw), &installed) == nil {
+				for _, ref := range installCredentials(installed.Config) {
+					if secret, err := s.secret(ref.ID, ref.Revision, ref.Kind); err == nil {
+						req.Secrets[ref.ID+":"+ref.Revision] = string(secret)
+					}
+				}
+			}
+		}
+	}
 	for _, rel := range []*deploy.Release{req.Candidate, req.Baseline} {
 		if rel == nil {
 			continue

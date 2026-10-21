@@ -19,6 +19,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
 func Digest(v any) string {
@@ -81,7 +83,16 @@ func InitTarget(root, controller, target, socket, dockerBinary string) error {
 	if e := secureAncestors(filepath.Dir(root)); e != nil {
 		return e
 	}
-	if e := secureAncestors(dockerBinary); e != nil {
+	if !filepath.IsAbs(dockerBinary) || filepath.Clean(dockerBinary) != dockerBinary {
+		return errors.New("DOCKER_BINARY_PATH_INVALID")
+	}
+	// Native service management does not require Docker to be installed. Its
+	// configured parent must already be protected; an installed binary is checked
+	// here and again before every actual Docker invocation.
+	if e := secureAncestors(filepath.Dir(dockerBinary)); e != nil {
+		return e
+	}
+	if e := secureAncestors(dockerBinary); e != nil && !os.IsNotExist(e) {
 		return e
 	}
 	if _, e := os.Lstat(root); !os.IsNotExist(e) {
@@ -141,9 +152,11 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 }
 
 type executor struct {
-	root    string
-	owner   Owner
-	secrets map[string]string
+	root              string
+	owner             Owner
+	secrets           map[string]string
+	softwareRun       func(time.Duration, string, ...string) ([]byte, error)
+	installationInput io.Reader
 }
 
 func (x *executor) docker(args ...string) ([]byte, error) {
@@ -154,6 +167,10 @@ func (x *executor) docker(args ...string) ([]byte, error) {
 	if len(args) > 1 && args[0] == "image" && args[1] == "load" {
 		limit = 2 * time.Minute
 	}
+	return x.dockerWithin(limit, args...)
+}
+
+func (x *executor) dockerWithin(limit time.Duration, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	if e := secureAncestors(x.owner.DockerBinary); e != nil {
@@ -371,7 +388,7 @@ func Execute(input io.Reader, output io.Writer) error {
 	if e = readJSON(filepath.Join(root, "owner.json"), &x.owner); e != nil {
 		return e
 	}
-	br := bufio.NewReaderSize(io.LimitReader(input, PreviewArchiveLimit+(128<<10)), 64<<10)
+	br := bufio.NewReaderSize(io.LimitReader(input, max(PreviewArchiveLimit, serviceinstall.ArchiveLimit)+(128<<10)), 64<<10)
 	line, e := br.ReadSlice('\n')
 	if e != nil || len(line) > 64<<10 {
 		return errors.New("ENVELOPE_INVALID")
@@ -382,8 +399,23 @@ func Execute(input io.Reader, output io.Writer) error {
 	}
 	x.secrets = req.Secrets
 	req.Secrets = nil
+	x.installationInput = br
 	if req.ProtocolVersion != 1 || req.ExecutorVersion != Version || req.ControllerID != x.owner.ControllerID || req.TargetID != x.owner.TargetID || x.owner.ExecutorVersion != Version {
 		return errors.New("EXECUTOR_IDENTITY_MISMATCH")
+	}
+	if req.Action == "CAPABILITIES" {
+		// A successful protected invocation proves mutation authority separately
+		// from optional Docker/Compose availability. This action changes no state.
+		return json.NewEncoder(output).Encode(inspectExecutorCapabilities(x.owner, runtime.GOOS+"/"+runtime.GOARCH, x.dockerWithin))
+	}
+	if req.Firewall != nil || strings.HasPrefix(req.Action, "FIREWALL_") {
+		return x.executeFirewall(req, output)
+	}
+	if req.Software != nil || req.Installation != nil || strings.HasPrefix(req.Action, "SOFTWARE_") {
+		return x.executeSoftware(req, output)
+	}
+	if req.Action == "TOOL_PROBE" {
+		return x.toolProbe(output)
 	}
 	if req.Action == "PROBE" {
 		osRelease, e := os.ReadFile("/etc/os-release")

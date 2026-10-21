@@ -40,10 +40,13 @@ func (h *HTTP) enqueuePlugin(w http.ResponseWriter, r *http.Request, s *session,
 		h.internal(w, r, e)
 		return
 	}
-	var current target
-	e = tx.QueryRow("SELECT id,name,install_root,kind,address,ssh_port,ssh_user,host_fingerprint,coalesce(credential_id,''),coalesce(CAST(credential_revision AS TEXT),'') FROM targets WHERE id=?", p.TargetID).Scan(&current.ID, &current.Name, &current.InstallRoot, &current.Kind, &current.Address, &current.Port, &current.User, &current.Fingerprint, &current.CredentialID, &current.Revision)
+	current, e := scanHost(tx.QueryRow("SELECT "+hostColumns+" FROM targets WHERE id=?", p.TargetID))
 	if e != nil {
 		h.opsError(w, r, e)
+		return
+	}
+	if current.Maintenance {
+		h.fail(w, r, 409, "HOST_MAINTENANCE", "主机维护中，请恢复后再提交变更")
 		return
 	}
 	if pluginTargetSnapshot(current) != p.TargetSnapshot {
@@ -103,7 +106,7 @@ func (h *HTTP) enqueuePlugin(w http.ResponseWriter, r *http.Request, s *session,
 			h.opsError(w, r, readErr)
 			return
 		}
-		n, refErr := pluginReferences(tx, i)
+		n, refErr := pluginRemovalReferences(tx, i)
 		if refErr != nil {
 			h.internal(w, r, refErr)
 			return
@@ -153,7 +156,9 @@ func (h *HTTP) processPlugin(ctx context.Context, id, raw string) {
 		h.jobUnknown(id, "TARGET_MISSING")
 		return
 	}
-	res, e := h.store.DB.Exec("UPDATE jobs SET status='RUNNING',phase='TARGET_EXECUTION',updated_at=? WHERE id=? AND status='QUEUED'", Now(), id)
+	h.store.mu.Lock()
+	res, e := h.store.DB.Exec("UPDATE jobs SET status='RUNNING',phase='TARGET_EXECUTION',updated_at=? WHERE id=? AND status='QUEUED' AND EXISTS(SELECT 1 FROM targets WHERE id=? AND maintenance=0)", Now(), id, req.TargetID)
+	h.store.mu.Unlock()
 	if e != nil {
 		return
 	}
@@ -217,11 +222,21 @@ func (h *HTTP) cancelPluginJob(w http.ResponseWriter, r *http.Request, s *sessio
 	if e == nil && req.Plugin != nil {
 		_, e = tx.Exec("UPDATE plugin_installations SET status='FAILED',error_code='JOB_CANCELLED',version=version+1,updated_at=? WHERE id=? AND last_job_id=?", Now(), req.PluginInstallationID, id)
 	}
+	if e == nil && req.Software != nil {
+		_, e = tx.Exec("UPDATE software_instances SET desired_state=CASE WHEN ? THEN desired_state ELSE 'UNCHANGED' END,error_code='JOB_CANCELLED',version=version+1,updated_at=? WHERE id=? AND last_job_id=?", req.Reconfiguration != nil, Now(), req.Software.ID, id)
+	}
+	if e == nil && req.Installation != nil {
+		_, e = tx.Exec("UPDATE software_instances SET desired_state='UNCHANGED',installation_status='CANCELLED',error_code='JOB_CANCELLED',version=version+1,updated_at=? WHERE id=? AND last_job_id=?", Now(), req.Installation.SoftwareID, id)
+	}
 	if e == nil {
 		_, e = tx.Exec("DELETE FROM operation_locks WHERE job_id=?", id)
 	}
 	if e == nil {
-		e = auditTx(tx, s.Username, "PLUGIN_JOB_CANCELLED", id, "SUCCESS", r.Context().Value(traceKey{}).(string))
+		action := "PLUGIN_JOB_CANCELLED"
+		if kind == "FIREWALL_CHANGE" {
+			action = "FIREWALL_JOB_CANCELLED"
+		}
+		e = auditTx(tx, s.Username, action, id, "SUCCESS", r.Context().Value(traceKey{}).(string))
 	}
 	if e == nil {
 		e = tx.Commit()

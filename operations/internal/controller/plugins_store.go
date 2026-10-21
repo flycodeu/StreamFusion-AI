@@ -51,7 +51,7 @@ func scanPlugin(row interface{ Scan(...any) error }) (pluginInstallation, error)
 func (s *Store) readPlugin(id string) (pluginInstallation, error) {
 	i, e := scanPlugin(s.DB.QueryRow("SELECT "+pluginColumns+" FROM plugin_installations WHERE id=?", id))
 	if e == nil {
-		i.ReferenceCount, e = pluginReferences(s.DB, i)
+		i.ReferenceCount, e = pluginRemovalReferences(s.DB, i)
 	}
 	return i, e
 }
@@ -64,9 +64,23 @@ func pluginReferences(q interface{ QueryRow(string, ...any) *sql.Row }, i plugin
 	return n, e
 }
 
+// The legacy removal endpoint must not delete an image still managed by the
+// software center. Unmanage checks only application references, so releasing
+// this software record can still be followed by an explicit image removal.
+func pluginRemovalReferences(q interface{ QueryRow(string, ...any) *sql.Row }, i pluginInstallation) (int, error) {
+	n, err := pluginReferences(q, i)
+	if err != nil {
+		return 0, err
+	}
+	var managed int
+	err = q.QueryRow(`SELECT count(*) FROM software_instances WHERE host_id=? AND runtime_kind='TOOL' AND management_mode='MANAGED' AND coalesce(nullif(json_extract(installation_json,'$.config.runtimeMode'),''),'DOCKER')='DOCKER' AND json_extract(installation_json,'$.definition.imageId')=?`, i.TargetID, i.ImageID).Scan(&managed)
+	return n + managed, err
+}
+
 func pluginTargetSnapshot(t target) string {
 	t.Observation = nil
 	t.ObservedAt = ""
+	t.Capabilities = hostCapabilities{}
 	return deploy.Digest(t)
 }
 

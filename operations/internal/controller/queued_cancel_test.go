@@ -15,7 +15,7 @@ import (
 func TestQueuedCancellationFencesReleaseAndImportWorkers(t *testing.T) {
 	s, b := setup(t)
 	b.login()
-	targetID := dataOf(t, b.call("POST", "/targets", map[string]any{"name": "cancel-target", "installRoot": "/opt/cancel-target"}, 201))["id"].(string)
+	targetID := dataOf(t, b.call("POST", "/hosts", map[string]any{"kind": "LOCAL", "name": "cancel-target", "installRoot": "/opt/cancel-target"}, 201))["id"].(string)
 	for _, kind := range []string{"PUBLISH", "ROLLBACK", "IMPORT"} {
 		id := uuid.NewString()
 		raw := jsonText(deploy.Request{TargetID: targetID, Candidate: &deploy.Release{ID: uuid.NewString()}})

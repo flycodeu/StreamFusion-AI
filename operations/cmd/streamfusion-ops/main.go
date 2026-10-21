@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/streamfusion-ai/operations/internal/controller"
 	"github.com/streamfusion-ai/operations/internal/deploy"
+	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 	"github.com/streamfusion-ai/operations/internal/webui"
 	"golang.org/x/term"
 )
@@ -30,7 +32,55 @@ func main() {
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("用法: streamfusion-ops <serve|stop|init-admin|backup|restore|export-key|version> --help")
+		return errors.New("用法: streamfusion-ops <serve|stop|init-admin|backup|restore|export-key|native-package|target-init|target-verify|target-upgrade|version> --help")
+	}
+	if args[0] == "native-package" {
+		flags := flag.NewFlagSet("native-package", flag.ContinueOnError)
+		key := flags.String("recipe", "", "内置软件配方，例如zlm、maven、java")
+		version := flags.String("recipe-version", "", "配方版本；多版本默认选择目录第一项")
+		out := flags.String("out", "", "不存在的输出材料文件")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 || *key == "" || *out == "" {
+			return errors.New("native-package需要--recipe与--out，可选--recipe-version")
+		}
+		selected := *version
+		if selected == "" {
+			for _, d := range serviceinstall.Catalog() {
+				if d.Key == *key && d.Native != nil {
+					selected = d.Version
+					break
+				}
+			}
+		}
+		d, err := serviceinstall.Find(*key, selected)
+		if err != nil || d.Native == nil {
+			return errors.New("NATIVE_RECIPE_NOT_FOUND")
+		}
+		path, err := filepath.Abs(*out)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		if err = serviceinstall.PrepareNativeMaterial(ctx, d, path); err != nil {
+			return err
+		}
+		fmt.Printf("NATIVE_MATERIAL_READY: %s；上传时选择%s %s 原生配方并核对SHA-256\n", path, d.Name, d.Version)
+		return nil
+	}
+	if args[0] == "target-firewall-recover" {
+		f := flag.NewFlagSet("target-firewall-recover", flag.ContinueOnError)
+		root := f.String("root", "", "受管目标目录")
+		job := f.String("job", "", "原防火墙作业ID")
+		if err := f.Parse(args[1:]); err != nil {
+			return err
+		}
+		if f.NArg() != 0 {
+			return errors.New("NO_POSITIONAL_ARGUMENTS")
+		}
+		return deploy.RecoverTargetFirewall(*root, *job)
 	}
 	if args[0] == "target-exec" {
 		if len(args) != 1 {
@@ -58,6 +108,43 @@ func run(args []string) error {
 			return errors.New("NO_POSITIONAL_ARGUMENTS")
 		}
 		return deploy.InitTarget(*root, *cid, *tid, *socket, *dockerBinary)
+	}
+	if args[0] == "target-upgrade" {
+		f := flag.NewFlagSet("target-upgrade", flag.ContinueOnError)
+		root := f.String("root", "", "已有受管目标目录")
+		binary := f.String("binary", "", "新的Linux执行器二进制")
+		sha256 := f.String("sha256", "", "新二进制的可信SHA-256")
+		cid := f.String("controller-id", "", "已有控制器ID")
+		tid := f.String("target-id", "", "已有目标ID")
+		if err := f.Parse(args[1:]); err != nil {
+			return err
+		}
+		if f.NArg() != 0 {
+			return errors.New("NO_POSITIONAL_ARGUMENTS")
+		}
+		backup, err := deploy.UpgradeTarget(*root, *binary, *sha256, *cid, *tid)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("TARGET_UPGRADED: 旧执行器保留于 %s；请重新检查主机能力\n", backup)
+		return nil
+	}
+	if args[0] == "target-verify" {
+		f := flag.NewFlagSet("target-verify", flag.ContinueOnError)
+		root := f.String("root", "", "已有受管目标目录")
+		cid := f.String("controller-id", "", "已有控制器ID")
+		tid := f.String("target-id", "", "已有目标ID")
+		if err := f.Parse(args[1:]); err != nil {
+			return err
+		}
+		if f.NArg() != 0 {
+			return errors.New("NO_POSITIONAL_ARGUMENTS")
+		}
+		if err := deploy.VerifyTarget(*root, *cid, *tid); err != nil {
+			return err
+		}
+		fmt.Println("TARGET_IDENTITY_VERIFIED")
+		return nil
 	}
 	if args[0] == "version" {
 		fmt.Println(controller.Version)
@@ -249,8 +336,10 @@ func run(args []string) error {
 	}
 	workerDone := make(chan struct{})
 	go func() { defer close(workerDone); handler.RunOperations(stop) }()
+	observationDone := make(chan struct{})
+	go func() { defer close(observationDone); handler.RunObservations(stop) }()
 	shutdownDone := make(chan struct{})
-	defer func() { done(); <-workerDone; <-shutdownDone; cleanupControl() }()
+	defer func() { done(); <-workerDone; <-observationDone; <-shutdownDone; cleanupControl() }()
 	go func() {
 		defer close(shutdownDone)
 		<-stop.Done()

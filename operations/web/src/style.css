@@ -3,18 +3,18 @@
     "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
   font-size: 14px;
   color: #263445;
-  background: #f1f3f6;
+  background: #f5f6f8;
   font-synthesis: none;
   --surface: #fff;
   --text: #263445;
   --muted: #627286;
-  --border: #dce2e9;
-  --accent: #235da8;
+  --border: #e5e8ee;
+  --accent: #2874d6;
   --accent-soft: #edf3fa;
   --success: #23734d;
   --error: #b13b3b;
   --mono: "Cascadia Mono", Consolas, "Liberation Mono", monospace;
-  --el-color-primary: #235da8;
+  --el-color-primary: #2874d6;
   --el-color-primary-light-3: #658ec2;
   --el-color-primary-light-5: #91aed4;
   --el-color-primary-light-7: #bdcfe5;
@@ -51,7 +51,7 @@ button {
 }
 button:disabled {
   opacity: 0.5;
-  cursor: wait;
+  cursor: not-allowed;
 }
 button:focus-visible,
 summary:focus-visible {
@@ -64,67 +64,76 @@ summary:focus-visible {
   min-height: 100vh;
 }
 .sidebar {
-  width: 224px;
+  width: 208px;
   flex-shrink: 0;
-  padding: 26px 14px 20px;
+  padding: 24px 14px 18px;
   display: flex;
   flex-direction: column;
-  background: #d0e3f6;
-  color: #24547f;
-  border-right: 1px solid #acc8e5;
+  background: #fff;
+  border-right: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  height: 100vh;
 }
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
-  font-family: "Bahnschrift", "Microsoft YaHei UI", sans-serif;
-  font-size: 17px;
-  font-weight: 600;
-  line-height: 1.3;
+  gap: 10px;
+  font:
+    600 17px/1.4 "Bahnschrift",
+    "Microsoft YaHei UI",
+    sans-serif;
 }
 .sidebar .brand {
-  padding: 0 8px 24px;
-  border-bottom: 1px solid #acc8e5;
+  padding: 0 7px 24px;
 }
 .brand small {
-  color: #52779b;
-  font: 11px var(--mono);
-  letter-spacing: 0.18em;
+  display: block;
+  color: #8a95a5;
+  font:
+    11px/1.7 "Microsoft YaHei UI",
+    sans-serif;
+  letter-spacing: 0.12em;
 }
 .mark {
   display: grid;
   place-items: center;
   width: 34px;
-  height: 34px;
+  height: 36px;
   flex-shrink: 0;
   background: var(--accent);
   color: #fff;
-  border: 1px solid #4e7eb9;
-  border-radius: 4px;
+  border-radius: 9px;
   font:
-    600 21px "Bahnschrift",
+    600 22px "Bahnschrift",
     sans-serif;
-}
-.sidebar .mark {
-  background: #aecff0;
-  color: #20588f;
-  border-color: #a8c8e9;
 }
 nav {
   display: grid;
-  gap: 6px;
-  margin-top: 26px;
+  gap: 23px;
+  margin-top: 10px;
+}
+.nav-group {
+  display: grid;
+  gap: 4px;
+}
+.nav-group-label {
+  padding: 0 14px 6px;
+  color: #919baa;
+  font-size: 11px;
+  letter-spacing: 0.08em;
 }
 nav button {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 44px;
+  gap: 13px;
+  min-height: 42px;
+  width: 100%;
   padding: 10px 14px;
   border: 0;
-  border-radius: 4px;
+  border-radius: 6px;
   background: transparent;
-  color: #2f5d88;
+  color: #5e6a7c;
   text-align: left;
   font-size: 13px;
   transition:
@@ -132,13 +141,17 @@ nav button {
     color 120ms;
 }
 nav button:hover {
-  background: #c1daf3;
-  color: #20588f;
+  background: #f5f7fa;
+  color: var(--text);
 }
 nav button.active {
-  background: #aaccf0;
-  color: #174f88;
-  box-shadow: inset 3px 0 var(--accent);
+  background: #edf4fe;
+  color: var(--accent);
+  font-weight: 600;
+}
+.navigation-toggle,
+.nav-backdrop {
+  display: none;
 }
 .nav-icon,
 .account-icon {
@@ -153,34 +166,34 @@ nav button.active {
 }
 .side-foot {
   margin-top: auto;
-  padding: 20px 12px 0;
-  border-top: 1px solid #acc8e5;
-  color: #456e98;
+  padding: 18px 12px 0;
+  border-top: 1px solid var(--border);
+  color: #96a0ae;
   font: 11px/1.9 var(--mono);
 }
 .side-foot span {
-  color: #2f5d88;
+  color: #7e8a9b;
 }
 .main {
   flex: 1;
   min-width: 0;
-  padding: 0 36px 36px;
+  padding: 0 28px 32px;
 }
 .main > header {
   display: flex;
   align-items: center;
-  min-height: 82px;
-  margin: 0 -36px;
-  padding: 20px 36px;
+  min-height: 64px;
+  margin: 0 -28px;
+  padding: 14px 28px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  gap: 20px;
+  gap: 16px;
 }
 h1 {
   margin: 0;
-  font-size: 23px;
+  font-size: 18px;
   font-weight: 600;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
 }
 h2 {
   margin: 0;
@@ -218,8 +231,8 @@ h2 {
   border-radius: 0;
 }
 .content {
-  margin: 28px auto 0;
-  max-width: 1440px;
+  margin: 24px auto 0;
+  max-width: 1600px;
 }
 .status-line {
   display: flex;
@@ -329,8 +342,8 @@ small {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
-  width: 100%;
-  margin-top: 6px;
+  width: auto;
+  margin: 0;
 }
 .primary:hover:not(:disabled) {
   background: #1c4a86;
@@ -374,7 +387,7 @@ textarea {
   min-height: 38px;
   margin-top: 8px;
   padding: 9px 11px;
-  border: 1px solid #bdc8d5;
+  border: 1px solid #d9dfe8;
   border-radius: 4px;
   background: var(--surface);
   color: var(--text);
@@ -391,7 +404,7 @@ select:focus {
   box-shadow: 0 0 0 2px #235da81a;
 }
 select:disabled {
-  background: #f1f3f6;
+  background: #f5f6f8;
   color: var(--muted);
 }
 .login-main {
@@ -425,6 +438,7 @@ select:disabled {
   gap: 20px;
 }
 .login-card .primary {
+  width: 100%;
   min-height: 42px;
 }
 .error {
@@ -447,7 +461,7 @@ table {
 th {
   padding: 14px 18px;
   text-align: left;
-  background: #eaf0f6;
+  background: #f8f9fb;
   color: #526278;
   font-size: 12px;
   font-weight: 500;
@@ -603,7 +617,7 @@ td .quiet {
 .diagnostic {
   margin: 20px auto 0;
   padding: 12px 16px;
-  max-width: 1440px;
+  max-width: 1600px;
   background: #fcf0f0;
   border: 1px solid #efd6d6;
   border-radius: 4px;
@@ -618,16 +632,41 @@ td .quiet {
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 1100px) {
-  .sidebar {
-    width: 204px;
-  }
+/* Shared forms keep one rhythm across software, hosts and release workflows. */
+.el-drawer {
+  max-width: 100vw;
+}
+.el-drawer__header {
+  margin-bottom: 0;
+  padding: 22px 28px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.el-drawer__title {
+  font-size: 17px;
+  font-weight: 600;
+}
+.el-drawer__body {
+  padding: 26px 28px;
+}
+.el-drawer__footer {
+  padding: 16px 28px;
+  border-top: 1px solid var(--border);
+  background: #fff;
+}
+.el-dialog {
+  border-radius: 10px;
+}
+.el-dialog__body {
+  color: var(--text);
+}
+@media (max-width: 1200px) {
   .main {
-    padding: 0 24px 28px;
+    padding: 0 22px 28px;
   }
   .main > header {
-    margin: 0 -24px;
-    padding: 20px 24px;
+    margin: 0 -22px;
+    padding: 14px 22px;
   }
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -636,55 +675,63 @@ td .quiet {
     grid-template-columns: 1fr;
   }
 }
-@media (max-width: 650px) {
+@media (max-width: 900px) {
   .shell {
     display: block;
   }
   .sidebar {
-    width: 100%;
-    padding: 16px 16px 0;
+    position: fixed;
+    left: -230px;
+    visibility: hidden;
+    top: 0;
+    bottom: 0;
+    z-index: 1002;
+    width: 208px;
+    transition: left 160ms;
+    box-shadow: 8px 0 35px #182b4510;
   }
-  .sidebar .brand {
+  .sidebar.is-open {
+    left: 0;
+    visibility: visible;
+  }
+  .nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 1001;
+    background: #182b4540;
     border: 0;
-    padding: 0;
-    font-size: 15px;
   }
-  .mark {
-    width: 30px;
-    height: 30px;
-    font-size: 19px;
+  .navigation-toggle {
+    display: grid;
+    place-items: center;
+    background: none;
+    border: 0;
+    color: var(--muted);
+    padding: 4px;
+    margin-left: -4px;
   }
-  nav {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    margin-top: 18px;
-    gap: 0;
+  .navigation-toggle svg {
+    width: 21px;
+    height: 21px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
   }
-  nav button {
-    min-height: 44px;
-    justify-content: center;
-    padding: 10px 2px;
-    border-radius: 0;
-    font-size: 12px;
-    white-space: nowrap;
-  }
-  nav button.active {
-    box-shadow: inset 0 -2px var(--accent);
-  }
-  .nav-icon,
-  .side-foot {
-    display: none;
-  }
+}
+@media (max-width: 650px) {
   .main {
     padding: 0 16px 24px;
   }
   .main > header {
-    min-height: 68px;
+    min-height: 60px;
     margin: 0 -16px;
-    padding: 16px;
-    gap: 12px;
+    padding: 14px 16px;
+    gap: 10px;
   }
   h1 {
-    font-size: 20px;
+    font-size: 17px;
   }
   h2 {
     font-size: 16px;
@@ -700,7 +747,7 @@ td .quiet {
     padding-left: 10px;
   }
   .content {
-    margin-top: 20px;
+    margin-top: 18px;
   }
   .status-line {
     flex-wrap: wrap;
@@ -754,6 +801,13 @@ td .quiet {
   }
   .el-dialog {
     --el-dialog-padding-primary: 20px;
+  }
+  .el-drawer__header,
+  .el-drawer__footer {
+    padding: 18px 20px;
+  }
+  .el-drawer__body {
+    padding: 22px 20px;
   }
 }
 @media (prefers-reduced-motion: reduce) {

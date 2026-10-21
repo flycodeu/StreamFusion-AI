@@ -3,7 +3,10 @@ import { computed, onMounted, onUnmounted, ref } from "vue";
 import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, prepare, request, send, setCSRF } from "./api";
 import OpsWorkspace from "./OpsWorkspace.vue";
-import PluginCenter from "./PluginCenter.vue";
+import SoftwareManagement from "./SoftwareManagement.vue";
+import HostManagement from "./HostManagement.vue";
+import PortManagement from "./PortManagement.vue";
+import HostOverview from "./HostOverview.vue";
 
 interface Status {
   status: string;
@@ -42,22 +45,31 @@ interface Audit {
 const nav = [
   {
     id: "overview",
-    label: "总览",
+    label: "运行总览",
     icon: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
   },
   {
-    id: "targets",
-    label: "主机与依赖",
+    id: "hosts",
+    label: "主机管理",
     icon: "M4 5h16v14H4z M8 9h2 M14 9h2 M8 14h8",
   },
-  { id: "plugins", label: "插件中心", icon: "M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z" },
+  {
+    id: "ports",
+    label: "端口管理",
+    icon: "M4 6h16v12H4z M8 9v6 M12 9v6 M16 9v6",
+  },
+  {
+    id: "software",
+    label: "软件管理",
+    icon: "M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z",
+  },
   { id: "instances", label: "应用实例", icon: "M5 5h14v14H5z M9 9h6v6H9z" },
-  { id: "artifacts", label: "制品", icon: "M4 7h16v13H4z M8 4h8v3H8z" },
+  { id: "artifacts", label: "版本制品", icon: "M4 7h16v13H4z M8 4h8v3H8z" },
   { id: "jobs", label: "发布作业", icon: "M6 3h12v4H6z M6 11h12 M6 16h8" },
 
   {
     id: "credentials",
-    label: "凭据",
+    label: "连接凭据",
     icon: "M14 3a7 7 0 0 0-6.7 9L3 16v5h5v-3h3l2-2a7 7 0 1 0 1-13z M16 7h.01",
   },
   {
@@ -67,7 +79,7 @@ const nav = [
   },
   {
     id: "settings",
-    label: "控制器设置",
+    label: "系统设置",
     icon: "M4 7h16 M4 17h16 M8 4v6 M16 14v6",
   },
 ];
@@ -75,6 +87,17 @@ const title = computed(
   () => nav.find((item) => item.id === active.value)?.label,
 );
 const active = ref("overview");
+const preparationHostId = ref("");
+function showHostPreparation(hostId: string) {
+  preparationHostId.value = hostId;
+  active.value = "hosts";
+}
+const navigationOpen = ref(false);
+const navigationGroups = [
+  { label: "工作空间", items: nav.slice(0, 4) },
+  { label: "应用交付", items: nav.slice(4, 7) },
+  { label: "控制器", items: nav.slice(7) },
+];
 const loggedIn = ref(false);
 const busy = ref(false);
 const connected = ref(false);
@@ -123,6 +146,26 @@ const actionLabels: Record<string, string> = {
   CREDENTIAL_REVOKED: "撤销凭据",
   BACKUP_CREATED: "创建备份",
   STATE_RESTORED: "恢复状态",
+  HOST_PORTS_OBSERVED: "检测主机端口",
+  FIREWALL_CHANGE_ACCEPTED: "提交防火墙变更",
+  FIREWALL_CHANGE_RESULT: "防火墙变更结果",
+  FIREWALL_JOB_CANCELLED: "取消防火墙作业",
+  HOST_SAVED: "保存主机连接",
+  HOST_CHECKED: "检查主机能力",
+  HOST_SOFTWARE_DISCOVERED: "识别主机软件",
+  HOST_MAINTENANCE_CHANGED: "修改主机维护状态",
+  HOST_DELETED: "移除主机登记",
+  SOFTWARE_REGISTERED: "登记已有软件",
+  SOFTWARE_OBSERVED: "检查软件状态",
+  SOFTWARE_ADOPT_ACCEPTED: "提交软件接管",
+  SOFTWARE_START_ACCEPTED: "提交软件启动",
+  SOFTWARE_STOP_ACCEPTED: "提交软件停止",
+  SOFTWARE_UNMANAGE_ACCEPTED: "提交解除软件管理",
+  SOFTWARE_ADOPT_RESULT: "软件接管结果",
+  SOFTWARE_START_RESULT: "软件启动结果",
+  SOFTWARE_STOP_RESULT: "软件停止结果",
+  SOFTWARE_UNMANAGE_RESULT: "解除软件管理结果",
+  SOFTWARE_UNMANAGED: "解除软件管理",
 };
 function report(e: unknown) {
   if (e instanceof ApiError) {
@@ -331,24 +374,45 @@ onUnmounted(() => {
 
 <template>
   <div class="shell">
-    <aside v-if="loggedIn" class="sidebar">
+    <button
+      v-if="loggedIn && navigationOpen"
+      class="nav-backdrop"
+      aria-label="收起导航"
+      @click="navigationOpen = false"
+    ></button>
+    <aside
+      v-if="loggedIn"
+      id="ops-navigation"
+      class="sidebar"
+      :class="{ 'is-open': navigationOpen }"
+    >
       <div class="brand">
         <span class="mark">S</span
-        ><span>StreamFusion<br /><small>OPS</small></span>
+        ><span>StreamFusion<small>运维控制台</small></span>
       </div>
       <nav aria-label="导航">
-        <button
-          v-for="item in nav"
-          :key="item.id"
-          :class="{ active: active === item.id }"
-          :aria-current="active === item.id ? 'page' : undefined"
-          @click="active = item.id"
+        <div
+          v-for="group in navigationGroups"
+          :key="group.label"
+          class="nav-group"
         >
-          <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path :d="item.icon" />
-          </svg>
-          {{ item.label }}
-        </button>
+          <span class="nav-group-label">{{ group.label }}</span>
+          <button
+            v-for="item in group.items"
+            :key="item.id"
+            :class="{ active: active === item.id }"
+            :aria-current="active === item.id ? 'page' : undefined"
+            @click="
+              active = item.id;
+              navigationOpen = false;
+            "
+          >
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path :d="item.icon" />
+            </svg>
+            {{ item.label }}
+          </button>
+        </div>
       </nav>
       <div class="side-foot">
         {{ status?.os || "—" }} · {{ status?.arch || "—" }}<br /><span
@@ -358,6 +422,17 @@ onUnmounted(() => {
     </aside>
     <main class="main" :class="{ 'login-main': !loggedIn }">
       <header v-if="loggedIn">
+        <button
+          class="navigation-toggle"
+          aria-label="展开导航"
+          aria-controls="ops-navigation"
+          :aria-expanded="navigationOpen"
+          @click="navigationOpen = !navigationOpen"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
         <h1>{{ title }}</h1>
         <div class="account">
           <svg class="account-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -405,60 +480,34 @@ onUnmounted(() => {
           </div>
           <code>traceId: {{ diagnostic.traceId }}</code>
         </details>
-        <PluginCenter v-if="active === 'plugins'" @error="report" />
+        <HostManagement
+          v-if="active === 'hosts'"
+          :preparation-host-id="preparationHostId"
+          @error="report"
+          @preparation-opened="preparationHostId = ''"
+        />
+        <PortManagement
+          v-else-if="active === 'ports'"
+          @error="report"
+          @preparation="showHostPreparation"
+        />
+        <SoftwareManagement
+          v-else-if="active === 'software'"
+          @error="report"
+          @preparation="showHostPreparation"
+        />
         <OpsWorkspace
-          v-else-if="['targets', 'instances', 'artifacts', 'jobs'].includes(active)"
+          v-else-if="['instances', 'artifacts', 'jobs'].includes(active)"
           :page="active"
           @error="report"
         />
-        <section v-else-if="active === 'overview'" class="content">
-          <div class="status-line" :class="{ disconnected: !connected }">
-            <span class="pulse" :class="{ offline: !connected }"></span
-            ><strong>{{ connected ? "控制器运行中" : "连接中断" }}</strong
-            ><span class="muted">{{ status?.listen }}</span
-            ><span class="spacer"></span
-            ><button
-              class="quiet"
-              :disabled="busy"
-              @click="execute(refreshStatus)"
-            >
-              刷新
-            </button>
-          </div>
-          <div class="metric-grid">
-            <article>
-              <span>版本</span><strong>{{ status?.release || "—" }}</strong>
-            </article>
-            <article>
-              <span>运行时间</span><strong>{{ uptime }}</strong>
-            </article>
-            <article>
-              <span>运行环境</span
-              ><strong>{{ status?.os }} / {{ status?.arch }}</strong>
-            </article>
-            <article>
-              <span>堆内存</span
-              ><strong>{{
-                status ? (status.heapBytes / 1048576).toFixed(1) + " MB" : "—"
-              }}</strong>
-            </article>
-          </div>
-          <div class="section-head">
-            <h2>{{ settings?.name }}</h2>
-          </div>
-          <div class="identity">
-            <div>
-              <span>控制器 ID</span><code>{{ settings?.controllerId }}</code>
-            </div>
-            <div>
-              <span>状态目录</span><code>{{ status?.stateDirectory }}</code>
-            </div>
-            <div>
-              <span>启动时间</span
-              ><span class="value">{{ displayTime(status?.startedAt) }}</span>
-            </div>
-          </div>
-        </section>
+        <HostOverview
+          v-else-if="active === 'overview'"
+          :controller="status"
+          :connected="connected"
+          :uptime="uptime"
+          @error="report"
+        />
         <section v-else-if="active === 'credentials'" class="content">
           <div class="section-head">
             <h2>凭据修订</h2>

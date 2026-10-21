@@ -13,8 +13,9 @@ export async function request<T>(
   path: string,
   method = "GET",
   data?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
-  const response = await send(path, method, data);
+  const response = await send(path, method, data, signal);
   const body = await response.json().catch(() => null);
   if (!body) throw new Error("控制器未返回有效响应，请检查连接");
   if (!response.ok)
@@ -26,16 +27,32 @@ export async function request<T>(
     );
   return body.data as T;
 }
-export function send(path: string, method: string, data?: unknown) {
+export function send(
+  path: string,
+  method: string,
+  data?: unknown,
+  signal?: AbortSignal,
+) {
+  const timeout = AbortSignal.timeout(
+    /^\/installation-materials\/[^/]+\/confirm$/.test(path) ||
+      path === "/installation-materials/official"
+      ? 900000
+      : path.endsWith("/recover")
+        ? 300000
+        : 60000,
+  );
   return fetch("/ops/api/v1" + path, {
     method,
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
     body: data === undefined ? undefined : JSON.stringify(data),
-    signal: AbortSignal.timeout(path.endsWith("/recover") ? 300000 : 60000),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   });
 }
-export async function upload(path: string, file: File) {
+export async function upload(path: string, file: File, signal?: AbortSignal) {
+  const timeout = AbortSignal.timeout(
+    path.startsWith("/installation-materials/") ? 900000 : 180000,
+  );
   const response = await fetch("/ops/api/v1" + path, {
     method: "PUT",
     credentials: "same-origin",
@@ -44,7 +61,7 @@ export async function upload(path: string, file: File) {
       "X-CSRF-Token": csrf,
     },
     body: file,
-    signal: AbortSignal.timeout(180000),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   });
   const body = await response.json();
   if (!response.ok)

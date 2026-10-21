@@ -132,10 +132,11 @@ func TestPlatformZLMCatalogAndAuthenticatedHandoff(t *testing.T) {
 			}()
 		}
 	}()
-	targetID := dataOf(t, b.call("POST", "/targets", map[string]any{
+	discovered := dataOf(t, b.call("POST", "/hosts/fingerprint", map[string]any{"address": "127.0.0.1", "sshPort": listener.Addr().(*net.TCPAddr).Port, "sshUser": "ops", "credentialId": sshCredential}, 200))
+	targetID := dataOf(t, b.call("POST", "/hosts", map[string]any{
 		"name": "ZLM host", "kind": "SSH", "address": "127.0.0.1", "sshPort": listener.Addr().(*net.TCPAddr).Port,
-		"sshUser": "ops", "hostFingerprint": ssh.FingerprintSHA256(hostSigner.PublicKey()),
-		"credentialId": sshCredential, "credentialRevision": "1", "installRoot": "/opt/zlm-node-a",
+		"sshUser": "ops", "fingerprintToken": discovered["fingerprintToken"],
+		"credentialId": sshCredential, "installRoot": "/opt/zlm-node-a",
 	}, 201))["id"].(string)
 	config := deploy.Config{
 		Environment: "zlm", BindAddress: "10.75.216.216", HostPort: 18080,

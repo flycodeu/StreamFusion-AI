@@ -144,6 +144,18 @@ func (h *HTTP) revokeCredential(w http.ResponseWriter, r *http.Request, s *sessi
  UNION ALL
  SELECT b.credential_id,b.credential_revision FROM release_bindings rb JOIN component_bindings b ON b.id=rb.binding_id
  WHERE rb.release_id IN (SELECT current_release_id FROM instances UNION SELECT previous_release_id FROM instances UNION SELECT release_id FROM jobs WHERE status IN ('QUEUED','RUNNING','UNKNOWN') OR target_ack_pending=1)
+ UNION ALL
+ SELECT c.credential_id,c.credential_revision FROM software_install_credentials c JOIN software_install_plans p ON p.id=c.plan_id
+ WHERE (p.status='DRAFT' AND p.expires_at>strftime('%Y-%m-%dT%H:%M:%SZ','now')) OR EXISTS(SELECT 1 FROM jobs j WHERE j.software_plan_id=p.id AND (j.status IN ('QUEUED','RUNNING','UNKNOWN') OR j.target_ack_pending=1)) OR EXISTS(SELECT 1 FROM software_instances i WHERE i.management_mode='MANAGED' AND (
+ (json_extract(i.installation_json,'$.config.credentialId')=c.credential_id AND CAST(json_extract(i.installation_json,'$.config.credentialRevision') AS INTEGER)=c.credential_revision)
+ OR (json_extract(i.installation_json,'$.config.userCredentialId')=c.credential_id AND CAST(json_extract(i.installation_json,'$.config.userCredentialRevision') AS INTEGER)=c.credential_revision)
+ OR (json_extract(i.installation_json,'$.config.accessKeyCredentialId')=c.credential_id AND CAST(json_extract(i.installation_json,'$.config.accessKeyCredentialRevision') AS INTEGER)=c.credential_revision)))
+ UNION ALL
+ SELECT c.credential_id,c.credential_revision FROM software_configuration_credentials c JOIN software_configuration_plans p ON p.id=c.plan_id
+ WHERE (p.status='DRAFT' AND p.expires_at>strftime('%Y-%m-%dT%H:%M:%SZ','now')) OR EXISTS(SELECT 1 FROM jobs j WHERE j.configuration_plan_id=p.id AND (j.status IN ('QUEUED','RUNNING','UNKNOWN') OR j.target_ack_pending=1)) OR EXISTS(SELECT 1 FROM software_instances i WHERE i.management_mode='MANAGED' AND (
+ (json_extract(i.installation_json,'$.config.credentialId')=c.credential_id AND CAST(json_extract(i.installation_json,'$.config.credentialRevision') AS INTEGER)=c.credential_revision)
+ OR (json_extract(i.installation_json,'$.config.userCredentialId')=c.credential_id AND CAST(json_extract(i.installation_json,'$.config.userCredentialRevision') AS INTEGER)=c.credential_revision)
+ OR (json_extract(i.installation_json,'$.config.accessKeyCredentialId')=c.credential_id AND CAST(json_extract(i.installation_json,'$.config.accessKeyCredentialRevision') AS INTEGER)=c.credential_revision)))
 ) WHERE credential_id=? AND credential_revision=?`, id, revision).Scan(&referenced)
 	if err != nil {
 		h.internal(w, r, err)

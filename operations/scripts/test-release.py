@@ -126,13 +126,15 @@ def main():
     try:
         login()
         cid = api("/settings")["controllerId"]
-        tid = api("/targets", "POST", {"name": "lab", "installRoot": str(target)}, 201)["id"]
+        tid = api("/hosts", "POST", {"name": "lab", "kind": "LOCAL", "installRoot": str(target)}, 201)["id"]
         subprocess.run([binary, "target-init", "--root", str(target), "--controller-id", cid, "--target-id", tid,
             "--docker-binary", str(lab / "docker/docker"), "--docker-socket", str(lab / "docker.sock")], check=True)
         plugins = target / "docker-config/cli-plugins"
         plugins.mkdir(parents=True, mode=0o700)
         shutil.copy2(lab / "docker-compose", plugins / "docker-compose")
-        api(f"/targets/{tid}/probes", "POST", {})
+        host = api(f"/hosts/{tid}/checks", "POST", {})
+        assert host["capabilities"]["mutation"]["status"] == "AVAILABLE"
+        assert host["capabilities"]["docker"]["status"] == "AVAILABLE"
         checks.append("protected target bootstrap and probe")
         artifact_a, artifact_b, artifact_c = [upload_archive(v) for v in ("A", "B", "C")]
         config = {"environment": "test", "profile": "", "bindAddress": "127.0.0.1", "hostPort": 28190, "containerPort": 8080,

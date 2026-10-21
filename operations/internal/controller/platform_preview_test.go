@@ -70,7 +70,7 @@ func TestPlatformCatalogAuthenticationAndVersionFence(t *testing.T) {
 	if w.Code != 401 {
 		t.Fatal("browser cookie accepted", w.Code)
 	}
-	targetID := dataOf(t, b.call("POST", "/targets", map[string]any{"name": "host-a", "installRoot": "/opt/preview-a"}, 201))["id"].(string)
+	targetID := dataOf(t, b.call("POST", "/hosts", map[string]any{"kind": "LOCAL", "name": "host-a", "installRoot": "/opt/preview-a"}, 201))["id"].(string)
 	config := deploy.Config{Environment: "preview", BindAddress: "127.0.0.1", HostPort: 9443, ContainerPort: 9443, MemoryMiB: 1024, HealthPath: "/preview-control/v1/snapshot", HealthSeconds: 10, DataCompatibility: "preview-ownership-v1", Preview: &deploy.PreviewConfig{NodeID: "preview-a", ControlHost: "127.0.0.1", MediaAddress: "127.0.0.1", AllowedTargets: []string{"127.0.0.1:554"}, CPUs: 2, MaxSources: 64, MaxViewers: 64, MaxTranscodes: 64, MaxStarting: 2, IngressKbps: 100000, EgressKbps: 100000, SourceUpperKbps: 10000, OutputUpperKbps: 10000}}
 	instanceID := dataOf(t, b.call("POST", "/instances", map[string]any{"name": "ZLM A", "targetId": targetID, "config": config}, 200))["id"].(string)
 	artifactID, releaseID := uuid.NewString(), uuid.NewString()

@@ -52,6 +52,13 @@ else:
     raise AssertionError('did not reach interruption point')
 PY
 bash "$scripts/install-linux.sh" "${args[@]}" --apply --password-file "$work/password"
+target_materials="$prefix/release/0.2.0"
+[[ -f $target_materials/streamfusion-ops && -f $target_materials/install-target.sh && -f $target_materials/.ops-target-materials ]]
+[[ $(stat -c %U "$target_materials/streamfusion-ops") == root && $(stat -c %a "$target_materials/streamfusion-ops") == 555 ]]
+(cd "$target_materials" && sha256sum -c SHA256SUMS)
+printf '\n# changed-by-isolated-test\n' >> "$target_materials/install-target.sh"
+if bash "$scripts/install-linux.sh" "${args[@]}" >/dev/null 2>&1; then echo 'changed target preparation file overwritten'; exit 1; fi
+install -m 0444 "$scripts/install-target.sh" "$target_materials/install-target.sh"
 bash "$scripts/install-linux.sh" "${args[@]}" --apply
 python3 - "$work/platform-token" <<'PY'
 import secrets, sys
@@ -95,6 +102,8 @@ print(json.dumps({'scenario':'I01 idle / one controller / no targets','sampleSec
 PY
 python3 "$scripts/test-runtime.py" --url "http://127.0.0.1:$port" --binary "$prefix/streamfusion-ops" --state "$state" --password-file "$work/password" --output "$work/recovery" --unit "$name.service"
 hash_before=$(sha256sum "$state/controller.sqlite")
+printf 'keep operator-owned material\n' > "$target_materials/operator-note"
 bash "$scripts/uninstall-linux.sh" --prefix "$prefix" --apply
 [[ -f $state/master.key && -f $state/controller.sqlite && ! -e $prefix/streamfusion-ops && $hash_before == "$(sha256sum "$state/controller.sqlite")" ]]
+[[ ! -e $target_materials/streamfusion-ops && ! -e $target_materials/.ops-target-materials && -f $target_materials/operator-note ]]
 echo 'PASS: install / repeat-install / restart / recovery / uninstall-keeps-state'
