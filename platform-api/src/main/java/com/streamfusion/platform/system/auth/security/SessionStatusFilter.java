@@ -6,6 +6,8 @@ import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.response.R;
 import com.streamfusion.platform.common.web.ApiErrorWriter;
 import com.streamfusion.platform.monitor.loginrecord.service.LoginRecordService;
+import com.streamfusion.platform.monitor.security.SecurityMonitor;
+import com.streamfusion.platform.system.access.service.AccessService;
 import com.streamfusion.platform.system.auth.pojo.dto.SessionPrincipalDto;
 import com.streamfusion.platform.system.auth.service.CurrentUserService;
 import com.streamfusion.platform.system.user.service.UserService;
@@ -44,13 +46,16 @@ public class SessionStatusFilter extends OncePerRequestFilter {
     private final LoginRecordService records;
     private final ApiErrorWriter errors;
     private final ObjectMapper json;
+    private final AccessService access;
+    private final SecurityMonitor security;
 
     @Override
     protected void doFilterInternal(
             HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
         String path = request.getRequestURI().substring(request.getContextPath().length());
-        if (!"/auth/session".equals(path)) {
+        boolean securityFeed = "/audit/security-alerts/feed".equals(path);
+        if (!"/auth/session".equals(path) && !securityFeed) {
             chain.doFilter(request, response);
             return;
         }
@@ -70,7 +75,15 @@ public class SessionStatusFilter extends OncePerRequestFilter {
                 throw BusinessException.error(ErrorCode.UNAUTHORIZED);
             }
             try {
-                current.validate(principal, users.getById(principal.getUserId()));
+                var user = users.getById(principal.getUserId());
+                current.validate(principal, user);
+                if (securityFeed) {
+                    if (CurrentUserService.requiresPasswordChange(user))
+                        throw BusinessException.error(ErrorCode.PASSWORD_CHANGE_REQUIRED);
+                    if (!access.isSuperAdmin(user.getId())
+                            || !access.hasModuleAccess(user.getId(), "audit"))
+                        throw BusinessException.error(ErrorCode.FORBIDDEN);
+                }
             } catch (BusinessException error) {
                 if (error.code() != ErrorCode.UNAUTHORIZED) throw error;
                 throw records.endedSession(principal, snapshot.activity());
@@ -79,7 +92,9 @@ public class SessionStatusFilter extends OncePerRequestFilter {
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
             response.setCharacterEncoding("UTF-8");
             if (!"HEAD".equals(request.getMethod())) {
-                json.writeValue(response.getOutputStream(), R.success());
+                json.writeValue(
+                        response.getOutputStream(),
+                        securityFeed ? R.success(security.feed()) : R.success());
             }
         } catch (BusinessException error) {
             errors.write(request, response, error.code(), error.safeDetails());

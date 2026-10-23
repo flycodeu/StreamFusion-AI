@@ -88,7 +88,8 @@ public class PreviewProcessInspector {
                     if (argument == null || (chars += argument.length()) > MAX_ARGUMENT_CHARS)
                         return false;
                     if (matches(argument, "rtsp", app, inputId)
-                            || matches(argument, "rtmp", app, outputId)) return false;
+                            || matches(argument, "rtmp", app, outputId)
+                            || matches(argument, "rtsp", app, outputId)) return false;
                 }
             }
             deadline.check();

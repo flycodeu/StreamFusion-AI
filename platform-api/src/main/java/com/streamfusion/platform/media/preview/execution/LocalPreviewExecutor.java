@@ -193,7 +193,11 @@ public final class LocalPreviewExecutor implements PreviewExecutor {
         var decision = PreviewPlaybackPlanner.decide(sourceStats.videoCodec(), videoCodecs);
         if (decision == PreviewPlaybackPlanner.Decision.UNSUPPORTED)
             throw new PreviewFailure("CODEC_UNSUPPORTED");
-        if (decision == PreviewPlaybackPlanner.Decision.TRANSCODE_H264) {
+        boolean normalizeAudio =
+                !directOnly.contains(viewerId)
+                        && videoCodecs.contains("H264")
+                        && media.requiresAudioTranscode(upstream, deadline);
+        if (decision == PreviewPlaybackPlanner.Decision.TRANSCODE_H264 || normalizeAudio) {
             if (directOnly.contains(viewerId)) throw new PreviewFailure("TRANSCODE_CAPACITY");
             upstream = sharedTranscodes.acquire(viewerId, upstream, deadline);
             checkpoint.run();

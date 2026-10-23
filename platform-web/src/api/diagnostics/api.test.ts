@@ -29,6 +29,8 @@ describe('diagnostic cursor API', () => {
     nextCursor: 'next-cursor',
     cursorExpired: false,
     droppedEvents: 3,
+    total: 125,
+    totalExact: true,
   }
 
   it('sends backend page size and cursor and decodes completeness metadata', async () => {
@@ -44,5 +46,16 @@ describe('diagnostic cursor API', () => {
   it('rejects invalid completeness metadata instead of claiming a complete page', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply({ ...data, cursorExpired: 'false' })))
     await expect(getDiagnostics({ size: 50 })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' })
+  })
+
+  it('supports a backend without totals without inventing a zero count', async () => {
+    const legacy: Partial<typeof data> = { ...data }
+    delete legacy.total
+    delete legacy.totalExact
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply(legacy)))
+    await expect(getDiagnostics({ size: 50 })).resolves.toMatchObject({
+      total: null,
+      totalExact: false,
+    })
   })
 })

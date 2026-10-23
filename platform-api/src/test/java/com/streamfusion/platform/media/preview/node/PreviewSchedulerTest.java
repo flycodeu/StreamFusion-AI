@@ -229,6 +229,21 @@ class PreviewSchedulerTest {
     }
 
     @Test
+    void knownH264SourceRetainsItsSharedAudioNormalizationReservation() throws Exception {
+        initialize();
+        when(local.start(anyString(), anyList(), any(), any()))
+                .thenReturn(new PreviewExecutor.Playback("H264", true, "H264"));
+        policy("local", "REMOTE", new PreviewBudget(64, 64, 1, 4, 655360, 655360, 8192, 8192), 0);
+        String first = open(1), second = open(1);
+        assertThat(repository.transcodeAllowed(second)).isTrue();
+        assertThat(ledger.usage("local").transcodes()).isOne();
+        routing.close(first, deadline());
+        assertThat(ledger.usage("local").transcodes()).isOne();
+        routing.close(second, deadline());
+        assertThat(ledger.usage("local").transcodes()).isZero();
+    }
+
+    @Test
     void platformRestartKeepsOtherNodeAvailableAndCleansOnlyOriginalOwnership() throws Exception {
         initialize();
         String id = open(1);

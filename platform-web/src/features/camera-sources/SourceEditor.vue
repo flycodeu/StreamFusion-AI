@@ -7,6 +7,7 @@ import {
   ElInput,
   ElInputNumber,
   ElMessage,
+  ElMessageBox,
   ElOption,
   ElSelect,
   ElSwitch,
@@ -25,8 +26,9 @@ import type {
 import CameraDialogFrame from '../camera/CameraDialogFrame.vue'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
-import { formError as validationError, secret } from '../camera/form'
-const props = defineProps<{ sourceId: string; embedded?: boolean }>()
+import { formError as validationError, secret, sourceBrandLabel } from '../camera/form'
+import BrandSelect from '../camera/BrandSelect.vue'
+const props = defineProps<{ sourceId: string; embedded?: boolean; manufacturer?: string | null }>()
 const adapters = useDeviceAdapters()
 const emit = defineEmits<{ close: []; saved: [] }>()
 const captureScope = usePageScope(),
@@ -38,6 +40,18 @@ const saving = ref(false),
   manualStorageReady = ref(true)
 const error = formError
 const platform = computed(() => getPlatformConnection(editing.value?.adapterType))
+const brandPlaceholder = computed(() => {
+  const brand = sourceBrandLabel({
+    sourceType: editing.value?.adapterType ?? null,
+    manufacturer: props.manufacturer,
+    sourceDisplayName: '',
+  })
+  return brand === '未识别品牌' ? '选择或输入品牌' : `${brand}（设备识别，可修改）`
+})
+const initialDraft = ref<string | null>(null)
+const dirty = computed(
+  () => initialDraft.value !== null && JSON.stringify(form) !== initialDraft.value,
+)
 let detailSequence = 0
 const form = reactive({
   adapterType: '',
@@ -84,14 +98,38 @@ async function openEdit() {
       passwordAction: current.credentials.length ? 'KEEP' : 'REPLACE',
       password: '',
     })
+    initialDraft.value = JSON.stringify(form)
   } catch (cause) {
     if (active() && sequence === detailSequence) error.value = cause
   }
 }
+async function confirmLeave(): Promise<boolean> {
+  if (saving.value) return false
+  if (!dirty.value) return true
+  try {
+    await ElMessageBox.confirm('连接资料尚未保存，离开会放弃这些修改。', '放弃未保存的修改？', {
+      type: 'warning',
+      confirmButtonText: '放弃修改',
+      cancelButtonText: '继续编辑',
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+async function close() {
+  const active = captureScope()
+  if ((await confirmLeave()) && active()) emit('close')
+}
+defineExpose({ confirmLeave, saving })
 async function save() {
   if (saving.value || !options.value || !editing.value) return
   const active = captureScope()
   formError.value = null
+  if ([...form.vendorHint.trim()].length > 128) {
+    formError.value = validationError('品牌最多填写128个字符。')
+    return
+  }
   if (
     !form.name.trim() ||
     !form.host.trim() ||
@@ -149,9 +187,9 @@ async function save() {
       if (original.connectionCategory === 'DEVICE' && original.endpointEditable) {
         if ((form.adapterType || null) !== original.adapterType)
           input.adapterType = form.adapterType || null
-        if ((form.vendorHint.trim() || null) !== (original.vendorHint ?? null))
-          input.vendorHint = form.vendorHint.trim() || null
       }
+      if ((form.vendorHint.trim() || null) !== (original.vendorHint ?? null))
+        input.vendorHint = form.vendorHint.trim() || null
       const previous = original.endpoints[0]!
       if (
         endpoint.host !== previous.host ||
@@ -173,9 +211,10 @@ async function save() {
       await api.updateSource(original.sourceId, input)
     }
     if (!active()) return
-    emit('saved')
     form.username = ''
     form.password = ''
+    initialDraft.value = JSON.stringify(form)
+    emit('saved')
     ElMessage.success('连接资料已保存')
   } catch (cause) {
     if (active()) {
@@ -219,66 +258,43 @@ onBeforeUnmount(() => {
     :close-on-click-modal="!saving"
     :close-on-press-escape="!saving"
     :show-close="!saving"
-    @update:model-value="emit('close')"
+    :before-close="close"
+    @update:model-value="
+      (visible: boolean) => {
+        if (!visible) void close()
+      }
+    "
   >
     <RequestError :error="formError" />
     <p class="connection-note">连接配置对共用此连接的相机生效。</p>
-    <ElForm label-width="110px" :disabled="saving || loading" @submit.prevent="save">
-      <template v-if="editing?.connectionCategory === 'DEVICE' && editing.endpointEditable">
-        <ElFormItem label="连接方式"
-          ><ElSelect v-model="form.adapterType"
-            ><ElOption label="暂不指定" value="" /><ElOption
-              v-for="adapter in adapters"
-              :key="adapter.type"
-              :value="adapter.type"
-              :label="adapter.label" /><ElOption
-              v-if="form.adapterType && !adapters.some((item) => item.type === form.adapterType)"
-              :value="form.adapterType"
-              :label="form.adapterType" /></ElSelect
-        ></ElFormItem>
-        <ElFormItem label="品牌备注"
-          ><ElInput v-model="form.vendorHint" maxlength="100" placeholder="人工填写的品牌"
+    <ElForm label-position="top" :disabled="saving || loading" @submit.prevent="save">
+      <ElFormItem label="品牌">
+        <BrandSelect
+          v-model="form.vendorHint"
+          :adapters="adapters"
+          :placeholder="brandPlaceholder"
+        />
+      </ElFormItem>
+      <div class="connection-fields address-fields">
+        <ElFormItem label="连接主机" required
+          ><ElInput
+            v-model="form.host"
+            :disabled="editing?.endpointEditable === false"
+            maxlength="253"
+            placeholder="IP 或批准的域名，不含协议、端口或路径"
         /></ElFormItem>
-      </template>
-      <ElFormItem label="连接名称" required
-        ><ElInput v-model="form.name" maxlength="100"
-      /></ElFormItem>
-      <ElFormItem v-if="options?.networkPolicies.length" label="接入网络"
-        ><ElSelect v-model="form.networkPolicyKey" placeholder="可暂不设置"
-          ><ElOption
-            v-for="item in options?.networkPolicies"
-            :key="item.key"
-            :value="item.key"
-            :label="item.name" /></ElSelect
-      ></ElFormItem>
-      <ElFormItem label="连接主机" required
-        ><ElInput
-          v-model="form.host"
-          :disabled="editing?.endpointEditable === false"
-          maxlength="253"
-          placeholder="IP 或批准的域名，不含协议、端口或路径"
-      /></ElFormItem>
-      <ElFormItem v-if="editing && editing.adapterType !== 'RTSP'" label="连接协议"
-        ><ElSelect v-model="form.scheme" :disabled="editing?.endpointEditable === false"
-          ><ElOption label="HTTP" value="http" /><ElOption
-            label="HTTPS（验证证书）"
-            value="https" /></ElSelect
-      ></ElFormItem>
-      <ElFormItem label="服务端口" required
-        ><ElInputNumber
-          v-model="form.port"
-          :min="1"
-          :max="65535"
-          :disabled="editing?.endpointEditable === false"
-      /></ElFormItem>
-      <p v-if="editing?.endpointEditable === false">已有通道的设备地址不可修改。</p>
-      <ElFormItem v-if="editing?.rtspPort != null" label="RTSP 端口"
-        ><ElInputNumber v-model="form.rtspPort" :min="1" :max="65535"
-      /></ElFormItem>
+        <ElFormItem label="服务端口" required
+          ><ElInputNumber
+            v-model="form.port"
+            :min="1"
+            :max="65535"
+            :disabled="editing?.endpointEditable === false"
+        /></ElFormItem>
+      </div>
       <ElFormItem label="需要认证"
         ><ElSwitch v-model="form.authenticated" :disabled="!!platform"
       /></ElFormItem>
-      <template v-if="form.authenticated">
+      <div v-if="form.authenticated" class="connection-fields credential-fields">
         <ElFormItem :label="platform?.usernameLabel ?? '设备账号'" required
           ><ElSelect v-if="editing?.credentials.length" v-model="form.usernameAction"
             ><ElOption value="KEEP" label="保留已保存账号" /><ElOption
@@ -303,14 +319,64 @@ onBeforeUnmount(() => {
             autocomplete="new-password"
             maxlength="512"
         /></ElFormItem>
-      </template>
-      <ElFormItem label="允许新使用"><ElSwitch v-model="form.enabled" /></ElFormItem>
-      <ElFormItem label="备注"
-        ><ElInput v-model="form.remark" type="textarea" maxlength="500"
-      /></ElFormItem>
+      </div>
+      <details class="connection-advanced">
+        <summary>更多连接设置</summary>
+        <template v-if="editing?.connectionCategory === 'DEVICE' && editing.endpointEditable">
+          <ElFormItem label="连接方式">
+            <ElSelect v-model="form.adapterType">
+              <ElOption label="暂不指定" value="" />
+              <ElOption
+                v-for="adapter in adapters"
+                :key="adapter.type"
+                :value="adapter.type"
+                :label="adapter.label"
+              />
+              <ElOption
+                v-if="form.adapterType && !adapters.some((item) => item.type === form.adapterType)"
+                :value="form.adapterType"
+                :label="form.adapterType"
+              />
+            </ElSelect>
+          </ElFormItem>
+        </template>
+        <ElFormItem label="连接名称" required
+          ><ElInput v-model="form.name" maxlength="100"
+        /></ElFormItem>
+        <ElFormItem v-if="options?.networkPolicies.length" label="接入网络">
+          <ElSelect v-model="form.networkPolicyKey" placeholder="可暂不设置">
+            <ElOption
+              v-for="item in options?.networkPolicies"
+              :key="item.key"
+              :value="item.key"
+              :label="item.name"
+            />
+          </ElSelect>
+        </ElFormItem>
+        <div class="connection-fields">
+          <ElFormItem v-if="editing && editing.adapterType !== 'RTSP'" label="连接协议">
+            <ElSelect v-model="form.scheme" :disabled="editing?.endpointEditable === false">
+              <ElOption label="HTTP" value="http" /><ElOption
+                label="HTTPS（验证证书）"
+                value="https"
+              />
+            </ElSelect>
+          </ElFormItem>
+          <ElFormItem v-if="editing?.rtspPort != null" label="RTSP 端口"
+            ><ElInputNumber v-model="form.rtspPort" :min="1" :max="65535"
+          /></ElFormItem>
+        </div>
+        <p v-if="editing?.endpointEditable === false" class="connection-note">
+          已有通道的设备地址不可修改。
+        </p>
+        <ElFormItem label="允许新使用"><ElSwitch v-model="form.enabled" /></ElFormItem>
+        <ElFormItem label="备注"
+          ><ElInput v-model="form.remark" type="textarea" maxlength="500"
+        /></ElFormItem>
+      </details>
     </ElForm>
     <template #footer
-      ><ElButton :disabled="saving" @click="emit('close')">关闭</ElButton
+      ><ElButton :disabled="saving" @click="close">关闭</ElButton
       ><ElButton type="primary" :loading="saving" :disabled="loading || !options" @click="save">{{
         '保存配置'
       }}</ElButton></template
@@ -321,5 +387,29 @@ onBeforeUnmount(() => {
 .connection-note {
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+.connection-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 20px;
+}
+.address-fields {
+  grid-template-columns: minmax(0, 1fr) 160px;
+}
+.credential-fields :deep(.el-select + .el-input) {
+  margin-top: 8px;
+}
+.connection-fields :deep(.el-input-number) {
+  width: 100%;
+}
+.connection-advanced summary {
+  cursor: pointer;
+  color: var(--el-color-primary);
+  padding: 4px 0 16px;
+}
+@media (max-width: 600px) {
+  .connection-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>

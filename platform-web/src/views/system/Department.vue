@@ -122,7 +122,12 @@ async function remove(node: Department): Promise<void> {
   const inScope = captureScope()
   deleting.value = true
   try {
-    await ElMessageBox.confirm(`删除部门“${node.name}”？`, '确认删除', { type: 'warning' })
+    await ElMessageBox.confirm(`删除部门“${node.name}”？`, '确认删除', {
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+      confirmButtonText: '确认删除',
+      cancelButtonText: '取消',
+    })
     if (!inScope()) return
     await api.deleteDepartment(node)
     if (!inScope()) return
@@ -148,7 +153,7 @@ onMounted(load)
       </ElFormItem>
     </ElForm>
     <RequestError :error="error" />
-    <TablePanel>
+    <TablePanel :initial-loading="loading && !rows.length">
       <template #actions>
         <ElButton type="primary" @click="openCreate()">新建部门</ElButton>
         <ElButton :disabled="!singleSelected || loading" @click="editSelected">编辑</ElButton>

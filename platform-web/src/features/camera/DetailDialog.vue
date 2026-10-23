@@ -136,7 +136,12 @@ async function removeProfile(profile: CameraProfile) {
     await ElMessageBox.confirm(
       `删除码流“${profile.label}”？此操作只删除本地档案。`,
       '确认删除码流',
-      { type: 'warning' },
+      {
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+      },
     )
     if (!active()) return
     await api.deleteProfile(props.cameraId, profile.streamProfileId, profile.version)

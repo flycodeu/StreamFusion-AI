@@ -14,7 +14,7 @@ import {
   ElOption,
   ElPagination,
   ElSelect,
-  ElSwitch,
+  ElEmpty,
   ElTable,
   ElTableColumn,
   ElTag,
@@ -339,7 +339,12 @@ async function forceLogout(row: UserSummary): Promise<void> {
     await ElMessageBox.confirm(
       `将结束账号「${row.username}」的当前登录，对方会收到登出提示。账号仍可重新登录。`,
       '强制登出',
-      { type: 'warning', confirmButtonText: '确认登出', cancelButtonText: '取消' },
+      {
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+        confirmButtonText: '确认登出',
+        cancelButtonText: '取消',
+      },
     )
     if (!inScope()) return
     error.value = null
@@ -364,6 +369,17 @@ function successfulPasswordResult(user: UserCredentialResult): PasswordResult {
   }
 }
 
+async function copyPassword(password: string | null): Promise<void> {
+  if (!password) return
+  const inScope = captureScope()
+  try {
+    await globalThis.navigator.clipboard.writeText(password)
+    if (inScope()) ElMessage.success('已复制初始密码')
+  } catch {
+    if (inScope()) ElMessage.warning('复制失败，请选中密码手动复制')
+  }
+}
+
 async function resetPasswords(users: UserSummary[]): Promise<void> {
   const targets = users.filter((user) => !isProtectedAccount(user))
   if (!targets.length || resetting.value) return
@@ -372,6 +388,9 @@ async function resetPasswords(users: UserSummary[]): Promise<void> {
   try {
     await ElMessageBox.confirm(`确认重置 ${targets.length} 个用户的密码？`, '重置密码', {
       type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+      confirmButtonText: '确认重置',
+      cancelButtonText: '取消',
     })
     if (!inScope()) return
     passwordResults.value = []
@@ -408,7 +427,12 @@ async function remove(row: UserSummary): Promise<void> {
   const current = sequence
   deleting.value = true
   try {
-    await ElMessageBox.confirm(`删除用户“${row.username}”？`, '确认删除', { type: 'warning' })
+    await ElMessageBox.confirm(`删除用户“${row.username}”？`, '确认删除', {
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+      confirmButtonText: '确认删除',
+      cancelButtonText: '取消',
+    })
     if (!inScope()) return
     await api.deleteUser(row)
     if (!inScope()) return
@@ -454,7 +478,7 @@ onMounted(load)
       </ElFormItem>
     </ElForm>
     <RequestError :error="error" />
-    <TablePanel>
+    <TablePanel :initial-loading="loading && !rows.length">
       <template #actions>
         <ElButton type="primary" :disabled="resetting" @click="openCreate">新建用户</ElButton>
         <ElButton
@@ -492,6 +516,24 @@ onMounted(load)
         empty-text="暂无用户"
         @selection-change="setSelection"
       >
+        <template #empty>
+          <ElEmpty
+            :image-size="64"
+            :description="
+              error
+                ? '用户列表读取失败'
+                : keyword || status !== null
+                  ? '未找到符合条件的用户'
+                  : '暂无用户'
+            "
+          >
+            <ElButton v-if="error" @click="load">重新加载</ElButton>
+            <ElButton v-else-if="keyword || status !== null" @click="resetSearch"
+              >重置筛选</ElButton
+            >
+            <ElButton v-else type="primary" @click="openCreate">新建用户</ElButton>
+          </ElEmpty>
+        </template>
         <ElTableColumn
           type="selection"
           width="48"
@@ -548,49 +590,50 @@ onMounted(load)
         >
         <ElTableColumn
           label="操作"
-          min-width="410"
+          width="190"
           fixed="right"
           class-name="table-actions-column"
           :resizable="false"
           ><template #default="{ row }"
-            ><TableActions>
+            ><TableActions compact>
               <ElButton
-                plain
+                link
                 type="primary"
                 :disabled="!canEdit(asUser(row)) || resetting"
                 @click="openEdit(asUser(row))"
                 >编辑</ElButton
               >
               <ElButton
-                plain
+                link
                 type="primary"
                 :disabled="!canManageRelations(asUser(row)) || resetting"
                 @click="openRelation(asUser(row))"
                 >角色</ElButton
               >
-              <ElButton
-                plain
-                type="primary"
-                :disabled="!canManageRelations(asUser(row))"
-                @click="showLoginRecords(asUser(row))"
-                >登录记录</ElButton
-              >
-              <ElSwitch
-                :model-value="row.status !== 2"
-                :disabled="isProtectedAccount(asUser(row)) || resetting"
-                :loading="statusChanging.includes(row.id)"
-                :aria-label="`启用用户 ${row.username}`"
-                inline-prompt
-                active-text="开"
-                inactive-text="关"
-                @change="changeStatus(asUser(row), Boolean($event))"
-              />
               <ElDropdown trigger="click" class="table-action-end">
-                <ElButton plain :disabled="resetting || deleting || forcingLogout.includes(row.id)"
-                  >更多</ElButton
+                <ElButton
+                  link
+                  type="primary"
+                  :disabled="resetting || deleting || forcingLogout.includes(row.id)"
+                  >更多 ▾</ElButton
                 >
                 <template #dropdown>
                   <ElDropdownMenu>
+                    <ElDropdownItem
+                      :disabled="!canManageRelations(asUser(row)) || resetting"
+                      @click="showLoginRecords(asUser(row))"
+                      >登录记录</ElDropdownItem
+                    >
+                    <ElDropdownItem
+                      :disabled="
+                        isProtectedAccount(asUser(row)) ||
+                        resetting ||
+                        statusChanging.includes(row.id)
+                      "
+                      @click="changeStatus(asUser(row), row.status === 2)"
+                    >
+                      {{ row.status === 2 ? '启用账号' : '停用账号' }}
+                    </ElDropdownItem>
                     <ElDropdownItem
                       :disabled="isProtectedAccount(asUser(row)) || forcingLogout.includes(row.id)"
                       @click="forceLogout(asUser(row))"
@@ -600,7 +643,7 @@ onMounted(load)
                       divided
                       :disabled="isProtectedAccount(asUser(row)) || deleting"
                       @click="remove(asUser(row))"
-                      >删除用户</ElDropdownItem
+                      ><span class="danger-action">删除用户</span></ElDropdownItem
                     >
                   </ElDropdownMenu>
                 </template>
@@ -615,7 +658,7 @@ onMounted(load)
           v-model:page-size="size"
           :total="total"
           :page-sizes="[20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
+          layout="total, sizes, prev, pager, next, jumper"
           @change="load"
         />
       </template>
@@ -641,7 +684,7 @@ onMounted(load)
       :show-close="!saving"
     >
       <RequestError :error="error" />
-      <ElForm class="user-form-grid" label-width="80px" :disabled="saving" @submit.prevent="save">
+      <ElForm class="user-form-grid" label-position="top" :disabled="saving" @submit.prevent="save">
         <ElFormItem label="账号" :required="!editing" :error="submitted ? accountError : ''"
           ><ElInput v-model="form.username" :disabled="!!editing" maxlength="32"
         /></ElFormItem>
@@ -723,8 +766,18 @@ onMounted(load)
         </ElTableColumn>
         <ElTableColumn label="初始密码" min-width="220">
           <template #default="{ row }"
-            ><code v-if="row.success" class="temporary-password">{{ row.temporaryPassword }}</code
-            ><span v-else>—</span></template
+            ><div v-if="row.success" class="password-cell">
+              <code class="temporary-password">{{ row.temporaryPassword }}</code>
+              <ElButton
+                link
+                type="primary"
+                :disabled="!row.temporaryPassword"
+                :aria-label="`复制 ${row.username} 的初始密码`"
+                @click="copyPassword(row.temporaryPassword)"
+                >复制</ElButton
+              >
+            </div>
+            <span v-else>—</span></template
           >
         </ElTableColumn>
         <ElTableColumn label="错误信息" min-width="200">
@@ -750,6 +803,17 @@ onMounted(load)
 .temporary-password {
   user-select: all;
   overflow-wrap: anywhere;
+}
+.password-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.password-cell code {
+  min-width: 0;
+}
+.danger-action {
+  color: var(--el-color-danger);
 }
 .user-form-grid {
   display: grid;

@@ -7,6 +7,18 @@ const proxy = config({ command: 'serve', mode: 'test' }).server?.proxy ?? {}
 const businessProxyRules = Object.keys(proxy).filter((key) => key.startsWith('^'))
 const isProxied = (path: string) => businessProxyRules.some((rule) => new RegExp(rule).test(path))
 
+describe('browser response security', () => {
+  it('restricts framing in development and built preview without blocking same-origin documents', () => {
+    const resolved = config({ command: 'serve', mode: 'test' })
+    for (const headers of [resolved.server?.headers, resolved.preview?.headers]) {
+      expect(headers?.['Content-Security-Policy']).toContain("frame-ancestors 'self'")
+      expect(headers?.['X-Frame-Options']).toBe('SAMEORIGIN')
+      expect(headers?.['X-Content-Type-Options']).toBe('nosniff')
+    }
+    expect(resolved.build?.sourcemap).toBe(false)
+  })
+})
+
 describe('development business API proxy', () => {
   it.each([
     ['198.51.100.42', '198.51.100.42'],

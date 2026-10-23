@@ -87,7 +87,7 @@ class RoleIntegrationTest extends SecureLoginSupport {
                         node ->
                                 childCounts.put(
                                         node.path("id").asText(), node.path("children").size()));
-        assertThat(childCounts).containsEntry(systemRoot, 5).containsEntry(monitorRoot, 5);
+        assertThat(childCounts).containsEntry(systemRoot, 5).containsEntry(monitorRoot, 6);
         write(
                 put("/roles/" + roleId + "/menus"),
                 admin,

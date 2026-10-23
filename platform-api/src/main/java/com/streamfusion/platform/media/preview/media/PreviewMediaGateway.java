@@ -29,6 +29,16 @@ public interface PreviewMediaGateway {
     /** Isolated viewer output from an owned local upstream; never accepts a caller URL. */
     Stream openViewer(Stream upstream, String app, String id, PreviewDeadline deadline);
 
+    /** Owned encoder input may retain AAC; browser exits still admit only WebRTC audio. */
+    default Stream openTranscodeInput(
+            Stream upstream, String app, String id, PreviewDeadline deadline) {
+        return openViewer(upstream, app, id, deadline);
+    }
+
+    default boolean requiresAudioTranscode(Stream upstream, PreviewDeadline deadline) {
+        return false;
+    }
+
     /** Exact tuple presence, distinct from video tracks not yet being ready. */
     boolean exists(Stream stream, PreviewDeadline deadline);
 

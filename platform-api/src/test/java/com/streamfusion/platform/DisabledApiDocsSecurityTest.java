@@ -23,6 +23,16 @@ class DisabledApiDocsSecurityTest {
 
     @Test
     void closedDocumentationDoesNotRemainInThePublicAllowlist() throws Exception {
-        mvc.perform(get("/v3/api-docs")).andExpect(status().isUnauthorized());
+        for (String path :
+                new String[] {
+                    "/v3/api-docs",
+                    "/v3/api-docs.yaml",
+                    "/v3/api-docs/swagger-config",
+                    "/swagger-ui.html",
+                    "/swagger-ui/index.html",
+                    "/swagger-ui/swagger-ui-bundle.js"
+                }) {
+            mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        }
     }
 }

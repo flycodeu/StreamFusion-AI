@@ -137,6 +137,70 @@ class DiagnosticQueryServiceTest {
     }
 
     @Test
+    void totalsCountAllMatchingRecordsIndependentlyOfPageSizeAndCursor() throws Exception {
+        var data = new StringBuilder();
+        for (int i = 0; i < 5; i++)
+            data.append(json.writeValueAsString(event("a".repeat(32), i))).append('\n');
+        data.append(json.writeValueAsString(event("b".repeat(32), 1))).append('\n');
+        data.append(json.writeValueAsString(event("a".repeat(32), 90000))).append('\n');
+        Files.writeString(logs.resolve("diagnostics.jsonl"), data);
+        var first =
+                service.query(
+                        new DiagnosticQueryService.Query(
+                                null, now, "a".repeat(32), null, null, null, null, 2, null));
+        var second =
+                service.query(
+                        new DiagnosticQueryService.Query(
+                                null,
+                                now,
+                                "a".repeat(32),
+                                null,
+                                null,
+                                null,
+                                null,
+                                2,
+                                first.nextCursor()));
+        assertThat(first.items()).hasSize(2);
+        assertThat(first.total()).isEqualTo(5);
+        assertThat(first.totalExact()).isTrue();
+        assertThat(second.items()).hasSize(2);
+        assertThat(second.total()).isEqualTo(5);
+        assertThat(second.totalExact()).isTrue();
+    }
+
+    @Test
+    void incompleteLogsExposeOnlyALowerBoundAndEmptyLogsHaveAnExactZero() throws Exception {
+        var path = logs.resolve("diagnostics.jsonl");
+        Files.writeString(
+                path, "broken\n" + json.writeValueAsString(event("a".repeat(32), 1)) + "\n");
+        var partial = service.query(page(null, 1));
+        assertThat(partial.total()).isEqualTo(1);
+        assertThat(partial.totalExact()).isFalse();
+        Files.writeString(path, "");
+        var empty = service.query(page(null, 1));
+        assertThat(empty.total()).isZero();
+        assertThat(empty.totalExact()).isTrue();
+    }
+
+    @Test
+    void countStopsAtTheScanBudgetInsteadOfClaimingAnExactTotal() throws Exception {
+        var event =
+                DiagnosticEvent.builder()
+                        .occurredAt(now)
+                        .kind("REQUEST")
+                        .level("WARN")
+                        .stack(List.of("x".repeat(50000)))
+                        .build();
+        Files.writeString(
+                logs.resolve("diagnostics.jsonl"),
+                (json.writeValueAsString(event) + "\n").repeat(500));
+        var result = service.query(page(null, 2));
+        assertThat(result.items()).hasSize(2);
+        assertThat(result.totalExact()).isFalse();
+        assertThat(result.total()).isBetween(2L, 499L);
+    }
+
+    @Test
     void pagesIdenticalTimestampsAcrossRotationAndConcurrentAppend() throws Exception {
         var path = logs.resolve("diagnostics.jsonl");
         var lines = new StringBuilder();

@@ -67,7 +67,7 @@ export const mediaLabels: Record<ConnectionState, string> = {
 }
 
 export const connectionLabels: Record<ConnectionState, string> = {
-  accessible: '代表流可达',
+  accessible: '在线',
   failed: '连接异常',
   checking: '检测中',
   stale: '配置已变更',

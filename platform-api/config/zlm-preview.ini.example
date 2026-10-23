@@ -1,9 +1,9 @@
 # Merge these sections into the active ZLM config.ini; this is not Spring configuration.
 # Keep ffmpeg.bin pointing to the selected FFmpeg executable (absolute path, without spaces).
 [ffmpeg]
-# TCP input, bounded decoder/encoder threads, no audio, browser-compatible low-delay H.264.
-# Keep the three %s placeholders: executable, local RTSP input, local RTMP output.
-cmd=%s -hide_banner -nostdin -nostats -rtsp_transport tcp -timeout 10000000 -threads 2 -i %s -map 0:v:0 -an -c:v libx264 -preset veryfast -tune zerolatency -threads 4 -pix_fmt yuv420p -profile:v baseline -bf 0 -g 40 -keyint_min 20 -sc_threshold 0 -crf 23 -maxrate 6M -bufsize 3M -f flv %s
+# TCP input, bounded decoder/encoder threads, optional Opus audio, browser-compatible low-delay H.264.
+# Keep the three %s placeholders: executable, local RTSP input, local RTSP output.
+cmd=%s -hide_banner -nostdin -nostats -rtsp_transport tcp -timeout 10000000 -threads 2 -i %s -map 0:v:0 -map 0:a:0? -c:v libx264 -preset veryfast -tune zerolatency -threads 4 -pix_fmt yuv420p -profile:v baseline -bf 0 -g 40 -keyint_min 20 -sc_threshold 0 -crf 23 -maxrate 6M -bufsize 3M -c:a libopus -ar 48000 -ac 1 -b:a 64k -f rtsp -rtsp_transport tcp %s
 
 [protocol]
 # Smooth bursty source delivery. Timer interval is 20ms, not an end-to-end latency promise.

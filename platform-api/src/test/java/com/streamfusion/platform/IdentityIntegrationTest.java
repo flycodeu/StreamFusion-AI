@@ -136,7 +136,7 @@ class IdentityIntegrationTest extends SecureLoginSupport {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.isSuperAdmin").value(true))
                 .andExpect(jsonPath("$.data.permissions").doesNotExist())
-                .andExpect(jsonPath("$.data.modules.length()").value(11))
+                .andExpect(jsonPath("$.data.modules.length()").value(12))
                 .andExpect(jsonPath("$.data.user.status").value(1))
                 .andExpect(jsonPath("$.data.user.id").isString())
                 .andExpect(jsonPath("$.data.user.version").isString())
@@ -640,7 +640,10 @@ class IdentityIntegrationTest extends SecureLoginSupport {
 
     @Test
     void openApiDocumentsActualDtosVosAndWriteOnlyCredentials() throws Exception {
-        var result = mvc.perform(get("/v3/api-docs")).andExpect(status().isOk()).andReturn();
+        var result =
+                mvc.perform(get("/v3/api-docs").session(admin()))
+                        .andExpect(status().isOk())
+                        .andReturn();
         JsonNode document = json.readTree(result.getResponse().getContentAsString());
         JsonNode schemas = document.path("components").path("schemas");
         assertThat(schemas.has("LoginDto")).isFalse();
@@ -812,7 +815,7 @@ class IdentityIntegrationTest extends SecureLoginSupport {
         mvc.perform(get("/user/page").session(admin)).andExpect(status().isForbidden());
         mvc.perform(get("/auth/me").session(admin))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.modules.length()").value(10));
+                .andExpect(jsonPath("$.data.modules.length()").value(11));
 
         jdbc.update("INSERT INTO sys_role_menu(role_id,menu_id) VALUES (1,1002)");
         mvc.perform(get("/user/page").session(admin)).andExpect(status().isOk());

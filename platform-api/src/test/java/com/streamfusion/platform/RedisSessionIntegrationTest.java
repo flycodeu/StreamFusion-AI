@@ -210,6 +210,8 @@ class RedisSessionIntegrationTest {
                         "SELECT last_activity_at FROM sys_login_record", java.sql.Timestamp.class);
         for (int attempt = 0; attempt < 3; attempt++) {
             assertThat(withCookie(previous, "/auth/session").statusCode()).isEqualTo(200);
+            assertThat(withCookie(previous, "/audit/security-alerts/feed").statusCode())
+                    .isEqualTo(200);
         }
         assertThat(((Session) repository.findById(previousId)).getLastAccessedTime())
                 .isEqualTo(before);

@@ -135,10 +135,10 @@ class FoundationTest {
     }
 
     @Test
-    void publishesOpenApi() {
+    void rawApiDocumentRequiresAuthentication() {
         var response = client.getForEntity("/v3/api-docs", JsonNode.class);
-        assertThat(response.getStatusCode().value()).isEqualTo(200);
-        assertThat(response.getBody().get("openapi").asText()).startsWith("3.");
+        assertThat(response.getStatusCode().value()).isEqualTo(401);
+        assertThat(response.getBody().has("openapi")).isFalse();
     }
 
     @Configuration(proxyBeanMethods = false)

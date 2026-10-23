@@ -78,6 +78,7 @@ public final class ModuleAuthorizationInterceptor implements HandlerInterceptor 
         return path.equals("/actuator/health")
                 || path.equals("/error")
                 || path.equals("/v3/api-docs")
+                || path.equals("/v3/api-docs.yaml")
                 || path.startsWith("/v3/api-docs/")
                 || path.equals("/swagger-ui.html")
                 || path.startsWith("/swagger-ui/");

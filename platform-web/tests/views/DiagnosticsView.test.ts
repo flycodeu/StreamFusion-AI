@@ -80,6 +80,22 @@ afterEach(() => {
 })
 
 describe('diagnostic query page', () => {
+  it('shows the query total rather than the current page size', async () => {
+    mock.getDiagnostics.mockResolvedValue({ items: [], total: 321, totalExact: true })
+    const root = await mount()
+    expect(text(root)).toContain('共 321 条')
+    expect(text(root)).toContain('本页 0 条')
+  })
+  it('labels a bounded count as a lower bound and preserves unknown totals', async () => {
+    mock.getDiagnostics.mockResolvedValue({ items: [], total: 17, totalExact: false })
+    const root = await mount()
+    expect(text(root)).toContain('已匹配至少 17 条')
+    expect(text(root)).not.toContain('共 17 条')
+    mock.getDiagnostics.mockResolvedValue({ items: [] })
+    button(root, '重置').props.onClick!()
+    await flush()
+    expect(text(root)).toContain('总数量暂不可用')
+  })
   it('loads trace and event time from a diagnostic link', async () => {
     Object.assign(mock.route.query, { traceId: 'a'.repeat(32), time: '2026-10-14T12:00:00Z' })
     await mount()

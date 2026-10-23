@@ -128,7 +128,12 @@ async function remove() {
     await ElMessageBox.confirm(
       `删除通道“${target.name}”及其码流档案？存在授权或业务引用时不能删除。`,
       '确认删除通道',
-      { type: 'warning' },
+      {
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+      },
     )
     if (!active()) return
     await api.deleteCamera(target)

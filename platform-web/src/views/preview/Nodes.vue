@@ -5,7 +5,13 @@ defineOptions({ name: 'PreviewServiceNodes' })
 </script>
 
 <template>
-  <div class="content-page">
+  <div class="content-page preview-nodes-page">
     <PreviewNodePanel management />
   </div>
 </template>
+
+<style scoped>
+.preview-nodes-page {
+  background: #f8fafc;
+}
+</style>

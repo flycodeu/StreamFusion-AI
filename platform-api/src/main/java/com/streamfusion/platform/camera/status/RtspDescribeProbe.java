@@ -220,6 +220,7 @@ public final class RtspDescribeProbe implements AutoCloseable {
         }
         java.util.concurrent.ScheduledFuture<?> timeout = null;
         Resolution resolution = null;
+        Socket socket = null;
         String endpoint = null;
         int status = 0;
         try {
@@ -258,11 +259,19 @@ public final class RtspDescribeProbe implements AutoCloseable {
                 endpoint = null;
                 throw new Failure(Outcome.NOT_EXECUTED, "ENDPOINT_BUSY");
             }
+            socket = newSocket(execution);
             String authorization = null;
             for (int sequence = 1; sequence <= 2; sequence++) {
                 execution.check();
                 Response response =
-                        request(target, addresses[0], port, sequence, authorization, execution);
+                        request(
+                                target,
+                                socket,
+                                addresses[0],
+                                port,
+                                sequence,
+                                authorization,
+                                execution);
                 status = response.status();
                 execution.check();
                 if (status == 401 && sequence == 1) {
@@ -282,6 +291,15 @@ public final class RtspDescribeProbe implements AutoCloseable {
                                 "UNSUPPORTED_AUTHENTICATION".equals(ex.reasonCode())
                                         ? "AUTH_UNSUPPORTED"
                                         : "AUTH_REJECTED");
+                    }
+                    // Some cameras bind the challenge to this TCP connection. Reconnect only
+                    // when the peer explicitly requires it, without adding a request or deadline.
+                    String connection = response.headers().get("connection");
+                    if (connection != null
+                            && java.util.Arrays.stream(connection.split(","))
+                                    .anyMatch(value -> value.strip().equalsIgnoreCase("close"))) {
+                        cancellation.release(socket);
+                        socket = newSocket(execution);
                     }
                     continue;
                 }
@@ -325,6 +343,7 @@ public final class RtspDescribeProbe implements AutoCloseable {
                 return result(Outcome.CANCELLED, "CANCELLED", status, started);
             return result(Outcome.NOT_EXECUTED, "PROBE_CLOSED", status, started);
         } finally {
+            if (socket != null) cancellation.release(socket);
             if (timeout != null) timeout.cancel(false);
             if (resolution != null && dns.remove(resolution)) resolution.finish();
             if (endpoint != null) endpoints.remove(endpoint);
@@ -386,44 +405,44 @@ public final class RtspDescribeProbe implements AutoCloseable {
         }
     }
 
+    private static Socket newSocket(Execution execution) {
+        var socket = new Socket();
+        if (!execution.cancellation.register(socket)) {
+            execution.check();
+            throw new Failure(Outcome.NOT_EXECUTED, "CANCELLATION_IN_USE");
+        }
+        return socket;
+    }
+
     private Response request(
             Target target,
+            Socket socket,
             InetAddress address,
             int port,
             int sequence,
             String authorization,
             Execution execution)
             throws IOException {
-        var socket = new Socket();
-        if (!execution.cancellation.register(socket)) {
-            execution.check();
-            throw new Failure(Outcome.NOT_EXECUTED, "CANCELLATION_IN_USE");
-        }
-        try {
-            authorize(target, execution);
+        authorize(target, execution);
+        if (!socket.isConnected())
             socket.connect(new InetSocketAddress(address, port), remainingMillis(execution));
-            socket.setSoTimeout(remainingMillis(execution));
-            var value =
-                    "DESCRIBE "
-                            + target.uri().toASCIIString()
-                            + " RTSP/1.0\r\nCSeq: "
-                            + sequence
-                            + "\r\nAccept: application/sdp\r\n"
-                            + (authorization == null
-                                    ? ""
-                                    : "Authorization: " + authorization + "\r\n")
-                            + "\r\n";
-            byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-            if (bytes.length > limits.maxHeaderBytes())
-                throw new Failure(Outcome.NOT_EXECUTED, "REQUEST_LIMIT");
-            execution.check();
-            socket.getOutputStream().write(bytes);
-            socket.getOutputStream().flush();
-            execution.check();
-            return response(socket.getInputStream(), sequence);
-        } finally {
-            execution.cancellation.release(socket);
-        }
+        socket.setSoTimeout(remainingMillis(execution));
+        var value =
+                "DESCRIBE "
+                        + target.uri().toASCIIString()
+                        + " RTSP/1.0\r\nCSeq: "
+                        + sequence
+                        + "\r\nAccept: application/sdp\r\n"
+                        + (authorization == null ? "" : "Authorization: " + authorization + "\r\n")
+                        + "\r\n";
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > limits.maxHeaderBytes())
+            throw new Failure(Outcome.NOT_EXECUTED, "REQUEST_LIMIT");
+        execution.check();
+        socket.getOutputStream().write(bytes);
+        socket.getOutputStream().flush();
+        execution.check();
+        return response(socket.getInputStream(), sequence);
     }
 
     private static void authorize(Target target, Execution execution) {

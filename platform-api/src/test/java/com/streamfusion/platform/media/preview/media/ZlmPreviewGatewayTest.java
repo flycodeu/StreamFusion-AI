@@ -492,6 +492,17 @@ class ZlmPreviewGatewayTest {
     }
 
     @Test
+    void opusOutputUsesOwnedRtspTupleAndSurvivesTheSameCleanupChecks() throws Exception {
+        configureFfmpeg();
+        ffmpegCommand = PreviewEncodingProfile.software();
+        var output = gateway.transcode(stream(), ID + "h264");
+        assertThat(jobs.get(output.key()).get("dst_url"))
+                .isEqualTo("rtsp://127.0.0.1:8554/" + APP + "/" + ID + "h264");
+        gateway.close(stream(), output);
+        assertThat(registry.keys()).isEmpty();
+    }
+
+    @Test
     void hardwareEncodersUseTheSameReservationAndConfirmedCleanup() throws Exception {
         configureFfmpeg();
         for (String encoder : List.of("h264_nvenc", "h264_qsv", "h264_amf")) {

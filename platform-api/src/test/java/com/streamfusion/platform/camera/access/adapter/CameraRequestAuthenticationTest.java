@@ -79,8 +79,24 @@ class CameraRequestAuthenticationTest {
         assertThat(value)
                 .contains(
                         "uri=\"/live%2Fmain?token=a%2Bb&x=1\"",
-                        "response=\"2c4598d373da1b062e9ae1dd4529710a\"", "algorithm=MD5")
+                        "response=\"2c4598d373da1b062e9ae1dd4529710a\"")
+                .doesNotContain("algorithm=")
                 .doesNotContain("camera.example", "http://");
+    }
+
+    @Test
+    void legacyDigestKeepsImplicitMd5WithoutAddingOptionalParameters() {
+        String value =
+                CameraRequestAuthentication.challenge(
+                        CHALLENGE,
+                        "DESCRIBE",
+                        RTSP_TARGET,
+                        "fixture-user",
+                        "fixture-password",
+                        "fixture-cnonce");
+        assertThat(value)
+                .contains("response=\"75e816ea02713afdec36bdbb82ade97f\"")
+                .doesNotContain("algorithm=", "qop=", "cnonce=", "nc=");
     }
 
     @Test

@@ -7,35 +7,71 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.streamfusion.platform.support.IdentitySchema;
+import com.streamfusion.platform.support.SecureLoginSupport;
+import com.streamfusion.platform.system.auth.service.BootstrapService;
 import java.util.ArrayList;
+import javax.sql.DataSource;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
+import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
-@SpringBootTest
+@SpringBootTest(
+        properties =
+                "spring.datasource.url=jdbc:h2:mem:security_configuration;MODE=MySQL;DB_CLOSE_DELAY=-1")
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-class SecurityConfigurationTest {
+class SecurityConfigurationTest extends SecureLoginSupport {
+    private final DataSource source;
+    private final BootstrapService bootstrap;
     private final MockMvc mvc;
     private final ApplicationContext context;
     private final ObjectMapper mapper;
 
     @Autowired
-    SecurityConfigurationTest(MockMvc mvc, ApplicationContext context, ObjectMapper mapper) {
+    SecurityConfigurationTest(
+            MockMvc mvc,
+            ApplicationContext context,
+            ObjectMapper mapper,
+            DataSource source,
+            BootstrapService bootstrap) {
         this.mvc = mvc;
         this.context = context;
         this.mapper = mapper;
+        this.source = source;
+        this.bootstrap = bootstrap;
+    }
+
+    @BeforeEach
+    void initializeAccounts() throws Exception {
+        IdentitySchema.initialize(source);
+        bootstrap.initialize("DocsAdmin", null, "DocsAdmin1!", null);
+    }
+
+    private MockHttpSession authorizedSession() throws Exception {
+        var result =
+                mvc.perform(
+                                loginRequest(mvc, mapper, null, "DocsAdmin", "DocsAdmin1!")
+                                        .with(csrf()))
+                        .andExpect(status().isOk())
+                        .andReturn();
+        return (MockHttpSession) result.getRequest().getSession(false);
     }
 
     @Test
     void publishesDocumentedManagementEndpoints() throws Exception {
-        var response = mvc.perform(get("/v3/api-docs")).andExpect(status().isOk()).andReturn();
+        var response =
+                mvc.perform(get("/v3/api-docs").session(authorizedSession()))
+                        .andExpect(status().isOk())
+                        .andReturn();
         var document = mapper.readTree(response.getResponse().getContentAsString());
         assertThat(
                         document.path("paths")
@@ -86,14 +122,15 @@ class SecurityConfigurationTest {
 
     @Test
     void exposesBrowsableApiDocumentation() throws Exception {
-        mvc.perform(get("/swagger-ui.html"))
+        var session = authorizedSession();
+        mvc.perform(get("/swagger-ui.html").session(session))
                 .andExpect(status().is3xxRedirection())
                 .andExpect(
                         header().string(
                                         "Location",
                                         org.hamcrest.Matchers.containsString(
                                                 "/swagger-ui/index.html")));
-        mvc.perform(get("/swagger-ui/index.html")).andExpect(status().isOk());
+        mvc.perform(get("/swagger-ui/index.html").session(session)).andExpect(status().isOk());
     }
 
     @Test

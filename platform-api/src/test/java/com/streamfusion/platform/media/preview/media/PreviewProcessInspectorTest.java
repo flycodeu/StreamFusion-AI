@@ -42,6 +42,7 @@ class PreviewProcessInspectorTest {
         for (String url :
                 new String[] {
                     "rtmp://127.0.0.1:1936/" + APP + "/" + OUTPUT,
+                    "rtsp://127.0.0.1:8555/" + APP + "/" + OUTPUT,
                     "rtsp://127.0.0.1:8555/" + APP + "/" + INPUT,
                     "rtmp://[::1]:1936/" + APP + "/" + OUTPUT,
                     "rtmp://localhost:1936/" + APP + "/" + OUTPUT

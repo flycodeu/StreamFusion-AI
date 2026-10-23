@@ -111,9 +111,10 @@ public final class CameraRequestAuthentication {
                         + ", uri="
                         + quoted(requestTarget)
                         + ", response="
-                        + quoted(response)
-                        + ", algorithm="
-                        + algorithm;
+                        + quoted(response);
+        // An omitted algorithm already means MD5. Preserve legacy camera challenges instead of
+        // adding an optional parameter they did not advertise.
+        if (parameters.containsKey("algorithm")) value += ", algorithm=" + algorithm;
         if (qop != null) value += ", qop=auth, nc=00000001, cnonce=" + quoted(cnonce);
         else if (algorithm.toUpperCase(Locale.ROOT).endsWith("-SESS"))
             value += ", cnonce=" + quoted(cnonce);

@@ -8,6 +8,11 @@ import { useDeviceRefresh } from '../../features/camera-status/useDeviceRefresh'
 import PlanDialog from '../../features/camera-status/PlanDialog.vue'
 import {
   ElButton,
+  ElDrawer,
+  ElDropdown,
+  ElDropdownMenu,
+  ElDropdownItem,
+  ElEmpty,
   ElCheckbox,
   ElForm,
   ElFormItem,
@@ -49,6 +54,7 @@ const previewPath = computed(() => findPreviewPath(sessionState.me?.routes || []
 const captureScope = usePageScope(),
   rows = ref<CameraDeviceGroup[]>([]),
   page = ref(1),
+  size = ref(20),
   total = ref(0),
   name = ref(''),
   lifecycle = ref<Lifecycle | null>(null)
@@ -93,8 +99,8 @@ async function deviceSaved(name: string) {
 }
 const columns = useColumns(
   'camera-device-workspace-v3',
-  ['name', 'group', 'source', 'connection'],
-  ['name', 'group', 'channels', 'source', 'connection', 'lifecycle'],
+  ['name', 'source', 'connection'],
+  ['name', 'channels', 'source', 'connection', 'lifecycle'],
 )
 let sequence = 0,
   treeSequence = 0
@@ -102,7 +108,7 @@ const asDevice = (value: unknown) => value as CameraDeviceGroup
 function query(): api.CameraSearch {
   return {
     page: page.value,
-    size: 20,
+    size: size.value,
     name: name.value.trim() || undefined,
     lifecycle: pendingOnly.value ? 'PENDING_ASSIGNMENT' : lifecycle.value || undefined,
     groupId: groupId.value || undefined,
@@ -121,7 +127,7 @@ async function load() {
       api.getCameraOptions(),
     ])
     if (!active() || current !== sequence) return
-    const lastPage = Math.max(1, Math.ceil(result.total / 20))
+    const lastPage = Math.max(1, Math.ceil(result.total / requestQuery.size))
     if (page.value > lastPage) {
       page.value = lastPage
       await load()
@@ -235,7 +241,12 @@ async function removeGroup(group: CameraGroup) {
     await ElMessageBox.confirm(
       `删除分组“${group.name}”？有子组、通道或授权引用时不能删除。`,
       '确认删除分组',
-      { type: 'warning' },
+      {
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+      },
     )
     if (!active()) return
     await deleteGroup(group)
@@ -253,12 +264,7 @@ onMounted(refresh)
     <ElButton class="mobile-group-toggle" :aria-expanded="treeOpen" @click="treeOpen = !treeOpen"
       >分组：{{ groupPath }}</ElButton
     >
-    <aside
-      v-loading="treeLoading"
-      class="camera-group-pane"
-      :class="{ 'is-open': treeOpen }"
-      aria-label="视频分组"
-    >
+    <aside v-loading="treeLoading" class="camera-group-pane" aria-label="视频分组">
       <header class="group-pane-header">
         <h2>视频分组</h2>
         <ElButton
@@ -284,6 +290,42 @@ onMounted(refresh)
         @all="selectGroup(null)"
       />
     </aside>
+    <ElDrawer
+      v-model="treeOpen"
+      title="视频分组"
+      direction="ltr"
+      size="min(360px, 90vw)"
+      destroy-on-close
+    >
+      <template #header>
+        <header class="group-pane-header">
+          <h2>视频分组</h2>
+          <ElButton
+            v-if="canManage"
+            link
+            type="primary"
+            @click="groupEditor = { group: null, parentId: null }"
+            >新建</ElButton
+          >
+        </header>
+      </template>
+      <div v-loading="treeLoading">
+        <RequestError :error="treeError" />
+        <ElButton v-if="treeError" link @click="loadTree">重新加载分组</ElButton>
+        <GroupTree
+          :model-value="groupId"
+          :groups="groups"
+          show-pending
+          :pending="pendingOnly"
+          :manageable="canManage"
+          :disabled="groupDeleting"
+          @action="groupAction"
+          @update:model-value="selectGroup"
+          @pending="selectPending"
+          @all="selectGroup(null)"
+        />
+      </div>
+    </ElDrawer>
     <section class="camera-list-pane" aria-label="相机管理">
       <ElForm class="search-form camera-search-form" inline @submit.prevent="search"
         ><ElFormItem label="设备 / 通道"
@@ -317,12 +359,18 @@ onMounted(refresh)
         ></ElForm
       >
       <RequestError :error="error" />
-      <TablePanel>
+      <TablePanel :initial-loading="loading && !rows.length">
         <template #actions
           ><template v-if="canManage"
-            ><ElButton type="primary" @click="creating = 'manual'">手动添加</ElButton
-            ><ElButton @click="creating = 'scan'">网段搜索</ElButton
-            ><ElButton @click="creating = 'platform'">平台导入</ElButton
+            ><ElDropdown split-button type="primary" trigger="click" @click="creating = 'manual'">
+              添加相机
+              <template #dropdown
+                ><ElDropdownMenu>
+                  <ElDropdownItem @click="creating = 'manual'">手动添加</ElDropdownItem>
+                  <ElDropdownItem @click="creating = 'scan'">网段搜索</ElDropdownItem>
+                  <ElDropdownItem @click="creating = 'platform'">平台导入</ElDropdownItem>
+                </ElDropdownMenu></template
+              > </ElDropdown
             ><ElButton @click="importTasksOpen = true">导入任务</ElButton></template
           ></template
         >
@@ -334,7 +382,6 @@ onMounted(refresh)
               v-model="columns"
               :options="[
                 { key: 'name', label: '相机设备' },
-                { key: 'group', label: '所属分组' },
                 { key: 'channels', label: '通道数量' },
                 { key: 'source', label: '品牌' },
                 { key: 'connection', label: '连接状态' },
@@ -349,6 +396,26 @@ onMounted(refresh)
           border
           empty-text="暂无可访问设备"
         >
+          <template #empty>
+            <ElEmpty
+              :image-size="64"
+              :description="
+                error
+                  ? '设备列表读取失败'
+                  : name || lifecycle || groupId || pendingOnly
+                    ? '未找到符合条件的设备'
+                    : '暂无可访问设备'
+              "
+            >
+              <ElButton v-if="error" @click="load">重新加载</ElButton>
+              <ElButton v-else-if="name || lifecycle || groupId || pendingOnly" @click="resetSearch"
+                >重置筛选</ElButton
+              >
+              <ElButton v-else-if="canManage" type="primary" @click="creating = 'manual'"
+                >添加相机</ElButton
+              >
+            </ElEmpty>
+          </template>
           <ElTableColumn v-if="columns.includes('name')" label="相机设备" min-width="185"
             ><template #default="{ row }">
               <div class="device-name" :title="row.name">
@@ -392,29 +459,15 @@ onMounted(refresh)
               </div>
             </template>
           </ElTableColumn>
-          <ElTableColumn
-            v-if="columns.includes('group')"
-            label="所属分组"
-            min-width="110"
-            show-overflow-tooltip
-          >
-            <template #default="{ row }">{{
-              row.groupCount == null
-                ? '未获取'
-                : row.groupCount > 1
-                  ? `多个分组（${row.groupCount}）`
-                  : row.groupPath || '待归档'
-            }}</template>
-          </ElTableColumn>
           <ElTableColumn v-if="columns.includes('channels')" label="可见通道" width="110">
             <template #default="{ row }">{{ row.channelCount }} 个</template>
           </ElTableColumn>
           <ElTableColumn v-if="columns.includes('lifecycle')" label="配置状态" min-width="180"
             ><template #default="{ row }"
               ><div class="device-statuses">
-                <ElTag v-if="row.enabledCount" type="info">{{ row.enabledCount }} 启用</ElTag>
-                <ElTag v-if="row.disabledCount" type="info">{{ row.disabledCount }} 停用</ElTag>
-                <ElTag v-if="row.pendingCount" type="info">{{ row.pendingCount }} 待归档</ElTag>
+                <ElTag v-if="row.enabledCount" type="success">{{ row.enabledCount }} 启用</ElTag>
+                <ElTag v-if="row.disabledCount" type="danger">{{ row.disabledCount }} 停用</ElTag>
+                <ElTag v-if="row.pendingCount" type="warning">{{ row.pendingCount }} 待归档</ElTag>
               </div></template
             ></ElTableColumn
           >
@@ -482,16 +535,17 @@ onMounted(refresh)
               </div>
             </dl>
             <TableActions compact>
-              <ElButton v-if="previewPath" link type="primary" @click="openPreview(row)"
-                >预览</ElButton
-              >
-              <ElButton link type="primary" @click="selectedDevice = row">详情</ElButton>
-              <ElButton v-if="canManage" link type="primary" @click="movingDevice = row"
-                >移动分组</ElButton
-              >
-              <ElButton v-if="canManage" link type="primary" @click="editingDevice = row"
-                >编辑</ElButton
-              >
+              <ElButton v-if="previewPath" type="primary" @click="openPreview(row)">预览</ElButton>
+              <ElButton @click="selectedDevice = row">详情</ElButton>
+              <ElDropdown v-if="canManage" trigger="click">
+                <ElButton :aria-label="`更多操作：${row.name}`">更多 ▾</ElButton>
+                <template #dropdown
+                  ><ElDropdownMenu>
+                    <ElDropdownItem @click="movingDevice = row">移动分组</ElDropdownItem>
+                    <ElDropdownItem @click="editingDevice = row">编辑</ElDropdownItem>
+                  </ElDropdownMenu></template
+                >
+              </ElDropdown>
             </TableActions>
           </article>
           <p v-if="!loading && !rows.length" class="mobile-empty">暂无可访问设备</p>
@@ -499,10 +553,12 @@ onMounted(refresh)
         <template #footer
           ><ElPagination
             v-model:current-page="page"
-            :page-size="20"
+            v-model:page-size="size"
+            :page-sizes="[20, 50, 100]"
             :total="total"
-            layout="total, prev, pager, next"
-            @current-change="load"
+            layout="total, sizes, prev, pager, next, jumper"
+            @size-change="page = 1"
+            @change="load"
         /></template>
       </TablePanel>
     </section>
@@ -614,9 +670,6 @@ onMounted(refresh)
   }
   .camera-group-pane {
     display: none;
-  }
-  .camera-group-pane.is-open {
-    display: block;
   }
 }
 .device-name {

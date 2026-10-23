@@ -174,7 +174,12 @@ async function remove(role: Role): Promise<void> {
   const current = sequence
   deleting.value = true
   try {
-    await ElMessageBox.confirm(`删除角色“${role.name}”？`, '确认删除', { type: 'warning' })
+    await ElMessageBox.confirm(`删除角色“${role.name}”？`, '确认删除', {
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+      confirmButtonText: '确认删除',
+      cancelButtonText: '取消',
+    })
     if (!inScope()) return
     await api.deleteRole(role)
     if (!inScope()) return
@@ -274,7 +279,7 @@ onMounted(load)
       </ElFormItem>
     </ElForm>
     <RequestError :error="error" />
-    <TablePanel>
+    <TablePanel :initial-loading="loading && !rows.length">
       <template #actions>
         <ElButton type="primary" @click="openCreate">新建角色</ElButton>
         <ElButton
@@ -367,7 +372,7 @@ onMounted(load)
           v-model:page-size="size"
           :total="total"
           :page-sizes="[20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
+          layout="total, sizes, prev, pager, next, jumper"
           @change="load"
         />
       </template>

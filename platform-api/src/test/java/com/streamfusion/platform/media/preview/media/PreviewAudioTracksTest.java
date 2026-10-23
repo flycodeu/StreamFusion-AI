@@ -24,6 +24,19 @@ class PreviewAudioTracksTest {
     }
 
     @Test
+    void realZlmMpeg4GenericAndAacNamesNeedNormalizationButNeverDirectWebRtc() throws Exception {
+        for (String codec : new String[] {"AAC", "mpeg4-generic"}) {
+            var media =
+                    json.readTree(
+                            "[{\"tracks\":[{\"codec_type\":1,\"ready\":true,\"codec_id_name\":\""
+                                    + codec
+                                    + "\"}]}]");
+            assertThat(PreviewAudioTracks.requiresNormalization(media)).isTrue();
+            assertThat(PreviewAudioTracks.compatible(media)).isFalse();
+        }
+    }
+
+    @Test
     void unknownUnsupportedUnreadyAndAmbiguousAudioStayVideoOnly() throws Exception {
         for (String media :
                 new String[] {

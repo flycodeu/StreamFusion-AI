@@ -1,5 +1,6 @@
 package com.streamfusion.platform.common.security;
 
+import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.web.ApiErrorWriter;
 import com.streamfusion.platform.monitor.loginrecord.service.LoginRecordService;
@@ -10,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.web.SecurityFilterChain;
@@ -28,6 +30,7 @@ public class SecurityConfiguration {
             HttpSecurity http,
             ApiErrorWriter writer,
             CurrentUserService current,
+            ModuleAuthorizationService modules,
             LoginRecordService loginRecords,
             SecurityContextRepository contexts,
             HttpSessionCsrfTokenRepository csrf,
@@ -50,9 +53,21 @@ public class SecurityConfiguration {
                                 .requestMatchers(
                                         "/v3/api-docs",
                                         "/v3/api-docs/**",
+                                        "/v3/api-docs.yaml",
                                         "/swagger-ui.html",
                                         "/swagger-ui/**")
-                                .permitAll();
+                                .access(
+                                        (authentication, context) -> {
+                                            try {
+                                                // Protect both schema handlers and static Swagger
+                                                // resources before MVC; page visibility is not
+                                                // auth.
+                                                modules.authorize(context.getRequest(), "api-docs");
+                                                return new AuthorizationDecision(true);
+                                            } catch (BusinessException denied) {
+                                                return new AuthorizationDecision(false);
+                                            }
+                                        });
                     }
                     // TraceFilter recognizes registered @ModuleAccess paths before this chain.
                     // The error-contract boundary also preserves existing business URL behavior.

@@ -13,6 +13,7 @@ import {
 import { signOut } from '../../session/session'
 import { sessionState } from '../../session/state'
 import UserAvatar from '../../components/avatar/UserAvatar.vue'
+import SecurityAlertBell from '../../features/security/SecurityAlertBell.vue'
 
 defineProps<{ collapsed: boolean; displayName?: string }>()
 const emit = defineEmits<{ 'toggle-sidebar': [] }>()
@@ -62,11 +63,12 @@ async function command(value: string): Promise<void> {
         <path d="M9 4v16M13 9h4M13 13h4" />
       </svg>
     </button>
-    <ElBreadcrumb class="breadcrumbs" separator="/">
-      <ElBreadcrumbItem v-for="(item, index) in breadcrumbs" :key="index">{{
+    <ElBreadcrumb class="breadcrumbs" separator="/" :title="breadcrumbs.join(' / ')">
+      <ElBreadcrumbItem v-for="(item, index) in breadcrumbs" :key="index" :title="item">{{
         item
       }}</ElBreadcrumbItem>
     </ElBreadcrumb>
+    <SecurityAlertBell />
     <ElDropdown class="account" trigger="click" @command="command">
       <button class="account-trigger" type="button" aria-label="账户菜单">
         <UserAvatar
@@ -120,9 +122,24 @@ async function command(value: string): Promise<void> {
   height: 22px;
 }
 .breadcrumbs {
+  display: flex;
+  overflow: hidden;
   flex: 1;
   min-width: 0;
   line-height: 1.5;
+}
+.breadcrumbs :deep(.el-breadcrumb__item) {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.breadcrumbs :deep(.el-breadcrumb__inner) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.breadcrumbs :deep(.el-breadcrumb__separator) {
+  flex-shrink: 0;
 }
 .account {
   margin-left: auto;

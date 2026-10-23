@@ -89,6 +89,7 @@ vi.mock('element-plus', async () => {
   const { defineComponent, h, inject, provide } = await import('vue')
   const controls = [
     'ElButton',
+    'ElEmpty',
     'ElForm',
     'ElFormItem',
     'ElInput',
@@ -124,6 +125,12 @@ vi.mock('element-plus', async () => {
   )
   return {
     ...simple,
+    ElDropdown: defineComponent({
+      inheritAttrs: false,
+      setup(_, { attrs, slots }) {
+        return () => h('ElDropdown', attrs, [slots.default?.(), slots.dropdown?.()])
+      },
+    }),
     ElTreeSelect: defineComponent({
       inheritAttrs: false,
       setup(_, { attrs, slots }) {
@@ -361,6 +368,13 @@ const setField = async (root: Host, label: string, value: unknown, kind = 'ElInp
   ;(field(root, label, kind).props['onUpdate:modelValue'] as (value: unknown) => void)(value)
   await nextTick()
 }
+async function deviceTab(root: Host, value: string) {
+  const tabs = nodes(root).find((item) => item.type === 'ElTabs')!
+  if (await (tabs.props['before-leave'] as (value: string) => Promise<boolean>)(value)) {
+    ;(tabs.props['onUpdate:modelValue'] as (value: string) => void)(value)
+  }
+  await settle()
+}
 async function selectPlatformRegion(root: Host) {
   const tree = nodes(root).find((item) => item.type === 'ElTree')!
   await (tree.props.onNodeClick as (data: unknown, node: unknown) => Promise<void>)(
@@ -426,6 +440,7 @@ beforeEach(() => {
   ])
   api.getCameraDevice.mockResolvedValue({
     deviceId: '100',
+    sourceId: '1',
     name: '设备一',
     localName: null,
     remark: '北门',
@@ -433,6 +448,7 @@ beforeEach(() => {
   })
   api.updateCameraDevice.mockResolvedValue({
     deviceId: '100',
+    sourceId: '1',
     name: '入口相机',
     localName: '入口相机',
     remark: '北门',
@@ -1076,10 +1092,16 @@ describe('camera management interaction boundaries', () => {
       diagnostics: ['未配置联网策略'],
     })
     const root = await mount(CameraManage)
-    expect(button(root, '手动添加')).toBeDefined()
-    expect(button(root, '网段搜索')).toBeDefined()
-    expect(button(root, '平台导入')).toBeDefined()
-    await click(root, '手动添加')
+    for (const label of ['手动添加', '网段搜索', '平台导入']) {
+      expect(
+        nodes(root).find((item) => item.type === 'ElDropdownItem' && text(item) === label),
+      ).toBeDefined()
+    }
+    const add = nodes(root).find(
+      (item) => item.type === 'ElDropdown' && item.props['split-button'] !== undefined,
+    )!
+    await (add.props.onClick as () => void)()
+    await nextTick()
     await setField(
       nodes(root).find((item) => item.type === 'ElDialog')!,
       '相机名称',
@@ -1100,6 +1122,42 @@ describe('camera management interaction boundaries', () => {
     await settle()
     expect(nodes(root).filter((item) => item.type === 'ElDialog')).toHaveLength(0)
     expect(api.getCamera).not.toHaveBeenCalled()
+  })
+  it('resets device pagination when the user changes the page size', async () => {
+    api.getCameraDevices.mockResolvedValue({ items: [device], total: 200, page: 1, size: 20 })
+    const root = await mount(CameraManage)
+    const pager = nodes(root).find((item) => item.type === 'ElPagination')!
+    ;(pager.props['onUpdate:currentPage'] as (value: number) => void)(3)
+    await (pager.props.onChange as () => Promise<void>)()
+    expect(api.getCameraDevices).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 3, size: 20 }),
+    )
+    ;(pager.props['onUpdate:pageSize'] as (value: number) => void)(50)
+    ;(pager.props.onSizeChange as () => void)()
+    await (pager.props.onChange as () => Promise<void>)()
+    expect(api.getCameraDevices).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 1, size: 50 }),
+    )
+    expect(pager.props['page-sizes']).toEqual([20, 50, 100])
+  })
+  it('opens the responsive group drawer and closes it after choosing a group', async () => {
+    const root = await mount(CameraManage)
+    const toggle = nodes(root).find(
+      (item) => item.type === 'ElButton' && item.props.class === 'mobile-group-toggle',
+    )!
+    await (toggle.props.onClick as () => void)()
+    await settle()
+    const drawer = nodes(root).find((item) => item.type === 'ElDrawer')!
+    expect(drawer).toBeDefined()
+    const all = nodes(drawer).find(
+      (item) => item.type === 'ElButton' && text(item).includes('全部相机'),
+    )!
+    await (all.props.onClick as () => void)()
+    await settle()
+    expect(nodes(root).some((item) => item.type === 'ElDrawer')).toBe(false)
+    expect(api.getCameraDevices).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 1, groupId: undefined }),
+    )
   })
   it('reports missing storage keys separately from network-policy readiness even without credentials', async () => {
     const root = await mount(ManualCreateDialog, { storageReady: false })
@@ -1710,6 +1768,101 @@ describe('camera management interaction boundaries', () => {
     expect(api.updateSource).not.toHaveBeenCalled()
     expect(saved).toHaveBeenCalledWith('入口相机')
   })
+  it('opens the device source directly from edit and saves a custom brand without changing its protocol', async () => {
+    api.getSource.mockResolvedValue({
+      ...source,
+      connectionCategory: 'DEVICE',
+      adapterType: 'ONVIF',
+      vendorHint: null,
+      endpointEditable: false,
+    })
+    const root = await mount(DeviceEditor, { device })
+    await deviceTab(root, 'connection')
+    expect(api.getCameraDevice).toHaveBeenCalledWith('100')
+    expect(api.getSource).toHaveBeenCalledWith('1')
+    expect(field(root, '品牌', 'ElSelect').props).toMatchObject({
+      filterable: '',
+      'allow-create': '',
+    })
+    expect(field(root, '连接主机').props.disabled).toBe(true)
+    await setField(root, '品牌', '自定义品牌', 'ElSelect')
+    await click(root, '保存配置')
+    expect(api.updateSource).toHaveBeenCalledExactlyOnceWith('1', {
+      version: '4',
+      vendorHint: '自定义品牌',
+    })
+    expect(api.updateCameraDevice).not.toHaveBeenCalled()
+    expect(api.updateCamera).not.toHaveBeenCalled()
+  })
+  it('opens a standalone camera connection by its source ID and protects unsaved basic changes', async () => {
+    api.getCamera.mockResolvedValue({ ...camera, sourceId: '1' })
+    const root = await mount(DeviceEditor, {
+      device: { ...device, groupKey: 'c10', identified: false },
+    })
+    await setField(root, '相机名称', '未保存的新名称')
+    api.confirm.mockRejectedValueOnce('cancel')
+    await deviceTab(root, 'connection')
+    expect(api.getSource).not.toHaveBeenCalled()
+    expect(field(root, '相机名称').props.modelValue).toBe('未保存的新名称')
+    api.confirm.mockResolvedValueOnce('confirm')
+    await deviceTab(root, 'connection')
+    await settle()
+    expect(api.getSource).toHaveBeenCalledExactlyOnceWith('1')
+    expect(api.updateCamera).not.toHaveBeenCalled()
+    await deviceTab(root, 'basic')
+    expect(field(root, '相机名称').props.modelValue).toBe(camera.name)
+  })
+  it('replaces only an explicitly selected password and retains the saved account and endpoint', async () => {
+    api.getSource.mockResolvedValue({
+      ...source,
+      adapterType: 'ONVIF',
+      connectionCategory: 'DEVICE',
+      endpointEditable: false,
+      credentials: [{ purpose: 'ONVIF', configured: true, usernameMasked: 'a***' }],
+      endpoints: [
+        {
+          ...source.endpoints[0],
+          purpose: 'ONVIF',
+          authMode: 'DRIVER_NEGOTIATED',
+          credentialPurpose: 'ONVIF',
+        },
+      ],
+    })
+    const root = await mount(SourceEditor, { sourceId: '1' })
+    expect(field(root, '设备密码', 'ElSelect').props.modelValue).toBe('KEEP')
+    expect(
+      nodes(root).some((item) => item.type === 'ElInput' && item.props.type === 'password'),
+    ).toBe(false)
+    await setField(root, '设备密码', 'REPLACE', 'ElSelect')
+    await click(root, '保存配置')
+    expect(api.updateSource).not.toHaveBeenCalled()
+    expect(text(root)).toContain('需要替换的账号密码')
+    await setField(root, '设备密码', ' example-password ')
+    await click(root, '保存配置')
+    expect(api.updateSource).toHaveBeenCalledExactlyOnceWith('1', {
+      version: '4',
+      credentialsUpsert: [
+        {
+          purpose: 'ONVIF',
+          username: { action: 'KEEP' },
+          password: { action: 'REPLACE', value: ' example-password ' },
+        },
+      ],
+    })
+  })
+  it('keeps an unsaved connection open on cancel and retains the draft after a version conflict', async () => {
+    const closed = vi.fn()
+    const root = await mount(SourceEditor, { sourceId: '1', onClose: closed })
+    await setField(root, '品牌', '本地品牌', 'ElSelect')
+    api.confirm.mockRejectedValueOnce('cancel')
+    await click(root, '关闭')
+    expect(closed).not.toHaveBeenCalled()
+    api.updateSource.mockRejectedValueOnce(new ApiRequestError('VERSION_CONFLICT', '配置已被修改'))
+    await click(root, '保存配置')
+    expect(text(root)).toContain('配置已被修改')
+    expect(field(root, '品牌', 'ElSelect').props.modelValue).toBe('本地品牌')
+    expect(closed).not.toHaveBeenCalled()
+  })
   it('keeps unidentified camera edits on their single record and protects unsaved changes', async () => {
     const closed = vi.fn()
     const root = await mount(DeviceEditor, {
@@ -1743,6 +1896,7 @@ describe('camera management interaction boundaries', () => {
     expect(labels).toContain('品牌')
     expect(labels).not.toContain('可见通道')
     expect(labels).toContain('连接状态')
+    expect(labels).not.toContain('所属分组')
     expect(labels).toContain('IP / 主机')
     expect(labels).toContain('端口')
     expect(labels).not.toContain('配置状态')

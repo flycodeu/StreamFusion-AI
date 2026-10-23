@@ -161,7 +161,12 @@ async function remove(node: MenuNode): Promise<void> {
   const inScope = captureScope()
   deleting.value = true
   try {
-    await ElMessageBox.confirm(`删除菜单“${node.name}”？`, '确认删除', { type: 'warning' })
+    await ElMessageBox.confirm(`删除菜单“${node.name}”？`, '确认删除', {
+      type: 'warning',
+      confirmButtonClass: 'el-button--danger',
+      confirmButtonText: '确认删除',
+      cancelButtonText: '取消',
+    })
     if (!inScope()) return
     await api.deleteMenu(node)
     if (!inScope()) return
@@ -198,7 +203,7 @@ onMounted(load)
       >
     </ElForm>
     <RequestError :error="error" />
-    <TablePanel>
+    <TablePanel :initial-loading="loading && !rows.length">
       <template #actions
         ><ElButton type="primary" @click="blank()">新建菜单</ElButton
         ><ElButton :disabled="!singleSelected" @click="singleSelected && openEdit(singleSelected)"

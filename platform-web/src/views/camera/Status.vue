@@ -124,7 +124,7 @@ const capacityHint = computed(() =>
 function search() {
   query.value = {
     page: 1,
-    size: 20,
+    size: query.value.size,
     layer: layer.value,
     name: name.value.trim() || undefined,
     observation: observation.value || undefined,
@@ -141,8 +141,8 @@ function changeLayer(value: string | number | boolean | undefined) {
   observation.value = null
   search()
 }
-function changePage(page: number) {
-  query.value = { ...query.value, page }
+function changePage(page: number, size = query.value.size) {
+  query.value = { ...query.value, page: size === query.value.size ? page : 1, size }
 }
 function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
   target.value = { channel, profileId: profile.streamProfileId }
@@ -213,7 +213,7 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
         </template>
       </div>
     </section>
-    <TablePanel>
+    <TablePanel :initial-loading="loading && !result">
       <template #actions
         ><ElButton type="primary" @click="plansOpen = true">巡检任务</ElButton></template
       >
@@ -237,8 +237,10 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
           :page-size="query.size"
           :total="total"
           :disabled="loading || !result"
-          layout="total, prev, pager, next"
-          @current-change="changePage"
+          :page-sizes="[20, 50, 100]"
+          layout="total, sizes, prev, pager, next, jumper"
+          @update:current-page="changePage($event)"
+          @update:page-size="changePage(1, $event)"
       /></template>
     </TablePanel>
     <PlanDialog

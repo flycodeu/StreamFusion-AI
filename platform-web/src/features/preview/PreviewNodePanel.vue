@@ -465,17 +465,11 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
 <template>
   <section class="preview-node-panel" :aria-label="management ? '预览节点管理' : '预览节点总览'">
     <header class="node-title">
-      <div>
+      <div class="node-title-label">
         <h2>预览节点</h2>
-        <span>{{ snapshot?.nodes.length ?? '—' }} 台已登记</span>
+        <span class="node-count">{{ snapshot?.nodes.length ?? '—' }} 台已登记</span>
       </div>
-    </header>
-    <RequestError
-      :error="error"
-      advice="核对节点原因和预算；连接异常时检查证书、凭据与节点日志，资源未确认关闭前保留占用。"
-    />
-    <div v-if="snapshot" class="node-content">
-      <div class="node-actions">
+      <div v-if="snapshot" class="node-actions">
         <ElButton :loading="busy" @click="run(() => previewNodeAction('check'))">检查节点</ElButton>
         <ElButton
           v-if="canManage"
@@ -483,100 +477,255 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           @click="run(() => previewNodeAction('reconcile'))"
           >重新核对资源</ElButton
         >
+        <button
+          v-if="canManage"
+          type="button"
+          class="guide-trigger primary-trigger"
+          popovertarget="preview-package-panel"
+        >
+          + 接入节点包
+        </button>
         <RouterLink v-if="!management" to="/preview/center">前往预览</RouterLink>
+      </div>
+    </header>
+    <RequestError
+      :error="error"
+      advice="核对节点原因和预算；连接异常时检查证书、凭据与节点日志，资源未确认关闭前保留占用。"
+    />
+    <div v-if="snapshot" class="node-content">
+      <div class="node-list">
+        <article
+          v-for="node in management
+            ? snapshot.nodes.filter((item) => item.kind !== 'ZLM_DIRECT')
+            : snapshot.nodes"
+          :key="node.nodeId"
+          class="node-card"
+          :style="{ order: node.nodeId === 'local' ? -1 : 0 }"
+        >
+          <div class="node-heading">
+            <div>
+              <h3>{{ node.name }}</h3>
+              <small>{{ node.nodeId }} · 优先级 {{ node.priority }}</small>
+            </div>
+            <ElTag round :type="node.mode === 'REMOTE' ? 'primary' : 'info'">{{
+              names[node.mode]
+            }}</ElTag>
+          </div>
+          <div class="node-status-bar" :class="{ ready: node.state === 'READY' }">
+            <p class="node-state">
+              <span class="state-dot" aria-hidden="true"></span> 实际状态：{{
+                names[node.state] || node.state
+              }}<span v-if="node.observedAt"> · {{ formatDateTime(node.observedAt) }}</span>
+            </p>
+            <dl class="node-identity">
+              <div>
+                <dt>
+                  {{
+                    node.kind === 'ZLM_DIRECT'
+                      ? 'ZLM API 地址'
+                      : node.nodeId === 'local'
+                        ? 'ZLM 地址'
+                        : '节点控制地址'
+                  }}
+                </dt>
+                <dd>
+                  {{
+                    node.kind === 'ZLM_DIRECT'
+                      ? node.zlmApiAddress || '未登记'
+                      : node.nodeId === 'local'
+                        ? localZlm?.apiBase || '本机'
+                        : node.controlUri || '未登记'
+                  }}
+                </dd>
+              </div>
+              <div v-if="node.nodeId !== 'local'">
+                <dt>媒体地址</dt>
+                <dd>{{ node.mediaAddress || '未登记' }}</dd>
+              </div>
+              <div v-if="node.opsSource">
+                <dt>Ops 已同步版本</dt>
+                <dd>
+                  <code>{{ node.opsSource.releaseId }}</code> ·
+                  {{ formatDateTime(node.opsSource.syncedAt) }}
+                </dd>
+              </div>
+              <div v-if="node.kind !== 'ZLM_DIRECT'">
+                <dt>{{ node.nodeId === 'local' ? 'ZLM 版本' : '节点程序版本' }}</dt>
+                <dd>
+                  {{
+                    node.nodeId === 'local'
+                      ? localZlm?.softwareVersion || '未检测'
+                      : node.observation?.version || '未上报'
+                  }}
+                </dd>
+              </div>
+              <div v-if="node.kind === 'MANAGED' || (node.nodeId !== 'local' && !node.kind)">
+                <dt>ZLM 版本</dt>
+                <dd>节点未上报</dd>
+              </div>
+              <div v-if="node.nodeId === 'local' && localZlm?.ports.length">
+                <dt>监听端口</dt>
+                <dd class="node-ports">
+                  <span v-for="port in localZlm.ports" :key="`${port.protocol}-${port.port}`">
+                    {{ port.protocol }} {{ port.port }}
+                  </span>
+                </dd>
+              </div>
+            </dl>
+          </div>
+          <div class="node-operational">
+            <dl class="node-metrics">
+              <div>
+                <dt>源流</dt>
+                <dd>{{ node.usage.sources }} / {{ node.budget.maxSources }}</dd>
+                <dd class="metric-track">
+                  <progress
+                    :value="node.usage.sources"
+                    :max="Math.max(1, node.budget.maxSources)"
+                    aria-label="源流预算使用率"
+                  ></progress>
+                </dd>
+              </div>
+              <div>
+                <dt>观看</dt>
+                <dd>{{ node.usage.viewers }} / {{ node.budget.maxViewers }}</dd>
+                <dd class="metric-track">
+                  <progress
+                    :value="node.usage.viewers"
+                    :max="Math.max(1, node.budget.maxViewers)"
+                    aria-label="观看预算使用率"
+                  ></progress>
+                </dd>
+              </div>
+              <div>
+                <dt>转码</dt>
+                <dd>{{ node.usage.transcodes }} / {{ node.budget.maxTranscodes }}</dd>
+                <dd class="metric-track">
+                  <progress
+                    :value="node.usage.transcodes"
+                    :max="Math.max(1, node.budget.maxTranscodes)"
+                    aria-label="转码预算使用率"
+                  ></progress>
+                </dd>
+              </div>
+              <div>
+                <dt>启动中</dt>
+                <dd>{{ node.usage.starting }} / {{ node.budget.maxStarting }}</dd>
+                <dd class="metric-track">
+                  <progress
+                    :value="node.usage.starting"
+                    :max="Math.max(1, node.budget.maxStarting)"
+                    aria-label="启动中预算使用率"
+                  ></progress>
+                </dd>
+              </div>
+            </dl>
+            <div class="node-bandwidth">
+              <div>
+                <div class="bandwidth-label">
+                  <span>预留入站</span
+                  ><strong
+                    >{{ (node.usage.ingressKbps / 1000).toFixed(1) }} /
+                    {{ node.budget.ingressKbps / 1000 }} Mbps</strong
+                  >
+                </div>
+                <progress
+                  :value="node.usage.ingressKbps"
+                  :max="Math.max(1, node.budget.ingressKbps)"
+                  aria-label="预留入站带宽使用率"
+                ></progress>
+              </div>
+              <div>
+                <div class="bandwidth-label">
+                  <span>预留出口</span
+                  ><strong
+                    >{{ (node.usage.egressKbps / 1000).toFixed(1) }} /
+                    {{ node.budget.egressKbps / 1000 }} Mbps</strong
+                  >
+                </div>
+                <progress
+                  :value="node.usage.egressKbps"
+                  :max="Math.max(1, node.budget.egressKbps)"
+                  aria-label="预留出口带宽使用率"
+                ></progress>
+              </div>
+            </div>
+            <ZlmNetworkLoad v-if="node.kind === 'ZLM_DIRECT'" :load="liveZlmLoad(node)" />
+            <p v-if="node.reasonCode" class="node-reason">
+              {{ previewReason(node.reasonCode) }} <code>{{ node.reasonCode }}</code>
+            </p>
+            <div class="node-actions node-footer">
+              <ElButton text @click="diagnostic = node">诊断 JSON</ElButton>
+              <template v-if="canManage">
+                <ElButton text :disabled="busy" @click="edit(node)">预算与优先级</ElButton>
+                <ElButton
+                  v-if="node.opsSource"
+                  :disabled="busy || node.mode !== 'DRAINING'"
+                  @click="synchronizing = node"
+                  >同步 Ops 配置</ElButton
+                >
+                <ElButton
+                  v-if="node.kind !== 'ZLM_DIRECT' && node.nodeId !== 'local'"
+                  :disabled="busy"
+                  @click="openMaintenance(node)"
+                  >维护许可</ElButton
+                >
+                <ElButton
+                  v-if="node.mode !== 'REMOTE'"
+                  class="node-mode-action"
+                  :disabled="busy"
+                  @click="mode(node, 'REMOTE')"
+                  >参与调度</ElButton
+                >
+                <ElButton
+                  v-else
+                  text
+                  class="node-mode-action drain-action"
+                  :disabled="busy"
+                  @click="mode(node, 'DRAINING')"
+                  >停止接新预览</ElButton
+                >
+              </template>
+            </div>
+            <details v-if="canManage && node.nodeId !== 'local'" class="node-advanced">
+              <summary>高级连接配置</summary>
+              <ElButton
+                v-if="node.kind !== 'ZLM_DIRECT' && !node.opsSource"
+                :disabled="busy || node.mode === 'REMOTE'"
+                @click="openConnection(node)"
+                >手工修改连接</ElButton
+              >
+              <ElButton
+                v-if="!node.opsSource"
+                :disabled="busy || node.mode !== 'DRAINING'"
+                @click="synchronizing = node"
+                >关联现有 Ops 实例</ElButton
+              >
+              <p v-else class="connection-empty">连接由 Ops 来源维护；修改配置请使用同步入口。</p>
+            </details>
+          </div>
+        </article>
       </div>
       <section v-if="canManage" class="node-guide direct-guide" aria-label="直连 ZLM">
         <div class="connection-heading">
-          <h3>直连 ZLM</h3>
+          <div>
+            <h3>直连 ZLM</h3>
+            <p class="connection-hint">手工接入与 Ops 引入互不依赖；接入后需手动参与调度</p>
+          </div>
           <div class="node-actions">
+            <button type="button" class="guide-trigger" popovertarget="preview-ops-zlm-panel">
+              从 Ops 引入 ZLM
+            </button>
             <ElButton
               :disabled="busy || directBusy || !directInstances?.registrationAvailable"
+              type="primary"
               @click="openDirectForm()"
-              >接入 ZLM</ElButton
+              >+ 接入 ZLM</ElButton
             >
-            <ElButton :loading="directBusy" @click="loadDirectInstances()">刷新</ElButton>
+            <ElButton text :loading="directBusy" @click="loadDirectInstances()">刷新</ElButton>
           </div>
         </div>
         <RequestError :error="directError" :advice="directAdvice" />
-        <p class="connection-hint">手工接入与 Ops 引入互不依赖；接入后需手动参与调度。</p>
-        <details class="ops-zlm-catalog">
-          <summary>
-            从 Ops 引入 ZLM（按需选择）<span v-if="opsZlmInstances?.items.length">
-              · {{ opsZlmInstances.items.length }} 台可查看</span
-            >
-          </summary>
-          <div class="connection-heading">
-            <h4>已发布实例</h4>
-            <ElButton :loading="opsZlmBusy" @click="loadOpsZlmInstances()">刷新</ElButton>
-          </div>
-          <RequestError
-            :error="opsZlmError"
-            advice="检查 Platform 与 Ops 的连接，以及 Ops 中 ZLM 实例的发布状态。"
-          />
-          <p v-if="opsZlmBusy && !opsZlmInstances" class="connection-empty">
-            正在读取 Ops 的 ZLM 实例…
-          </p>
-          <p v-else-if="opsZlmInstances?.reasonCode" class="connection-empty">
-            {{ previewReason(opsZlmInstances.reasonCode) }}
-            <code>{{ opsZlmInstances.reasonCode }}</code>
-          </p>
-          <p v-else-if="opsZlmInstances && !opsZlmInstances.available" class="connection-empty">
-            Ops 目录未配置；可继续手工接入。
-          </p>
-          <p v-else-if="opsZlmInstances && !opsZlmInstances.items.length" class="connection-empty">
-            Ops 暂无已发布的 ZLM 实例。
-          </p>
-          <div v-if="opsZlmInstances?.items.length" class="connection-list">
-            <article
-              v-for="item in opsZlmInstances.items"
-              :key="item.instanceId"
-              class="connection-row"
-            >
-              <div class="connection-detail">
-                <div class="connection-name">
-                  <strong>{{ item.name }}</strong>
-                  <ElTag
-                    :type="opsZlmStatus(item) === 'available' ? 'warning' : 'info'"
-                    effect="plain"
-                  >
-                    {{
-                      opsZlmStatus(item) === 'linked'
-                        ? '已引入平台'
-                        : opsZlmStatus(item) === 'occupied'
-                          ? '地址已登记'
-                          : '未引入平台'
-                    }}
-                  </ElTag>
-                </div>
-                <div class="connection-meta">
-                  <span>服务器：{{ item.targetName }}</span>
-                  <span v-if="item.targetAddress">服务器地址：{{ item.targetAddress }}</span>
-                  <span>媒体地址：{{ item.mediaAddress }}</span>
-                </div>
-                <div class="connection-meta">
-                  <span>ZLM HTTP API：{{ item.apiUrl }}</span>
-                  <span>HTTP 端口：{{ item.apiPort }}</span>
-                  <span>RTC 端口：{{ item.rtcPort }}</span>
-                  <span>Ops 目标根目录：{{ item.installRoot }}</span>
-                  <span v-if="item.installPath">ZLM 发布目录：{{ item.installPath }}</span>
-                  <span>发布版本：{{ item.releaseId }}</span>
-                </div>
-              </div>
-              <ElButton
-                :disabled="
-                  busy ||
-                  opsZlmBusy ||
-                  !item.controllerId ||
-                  !item.targetId ||
-                  !directInstances?.registrationAvailable ||
-                  opsZlmStatus(item) !== 'available'
-                "
-                @click="importZlmFromOps(item.instanceId, item.releaseId)"
-                >引入平台</ElButton
-              >
-            </article>
-          </div>
-        </details>
         <p v-if="directBusy && !directInstances" class="connection-empty">正在读取 ZLM 实例…</p>
         <p
           v-else-if="directInstances && !directInstances.registrationAvailable"
@@ -584,9 +733,20 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
         >
           平台密钥存储不可用，请检查服务账号权限。
         </p>
-        <p v-if="directInstances && !directInstances.items.length" class="connection-empty">
-          尚未接入 ZLM 实例。
-        </p>
+        <div v-if="directInstances && !directInstances.items.length" class="direct-empty">
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 40 40"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+          >
+            <rect x="8" y="7" width="24" height="11" rx="3" />
+            <rect x="8" y="22" width="24" height="11" rx="3" />
+            <path d="M13 12.5h2m-2 15h2m5-15h7m-7 15h7" />
+          </svg>
+          <strong>尚未接入 ZLM 实例</strong><span>手工接入或从 Ops 引入后，即可在此管理</span>
+        </div>
         <div v-if="directInstances?.items.length" class="connection-list">
           <article
             v-for="item in directInstances.items"
@@ -675,8 +835,27 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           </article>
         </div>
       </section>
-      <details v-if="canManage" class="node-guide node-package-guide" aria-label="接入预览节点">
-        <summary>接入节点包</summary>
+      <section
+        v-if="canManage"
+        id="preview-package-panel"
+        popover="auto"
+        class="guide-popover node-package-guide"
+        aria-label="接入预览节点"
+      >
+        <header class="popover-heading">
+          <div>
+            <h3>接入节点包</h3>
+            <p>从 Ops 引入或手工登记远程节点</p>
+          </div>
+          <button
+            type="button"
+            class="guide-trigger"
+            popovertarget="preview-package-panel"
+            popovertargetaction="hide"
+          >
+            关闭
+          </button>
+        </header>
         <div class="connection-heading">
           <h3>Ops 已安装</h3>
           <div class="node-actions">
@@ -775,161 +954,99 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             >手工登记</ElButton
           >
         </details>
-      </details>
-      <div class="node-list">
-        <article
-          v-for="node in management
-            ? snapshot.nodes.filter((item) => item.kind !== 'ZLM_DIRECT')
-            : snapshot.nodes"
-          :key="node.nodeId"
-          class="node-card"
-        >
-          <div class="node-heading">
-            <div>
-              <h3>{{ node.name }}</h3>
-              <small>{{ node.nodeId }} · 优先级 {{ node.priority }}</small>
-            </div>
-            <ElTag effect="plain">{{ names[node.mode] }}</ElTag>
+      </section>
+      <section
+        id="preview-ops-zlm-panel"
+        popover="auto"
+        class="guide-popover ops-zlm-catalog"
+        aria-label="从 Ops 引入 ZLM"
+      >
+        <header class="popover-heading">
+          <div>
+            <h3>从 Ops 引入 ZLM</h3>
+            <p>选择已发布实例接入预览调度</p>
           </div>
-          <p class="node-state">
-            实际状态：{{ names[node.state] || node.state
-            }}<span v-if="node.observedAt"> · {{ formatDateTime(node.observedAt) }}</span>
-          </p>
-          <dl class="node-identity">
-            <div>
-              <dt>
-                {{
-                  node.kind === 'ZLM_DIRECT'
-                    ? 'ZLM API 地址'
-                    : node.nodeId === 'local'
-                      ? 'ZLM 地址'
-                      : '节点控制地址'
-                }}
-              </dt>
-              <dd>
-                {{
-                  node.kind === 'ZLM_DIRECT'
-                    ? node.zlmApiAddress || '未登记'
-                    : node.nodeId === 'local'
-                      ? localZlm?.apiBase || '本机'
-                      : node.controlUri || '未登记'
-                }}
-              </dd>
-            </div>
-            <div v-if="node.nodeId !== 'local'">
-              <dt>媒体地址</dt>
-              <dd>{{ node.mediaAddress || '未登记' }}</dd>
-            </div>
-            <div v-if="node.opsSource">
-              <dt>Ops 已同步版本</dt>
-              <dd>
-                <code>{{ node.opsSource.releaseId }}</code> ·
-                {{ formatDateTime(node.opsSource.syncedAt) }}
-              </dd>
-            </div>
-            <div v-if="node.kind !== 'ZLM_DIRECT'">
-              <dt>{{ node.nodeId === 'local' ? 'ZLM 版本' : '节点程序版本' }}</dt>
-              <dd>
-                {{
-                  node.nodeId === 'local'
-                    ? localZlm?.softwareVersion || '未检测'
-                    : node.observation?.version || '未上报'
-                }}
-              </dd>
-            </div>
-            <div v-if="node.kind === 'MANAGED' || (node.nodeId !== 'local' && !node.kind)">
-              <dt>ZLM 版本</dt>
-              <dd>节点未上报</dd>
-            </div>
-            <div v-if="node.nodeId === 'local' && localZlm?.ports.length">
-              <dt>监听端口</dt>
-              <dd class="node-ports">
-                <span v-for="port in localZlm.ports" :key="`${port.protocol}-${port.port}`">
-                  {{ port.protocol }} {{ port.port }}
-                </span>
-              </dd>
-            </div>
-          </dl>
-          <div class="node-operational">
-            <dl class="node-metrics">
-              <div>
-                <dt>源流</dt>
-                <dd>{{ node.usage.sources }} / {{ node.budget.maxSources }}</dd>
-              </div>
-              <div>
-                <dt>观看</dt>
-                <dd>{{ node.usage.viewers }} / {{ node.budget.maxViewers }}</dd>
-              </div>
-              <div>
-                <dt>转码</dt>
-                <dd>{{ node.usage.transcodes }} / {{ node.budget.maxTranscodes }}</dd>
-              </div>
-              <div>
-                <dt>启动中</dt>
-                <dd>{{ node.usage.starting }} / {{ node.budget.maxStarting }}</dd>
-              </div>
-            </dl>
-            <div class="node-bandwidth">
-              <span>预留带宽</span>
-              <span
-                >入站 {{ (node.usage.ingressKbps / 1000).toFixed(1) }} /
-                {{ node.budget.ingressKbps / 1000 }} Mbps</span
-              >
-              <span
-                >出口 {{ (node.usage.egressKbps / 1000).toFixed(1) }} /
-                {{ node.budget.egressKbps / 1000 }} Mbps</span
-              >
-            </div>
-            <ZlmNetworkLoad v-if="node.kind === 'ZLM_DIRECT'" :load="liveZlmLoad(node)" />
-            <p v-if="node.reasonCode" class="node-reason">
-              {{ previewReason(node.reasonCode) }} <code>{{ node.reasonCode }}</code>
-            </p>
-            <div class="node-actions">
-              <ElButton @click="diagnostic = node">诊断 JSON</ElButton>
-              <template v-if="canManage">
-                <ElButton :disabled="busy" @click="edit(node)">预算与优先级</ElButton>
-                <ElButton
-                  v-if="node.opsSource"
-                  :disabled="busy || node.mode !== 'DRAINING'"
-                  @click="synchronizing = node"
-                  >同步 Ops 配置</ElButton
+          <button
+            type="button"
+            class="guide-trigger"
+            popovertarget="preview-ops-zlm-panel"
+            popovertargetaction="hide"
+          >
+            关闭
+          </button>
+        </header>
+        <div class="connection-heading">
+          <h4>已发布实例</h4>
+          <ElButton :loading="opsZlmBusy" @click="loadOpsZlmInstances()">刷新</ElButton>
+        </div>
+        <RequestError
+          :error="opsZlmError"
+          advice="检查 Platform 与 Ops 的连接，以及 Ops 中 ZLM 实例的发布状态。"
+        />
+        <p v-if="opsZlmBusy && !opsZlmInstances" class="connection-empty">
+          正在读取 Ops 的 ZLM 实例…
+        </p>
+        <p v-else-if="opsZlmInstances?.reasonCode" class="connection-empty">
+          {{ previewReason(opsZlmInstances.reasonCode) }}
+          <code>{{ opsZlmInstances.reasonCode }}</code>
+        </p>
+        <p v-else-if="opsZlmInstances && !opsZlmInstances.available" class="connection-empty">
+          Ops 目录未配置；可继续手工接入。
+        </p>
+        <p v-else-if="opsZlmInstances && !opsZlmInstances.items.length" class="connection-empty">
+          Ops 暂无已发布的 ZLM 实例。
+        </p>
+        <div v-if="opsZlmInstances?.items.length" class="connection-list">
+          <article
+            v-for="item in opsZlmInstances.items"
+            :key="item.instanceId"
+            class="connection-row"
+          >
+            <div class="connection-detail">
+              <div class="connection-name">
+                <strong>{{ item.name }}</strong>
+                <ElTag
+                  :type="opsZlmStatus(item) === 'available' ? 'warning' : 'info'"
+                  effect="plain"
                 >
-                <ElButton
-                  v-if="node.kind !== 'ZLM_DIRECT' && node.nodeId !== 'local'"
-                  :disabled="busy"
-                  @click="openMaintenance(node)"
-                  >维护许可</ElButton
-                >
-                <ElButton
-                  v-if="node.mode !== 'REMOTE'"
-                  :disabled="busy"
-                  @click="mode(node, 'REMOTE')"
-                  >参与调度</ElButton
-                >
-                <ElButton v-else :disabled="busy" @click="mode(node, 'DRAINING')"
-                  >停止接新预览</ElButton
-                >
-              </template>
+                  {{
+                    opsZlmStatus(item) === 'linked'
+                      ? '已引入平台'
+                      : opsZlmStatus(item) === 'occupied'
+                        ? '地址已登记'
+                        : '未引入平台'
+                  }}
+                </ElTag>
+              </div>
+              <div class="connection-meta">
+                <span>服务器：{{ item.targetName }}</span>
+                <span v-if="item.targetAddress">服务器地址：{{ item.targetAddress }}</span>
+                <span>媒体地址：{{ item.mediaAddress }}</span>
+              </div>
+              <div class="connection-meta">
+                <span>ZLM HTTP API：{{ item.apiUrl }}</span>
+                <span>HTTP 端口：{{ item.apiPort }}</span>
+                <span>RTC 端口：{{ item.rtcPort }}</span>
+                <span>Ops 目标根目录：{{ item.installRoot }}</span>
+                <span v-if="item.installPath">ZLM 发布目录：{{ item.installPath }}</span>
+                <span>发布版本：{{ item.releaseId }}</span>
+              </div>
             </div>
-            <details v-if="canManage && node.nodeId !== 'local'" class="node-advanced">
-              <summary>高级连接配置</summary>
-              <ElButton
-                v-if="node.kind !== 'ZLM_DIRECT' && !node.opsSource"
-                :disabled="busy || node.mode === 'REMOTE'"
-                @click="openConnection(node)"
-                >手工修改连接</ElButton
-              >
-              <ElButton
-                v-if="!node.opsSource"
-                :disabled="busy || node.mode !== 'DRAINING'"
-                @click="synchronizing = node"
-                >关联现有 Ops 实例</ElButton
-              >
-              <p v-else class="connection-empty">连接由 Ops 来源维护；修改配置请使用同步入口。</p>
-            </details>
-          </div>
-        </article>
-      </div>
+            <ElButton
+              :disabled="
+                busy ||
+                opsZlmBusy ||
+                !item.controllerId ||
+                !item.targetId ||
+                !directInstances?.registrationAvailable ||
+                opsZlmStatus(item) !== 'available'
+              "
+              @click="importZlmFromOps(item.instanceId, item.releaseId)"
+              >引入平台</ElButton
+            >
+          </article>
+        </div>
+      </section>
     </div>
     <PreviewOpsSync
       v-if="synchronizing && canManage"
@@ -1228,143 +1345,232 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
 
 <style scoped>
 .preview-node-panel {
-  padding: 20px 24px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--el-bg-color);
-}
-.node-title,
-.node-title > div {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  background: transparent;
 }
 .node-title {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
+  gap: 16px;
+  padding: 16px 24px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+.node-title-label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 .node-title h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #0f172a;
 }
-.node-title span {
-  color: var(--text-secondary);
-  font-size: 13px;
+.node-count {
+  border-radius: 20px;
+  background: #f1f5f9;
+  color: #64748b;
+  padding: 5px 10px;
+  font-size: 12px;
 }
 .node-content {
-  margin-top: 20px;
+  display: grid;
+  gap: 16px;
+  min-width: 0;
 }
 .node-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 720px));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
   gap: 16px;
-  margin-top: 16px;
 }
 .node-card {
   container-name: node-card;
   container-type: inline-size;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-content: start;
   min-width: 0;
-  width: 100%;
-  max-width: 720px;
-  box-sizing: border-box;
-  padding: 18px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  padding: 20px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+  transition: box-shadow 0.18s ease;
 }
-.node-heading {
+.node-card:only-child {
   grid-column: 1 / -1;
+}
+.node-card:hover {
+  box-shadow: 0 5px 18px #0f172a08;
+}
+.node-heading,
+.node-heading > div {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
 }
+.node-heading {
+  justify-content: space-between;
+}
 h3 {
-  font-size: 16px;
-  margin: 0 0 4px;
-}
-small,
-.node-state,
-.node-bandwidth,
-.node-guide {
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.8;
-}
-.node-metrics {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0 0 14px;
-}
-.node-metrics > div {
-  min-width: 0;
-}
-.node-identity {
   margin: 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  font-size: 16px;
+  color: #0f172a;
+  font-weight: 600;
+}
+.node-heading small {
+  font:
+    12px ui-monospace,
+    Consolas,
+    monospace;
+  color: #64748b;
+  background: #f1f5f9;
+  padding: 4px 8px;
+  border-radius: 5px;
+  overflow-wrap: anywhere;
+}
+.node-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px 16px;
-  align-content: start;
+  margin: 16px 0;
+  padding: 8px 12px;
+  background: #fff7ed;
+  border-radius: 6px;
+  color: #78614d;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.node-status-bar.ready {
+  background: #f0fdf4;
+  color: #406b50;
 }
 .node-state {
-  grid-column: 1 / -1;
-  margin: 10px 0 16px;
+  margin: 0;
 }
-.node-operational {
-  min-width: 0;
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border-subtle);
+.state-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin: 0 6px 2px 0;
+  background: #d97706;
+}
+.ready .state-dot {
+  background: #16a34a;
+}
+.node-identity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  font-size: 13px;
 }
 .node-identity > div {
-  display: grid;
-  grid-template-columns: 100px minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
 }
-.node-identity > div:has(.node-ports) {
-  grid-column: 1 / -1;
+.node-identity dt::after {
+  content: ':';
 }
 .node-identity dd {
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+dt,
+dd {
   margin: 0;
 }
 .node-ports {
   display: flex;
+  gap: 8px;
   flex-wrap: wrap;
-  column-gap: 12px;
-  row-gap: 2px;
 }
-.node-ports > span {
-  white-space: nowrap;
+.node-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 0 16px;
+}
+.node-metrics > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.node-metrics dt {
+  color: #64748b;
+  font-size: 12px;
+  margin-bottom: 7px;
+}
+.node-metrics dd {
+  color: #0f172a;
+  font:
+    600 16px ui-monospace,
+    Consolas,
+    monospace;
+}
+.node-metrics .metric-track {
+  margin-top: 10px;
+}
+progress {
+  display: block;
+  width: 100%;
+  height: 4px;
+  border: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  appearance: none;
+  background: #e2e8f0;
+  color: #60a5fa;
+}
+progress::-webkit-progress-bar {
+  background: #e2e8f0;
+  border-radius: 6px;
+}
+progress::-webkit-progress-value {
+  background: #60a5fa;
+  border-radius: 6px;
+}
+progress::-moz-progress-bar {
+  background: #60a5fa;
+  border-radius: 6px;
 }
 .node-bandwidth {
   display: grid;
-  grid-template-columns: auto repeat(2, minmax(0, 1fr));
-  gap: 6px 12px;
-  margin: 0 0 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-bottom: 16px;
 }
-.node-bandwidth > span:first-child {
-  color: var(--el-text-color-primary);
-  font-weight: 600;
-}
-dt {
-  color: var(--text-secondary);
+.bandwidth-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
   font-size: 12px;
+  color: #64748b;
 }
-dd {
-  margin: 0;
+.bandwidth-label strong {
+  font-size: 13px;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
+  color: #334155;
+}
+.node-bandwidth progress {
+  height: 6px;
 }
 .node-actions {
   display: flex;
-  gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+  gap: 8px;
 }
 .node-actions :deep(.el-button + .el-button) {
   margin-left: 0;
@@ -1373,146 +1579,212 @@ dd {
   font-size: 14px;
   color: var(--el-color-primary);
 }
-.node-guide {
-  margin-top: 20px;
-  border-top: 1px solid var(--border-subtle);
-  padding-top: 16px;
+.node-footer {
+  border-top: 1px solid #f1f5f9;
+  padding-top: 12px;
 }
-.node-guide h3 {
-  color: var(--el-text-color-primary);
+.node-footer :deep(.el-button.node-mode-action) {
+  margin-left: auto;
 }
-.ops-zlm-catalog {
-  margin: 12px 0 16px;
-  padding: 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+.drain-action {
+  color: #a16207;
 }
-.ops-zlm-catalog > summary,
-.node-package-guide > summary {
-  cursor: pointer;
-  color: var(--el-text-color-primary);
-  font-size: 14px;
-  font-weight: 600;
+.drain-action:hover {
+  color: #dc2626;
+  background: #fff1f2;
 }
-.ops-zlm-catalog > .connection-heading,
-.node-package-guide > .connection-heading {
-  margin-top: 12px;
-}
-.ops-zlm-catalog > summary span {
-  color: var(--text-secondary);
-  font-weight: 400;
-}
-.ops-zlm-catalog h4 {
-  margin: 0;
-  color: var(--el-text-color-primary);
-  font-size: 13px;
-}
-.connection-empty,
-.connection-hint {
-  margin: 4px 0 0;
-}
-.connection-name code {
-  overflow-wrap: anywhere;
+.direct-guide {
+  padding: 22px 24px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
 }
 .connection-heading,
 .connection-name {
   display: flex;
   align-items: center;
-  gap: 10px;
   flex-wrap: wrap;
+  gap: 12px;
 }
 .connection-heading {
   justify-content: space-between;
 }
-.connection-heading h3 {
+.connection-heading h4 {
   margin: 0;
-  color: var(--el-text-color-primary);
+}
+.connection-hint {
+  color: #64748b;
+  font-size: 13px;
+  margin: 7px 0 0;
+  line-height: 1.6;
+}
+.connection-empty {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.direct-empty {
+  min-height: 140px;
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed #e2e8f0;
+  border-radius: 8px;
+  background: #fafcfe;
+  color: #94a3b8;
+  font-size: 13px;
+}
+.direct-empty svg {
+  width: 34px;
+  height: 34px;
+  color: #94a3b8;
+}
+.direct-empty strong {
   font-size: 14px;
+  font-weight: 500;
+  color: #475569;
+}
+.guide-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--el-text-color-regular);
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.guide-trigger:hover {
+  border-color: #93c5fd;
+  color: #2563eb;
+  background: #eff6ff;
+}
+.guide-trigger:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 3px;
+}
+.primary-trigger {
+  color: #fff;
+  background: var(--el-color-primary);
+  border-color: var(--el-color-primary);
+}
+.primary-trigger:hover {
+  color: #fff;
+  background: var(--el-color-primary-light-3);
+}
+.guide-popover {
+  box-sizing: border-box;
+  width: min(880px, calc(100vw - 32px));
+  max-height: 82vh;
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #f8fafc;
+  color: #334155;
+  box-shadow: 0 18px 64px #0f172a26;
+}
+.guide-popover::backdrop {
+  background: #0f172a40;
+}
+.popover-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding-bottom: 18px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.popover-heading p {
+  margin: 7px 0 0;
+  color: #64748b;
+  font-size: 13px;
 }
 .connection-list {
   display: grid;
-  gap: 8px;
-  margin-top: 10px;
+  gap: 12px;
+  margin-top: 16px;
 }
 .connection-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  padding: 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
 }
 .connection-detail {
   min-width: 0;
 }
-.direct-row {
-  align-items: center;
-}
-.direct-actions {
-  justify-content: flex-end;
-  max-width: 360px;
-}
-.node-package-guide {
-  padding-bottom: 2px;
-}
 .connection-meta {
   display: flex;
   flex-wrap: wrap;
-  column-gap: 14px;
+  gap: 6px 16px;
+  margin-top: 8px;
   overflow-wrap: anywhere;
   font-size: 12px;
-  line-height: 1.5;
-}
-.connection-meta > span {
-  min-width: 0;
-}
-.connection-extra {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border-subtle);
-}
-.connection-extra summary {
-  width: fit-content;
-  cursor: pointer;
-  color: var(--el-text-color-primary);
-  font-size: 13px;
-}
-.connection-extra > .el-button {
-  margin-top: 10px;
-}
-.node-advanced {
-  margin-top: 10px;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-.node-advanced summary {
-  width: fit-content;
-  cursor: pointer;
-}
-.node-advanced > .el-button {
-  margin-top: 8px;
-}
-.connection-name strong {
-  color: var(--el-text-color-primary);
-  font-size: 14px;
+  line-height: 1.7;
+  color: #64748b;
 }
 .connection-name code {
+  overflow-wrap: anywhere;
   font-size: 12px;
+}
+.connection-name strong {
+  font-size: 14px;
+}
+.direct-actions {
+  justify-content: flex-end;
+  max-width: 320px;
+}
+.connection-extra,
+.node-advanced {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+  font-size: 13px;
+}
+.connection-extra summary,
+.node-advanced summary {
+  cursor: pointer;
+  width: fit-content;
+  color: #64748b;
+}
+.connection-extra > .el-button,
+.node-advanced > .el-button {
+  margin-top: 10px;
 }
 .node-reason {
   font-size: 13px;
-  color: var(--el-color-warning-dark-2);
+  color: #a16207;
   overflow-wrap: anywhere;
 }
 .node-json {
   margin: 0;
+  padding: 18px;
   max-height: 60vh;
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 12px;
-  line-height: 1.7;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #334155;
+  font:
+    13px/1.8 ui-monospace,
+    Consolas,
+    monospace;
 }
 .budget-form {
   display: grid;
@@ -1581,21 +1853,12 @@ dd {
 .form-advanced-fields {
   margin-top: 14px;
 }
-@media (max-width: 560px) {
-  .preview-node-panel {
+
+@media (max-width: 800px) {
+  .node-title,
+  .direct-guide {
     padding: 16px;
   }
-  .node-identity > div {
-    grid-template-columns: 84px minmax(0, 1fr);
-  }
-  .budget-form {
-    grid-template-columns: 1fr;
-  }
-  .direct-actions {
-    justify-content: flex-start;
-  }
-}
-@media (max-width: 800px) {
   .connection-row {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1604,15 +1867,39 @@ dd {
     max-width: none;
   }
 }
-@container node-card (max-width: 680px) {
-  .node-identity {
-    grid-template-columns: minmax(0, 1fr);
+@media (max-width: 560px) {
+  .node-title-label {
+    width: 100%;
   }
+  .node-title > .node-actions {
+    gap: 8px;
+  }
+  .node-title :deep(.el-button),
+  .guide-trigger {
+    font-size: 12px;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  .node-card {
+    padding: 16px;
+  }
+  .budget-form {
+    grid-template-columns: 1fr;
+  }
+  .guide-popover {
+    padding: 18px;
+  }
+}
+@container node-card (max-width: 360px) {
   .node-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .node-bandwidth {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .node-footer :deep(.el-button.node-mode-action) {
+    margin-left: 0;
   }
 }
 </style>

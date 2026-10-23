@@ -115,6 +115,14 @@ class PreviewLeaseServiceTest {
                         })
                 .when(media)
                 .close(any(), nullable(PreviewMediaGateway.Transcode.class), any());
+        when(media.openTranscodeInput(any(), anyString(), anyString(), any()))
+                .thenAnswer(
+                        call ->
+                                media.openViewer(
+                                        call.getArgument(0),
+                                        call.getArgument(1),
+                                        call.getArgument(2),
+                                        call.getArgument(3)));
         when(media.openViewer(any(), anyString(), anyString(), any()))
                 .thenAnswer(
                         invocation -> {
@@ -533,6 +541,30 @@ class PreviewLeaseServiceTest {
         verify(media).transcode(any(), any(), any());
         service.delete(nativeViewer.leaseId());
         assertThat(service.renew(convertedViewer.leaseId()).state()).isEqualTo("READY");
+    }
+
+    @Test
+    void h264AacViewersShareOneNormalizerAndReleaseItOnlyAfterTheLastViewer() {
+        when(media.requiresAudioTranscode(any(), any())).thenReturn(true);
+        when(media.transcode(any(), any(), any()))
+                .thenAnswer(
+                        call ->
+                                new PreviewMediaGateway.Transcode(
+                                        call.getArgument(1), "audio-owned"));
+        var first = service.create(input("MAIN"));
+        var second = service.create(input("MAIN"));
+        assertThat(first.transcoded()).isTrue();
+        assertThat(second.transcoded()).isTrue();
+        assertThat(first.videoCodec()).isEqualTo("H264");
+        verify(media).transcode(any(), any(), any());
+        service.delete(first.leaseId());
+        verify(media, never()).close(any(), notNull());
+        assertThat(service.renew(second.leaseId()).state()).isEqualTo("READY");
+        service.delete(second.leaseId());
+        verify(media)
+                .close(
+                        any(),
+                        argThat(output -> output != null && "audio-owned".equals(output.key())));
     }
 
     @Test

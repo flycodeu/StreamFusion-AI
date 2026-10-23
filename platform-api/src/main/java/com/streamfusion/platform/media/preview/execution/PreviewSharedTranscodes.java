@@ -56,7 +56,8 @@ final class PreviewSharedTranscodes {
                 pulls.register(entry.input, true);
                 entry.openAttempted = true;
                 entry.input =
-                        media.openViewer(upstream, upstream.app(), entry.input.id(), deadline);
+                        media.openTranscodeInput(
+                                upstream, upstream.app(), entry.input.id(), deadline);
                 pulls.started(entry.input);
                 deadline.check();
                 entry.output =

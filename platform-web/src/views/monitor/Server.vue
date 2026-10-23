@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   ElAlert,
   ElButton,
@@ -10,6 +10,10 @@ import {
   ElTabPane,
   ElTabs,
   ElTag,
+  ElSwitch,
+  ElSelect,
+  ElOption,
+  ElSkeleton,
   vLoading,
 } from 'element-plus'
 import { getServerStatus } from '../../api/server/api'
@@ -19,12 +23,26 @@ import TablePanel from '../../components/table/TablePanel.vue'
 import { formatDateTime } from '../../utils/dateTime'
 import RuntimePanel from '../../features/media-runtime/RuntimePanel.vue'
 import PreviewNodePanel from '../../features/preview/PreviewNodePanel.vue'
+import { usePageScope } from '../../composables/usePageScope'
+import { useServerAutoRefresh } from '../../features/server/useServerAutoRefresh'
 
 defineOptions({ name: 'SystemServer' })
 const snapshot = ref<ServerSnapshot | null>(null)
 const activeTab = ref('host')
 const loading = ref(false)
 const error = ref<unknown>(null)
+const captureScope = usePageScope()
+const pageActive = captureScope()
+const {
+  enabled: autoRefresh,
+  interval: refreshInterval,
+  remaining,
+  paused: refreshPaused,
+} = useServerAutoRefresh(
+  load,
+  computed(() => activeTab.value === 'host' && pageActive()),
+  loading,
+)
 const statusNames: Record<string, string> = {
   RUNNING: '运行中',
   REACHABLE: '端口可达',
@@ -32,16 +50,21 @@ const statusNames: Record<string, string> = {
   NOT_CONFIGURED: '未配置',
   UNAVAILABLE: '不可用',
 }
-async function load(): Promise<void> {
-  if (loading.value) return
+async function load(): Promise<boolean> {
+  if (loading.value || !pageActive()) return false
+  const inScope = captureScope()
   loading.value = true
   error.value = null
   try {
-    snapshot.value = await getServerStatus()
+    const result = await getServerStatus()
+    if (!inScope()) return false
+    snapshot.value = result
+    return true
   } catch (cause) {
-    error.value = cause
+    if (inScope()) error.value = cause
+    return false
   } finally {
-    loading.value = false
+    if (inScope()) loading.value = false
   }
 }
 function percent(value?: number | null): string {
@@ -64,8 +87,29 @@ onMounted(load)
       <ElTabPane label="主机状态" name="host">
         <div class="host-content">
           <div class="server-toolbar">
-            <span>采集时间：{{ formatDateTime(snapshot?.sampledAt) }}</span
-            ><ElButton type="primary" :loading="loading" @click="load">刷新</ElButton>
+            <span>采集时间：{{ formatDateTime(snapshot?.sampledAt) }}</span>
+            <div class="refresh-controls">
+              <span v-if="refreshPaused" class="refresh-paused" role="status">自动刷新已暂停</span>
+              <span v-else-if="autoRefresh" class="refresh-countdown">{{
+                loading ? '刷新中' : `${remaining} 秒后刷新`
+              }}</span>
+              <ElSwitch
+                v-model="autoRefresh"
+                aria-label="自动刷新主机状态"
+                active-text="自动刷新"
+              />
+              <ElSelect
+                v-model="refreshInterval"
+                class="refresh-interval"
+                aria-label="自动刷新间隔"
+              >
+                <ElOption :value="30" label="30 秒" /><ElOption
+                  :value="60"
+                  label="1 分钟"
+                /><ElOption :value="120" label="2 分钟" />
+              </ElSelect>
+              <ElButton type="primary" :loading="loading" @click="load">刷新</ElButton>
+            </div>
           </div>
           <RequestError :error="error" />
           <ElAlert
@@ -77,57 +121,59 @@ onMounted(load)
             :closable="false"
             show-icon
           />
-          <div v-loading="loading && !snapshot" class="server-metrics">
-            <section class="server-section">
-              <h2>运行环境</h2>
-              <ElDescriptions :column="1" border>
-                <ElDescriptionsItem label="操作系统">{{
-                  snapshot?.host?.os || '不可用'
-                }}</ElDescriptionsItem>
-                <ElDescriptionsItem label="架构">{{
-                  snapshot?.host?.architecture || '不可用'
-                }}</ElDescriptionsItem>
-                <ElDescriptionsItem label="逻辑处理器">{{
-                  snapshot?.host?.processors ?? '不可用'
-                }}</ElDescriptionsItem>
-                <ElDescriptionsItem label="CPU使用率">{{
-                  percent(snapshot?.host?.cpuPercent)
-                }}</ElDescriptionsItem>
-                <ElDescriptionsItem label="内存使用"
-                  >{{ bytes(snapshot?.host?.memoryUsedBytes) }} /
-                  {{ bytes(snapshot?.host?.memoryTotalBytes) }}</ElDescriptionsItem
-                >
-              </ElDescriptions>
-            </section>
-            <section class="server-section">
-              <h2>Platform API</h2>
-              <ElDescriptions :column="2" border>
-                <ElDescriptionsItem label="Java版本">{{
-                  snapshot?.jvm?.javaVersion || '不可用'
-                }}</ElDescriptionsItem>
-                <ElDescriptionsItem label="进程ID">{{
-                  snapshot?.jvm?.pid || '不可用'
-                }}</ElDescriptionsItem>
-                <ElDescriptionsItem label="CPU使用率">{{
-                  percent(snapshot?.jvm?.cpuPercent)
-                }}</ElDescriptionsItem>
-                <ElDescriptionsItem label="非堆内存">{{
-                  bytes(snapshot?.jvm?.nonHeapUsedBytes)
-                }}</ElDescriptionsItem>
-                <ElDescriptionsItem label="堆内存" :span="2"
-                  >{{ bytes(snapshot?.jvm?.heapUsedBytes) }} /
-                  {{ bytes(snapshot?.jvm?.heapMaxBytes) }}</ElDescriptionsItem
-                >
-                <ElDescriptionsItem label="启动时间" :span="2">{{
-                  formatDateTime(snapshot?.jvm?.startedAt)
-                }}</ElDescriptionsItem>
-                <ElDescriptionsItem label="运行时长" :span="2">{{
-                  uptime(snapshot?.jvm?.uptimeMillis)
-                }}</ElDescriptionsItem>
-              </ElDescriptions>
-            </section>
-          </div>
-          <TablePanel>
+          <ElSkeleton :loading="loading && !snapshot" :rows="6" animated>
+            <div v-loading="loading" class="server-metrics">
+              <section class="server-section">
+                <h2>运行环境</h2>
+                <ElDescriptions :column="1" border>
+                  <ElDescriptionsItem label="操作系统">{{
+                    snapshot?.host?.os || '不可用'
+                  }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="架构">{{
+                    snapshot?.host?.architecture || '不可用'
+                  }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="逻辑处理器">{{
+                    snapshot?.host?.processors ?? '不可用'
+                  }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="CPU使用率">{{
+                    percent(snapshot?.host?.cpuPercent)
+                  }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="内存使用"
+                    >{{ bytes(snapshot?.host?.memoryUsedBytes) }} /
+                    {{ bytes(snapshot?.host?.memoryTotalBytes) }}</ElDescriptionsItem
+                  >
+                </ElDescriptions>
+              </section>
+              <section class="server-section">
+                <h2>Platform API</h2>
+                <ElDescriptions :column="2" border>
+                  <ElDescriptionsItem label="Java版本">{{
+                    snapshot?.jvm?.javaVersion || '不可用'
+                  }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="进程ID">{{
+                    snapshot?.jvm?.pid || '不可用'
+                  }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="CPU使用率">{{
+                    percent(snapshot?.jvm?.cpuPercent)
+                  }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="非堆内存">{{
+                    bytes(snapshot?.jvm?.nonHeapUsedBytes)
+                  }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="堆内存" :span="2"
+                    >{{ bytes(snapshot?.jvm?.heapUsedBytes) }} /
+                    {{ bytes(snapshot?.jvm?.heapMaxBytes) }}</ElDescriptionsItem
+                  >
+                  <ElDescriptionsItem label="启动时间" :span="2">{{
+                    formatDateTime(snapshot?.jvm?.startedAt)
+                  }}</ElDescriptionsItem>
+                  <ElDescriptionsItem label="运行时长" :span="2">{{
+                    uptime(snapshot?.jvm?.uptimeMillis)
+                  }}</ElDescriptionsItem>
+                </ElDescriptions>
+              </section>
+            </div>
+          </ElSkeleton>
+          <TablePanel :initial-loading="loading && !snapshot">
             <template #actions><h2 class="table-section-title">项目服务</h2></template>
             <ElTable
               :data="snapshot?.services || []"
@@ -159,7 +205,7 @@ onMounted(load)
               >
             </ElTable>
           </TablePanel>
-          <TablePanel>
+          <TablePanel :initial-loading="loading && !snapshot">
             <template #actions><h2 class="table-section-title">GPU</h2></template>
             <template #tools
               ><ElTag v-if="snapshot?.gpuStatus !== 'AVAILABLE'" type="info" effect="plain">{{
@@ -213,6 +259,26 @@ onMounted(load)
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  flex-wrap: wrap;
+}
+.refresh-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-left: auto;
+}
+.refresh-interval {
+  width: 100px;
+}
+.refresh-countdown {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.refresh-paused {
+  color: var(--el-color-warning);
+  font-size: 12px;
 }
 .server-toolbar > span {
   color: var(--text-secondary);

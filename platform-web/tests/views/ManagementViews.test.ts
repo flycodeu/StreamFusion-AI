@@ -45,6 +45,7 @@ const api = vi.hoisted(() => ({
   getIpBlocks: vi.fn(),
   unblockIp: vi.fn(),
   success: vi.fn(),
+  warning: vi.fn(),
   confirm: vi.fn(),
 }))
 vi.mock('../../src/api/departments/api', () => api)
@@ -116,7 +117,7 @@ vi.mock('element-plus', async () => {
     }),
     vLoading: {},
     ElMessageBox: { confirm: api.confirm },
-    ElMessage: { success: api.success, warning: vi.fn() },
+    ElMessage: { success: api.success, warning: api.warning },
     ElDrawer: defineComponent({
       inheritAttrs: false,
       setup(_, { attrs, slots }) {
@@ -323,6 +324,66 @@ afterEach(() => {
 })
 
 describe('management page interactions', () => {
+  it('keeps protected account operations disabled inside the compact menu', async () => {
+    signInAsSuperAdmin('1')
+    const target = user('1')
+    api.getUsers.mockResolvedValue({ items: [target], total: 1, page: 1, size: 20 })
+    const root = await mount(UserView)
+    for (const label of ['停用账号', '强制登出', '删除用户']) {
+      expect(
+        findAll(root, 'ElDropdownItem').find((item) => content(item) === label)?.props.disabled,
+      ).toBe(true)
+    }
+    expect(
+      findAll(root, 'ElDropdownItem').find((item) => content(item) === '登录记录')?.props.disabled,
+    ).toBe(false)
+  })
+
+  it('copies only the selected temporary password and clears the result when closed', async () => {
+    const target = user('2')
+    api.getUsers.mockResolvedValue({ items: [target], total: 1, page: 1, size: 20 })
+    api.resetUserPassword.mockResolvedValue({ ...target, temporaryPassword: 'TestOnly123!' })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const root = await mount(UserView)
+    ;(findAll(root, 'ElTable')[0]!.props.onSelectionChange as (rows: UserDetail[]) => void)([
+      target,
+    ])
+    await flush()
+    await click(button(root, '批量重置密码'))
+    expect(api.confirm).toHaveBeenCalledWith(
+      expect.any(String),
+      '重置密码',
+      expect.objectContaining({ confirmButtonClass: 'el-button--danger' }),
+    )
+    await click(button(root, '复制'))
+    expect(writeText).toHaveBeenCalledExactlyOnceWith('TestOnly123!')
+    expect(api.success).toHaveBeenCalledWith('已复制初始密码')
+    const result = findAll(root, 'ElDialog').find((item) => item.props.title === '密码重置结果')!
+    ;(result.props.onClosed as () => void)()
+    await flush()
+    expect(content(root)).not.toContain('TestOnly123!')
+  })
+
+  it('keeps the password available for manual copying when the clipboard is denied', async () => {
+    const target = user('2')
+    api.getUsers.mockResolvedValue({ items: [target], total: 1, page: 1, size: 20 })
+    api.resetUserPassword.mockResolvedValue({ ...target, temporaryPassword: 'TestOnly123!' })
+    vi.stubGlobal('navigator', {
+      clipboard: { writeText: vi.fn().mockRejectedValue(new Error('denied')) },
+    })
+    const root = await mount(UserView)
+    ;(findAll(root, 'ElTable')[0]!.props.onSelectionChange as (rows: UserDetail[]) => void)([
+      target,
+    ])
+    await flush()
+    await click(button(root, '批量重置密码'))
+    await click(button(root, '复制'))
+    expect(content(root)).toContain('TestOnly123!')
+    expect(api.success).not.toHaveBeenCalledWith('已复制初始密码')
+    expect(api.warning).toHaveBeenCalledWith('复制失败，请选中密码手动复制')
+  })
+
   it('confirms forced logout once and refreshes the list', async () => {
     const target = user('2')
     api.getUsers.mockResolvedValue({ items: [target], total: 1, page: 1, size: 20 })
@@ -421,9 +482,7 @@ describe('management page interactions', () => {
       const pagination = findAll(root, 'ElPagination')[0]!
       ;(pagination.props['onUpdate:currentPage'] as (value: number) => void)(initialPage)
       api.getUsers.mockClear().mockResolvedValue({ items: [], total: 0, page: 1, size: 20 })
-      await (findAll(root, 'ElSwitch')[0]!.props.onChange as (value: boolean) => Promise<void>)(
-        false,
-      )
+      await click(findAll(root, 'ElDropdownItem').find((item) => content(item) === '停用账号')!)
       await flush()
       expect(api.changeUserStatus).toHaveBeenCalledExactlyOnceWith(target, false)
       expect(api.getUsers).toHaveBeenCalledExactlyOnceWith({
@@ -470,8 +529,9 @@ describe('management page interactions', () => {
     const root = await mount(UserView)
     api.getUsers.mockClear()
     const changing = (
-      findAll(root, 'ElSwitch')[0]!.props.onChange as (value: boolean) => Promise<void>
-    )(false)
+      findAll(root, 'ElDropdownItem').find((item) => content(item) === '停用账号')!.props
+        .onClick as () => Promise<void>
+    )()
     apps.pop()!.unmount()
     pending.resolve({ ...target, status: 2 })
     await changing
@@ -803,7 +863,9 @@ describe('audit and IP block recovery', () => {
       signInAsSuperAdmin('1002')
       pending.resolve({ items: [item()], total: 1, page: 1, size: 20 })
       await flush()
-      expect(findAll(root, 'ElTable')[0]!.props.data).toEqual([])
+      expect(
+        findAll(root, 'ElTable').every((table) => !(table.props.data as unknown[]).length),
+      ).toBe(true)
     },
   )
 

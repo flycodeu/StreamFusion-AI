@@ -60,7 +60,9 @@ const statusLabel = computed(() =>
     <div class="card-states">
       <div class="video-state">
         <span>{{ platform ? '平台状态' : layer === 'CONTROL' ? '相机连接' : '视频收帧' }}</span
-        ><strong><i class="state-dot" aria-hidden="true" />{{ statusLabel }}</strong>
+        ><strong :title="layer === 'CONTROL' && !platform ? '最近一次相机连接检查结果' : undefined"
+          ><i class="state-dot" aria-hidden="true" />{{ statusLabel }}</strong
+        >
       </div>
     </div>
     <footer class="camera-card-footer">

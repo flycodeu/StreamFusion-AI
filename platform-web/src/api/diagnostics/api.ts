@@ -151,6 +151,8 @@ export async function getDiagnostics(query: DiagnosticQuery) {
           nextCursor: optionalString(row.nextCursor),
           cursorExpired: boolean(row.cursorExpired),
           droppedEvents: integer(row.droppedEvents),
+          total: row.total == null ? null : integer(row.total),
+          totalExact: row.totalExact == null ? false : boolean(row.totalExact),
         }
       },
     })

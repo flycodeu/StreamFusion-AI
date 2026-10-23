@@ -6,7 +6,11 @@ function invalid(): never {
   throw new ApiRequestError('INVALID_REQUEST', '请求参数不合法')
 }
 
-function prepare(options: TransportOptions): { url: string; headers: Headers; body?: string } {
+function prepare(options: TransportOptions): {
+  url: string
+  headers: Headers
+  body?: string | FormData
+} {
   const { path, method, body, params, ifMatch, csrf } = options
   if (options.responseType === 'file' && method !== 'GET') invalid()
   if (!['GET', 'POST', 'PUT', 'DELETE'].includes(method)) invalid()
@@ -41,20 +45,25 @@ function prepare(options: TransportOptions): { url: string; headers: Headers; bo
       invalid()
     }
   }
-  let serialized: string | undefined
+  let serialized: string | FormData | undefined
   if (body !== undefined) {
-    try {
-      serialized = JSON.stringify(body, (_key, value: unknown) => {
-        if (typeof value === 'bigint' || typeof value === 'function' || typeof value === 'symbol')
-          invalid()
-        if (typeof value === 'number' && !Number.isFinite(value)) invalid()
-        return value
-      })
-      if (serialized === undefined) invalid()
-    } catch {
-      invalid()
+    if (body instanceof globalThis.FormData) {
+      if (method !== 'POST' && method !== 'PUT') invalid()
+      serialized = body
+    } else {
+      try {
+        serialized = JSON.stringify(body, (_key, value: unknown) => {
+          if (typeof value === 'bigint' || typeof value === 'function' || typeof value === 'symbol')
+            invalid()
+          if (typeof value === 'number' && !Number.isFinite(value)) invalid()
+          return value
+        })
+        if (serialized === undefined) invalid()
+      } catch {
+        invalid()
+      }
+      headers.set('Content-Type', 'application/json')
     }
-    headers.set('Content-Type', 'application/json')
   }
   const suffix = query.toString()
   // Development separates API requests from SPA routes; production keeps its root API contract.

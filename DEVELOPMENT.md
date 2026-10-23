@@ -162,6 +162,31 @@ API 客户端需按以下顺序对接：
 
 **应急恢复：** 优先由另一未封禁地址的超级管理员在页面解除。所有管理员共用被封禁出口时，由有数据库权限的运维备份目标记录，核实 `source_ip`、`id` 与 `version` 后，在维护事务内定向更新该行 `status='RELEASED'`、`unblocked_at=当前北京时间`、`unblocked_by=NULL`、`version=version+1`，更新条件必须同时匹配原 id、version、BLOCKED，并确认仅一行。保留工单及前后记录；直接数据库恢复不会自动写应用审计。不删除整表、不重置其他 IP、不将关闭防护作为常规解封操作。Redis 旧计数无需清除，新版本已隔离旧世代。
 
+### 安全关联与站内告警
+
+安全监测默认开启，使用现有可信代理规则解析来源 IP，在本机滑动窗口中关联登录失败、权限拒绝、未知路径探测、CSRF 异常及同源多类异常。它只产生待核查告警，不改变既有账号锁定和 IP 封禁规则，也不检查所有请求正文或提供完整入侵检测。
+
+具有有效 `audit` 页面权限的超级管理员可从顶部“安全告警”或“操作记录 → 安全告警”查看详情、JSON 与关联请求标识。页面可见时每 20 秒检查摘要并提示新增告警，首次打开只建立基线，不重放历史通知；退出、撤权、隐藏页面时停止相应轮询。摘要接口从 Redis 只读读取会话，不延长空闲时间。
+
+| 配置项（`platform.security-monitor` 下） | 默认值 | 说明 |
+|---|---|---|
+| enabled | true | 可用 `SF_SECURITY_MONITOR_ENABLED=false` 关闭关联监测；原有登录防护仍生效 |
+| window | 5m | 滑动关联窗口，允许 1～30 分钟 |
+| cooldown | 5m | 同 IP 同规则合并时间，须不小于窗口且不超过 1 小时 |
+| login-threshold | 8 | 窗口内登录或验证码失败次数 |
+| denied-threshold | 10 | 窗口内权限拒绝次数 |
+| scan-threshold | 12 | 未知路径被拒绝次数，同时至少命中 8 个不同路径；调低阈值时路径数取二者较小值 |
+| csrf-threshold | 5 | 窗口内 CSRF 失败次数 |
+| mixed-threshold | 12 | 至少三类异常且达到总次数 |
+
+各次数阈值允许 3～100。除启用开关外，可在现有运行配置中按上述属性名覆盖，例如 `--platform.security-monitor.login-threshold=12`。应按真实出口规模调整阈值，共用 NAT 出口可能把不同用户关联在一起。
+
+告警保存在 `${streamfusion.work-dir}/security/alerts.json`，最多 1000 条、7 天，每 5 秒内合并保存一次；强制终止可能损失尚未保存的最新摘要。采用原子替换和目录写锁，`alerts.pending` 仅保留一个暂存文件。不能让多个实例共用同一 work-dir；本机文件需由运维限制访问。窗口计数与冷却状态在重启后重建，历史告警恢复；多实例之间不汇总。
+
+队列容量 1024、来源上限 2048、每来源窗口最多 128 个事件。丢弃、淘汰、截断、处理失败和保存状态在页面展示；损坏或无法读取的旧文件不会被覆盖。诊断入口为日志中的 `Security alert id=... rule=... sourceIp=... traceId=...` 以及告警 JSON。不记录密码、Cookie、Token、请求正文、查询串、原始路径或提交的账号名；来源 IP、经验证的用户 ID、事件分类和少量 traceId 仅供上述管理员查看。
+
+新增 `GET /audit/security-alerts/page?page=1&size=20` 和只读 `GET /audit/security-alerts/feed`，统一响应仍为 `R`。没有数据库迁移、外部消息发送、邮件/飞书通知或自动封禁联动。没有管理员页面在线时仍生成并保存告警，站内提示在下次查看时通过列表和计数呈现。
+
 ### 服务信息与接口文档
 
 服务信息使用异步采集和有界缓存，包含 JVM、主机可见资源及明确配置的服务端口。端口可连接不等于业务健康；Agent/Runtime 的 TCP 可达也不表示视频链路已实现。GPU 数据依赖本机可执行的 `nvidia-smi`，没有 NVIDIA 环境时显示不可用。
@@ -176,7 +201,26 @@ API 客户端需按以下顺序对接：
 | platform.server-monitor.runtime-host / runtime-port | 127.0.0.1 / 8101 | Runtime 探测目标，未部署时端口可设为 0 |
 | platform.server-monitor.gpu-enabled | true | 是否执行本机 NVIDIA GPU 查询 |
 
-监控面板内的接口文档页面要求 `api-docs` PAGE 权限，先读取 `GET /api-docs/status`，文档与 Swagger UI 均启用时嵌入当前后端文档。页面仅用于浏览，未开放接口调试；原始 `/v3/api-docs` 和 `/swagger-ui` 资源仍沿现有环境开关策略，prod 默认关闭。菜单权限并不把开发环境原本公开的 Springdoc 资源改成受保护接口。
+监控面板内的接口文档页面要求 `api-docs` PAGE 权限，先读取 `GET /api-docs/status`，文档与 Swagger UI 均启用时嵌入当前后端文档。页面仅用于浏览，未开放接口调试；原始 `/v3/api-docs`、`/v3/api-docs.yaml` 和 `/swagger-ui` 资源同样要求有效登录及 `api-docs` 模块权限，prod 默认关闭。
+
+### 图床管理
+
+图床页面通过后端 `/storage` 接口管理 SeaweedFS 的 S3 实例和纳管范围，要求有效 `storage` PAGE 权限。密钥沿用相机凭据加密配置，响应不返回明文。`SF_STORAGE_ALLOWED_ENDPOINTS` 是独立的服务端地址白名单，默认仅允许 `http://127.0.0.1:8333,http://localhost:8333`；其他地址须由运维显式配置，不能用相机网络策略代替。
+
+新库使用逐表源生成的完整 SQL。已有库升级须先备份并核对实际结构，按顺序评估 `sql/升级/20261022-storage-management.sql`、`20261022-storage-console.sql`、`20261022-storage-history-policy.sql`；已包含的表或列不要重复执行，禁止重放初始化脚本。应用启动只读检查结构，不自动迁移。
+
+文件上传上限 20 MiB，同名文件拒绝覆盖。手动删除使用确认时的文件身份和条件请求；结果不明时停止，不能自动重试。目录删除仅处理已确认候选，自动清理仍只提供候选预览。记录保留策略默认关闭，只清理任务等元数据，不删除 S3 文件。在线状态表示最近一次范围访问检查结果，不代表持续监控。
+
+常规 `mvnw verify` 使用隔离 H2 和 HTTP 夹具，不读取真实 S3 凭据。本机专项须先准备 `127.0.0.1:8333` 和测试用 `streamfusion-evidence` Bucket，再在 `platform-api` 目录显式执行：
+
+```powershell
+$env:SF_STORAGE_LOCAL_ACCEPTANCE = 'true'
+$env:SF_STORAGE_LOCAL_S3_CONFIG = 'C:/test-secrets/seaweedfs-s3.json'
+.\mvnw.cmd '-Dtest=StorageLocalFileAcceptanceTest,StorageLocalFolderAcceptanceTest' test
+Remove-Item Env:SF_STORAGE_LOCAL_ACCEPTANCE, Env:SF_STORAGE_LOCAL_S3_CONFIG
+```
+
+凭据文件格式使用 SeaweedFS `identities[0].credentials[0]`，仅从环境变量指定的本地文件读取，不提交仓库。专项只创建和清理带随机 UUID 的测试前缀；数据库使用隔离 H2，测试回执写入被忽略的 `.run/storage-fix-10/`。
 
 ### 应用配置
 
@@ -194,7 +238,7 @@ API 客户端需按以下顺序对接：
 | SF_AUTH_IDLE_TIMEOUT / SF_AUTH_ABSOLUTE_TIMEOUT | 30m / 8h | 会话空闲与绝对超时；绝对时长不得小于空闲超时且不超过 1 天 |
 | SF_AUTH_SECURE_COOKIE | dev/local 为 false，prod 为 true | 是否仅通过 HTTPS 发送会话 Cookie |
 
-服务信息控制器异步返回，并在其采集边界设置期限；目前没有业务出站 HTTP 调用，不预留通用出站请求超时配置。新增真实调用时在调用边界定义超时。
+服务信息控制器异步返回，并在其采集边界设置期限。相机、预览及 S3 调用分别在各自调用边界设置超时和资源上限，不使用通用无限重试。
 Java 日志系统在配置对象绑定前初始化，启动失败也可能生成日志目录。
 
 Python 各自在 `app/settings.py` 定义配置，在 `app/__main__.py` 启动进程。
@@ -232,9 +276,20 @@ Agent 前缀为 `SF_AGENT_`，Runtime 为 `SF_RUNTIME_`。不互相加载配置�
 
 开发模式下浏览器请求 `/api/...`，Vite 去掉 `/api` 后转发给 `API_TARGET`。生产构建保持同源根路径 API 契约，例如 `/auth/me`、`/menus` 和 `/api-docs/status`，不使用 `/api` 前缀。仅设置 `API_TARGET` 不会改变已构建页面的请求地址；`pnpm preview` 用于静态预览，不能替代完整 API 反向代理。
 
-静态服务器需将实际后端入口（`/auth/`、`/user/`、`/roles`、`/menus`、`/departments`、`/audit/`、`/server/`、`/security/`、`/api-docs/status`、`/actuator/health`）转发到 API，并保持 Cookie、CSRF 请求头、`X-Trace-Id`、`If-Match` 与响应状态。开启接口文档时，还需转发 `/v3/api-docs` 及其子路径、`/swagger-ui.html`、`/swagger-ui/`。
+静态服务器需将实际后端入口（`/auth/`、`/user/`、`/roles`、`/menus`、`/departments`、`/audit/`、`/server/`、`/security/`、`/api-docs/status`、`/actuator/health`）转发到 API，并保持 Cookie、CSRF 请求头、`X-Trace-Id`、`If-Match` 与响应状态。开启接口文档时，还需转发 `/v3/api-docs` 及其子路径、`/v3/api-docs.yaml`、`/swagger-ui.html`、`/swagger-ui/`。这些原始文档和 Swagger 静态资源均要求有效登录及 `api-docs` 模块权限；不能由代理绕过后端鉴权或通过公共缓存直接返回。
 
 API 转发应先于 Vue 路由的 `index.html` 回退；失败的 API 请求不能回退成前端 HTML。`/api-docs.html` 和 `/api-docs.js` 是前端嵌入文档页的静态文件，仍由静态服务器提供。部署前验证登录、改密、刷新业务路由、错误响应以及 Cookie 的 HTTPS 属性；仓库未提供生产部署编排。
+
+前端 HTML 响应必须包含以下响应头。Vite 开发服务器及 `pnpm preview` 已设置；`dist` 是静态文件，部署时必须在实际静态服务器上配置这些头。例如在 Nginx 提供前端页面的 `server` 或 `location` 中设置（已有 CSP 时合并指令，检查嵌套 `location` 的头部继承）：
+
+```nginx
+add_header Content-Security-Policy "frame-ancestors 'self'" always;
+add_header X-Frame-Options "SAMEORIGIN" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+```
+
+`frame-ancestors` 不能通过 HTML 的 CSP meta 标签生效。这里允许同源文档嵌入，阻止外部站点套用登录及业务页面；对登录页、业务路由回退页、`/api-docs.html` 都要验证实际响应。生产构建关闭 source map，但发布后的 JavaScript、接口路径和浏览器收到的数据仍可被查看，不能在前端保存服务器私钥或以代码混淆替代后端权限。
 
 ## 日志与请求关联
 

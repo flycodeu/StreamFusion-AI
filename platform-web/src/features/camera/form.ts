@@ -1,6 +1,7 @@
 import { shallowRef } from 'vue'
 import { ApiRequestError } from '../../lib/http/error'
 import type { SecretAction, SecretWrite } from '../../api/camera/types'
+import type { AccessAdapter } from '../../api/camera-access/types'
 export type { LocatorInput, SecretAction, SecretWrite, UsageHint } from '../../api/camera/types'
 
 export const formError = (message: string) => new ApiRequestError('VALIDATION_ERROR', message)
@@ -43,6 +44,16 @@ const sourceBrandLabels: Record<string, string> = {
   HIKVISION: '海康',
   HIK_PLATFORM: '海康',
   DAHUA: '大华',
+}
+export function brandOptions(adapters: AccessAdapter[]): string[] {
+  return [
+    ...new Set(
+      adapters.flatMap((adapter) => {
+        const label = sourceBrandLabels[adapter.type]
+        return adapter.category === 'DEVICE' && label ? [label] : []
+      }),
+    ),
+  ]
 }
 export function sourceBrandLabel(camera: {
   sourceType: string | null

@@ -33,6 +33,7 @@ import { useColumns } from '../../composables/table/useColumns'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
 import IpBlockPanel from '../../features/security/IpBlockPanel.vue'
+import SecurityAlertPanel from '../../features/security/SecurityAlertPanel.vue'
 import { sessionState } from '../../session/state'
 import AuditReferenceList from '../../features/audit/AuditReferenceList.vue'
 import RetentionDialog from '../../features/audit/RetentionDialog.vue'
@@ -226,8 +227,10 @@ watch(
     <ElTabs v-if="sessionState.me?.isSuperAdmin" v-model="activeTab">
       <ElTabPane label="操作记录" name="log" />
       <ElTabPane label="IP封禁" name="ip" />
+      <ElTabPane label="安全告警" name="security" />
     </ElTabs>
     <IpBlockPanel v-if="activeTab === 'ip' && sessionState.me?.isSuperAdmin" />
+    <SecurityAlertPanel v-else-if="activeTab === 'security' && sessionState.me?.isSuperAdmin" />
     <template v-else>
       <RetentionDialog
         v-if="retentionOpen && sessionState.me?.isSuperAdmin"
@@ -273,7 +276,7 @@ watch(
               :label="name"
               :value="key" /></ElSelect
         ></ElFormItem>
-        <ElFormItem label="操作时间"
+        <ElFormItem label="操作时间（UTC+8）"
           ><ElDatePicker
             v-model="timeRange"
             type="datetimerange"
@@ -295,7 +298,7 @@ watch(
         >
       </ElForm>
       <RequestError :error="error" />
-      <TablePanel>
+      <TablePanel :initial-loading="loading && !rows.length">
         <template #actions>
           <ElButton @click="exportOpen = true">导出与记录</ElButton>
           <ElButton v-if="sessionState.me?.isSuperAdmin" @click="retentionOpen = true"
@@ -383,7 +386,7 @@ watch(
             v-model:page-size="query.size"
             :total="total"
             :page-sizes="[20, 50, 100]"
-            layout="total, sizes, prev, pager, next"
+            layout="total, sizes, prev, pager, next, jumper"
             @change="load"
         /></template>
       </TablePanel>

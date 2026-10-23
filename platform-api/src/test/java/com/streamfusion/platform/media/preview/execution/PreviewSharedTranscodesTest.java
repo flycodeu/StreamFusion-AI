@@ -39,7 +39,7 @@ class PreviewSharedTranscodesTest {
     @BeforeEach
     void setup() {
         when(media.transcodeConfiguration(any(), any())).thenReturn("encoding-1");
-        when(media.openViewer(any(), anyString(), anyString(), any()))
+        when(media.openTranscodeInput(any(), anyString(), anyString(), any()))
                 .thenAnswer(
                         call -> {
                             String app = call.getArgument(1), id = call.getArgument(2);
@@ -87,7 +87,7 @@ class PreviewSharedTranscodesTest {
         shared.release("viewer", deadline());
         var order = inOrder(media, pulls);
         order.verify(pulls).register(any(), eq(true));
-        order.verify(media).openViewer(any(), anyString(), anyString(), any());
+        order.verify(media).openTranscodeInput(any(), anyString(), anyString(), any());
         order.verify(pulls).started(any());
         order.verify(media).transcode(any(), anyString(), anyString(), any());
         order.verify(media).close(any(), any(), any());

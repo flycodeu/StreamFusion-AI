@@ -2,6 +2,7 @@
 import { ElFormItem, ElInput, ElInputNumber, ElOption, ElSelect } from 'element-plus'
 import type { ManualCameraDraft } from './manual'
 import type { AccessAdapter } from '../../api/camera-access/types'
+import BrandSelect from './BrandSelect.vue'
 defineProps<{ hideHost?: boolean; adapters?: AccessAdapter[] }>()
 const model = defineModel<ManualCameraDraft>({ required: true })
 </script>
@@ -41,8 +42,8 @@ const model = defineModel<ManualCameraDraft>({ required: true })
       ><ElSelect v-model="model.scheme"
         ><ElOption label="HTTP" value="http" /><ElOption label="HTTPS" value="https" /></ElSelect
     ></ElFormItem>
-    <ElFormItem label="品牌备注"
-      ><ElInput v-model="model.vendorHint" maxlength="100" placeholder="人工填写的品牌"
+    <ElFormItem label="品牌"
+      ><BrandSelect v-model="model.vendorHint" :adapters="adapters"
     /></ElFormItem>
   </details>
 </template>

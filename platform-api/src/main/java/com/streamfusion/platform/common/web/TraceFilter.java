@@ -2,6 +2,7 @@ package com.streamfusion.platform.common.web;
 
 import com.streamfusion.platform.common.security.ModuleRegistry;
 import com.streamfusion.platform.monitor.diagnostics.DiagnosticLog;
+import com.streamfusion.platform.monitor.security.SecurityMonitor;
 import jakarta.servlet.AsyncEvent;
 import jakarta.servlet.AsyncListener;
 import jakarta.servlet.FilterChain;
@@ -29,10 +30,13 @@ public class TraceFilter extends OncePerRequestFilter {
     private static final Pattern VALID = Pattern.compile("^[a-f0-9]{32}$");
     private final ModuleRegistry modules;
     private final DiagnosticLog diagnostics;
+    private final SecurityMonitor security;
 
-    public TraceFilter(ModuleRegistry modules, DiagnosticLog diagnostics) {
+    public TraceFilter(
+            ModuleRegistry modules, DiagnosticLog diagnostics, SecurityMonitor security) {
         this.modules = modules;
         this.diagnostics = diagnostics;
+        this.security = security;
     }
 
     @Override
@@ -121,6 +125,11 @@ public class TraceFilter extends OncePerRequestFilter {
                     status,
                     duration);
             diagnostics.request(request, status, duration);
+            security.observe(
+                    request,
+                    status,
+                    Boolean.TRUE.equals(
+                            request.getAttribute(ApiErrorWriter.MODULE_REQUEST_ATTRIBUTE)));
         }
 
         @Override

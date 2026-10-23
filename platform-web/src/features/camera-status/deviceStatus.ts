@@ -4,7 +4,7 @@ export function deviceStatus(device: CameraDeviceGroup) {
   const summary = device.statusSummary
   const state = summary?.state ?? 'NEVER'
   const labels = {
-    ACCESSIBLE: '可达',
+    ACCESSIBLE: '在线',
     FAILED: '连接异常',
     PARTIAL: '部分未确认 / 异常',
     CHECKING: '检测中',

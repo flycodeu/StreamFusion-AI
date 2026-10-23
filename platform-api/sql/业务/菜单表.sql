@@ -73,3 +73,7 @@ VALUES
     (1103, 1100, '视频分组', 'PAGE', 'CameraGroups', '/camera/groups', '/camera-group/Manage', 'camera', 'department', 2, TRUE, TRUE),
     (1104, 1100, '相机授权', 'PAGE', 'CameraScopes', '/camera/scopes', '/camera-scope/Manage', 'camera_scope', 'role', 3, TRUE, TRUE),
     (1106, 1100, '相机状态', 'PAGE', 'CameraStatus', '/camera/status', '/camera/Status', 'camera', 'monitor', 4, TRUE, TRUE);
+
+-- Storage management uses the existing monitoring directory and module authorization.
+INSERT INTO sys_menu (id,parent_id,name,type,route_name,path,component_key,module_key,icon,sort_order,visible,enabled)
+VALUES (1013,1008,'图床管理','PAGE','StorageManage','/storage/manage','/storage/Manage','storage','connection',5,TRUE,TRUE);

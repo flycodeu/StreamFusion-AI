@@ -1,4 +1,9 @@
 spring:
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 21MB
+      file-size-threshold: 0
   application:
     name: streamfusion-platform-api
   profiles:
@@ -46,6 +51,11 @@ streamfusion:
   work-dir: ${SF_API_WORK_DIR:.run}
   shutdown-grace: ${SF_API_SHUTDOWN_GRACE:15s}
 platform:
+  security-monitor:
+    enabled: ${SF_SECURITY_MONITOR_ENABLED:true}
+  storage:
+    # Server-side destinations, independent of camera policies. Include ports explicitly.
+    allowed-endpoints: ${SF_STORAGE_ALLOWED_ENDPOINTS:http://127.0.0.1:8333,http://localhost:8333}
   preview-node:
     connection-file: ${SF_PREVIEW_NODE_CONNECTION_FILE:}
     credential-directory: ${SF_PREVIEW_NODE_CREDENTIAL_DIRECTORY:}

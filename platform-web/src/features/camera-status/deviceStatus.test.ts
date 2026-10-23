@@ -7,7 +7,7 @@ describe('device CONTROL summary', () => {
     const device = {
       statusSummary: { state: 'ACCESSIBLE', validUntil: '2026-10-13T01:00:00Z' },
     } as CameraDeviceGroup
-    expect(deviceStatus(device).label).toBe('可达')
+    expect(deviceStatus(device).label).toBe('在线')
     expect(
       deviceStatus({ ...device, statusSummary: { ...device.statusSummary!, state: 'STALE' } })
         .label,

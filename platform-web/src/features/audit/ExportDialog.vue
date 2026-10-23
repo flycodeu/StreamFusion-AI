@@ -127,6 +127,9 @@ async function act(action: 'create' | 'cancel' | 'remove' | 'download', row?: Ex
       else {
         await ElMessageBox.confirm('删除此导出文件？原始操作日志仍保留。', '删除导出文件', {
           type: 'warning',
+          confirmButtonClass: 'el-button--danger',
+          confirmButtonText: '确认删除',
+          cancelButtonText: '取消',
         })
         if (!active()) return
         await removeExport(row.id)

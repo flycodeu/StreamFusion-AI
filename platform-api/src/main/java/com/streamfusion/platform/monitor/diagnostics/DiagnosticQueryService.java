@@ -69,7 +69,9 @@ public class DiagnosticQueryService {
             int limit,
             String nextCursor,
             boolean cursorExpired,
-            long droppedEvents) {}
+            long droppedEvents,
+            long total,
+            boolean totalExact) {}
 
     public Result query(Query query) {
         Instant end = query.endTime() == null ? clock.instant() : query.endTime();
@@ -87,23 +89,39 @@ public class DiagnosticQueryService {
         Cursor cursor = decode(query.cursor());
         if (!readers.tryAcquire()) throw error(ErrorCode.RATE_LIMITED);
         try {
-            return scan(query, start, end, cursor);
+            var page = scan(query, start, end, cursor, false);
+            var count =
+                    cursor == null && page.totalExact()
+                            ? page
+                            : scan(query, start, end, null, true);
+            return new Result(
+                    page.items(),
+                    page.truncated(),
+                    page.unavailable(),
+                    page.retentionDays(),
+                    page.limit(),
+                    page.nextCursor(),
+                    page.cursorExpired(),
+                    page.droppedEvents(),
+                    count.total(),
+                    count.totalExact());
         } finally {
             readers.release();
         }
     }
 
-    private Result scan(Query query, Instant start, Instant end, Cursor cursor) {
+    private Result scan(Query query, Instant start, Instant end, Cursor cursor, boolean countOnly) {
         var items = new ArrayList<DiagnosticEvent>();
+        long matched = 0;
         boolean truncated = false;
         boolean unavailable = false;
         long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
         int remaining = MAX_BYTES;
-        int limit = query.size() == null ? LIMIT : query.size();
+        int limit = countOnly ? Integer.MAX_VALUE : query.size() == null ? LIMIT : query.size();
         String nextCursor = null;
         var files = new ArrayList<Path>();
         if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS))
-            return result(List.of(), false, true, limit, null, cursor != null);
+            return result(List.of(), false, true, limit, null, cursor != null, 0);
         try (var paths = Files.newDirectoryStream(directory, "diagnostics*.jsonl")) {
             for (Path path : paths) {
                 String name = path.getFileName().toString();
@@ -163,7 +181,7 @@ public class DiagnosticQueryService {
                 long size = channel.size();
                 long position = resume ? Math.min(cursor.offset(), size) : size;
                 if (resume && cursor.offset() != Long.MAX_VALUE && cursor.offset() > size)
-                    return result(List.of(), false, true, limit, null, true);
+                    return result(List.of(), false, true, limit, null, true, 0);
                 while (position > 0) {
                     if (remaining <= 0 || System.nanoTime() > deadline || items.size() >= limit) {
                         truncated = items.size() < limit;
@@ -187,7 +205,8 @@ public class DiagnosticQueryService {
                                 true,
                                 limit,
                                 encode(new Cursor(fileId, position)),
-                                false);
+                                false,
+                                matched);
                     }
                     int lineEnd = buffer.position() - 1;
                     // Ignore a partially written final record and a partially read first record.
@@ -210,7 +229,10 @@ public class DiagnosticQueryService {
                                 if (event.occurredAt() != null
                                         && !event.occurredAt().isBefore(start)
                                         && !event.occurredAt().isAfter(end)
-                                        && selected(query, event)) items.add(event);
+                                        && selected(query, event)) {
+                                    matched++;
+                                    if (!countOnly) items.add(event);
+                                }
                             } catch (IOException | RuntimeException ex) {
                                 unavailable = true;
                             }
@@ -236,7 +258,7 @@ public class DiagnosticQueryService {
                 unavailable = true;
             }
         }
-        return result(items, truncated, unavailable, limit, nextCursor, !found);
+        return result(items, truncated, unavailable, limit, nextCursor, !found, matched);
     }
 
     private static Result result(
@@ -245,7 +267,8 @@ public class DiagnosticQueryService {
             boolean unavailable,
             int limit,
             String nextCursor,
-            boolean cursorExpired) {
+            boolean cursorExpired,
+            long matched) {
         return new Result(
                 List.copyOf(items),
                 truncated,
@@ -254,7 +277,9 @@ public class DiagnosticQueryService {
                 limit,
                 nextCursor,
                 cursorExpired,
-                DiagnosticAsyncAppender.droppedEvents());
+                DiagnosticAsyncAppender.droppedEvents(),
+                matched,
+                !truncated && !unavailable && nextCursor == null && !cursorExpired);
     }
 
     private static String encode(Cursor cursor) {

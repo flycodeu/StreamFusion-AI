@@ -108,6 +108,7 @@ export function parseDeviceStatus(value: unknown): DeviceStatusSummary | null {
 }
 export interface CameraDeviceInfo {
   deviceId: string
+  sourceId: string
   name: string
   localName: string | null
   sourceName: string | null
@@ -118,6 +119,7 @@ export function parseDeviceInfo(value: unknown): CameraDeviceInfo {
   const row = object(value)
   return {
     deviceId: id(row.deviceId),
+    sourceId: id(row.sourceId),
     name: string(row.name),
     localName: optionalString(row.localName),
     sourceName: optionalString(row.sourceName),

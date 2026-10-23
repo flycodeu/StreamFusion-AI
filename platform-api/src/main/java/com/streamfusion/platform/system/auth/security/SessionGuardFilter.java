@@ -4,6 +4,7 @@ import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.web.ApiErrorWriter;
 import com.streamfusion.platform.monitor.loginrecord.service.LoginRecordService;
+import com.streamfusion.platform.monitor.security.SecurityMonitor;
 import com.streamfusion.platform.system.auth.pojo.dto.SessionPrincipalDto;
 import com.streamfusion.platform.system.auth.service.CurrentUserService;
 import jakarta.servlet.FilterChain;
@@ -46,6 +47,7 @@ public class SessionGuardFilter extends OncePerRequestFilter {
                 && !(authentication instanceof AnonymousAuthenticationToken)) {
             try {
                 var user = current.requireUser();
+                request.setAttribute(SecurityMonitor.ACTOR_ATTRIBUTE, user.getId());
                 loginRecords.observe(request);
                 if (CurrentUserService.requiresPasswordChange(user)
                         && !LIMITED.contains(method + " " + route)) {

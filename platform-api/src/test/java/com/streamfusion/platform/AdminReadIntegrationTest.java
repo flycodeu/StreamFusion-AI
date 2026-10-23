@@ -97,6 +97,54 @@ class AdminReadIntegrationTest extends SecureLoginSupport {
     }
 
     @Test
+    void rawDocumentationAndAssetsRequireTheSameLiveModuleGrant() throws Exception {
+        List<String> paths =
+                List.of(
+                        "/v3/api-docs",
+                        "/v3/api-docs.yaml",
+                        "/v3/api-docs/swagger-config",
+                        "/swagger-ui.html",
+                        "/swagger-ui/index.html",
+                        "/swagger-ui/swagger-ui-bundle.js",
+                        "/swagger-ui/swagger-ui.css");
+        for (String path : paths) {
+            mvc.perform(get(path)).andExpect(status().isUnauthorized());
+            mvc.perform(head(path)).andExpect(status().isUnauthorized());
+        }
+        for (String path : paths) {
+            mvc.perform(get(path).session(session))
+                    .andExpect(status().is(path.equals("/swagger-ui.html") ? 302 : 200));
+        }
+        // Ordinary roles get exactly this page; the SUPER_ADMIN role name is not a bypass.
+        jdbc.update(
+                "INSERT INTO sys_role(id,code,name,status,version) VALUES(9101,'DOC_READER','文档查看者','ENABLED',0)");
+        jdbc.update("DELETE FROM sys_user_role WHERE user_id=?", adminId);
+        jdbc.update("INSERT INTO sys_user_role(user_id,role_id) VALUES(?,9101)", adminId);
+        for (String path : paths) {
+            mvc.perform(get(path).session(session)).andExpect(status().isForbidden());
+        }
+        jdbc.update(
+                "INSERT INTO sys_role_menu(role_id,menu_id) SELECT 9101,id FROM sys_menu WHERE module_key='api-docs'");
+        mvc.perform(get("/v3/api-docs").session(session)).andExpect(status().isOk());
+        Long parentId =
+                jdbc.queryForObject(
+                        "SELECT parent_id FROM sys_menu WHERE module_key='api-docs'", Long.class);
+        jdbc.update("UPDATE sys_menu SET enabled=FALSE WHERE id=?", parentId);
+        mvc.perform(get("/v3/api-docs").session(session)).andExpect(status().isForbidden());
+        jdbc.update("UPDATE sys_menu SET enabled=TRUE WHERE id=?", parentId);
+        mvc.perform(get("/swagger-ui/swagger-ui-bundle.js").session(session))
+                .andExpect(status().isOk());
+        jdbc.update("DELETE FROM sys_role_menu WHERE role_id=9101");
+        // Revoke after a successful load; cache validators must not bypass the next authorization.
+        mvc.perform(
+                        get("/swagger-ui/swagger-ui-bundle.js")
+                                .session(session)
+                                .header("If-Modified-Since", "Wed, 01 Jan 2099 00:00:00 GMT"))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/v3/api-docs").session(session)).andExpect(status().isForbidden());
+    }
+
+    @Test
     void documentationStatusRequiresItsPageAndEnabledAncestors() throws Exception {
         mvc.perform(get("/api-docs/status").session(session))
                 .andExpect(status().isOk())

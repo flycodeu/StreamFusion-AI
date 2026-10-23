@@ -11,6 +11,33 @@ afterEach(() => {
 })
 
 describe('HTTP transport', () => {
+  it('sends multipart bodies with CSRF and lets the browser generate the boundary', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}'))
+    vi.stubGlobal('fetch', fetchMock)
+    const form = new FormData()
+    form.append('file', new File(['file bytes'], '中文.png', { type: 'image/png' }))
+    form.append('idempotencyKey', 'request-1')
+    await send({
+      path: '/storage/scopes/10/objects/upload',
+      method: 'POST',
+      body: form,
+      csrf: { headerName: 'X-CSRF-TOKEN', token: 'test' },
+    })
+    const [, options] = fetchMock.mock.calls[0]!
+    expect(options.body).toBe(form)
+    expect(options.headers.has('Content-Type')).toBe(false)
+    expect(options.headers.get('X-CSRF-TOKEN')).toBe('test')
+    expect(options.redirect).toBe('error')
+    expect(options.credentials).toBe('same-origin')
+  })
+  it('rejects multipart DELETE bodies rather than bypassing the JSON request contract', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(
+      send({ path: '/storage/scopes/10/object', method: 'DELETE', body: new FormData() }),
+    ).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
   it.each([
     '/user',
     '/user/page',

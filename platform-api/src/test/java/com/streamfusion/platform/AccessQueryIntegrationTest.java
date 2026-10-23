@@ -401,7 +401,7 @@ class AccessQueryIntegrationTest extends SecureLoginSupport {
     @Test
     void selectionCatalogsAndRoleSourceSearchStayPaginatedAndMinimal() throws Exception {
         JsonNode pages = read(ROOT + "/pages/page?size=2");
-        assertThat(pages.path("total").asInt()).isEqualTo(15);
+        assertThat(pages.path("total").asInt()).isEqualTo(16);
         assertThat(pages.path("items").size()).isEqualTo(2);
         JsonNode users = read(ROOT + "/users/page?size=1&page=2");
         assertThat(users.path("total").asInt()).isEqualTo(2);

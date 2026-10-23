@@ -134,7 +134,7 @@ class SchemaSqlTest {
                             "SELECT COUNT(*) FROM sys_role_menu rm"
                                     + " JOIN sys_role r ON r.id=rm.role_id WHERE r.code='SUPER_ADMIN'")) {
                 assertThat(rows.next()).isTrue();
-                assertThat(rows.getInt(1)).isEqualTo(15);
+                assertThat(rows.getInt(1)).isEqualTo(16);
             }
             assertThatThrownBy(() -> sql.executeQuery("SELECT * FROM sys_permission"))
                     .isInstanceOf(SQLException.class);
@@ -222,7 +222,7 @@ class SchemaSqlTest {
             }
             try (var rows = sql.executeQuery("SELECT COUNT(*) FROM sys_role_menu")) {
                 assertThat(rows.next()).isTrue();
-                assertThat(rows.getInt(1)).isEqualTo(15);
+                assertThat(rows.getInt(1)).isEqualTo(16);
             }
         }
     }

@@ -19,7 +19,8 @@ public class DiagnosticController {
     @GetMapping("/events")
     @Operation(
             summary = "查询本机接口和相机检查诊断日志",
-            description = "按时间、请求标识或检查任务筛选，按写入顺序倒序游标分页，每页最多200条；跨度最多7天，查询受扫描上限约束。")
+            description =
+                    "按时间、请求标识或检查任务筛选，倒序游标分页，每页最多200条、跨度最多7天。total为匹配计数；totalExact为false时仅表示扫描范围内的下限，分页和计数各受16MiB及2秒扫描预算约束。")
     public R<DiagnosticQueryService.Result> events(
             @ParameterObject @ModelAttribute DiagnosticQueryService.Query query) {
         return R.success(service.query(query));

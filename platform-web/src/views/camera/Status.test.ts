@@ -159,7 +159,7 @@ describe('independent camera status page presentation', () => {
     mock.rows = [row]
     row.profiles[0]!.control.freshness = 'CURRENT'
     const html = await renderPage()
-    expect(html).toContain('代表流可达')
+    expect(html).toContain('在线')
     expect(html).toContain('检查通过 0')
     expect(html).toContain('配置已变更 1')
     expect(html).toContain('连接检查')
@@ -298,14 +298,27 @@ describe('independent camera status page presentation', () => {
     expect(card).toContain('未确认')
     expect(card).not.toContain('检测待适配')
   })
-  it('does not claim video normality from a current accessible CONTROL observation', async () => {
+  it('labels a successful connection online while keeping video evidence separate', async () => {
     const row = channel()
     row.profiles[0]!.control.freshness = 'CURRENT'
     mock.rows = [row]
     const html = await renderPage()
-    expect(html).toContain('代表流可达')
+    expect(html).toContain('在线')
+    expect(html).toContain('最近一次相机连接检查结果')
     expect(await renderMediaCard(row)).toContain('尚未检查')
-    expect(html).not.toMatch(/>在线<|>正常<|>离线</)
+    expect(html).not.toMatch(/>正常<|>离线</)
+  })
+  it('does not turn an authentication failure into an offline or online claim', async () => {
+    const row = channel()
+    row.profiles[0]!.control.freshness = 'CURRENT'
+    row.profiles[0]!.control.observation = {
+      ...row.profiles[0]!.control.observation!,
+      value: 'FAILED',
+      reasonCode: 'AUTH_REJECTED',
+    }
+    const html = await renderToString(createSSRApp(StatusCard, { channel: row, layer: 'CONTROL' }))
+    expect(html).toContain('连接异常')
+    expect(html).not.toMatch(/>在线<|>离线</)
   })
   it('keeps disabled configuration separate from offline state', async () => {
     const row = channel()

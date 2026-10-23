@@ -126,6 +126,10 @@ public class PreviewReservationLedger {
                     boolean mayTranscode =
                             old == null
                                     || old.codec() == null
+                                    || count(
+                                                    "SELECT COUNT(*) FROM preview_output WHERE profile_id=? AND transcode_units>0",
+                                                    key.profileId())
+                                            > 0
                                     || PreviewPlaybackPlanner.decide(old.codec(), codecs)
                                             == PreviewPlaybackPlanner.Decision.TRANSCODE_H264;
                     // A direct-only node may probe a new source, but its media core forbids actual

@@ -81,6 +81,31 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
 
     @Override
     public Stream openViewer(Stream upstream, String app, String id, PreviewDeadline deadline) {
+        return openOwnedExit(upstream, app, id, deadline, false);
+    }
+
+    @Override
+    public Stream openTranscodeInput(
+            Stream upstream, String app, String id, PreviewDeadline deadline) {
+        return openOwnedExit(upstream, app, id, deadline, true);
+    }
+
+    @Override
+    public boolean requiresAudioTranscode(Stream upstream, PreviewDeadline deadline) {
+        if (!PreviewEncodingProfile.carriesAudio(
+                encodingConfig(upstream, deadline).path("ffmpeg.cmd").asText())) return false;
+        var params = tuple(upstream.app(), upstream.id());
+        params.put("schema", "rtsp");
+        return PreviewAudioTracks.requiresNormalization(
+                call(upstream.runtime(), "getMediaList", params, deadline).path("data"));
+    }
+
+    private Stream openOwnedExit(
+            Stream upstream,
+            String app,
+            String id,
+            PreviewDeadline deadline,
+            boolean encoderInput) {
         if (!upstream.app().equals(app)
                 || !app.matches("sf_preview_[a-f0-9]{12}")
                 || !upstream.id().matches("[a-f0-9]{32}(?:h264)?")
@@ -102,7 +127,7 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
                 URI.create("rtsp://" + host + ":" + port + "/" + app + "/" + upstream.id()),
                 deadline,
                 false,
-                compatibleAudio(upstream, deadline));
+                encoderInput || compatibleAudio(upstream, deadline));
     }
 
     private boolean compatibleAudio(Stream source, PreviewDeadline deadline) {
@@ -271,14 +296,23 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
         } catch (java.io.IOException | java.nio.file.InvalidPathException ex) {
             throw new PreviewFailure("TRANSCODE_NOT_CONFIGURED");
         }
+        boolean audio = PreviewEncodingProfile.carriesAudio(command);
         int rtsp = config.path("rtsp.port").asInt(0), rtmp = config.path("rtmp.port").asInt(0);
-        if (rtsp < 1 || rtsp > 65535 || rtmp < 1 || rtmp > 65535)
+        if (rtsp < 1 || rtsp > 65535 || !audio && (rtmp < 1 || rtmp > 65535))
             throw new PreviewFailure("TRANSCODE_NOT_CONFIGURED");
         String host = source.runtime().apiBase().getHost();
         if (host.contains(":") && !host.startsWith("[")) host = "[" + host + "]";
         // FFmpeg only receives a local random stream URL. Upstream credentials never enter its
         // command.
-        String destination = "rtmp://" + host + ":" + rtmp + "/" + source.app() + "/" + outputId;
+        String destination =
+                (audio ? "rtsp://" : "rtmp://")
+                        + host
+                        + ":"
+                        + (audio ? rtsp : rtmp)
+                        + "/"
+                        + source.app()
+                        + "/"
+                        + outputId;
         Transcode reference;
         try {
             reference =
@@ -592,7 +626,12 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
         if (!jobs.isArray()) throw new PreviewFailure("CLEANUP_PENDING");
         for (JsonNode job : jobs) {
             if (!output.key().equalsIgnoreCase(job.path("key").asText())) continue;
-            if (!localTuple(job.path("dst_url").asText(), "rtmp", source.app(), output.id())
+            if (!(localTuple(job.path("dst_url").asText(), "rtmp", source.app(), output.id())
+                            || localTuple(
+                                    job.path("dst_url").asText(),
+                                    "rtsp",
+                                    source.app(),
+                                    output.id()))
                     || !localTuple(job.path("src_url").asText(), "rtsp", source.app(), source.id()))
                 throw new PreviewFailure("CLEANUP_DESTINATION_REJECTED");
         }

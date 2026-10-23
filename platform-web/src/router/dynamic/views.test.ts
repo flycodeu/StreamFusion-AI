@@ -18,6 +18,7 @@ describe('file-based business page resolution', () => {
       '/monitor/Server',
       '/preview/Center',
       '/preview/Nodes',
+      '/storage/Manage',
       '/system/AccessQuery',
       '/system/Department',
       '/system/Menu',

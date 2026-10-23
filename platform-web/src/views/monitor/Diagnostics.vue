@@ -55,6 +55,8 @@ const cursors = ref<string[]>([''])
 const nextCursor = ref<string | null>(null)
 const cursorExpired = ref(false)
 const droppedEvents = ref(0)
+const total = ref<number | null>(null)
+const totalExact = ref(false)
 let activeQuery: DiagnosticQuery = {}
 let sequence = 0
 const asEvent = (value: unknown) => value as DiagnosticEvent
@@ -84,6 +86,8 @@ async function load() {
   cursors.value = ['']
   page.value = 1
   rows.value = []
+  total.value = null
+  totalExact.value = false
   nextCursor.value = null
   cursorExpired.value = false
   truncated.value = unavailable.value = false
@@ -105,6 +109,8 @@ async function fetchPage(target: number, cursor: string) {
     nextCursor.value = result.nextCursor ?? null
     cursorExpired.value = result.cursorExpired ?? false
     droppedEvents.value = result.droppedEvents ?? 0
+    total.value = result.total ?? null
+    totalExact.value = result.totalExact ?? false
     page.value = target
     cursors.value[target - 1] = cursor
     lastRead.value = formatDateTime(new Date())
@@ -298,6 +304,10 @@ watch(
       </ElTable>
       <template #footer>
         <div class="log-pagination">
+          <span v-if="total !== null" class="log-total">{{
+            totalExact ? `共 ${total} 条` : `已匹配至少 ${total} 条`
+          }}</span>
+          <span v-else class="log-total">总数量暂不可用</span>
           <span>第 {{ page }} 页 · 本页 {{ rows.length }} 条</span>
           <ElSelect v-model="pageSize" aria-label="每页条数" class="page-size" @change="load"
             ><ElOption
@@ -417,11 +427,15 @@ watch(
 }
 .log-pagination {
   display: flex;
+  justify-content: flex-end;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+.log-total {
+  margin-right: auto;
 }
 .page-size {
   width: 120px;

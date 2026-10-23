@@ -2,6 +2,7 @@ package com.streamfusion.platform.media.preview.media;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -47,9 +48,20 @@ class ZlmPreviewAudioRealMediaTest {
     private URI apiBase;
 
     @Test
-    void realPcmaAndOpusSurviveBothGatewaysWhileAacRemainsVideoOnly() throws Exception {
+    void baselineAudioPassesThroughAndAacOrH265NormalizeWithConfirmedCleanup() throws Exception {
         Path zlm = Path.of(required("SF_PREVIEW_ZLM_BIN")).toAbsolutePath();
-        Path ffmpeg = Path.of(required("SF_PREVIEW_FFMPEG_BIN")).toAbsolutePath();
+        Path installed = Path.of(required("SF_PREVIEW_FFMPEG_BIN")).toAbsolutePath();
+        Path ffmpeg =
+                directory.resolve(
+                        System.getProperty("os.name").startsWith("Windows")
+                                ? "ffmpeg.exe"
+                                : "ffmpeg");
+        try {
+            Files.createLink(ffmpeg, installed);
+        } catch (java.io.IOException unsupported) {
+            Files.copy(installed, ffmpeg);
+        }
+        assertThat(ffmpeg.toString().chars().noneMatch(Character::isWhitespace)).isTrue();
         assertThat(Files.isRegularFile(zlm) && Files.isRegularFile(ffmpeg)).isTrue();
         var ports = new HashSet<Integer>();
         int apiPort = port(ports), rtsp = port(ports), rtc = port(ports);
@@ -96,8 +108,21 @@ class ZlmPreviewAudioRealMediaTest {
                 enable_rtsp=1
                 enable_rtmp=0
                 enable_audio=1
+                [ffmpeg]
+                bin=%s
+                cmd=%s
+                log=%s
+                restart_sec=0
                 """
-                        .formatted(secret, apiPort, rtsp, rtc, rtc));
+                        .formatted(
+                                secret,
+                                apiPort,
+                                rtsp,
+                                rtc,
+                                rtc,
+                                ffmpeg.toString().replace('\\', '/'),
+                                PreviewEncodingProfile.software(),
+                                directory.resolve("ffmpeg.log").toString().replace('\\', '/')));
         OpsPreviewCatalog.writeProtectedSecret(secretFile, secret);
         var runtime =
                 new MediaRuntimeService.ActiveZlm(apiBase, secret, zlm, config, "isolated-audio");
@@ -126,13 +151,17 @@ class ZlmPreviewAudioRealMediaTest {
         try {
             await(() -> server.isAlive() && available(), Duration.ofSeconds(12));
             direct.requireIdle(connection, budget());
+            var runtimes = mock(MediaRuntimeService.class);
+            when(runtimes.activeFfmpeg())
+                    .thenReturn(
+                            java.util.Optional.of(
+                                    new MediaRuntimeService.ActiveFfmpeg(ffmpeg, "isolated")));
             var gateway =
-                    new ZlmPreviewGateway(
-                            json,
-                            mock(MediaRuntimeService.class),
-                            registry,
-                            mock(PreviewProcessInspector.class));
-            for (String codec : List.of("pcm_alaw", "pcm_mulaw", "libopus", "aac", "none")) {
+                    new ZlmPreviewGateway(json, runtimes, registry, new PreviewProcessInspector());
+            for (String fixtureCodec :
+                    List.of("pcm_alaw", "pcm_mulaw", "libopus", "aac", "h265_aac", "none")) {
+                boolean h265 = fixtureCodec.equals("h265_aac");
+                String codec = h265 ? "aac" : fixtureCodec;
                 String suffix = UUID.randomUUID().toString().replace("-", "");
                 String fixture = "audio_" + suffix.substring(0, 12);
                 String app = "sf_preview_" + suffix.substring(0, 12);
@@ -164,7 +193,7 @@ class ZlmPreviewAudioRealMediaTest {
                                 "-t",
                                 "60",
                                 "-c:v",
-                                "libx264",
+                                h265 ? "libx265" : "libx264",
                                 "-preset",
                                 "ultrafast",
                                 "-tune",
@@ -182,7 +211,10 @@ class ZlmPreviewAudioRealMediaTest {
                                 .redirectOutput(
                                         directory.resolve(codec + "-publisher.log").toFile())
                                 .start();
-                PreviewMediaGateway.Stream localSource = null, localViewer = null;
+                PreviewMediaGateway.Stream localSource = null,
+                        localViewer = null,
+                        encoderInput = null;
+                PreviewMediaGateway.Transcode encoded = null;
                 var directSource =
                         new ZlmDirectGateway.Stream(
                                 app, UUID.randomUUID().toString().replace("-", ""));
@@ -204,7 +236,38 @@ class ZlmPreviewAudioRealMediaTest {
                                             : readyAudio(app, suffix),
                             Duration.ofSeconds(10));
                     String viewerId = UUID.randomUUID().toString().replace("-", "");
-                    localViewer = gateway.openViewer(localSource, app, viewerId, budget());
+                    boolean normalize = codec.equals("aac");
+                    var browserSource = localSource;
+                    if (normalize) {
+                        assertThat(gateway.requiresAudioTranscode(localSource, budget()))
+                                .as(
+                                        "observed tracks: %s; config audio: %s",
+                                        api(
+                                                "getMediaList",
+                                                Map.of(
+                                                        "schema", "rtsp", "app", app, "stream",
+                                                        suffix)),
+                                        api("getServerConfig", Map.of())
+                                                .path("data")
+                                                .get(0)
+                                                .path("ffmpeg.cmd"))
+                                .isTrue();
+                        String encoderId = UUID.randomUUID().toString().replace("-", "");
+                        encoderInput =
+                                gateway.openTranscodeInput(localSource, app, encoderId, budget());
+                        encoded = gateway.transcode(encoderInput, encoderId + "h264", budget());
+                        String output = encoded.id();
+                        await(
+                                () -> readyVideo(app, output) && readyAudio(app, output),
+                                Duration.ofSeconds(10));
+                        browserSource =
+                                new PreviewMediaGateway.Stream(
+                                        runtime,
+                                        app,
+                                        output,
+                                        "__defaultVhost__/" + app + "/" + output);
+                    }
+                    localViewer = gateway.openViewer(browserSource, app, viewerId, budget());
                     direct.open(connection, directSource, input, budget());
                     await(
                             () ->
@@ -218,19 +281,21 @@ class ZlmPreviewAudioRealMediaTest {
                             () -> readyVideo(app, viewerId) && readyVideo(app, directViewer.id()),
                             Duration.ofSeconds(10));
                     assertThat(readyAudio(app, viewerId))
-                            .as("local " + codec)
-                            .isEqualTo(compatible);
+                            .as("local " + fixtureCodec)
+                            .isEqualTo(compatible || normalize);
                     assertThat(readyAudio(app, directViewer.id()))
                             .as("direct " + codec)
                             .isEqualTo(compatible);
                     var result = new LinkedHashMap<String, Object>();
-                    result.put("sourceCodec", codec);
-                    result.put("localViewerHasAudio", compatible);
+                    result.put("sourceCodec", fixtureCodec);
+                    result.put("localViewerHasAudio", compatible || normalize);
+                    result.put("normalized", normalize);
                     result.put("directViewerHasAudio", compatible);
-                    if (compatible) {
+                    if (compatible || normalize)
                         result.put(
                                 "localDecodedPcmPeak",
-                                decodePeak(ffmpeg, rtsp, app, viewerId, codec + "-local"));
+                                decodePeak(ffmpeg, rtsp, app, viewerId, fixtureCodec + "-local"));
+                    if (compatible) {
                         result.put(
                                 "directDecodedPcmPeak",
                                 decodePeak(
@@ -240,6 +305,8 @@ class ZlmPreviewAudioRealMediaTest {
                 } finally {
                     try {
                         if (localViewer != null) gateway.close(localViewer, null, budget());
+                        if (encoderInput != null) gateway.close(encoderInput, encoded, budget());
+                        assertThat(registry.keys()).isEmpty();
                         direct.close(connection, directViewer, budget());
                         direct.close(connection, directSource, budget());
                         if (localSource != null) gateway.close(localSource, null, budget());

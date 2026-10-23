@@ -31,6 +31,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -93,7 +94,7 @@ class RtspDescribeProbeTest {
     }
 
     @Test
-    void basicChallengeIsRetriedOnceOnNewConnection() throws Exception {
+    void basicChallengeReusesConnectionAndConsumesChallengeBody() throws Exception {
         var fixture =
                 fixture(
                         (socket, request, index) ->
@@ -111,6 +112,7 @@ class RtspDescribeProbeTest {
         var result = execute(probe(LIMITS), target(fixture, "/live", "operator", "private"));
         assertThat(result.outcome()).isEqualTo(CameraProbeResult.Outcome.ACCESSIBLE);
         assertThat(fixture.requests).hasSize(2);
+        assertThat(fixture.acceptCount.get()).isOne();
         assertThat(fixture.requests.get(0).headers()).doesNotContainKey("authorization");
         assertThat(fixture.requests.get(1).headers())
                 .containsEntry("cseq", "2")
@@ -125,27 +127,61 @@ class RtspDescribeProbeTest {
     }
 
     @Test
-    void digestUsesDescribeAndOriginalAbsoluteRequestTarget() throws Exception {
+    void connectionBoundDigestUsesDescribeAndOriginalAbsoluteRequestTarget() throws Exception {
+        var challengeSocket = new AtomicReference<Socket>();
         var fixture =
                 fixture(
-                        (socket, request, index) ->
-                                reply(
-                                        socket,
-                                        index == 1 ? 401 : 200,
-                                        request.cseq(),
-                                        index == 1
-                                                ? Map.of(
-                                                        "WWW-Authenticate",
-                                                        "Digest realm=\"fixture\", nonce=\"abc\", algorithm=MD5")
-                                                : Map.of(),
-                                        (index == 1 ? "" : SDP).getBytes(StandardCharsets.UTF_8)));
+                        (socket, request, index) -> {
+                            if (index == 1) challengeSocket.set(socket);
+                            reply(
+                                    socket,
+                                    index == 1
+                                                    || socket != challengeSocket.get()
+                                                    || request.headers()
+                                                            .getOrDefault("authorization", "")
+                                                            .contains("algorithm=")
+                                            ? 401
+                                            : 200,
+                                    request.cseq(),
+                                    index == 1
+                                            ? Map.of(
+                                                    "WWW-Authenticate",
+                                                    "Digest realm=\"fixture\", nonce=\"abc\"")
+                                            : Map.of(),
+                                    (index == 1 ? "" : SDP).getBytes(StandardCharsets.UTF_8));
+                        });
         var target = target(fixture, "/live%2Fopaque?q=%26", "operator", "private");
         assertThat(execute(probe(LIMITS), target).outcome())
                 .isEqualTo(CameraProbeResult.Outcome.ACCESSIBLE);
+        assertThat(fixture.acceptCount.get()).isOne();
         String expected =
                 md5(md5("operator:fixture:private") + ":abc:" + md5("DESCRIBE:" + target.uri()));
         assertThat(fixture.requests.get(1).headers().get("authorization"))
                 .contains("uri=\"" + target.uri() + "\"", "response=\"" + expected + "\"");
+    }
+
+    @Test
+    void explicitConnectionCloseChallengeStillAllowsOneAuthenticatedRetry() throws Exception {
+        var fixture =
+                fixture(
+                        (socket, request, index) -> {
+                            reply(
+                                    socket,
+                                    index == 1 ? 401 : 200,
+                                    request.cseq(),
+                                    index == 1
+                                            ? Map.of(
+                                                    "WWW-Authenticate", "Basic realm=\"fixture\"",
+                                                    "Connection", "close")
+                                            : Map.of(),
+                                    (index == 1 ? "" : SDP).getBytes(StandardCharsets.UTF_8));
+                            if (index == 1) socket.close();
+                        });
+        var result = execute(probe(LIMITS), target(fixture, "/live", "operator", "private"));
+        assertThat(result.outcome()).isEqualTo(CameraProbeResult.Outcome.ACCESSIBLE);
+        assertThat(fixture.acceptCount.get()).isEqualTo(2);
+        assertThat(fixture.requests).hasSize(2);
+        assertThat(fixture.requests.get(1).headers()).containsKey("authorization");
     }
 
     @Test
@@ -517,6 +553,42 @@ class RtspDescribeProbeTest {
     }
 
     @Test
+    void cancellationWhileWaitingForAuthenticatedResponseClosesReusedSocket() throws Exception {
+        var authenticated = new CountDownLatch(1);
+        var peerClosed = new CountDownLatch(1);
+        var fixture =
+                fixture(
+                        (socket, request, index) -> {
+                            if (index == 1) {
+                                reply(
+                                        socket,
+                                        401,
+                                        request.cseq(),
+                                        Map.of("WWW-Authenticate", "Basic realm=\"fixture\""),
+                                        new byte[0]);
+                            } else {
+                                authenticated.countDown();
+                                if (socket.getInputStream().read() == -1) peerClosed.countDown();
+                            }
+                        });
+        var cancellation = new RtspDescribeProbe.Cancellation();
+        var probe = probe(LIMITS);
+        var result =
+                calls.submit(
+                        () ->
+                                probe.execute(
+                                        target(fixture, "/live", "operator", "private"),
+                                        deadline(1500),
+                                        cancellation));
+        assertThat(authenticated.await(1, TimeUnit.SECONDS)).isTrue();
+        cancellation.cancel();
+        assertThat(result.get(1, TimeUnit.SECONDS).reasonCode()).isEqualTo("CANCELLED");
+        assertThat(peerClosed.await(1, TimeUnit.SECONDS)).isTrue();
+        assertThat(fixture.acceptCount.get()).isOne();
+        assertThat(fixture.requests).hasSize(2);
+    }
+
+    @Test
     void dnsTimeoutKeepsSlotUntilResolverActuallyExitsAndNeverOpensLateSocket() throws Exception {
         var entered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
@@ -751,28 +823,31 @@ class RtspDescribeProbeTest {
                         while (!server.isClosed()) {
                             try (Socket socket = server.accept()) {
                                 sockets.add(socket);
-                                int index = acceptCount.incrementAndGet();
+                                acceptCount.incrementAndGet();
                                 socket.setSoTimeout(2000);
                                 var reader =
                                         new BufferedReader(
                                                 new InputStreamReader(
                                                         socket.getInputStream(),
                                                         StandardCharsets.US_ASCII));
-                                String line = reader.readLine();
-                                if (line == null) continue;
-                                Map<String, String> headers = new LinkedHashMap<>();
-                                String header;
-                                while ((header = reader.readLine()) != null && !header.isEmpty()) {
-                                    int colon = header.indexOf(':');
-                                    headers.put(
-                                            header.substring(0, colon)
-                                                    .toLowerCase(java.util.Locale.ROOT),
-                                            header.substring(colon + 1).strip());
+                                while (!socket.isClosed()) {
+                                    String line = reader.readLine();
+                                    if (line == null) break;
+                                    Map<String, String> headers = new LinkedHashMap<>();
+                                    String header;
+                                    while ((header = reader.readLine()) != null
+                                            && !header.isEmpty()) {
+                                        int colon = header.indexOf(':');
+                                        headers.put(
+                                                header.substring(0, colon)
+                                                        .toLowerCase(java.util.Locale.ROOT),
+                                                header.substring(colon + 1).strip());
+                                    }
+                                    var request = new Request(line, headers);
+                                    requests.add(request);
+                                    accepted.countDown();
+                                    handler.handle(socket, request, requests.size());
                                 }
-                                var request = new Request(line, headers);
-                                requests.add(request);
-                                accepted.countDown();
-                                handler.handle(socket, request, index);
                             } catch (IOException ignored) {
                                 // Cancellation/total deadline deliberately closes a peer during
                                 // writes.

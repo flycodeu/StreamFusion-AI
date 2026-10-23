@@ -1,7 +1,7 @@
 # Alternative to zlm-preview.ini.example for an installed NVIDIA NVENC-capable FFmpeg/runtime.
 # Merge only these settings into the active ZLM configuration. Keep ffmpeg.bin unchanged.
 [ffmpeg]
-cmd=%s -hide_banner -nostdin -nostats -rtsp_transport tcp -timeout 10000000 -threads 2 -i %s -map 0:v:0 -an -c:v h264_nvenc -preset p2 -tune ull -rc cbr -b:v 3M -maxrate 3M -bufsize 3M -pix_fmt yuv420p -profile:v baseline -bf 0 -g 40 -rc-lookahead 0 -f flv %s
+cmd=%s -hide_banner -nostdin -nostats -rtsp_transport tcp -timeout 10000000 -threads 2 -i %s -map 0:v:0 -map 0:a:0? -c:v h264_nvenc -preset p2 -tune ull -rc cbr -b:v 3M -maxrate 3M -bufsize 3M -pix_fmt yuv420p -profile:v baseline -bf 0 -g 40 -rc-lookahead 0 -c:a libopus -ar 48000 -ac 1 -b:a 64k -f rtsp -rtsp_transport tcp %s
 
 [protocol]
 paced_sender_ms=20

@@ -46,6 +46,7 @@ const navigation = computed(
 <style scoped>
 .sidebar {
   width: 216px;
+  transition: width 0.2s ease;
   flex-shrink: 0;
   position: sticky;
   top: 0;
@@ -67,6 +68,7 @@ const navigation = computed(
   white-space: nowrap;
 }
 .brand-name {
+  transition: opacity 0.15s ease;
   color: #263445;
   font-size: 15px;
   font-weight: 600;
@@ -98,7 +100,17 @@ const navigation = computed(
   padding: 0 17px;
 }
 .is-collapsed .brand-name {
-  display: none;
+  opacity: 0;
+  visibility: hidden;
+}
+.brand img {
+  flex-shrink: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar,
+  .brand-name {
+    transition: none;
+  }
 }
 .is-collapsed .navigation :deep(.app-icon) {
   margin-right: 0;

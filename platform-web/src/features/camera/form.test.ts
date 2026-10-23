@@ -1,7 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
-import { secret, sourceBrandLabel, useCreateRequest } from './form'
+import { brandOptions, secret, sourceBrandLabel, useCreateRequest } from './form'
+import type { AccessAdapter } from '../../api/camera-access/types'
 
 describe('camera configuration commands', () => {
+  it('offers brands from registered vendor adapters without presenting protocols as brands', () => {
+    const adapters = [
+      { type: 'ONVIF', category: 'DEVICE' },
+      { type: 'HIKVISION', category: 'DEVICE' },
+      { type: 'DAHUA', category: 'DEVICE' },
+      { type: 'HIKVISION', category: 'DEVICE' },
+      { type: 'HIK_PLATFORM', category: 'PLATFORM' },
+    ] as AccessAdapter[]
+    expect(brandOptions(adapters)).toEqual(['海康', '大华'])
+    expect(brandOptions([])).toEqual([])
+  })
   it('keeps the original request body and key after a lost create response', () => {
     const create = useCreateRequest<{ name: string; profiles: { path: string }[] }>()
     const input = { name: '炉前', profiles: [{ path: '/encoded%2Fpath' }] }

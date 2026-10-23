@@ -1,7 +1,7 @@
 import type { AuditDetail, AuditReference } from '../../api/audit/types'
 
 export const changeNames: Record<string, string> = {
-  mode: '保留方式',
+  mode: '策略模式',
   keepMonths: '保留月数',
   maxRecords: '保留条数',
   removedLogCount: '清理条数',
@@ -87,7 +87,19 @@ function changeValue(key: string, value: string | string[] | null) {
   if (Array.isArray(value)) return value.join('、') || '无'
   if (value == null) return '无'
   const enums: Record<string, Record<string, string>> = {
-    mode: { AGE: '按时间', COUNT: '按数量' },
+    mode: {
+      AGE: '按时间',
+      COUNT: '按数量',
+      ENABLED: '已启用',
+      DISABLED: '已停用',
+      DRAINING: '排空中',
+      LOCAL: '本地',
+      REMOTE: '远程',
+      OPEN: '正常开放',
+      SEALED: '已准备维护',
+      CLAIMED: '维护中',
+      COMPLETE: '维护完成',
+    },
     enabled: { true: '是', false: '否' },
     lifecycle: { ENABLED: '已启用', DISABLED: '已停用', DRAFT: '待配置' },
     state: { ACTIVE: '执行中', STOPPED: '已停止', EXPIRED: '已到期' },
