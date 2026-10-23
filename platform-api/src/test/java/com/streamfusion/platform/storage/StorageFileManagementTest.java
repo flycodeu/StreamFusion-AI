@@ -299,7 +299,7 @@ class StorageFileManagementTest extends CameraTestSupport {
                 400);
         jdbc.update(
                 "UPDATE storage_task SET status='IN_PROGRESS',lease_until=? WHERE id=?",
-                java.sql.Timestamp.valueOf(StorageRules.now().minusMinutes(1)),
+                StorageRules.now().minusMinutes(1),
                 folder.path("taskId").asLong());
         taskService.recover();
         assertThat(

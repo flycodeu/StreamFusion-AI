@@ -468,7 +468,7 @@ class StorageManagementTest extends CameraTestSupport {
                 .andExpect(status().isOk());
         jdbc.update(
                 "UPDATE storage_task SET finished_at=? WHERE id=?",
-                java.sql.Timestamp.valueOf(StorageRules.now().minusDays(31)),
+                StorageRules.now().minusDays(31),
                 receipt.path("taskId").asLong());
         enableHistory(30);
         history.prune();
@@ -514,7 +514,7 @@ class StorageManagementTest extends CameraTestSupport {
     }
 
     private void historicalTask(long id, String status, int ageDays) {
-        var old = java.sql.Timestamp.valueOf(StorageRules.now().minusDays(ageDays));
+        var old = StorageRules.now().minusDays(ageDays);
         jdbc.update(
                 "INSERT INTO storage_task(id,run_id,instance_id,actor_id,type,status,phase,request_key,request_fingerprint,created_at,finished_at) VALUES(?,?,1,1,'CHECK',?,'FINISHED',?,'fixture',?,?)",
                 id,
@@ -548,7 +548,7 @@ class StorageManagementTest extends CameraTestSupport {
         enableHistory(30);
         historicalTask(7201, "SUCCEEDED", 40);
         historicalTask(7202, "RUNNING", 40);
-        var old = java.sql.Timestamp.valueOf(StorageRules.now().minusDays(40));
+        var old = StorageRules.now().minusDays(40);
         jdbc.update(
                 "INSERT INTO storage_cleanup_plan(id,instance_id,scope_id,actor_id,instance_version,scope_version,mode,status,execution_task_id,created_at,expires_at) VALUES(7201,1,1,1,0,0,'FOLDER','RUNNING',7202,?,?)",
                 old,
