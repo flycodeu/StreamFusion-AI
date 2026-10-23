@@ -8,6 +8,7 @@ const props = defineProps<{
   traceId: string | null
   time?: string | null
   planId?: string | null
+  buttonStyle?: 'link' | 'secondary'
 }>()
 const Diagnostics = defineAsyncComponent(() => import('../../views/monitor/Diagnostics.vue'))
 const open = ref(false)
@@ -24,7 +25,13 @@ const context = computed(() => {
 
 <template>
   <template v-if="context">
-    <ElButton link type="primary" @click="open = true">查看诊断日志</ElButton>
+    <ElButton
+      :link="buttonStyle !== 'secondary'"
+      :type="buttonStyle === 'secondary' ? 'default' : 'primary'"
+      :size="buttonStyle === 'secondary' ? 'small' : 'default'"
+      @click="open = true"
+      >查看诊断日志</ElButton
+    >
     <ElDialog
       v-if="open"
       v-model="open"

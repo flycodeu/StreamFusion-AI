@@ -3,12 +3,14 @@ package com.streamfusion.platform.camera;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.streamfusion.platform.camera.mapper.CameraEndpointMapper;
 import com.streamfusion.platform.camera.status.CameraStatusWorker;
 import com.streamfusion.platform.support.CameraTestSupport;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
@@ -45,6 +47,57 @@ class CameraAddressReadIntegrationTest extends CameraTestSupport {
                     .isEmpty();
             verify(endpoints, never()).displayAddresses(anyList());
         }
+        verifyNoInteractions(worker);
+    }
+
+    @Test
+    void pickerSearchMatchesNameOrIpBeforePaginationAndKeepsAuthorization() throws Exception {
+        var auth = admin();
+        long visibleSource = source(auth).path("sourceId").asLong();
+        var visible = camera(auth, Long.toString(visibleSource), "North gate");
+        long hiddenSource = source(auth).path("sourceId").asLong();
+        camera(auth, Long.toString(hiddenSource), "Hidden camera");
+        long group =
+                write(post("/camera-groups"), auth, Map.of("name", "Picker group"), 201)
+                        .path("groupId")
+                        .asLong();
+        jdbc.update("UPDATE camera_channel SET group_id=?,lifecycle='ENABLED'", group);
+        jdbc.update(
+                "UPDATE camera_source_endpoint SET host='10.0.1.66' WHERE source_id=?",
+                hiddenSource);
+        for (String keyword : List.of("North", "10.0.1.5", "10.0.1.")) {
+            var page = read("/cameras/devices/page?name=" + keyword + "&size=1", auth);
+            assertThat(page.path("total").asInt()).isEqualTo(keyword.equals("10.0.1.") ? 2 : 1);
+            assertThat(page.path("items")).hasSize(1);
+        }
+        var user =
+                write(post("/user"), auth, Map.of("username", "PickerViewer"), 201)
+                        .path("id")
+                        .asText();
+        jdbc.update("UPDATE sys_user SET status=1,must_change_password=FALSE WHERE id=?", user);
+        jdbc.update(
+                "INSERT INTO sys_role(id,code,name,status,version) VALUES(8912,'PICKER_VIEW','Picker viewer','ENABLED',0)");
+        jdbc.update("INSERT INTO sys_user_role(user_id,role_id) VALUES(?,8912)", user);
+        jdbc.update(
+                "INSERT INTO sys_role_menu(role_id,menu_id) SELECT 8912,id FROM sys_menu WHERE type='PAGE' AND module_key='camera'");
+        write(
+                put("/camera-scopes/users/" + user),
+                auth,
+                Map.of(
+                        "version",
+                        "0",
+                        "groupIds",
+                        List.of(),
+                        "cameraIds",
+                        List.of(visible.path("cameraId").asText())),
+                200);
+        var viewer = login("PickerViewer", "Initial1!");
+        var visiblePage = read("/cameras/devices/page?name=10.0.1.5", viewer);
+        assertThat(visiblePage.path("total").asInt()).isOne();
+        assertAddress(visiblePage.path("items").get(0), "RTSP", "10.0.1.5", 554);
+        assertThat(read("/cameras/devices/page?name=10.0.1.66", viewer).path("total").asInt())
+                .isZero();
+        assertThat(read("/cameras/devices/page?name=%25", auth).path("total").asInt()).isZero();
         verifyNoInteractions(worker);
     }
 

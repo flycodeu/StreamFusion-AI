@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { ElButton, ElOption, ElSelect } from 'element-plus'
+import { Clock, Refresh } from '@element-plus/icons-vue'
 import type { StatusLayer } from '../../api/camera-status/types'
 import { layerKey } from '../../api/camera-status/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { streamLabel } from '../camera/form'
 import { formatDateTime } from '../../utils/dateTime'
 import { executionLabels, isTerminal, reasonLabel } from './model'
+import { connectionLabels, upstreamLabels } from './health'
+import type { ConnectionState } from './health'
 import StatusFact from './StatusFact.vue'
 import StatusHistory from './StatusHistory.vue'
 import { useStatusChecks } from './useStatusChecks'
@@ -105,16 +108,36 @@ const executionReason = computed(() => {
   if (fact?.checkId === check.value.checkId && fact.reasonCode === check.value.reasonCode) return ''
   return reasonLabel(check.value.reasonCode)
 })
+const connection = computed(() => {
+  const upstream = selectedProfile.value?.upstream
+  const profile =
+    upstream && upstream.blockingReasonCode !== 'STATUS_LAYER_NOT_APPLICABLE'
+      ? upstream
+      : selectedProfile.value?.control
+  const platform = profile?.layer === 'UPSTREAM'
+  let state: ConnectionState = 'unknown'
+  if (profile?.latestCheck && !isTerminal(profile.latestCheck)) state = 'checking'
+  else if (profile?.observation) {
+    if (!profile.configurationCurrent || profile.freshness !== 'CURRENT') state = 'stale'
+    else if (profile.observation.value === 'ACCESSIBLE') state = 'accessible'
+    else if (profile.observation.value === 'FAILED') state = 'failed'
+  }
+  return {
+    state,
+    label: (platform ? upstreamLabels : connectionLabels)[state],
+    title: platform ? '最近一次平台状态查询结果' : '最近一次相机连接检查结果',
+  }
+})
 </script>
 
 <template>
-  <section v-if="camera" class="camera-status-panel" aria-label="相机状态检查">
-    <div class="status-heading">
-      <h3>状态检查</h3>
-      <ElButton link :loading="reading" :disabled="!active || reading" @click="refresh"
-        >刷新结果</ElButton
-      >
-    </div>
+  <section
+    v-if="camera"
+    class="camera-status-panel"
+    :class="{ 'has-summary': !!$slots.summary }"
+    aria-label="相机状态检查"
+  >
+    <slot name="summary" :connection="connection" />
     <div class="status-actions">
       <ElSelect
         v-model="profileId"
@@ -129,26 +152,35 @@ const executionReason = computed(() => {
           :value="profile.streamProfileId"
         />
       </ElSelect>
-    </div>
-    <div class="check-buttons">
+      <div class="check-buttons">
+        <ElButton
+          v-for="target in availableLayers"
+          :key="target"
+          :type="target === 'MEDIA' ? 'primary' : 'default'"
+          :loading="posting && pending?.input.layer === target"
+          :disabled="!canCheck(target)"
+          @click="inspect(target)"
+        >
+          {{
+            pending?.uncertain && pending.input.layer === target
+              ? '重试原检查'
+              : target === 'UPSTREAM'
+                ? '查询平台状态'
+                : target === 'MEDIA'
+                  ? '检查视频'
+                  : '检查连接'
+          }}
+        </ElButton>
+      </div>
       <ElButton
-        v-for="target in availableLayers"
-        :key="target"
-        :type="target === 'MEDIA' ? 'primary' : 'default'"
-        :loading="posting && pending?.input.layer === target"
-        :disabled="!canCheck(target)"
-        @click="inspect(target)"
+        class="status-refresh"
+        link
+        :icon="Refresh"
+        :loading="reading"
+        :disabled="!active || reading"
+        @click="refresh"
+        >刷新</ElButton
       >
-        {{
-          pending?.uncertain && pending.input.layer === target
-            ? '重试原检查'
-            : target === 'UPSTREAM'
-              ? '查询平台状态'
-              : target === 'MEDIA'
-                ? '检查视频'
-                : '检查连接'
-        }}
-      </ElButton>
     </div>
     <p v-if="pending?.uncertain" class="status-note" role="status">
       {{
@@ -162,54 +194,64 @@ const executionReason = computed(() => {
     </p>
     <template v-if="profileId">
       <div class="layer-switcher" role="group" aria-label="检查结果层级">
-        <ElButton
+        <button
           v-for="target in availableLayers"
           :key="target"
-          link
-          :type="layer === target ? 'primary' : 'default'"
+          type="button"
+          class="layer-tab"
+          :class="{ 'is-active': layer === target }"
           :aria-pressed="layer === target"
           @click="layer = target"
-          >{{
-            target === 'UPSTREAM' ? '平台状态' : target === 'MEDIA' ? '视频收帧' : '连接检查'
-          }}</ElButton
         >
+          {{ target === 'UPSTREAM' ? '平台状态' : target === 'MEDIA' ? '视频收帧' : '连接检查' }}
+        </button>
       </div>
       <StatusFact :profile="selected" />
       <div v-if="check" class="check-execution" aria-live="polite">
-        <div class="execution-heading">
-          <span>最近检查</span><strong>{{ executionLabels[check.executionState] }}</strong>
-        </div>
         <p v-if="executionReason" class="status-note">{{ executionReason }}</p>
         <details class="check-diagnostics">
-          <summary>检查信息</summary>
+          <summary>
+            <span>检查信息</span>
+            <span class="check-summary-state">{{ executionLabels[check.executionState] }}</span>
+          </summary>
           <dl>
             <div>
               <dt>检查标识</dt>
-              <dd>{{ check.checkId }}</dd>
+              <dd>
+                <code>{{ check.checkId }}</code>
+              </dd>
             </div>
             <div>
               <dt>请求时间</dt>
               <dd>{{ formatDateTime(check.requestedAt) }}</dd>
             </div>
-            <div v-if="check.reasonCode">
+            <div v-if="check.reasonCode" class="check-field-wide">
               <dt>原因码</dt>
-              <dd>{{ check.reasonCode }}</dd>
+              <dd>
+                <code>{{ check.reasonCode }}</code>
+              </dd>
             </div>
-            <div>
+            <div class="check-field-wide">
               <dt>请求标识</dt>
-              <dd>{{ check.traceId }}</dd>
+              <dd>
+                <code>{{ check.traceId }}</code>
+              </dd>
             </div>
           </dl>
         </details>
       </div>
     </template>
-    <p v-if="readPaused" class="status-note" role="status">
-      已暂停读取，请点击“刷新结果”查询进度。
-    </p>
+    <p v-if="readPaused" class="status-note" role="status">已暂停读取，请点击“刷新”查询进度。</p>
     <RequestError :error="targetError" />
-    <ElButton v-if="profileId" link type="primary" @click="historyOpen = !historyOpen">{{
-      historyOpen ? '收起检测记录' : '检测记录'
-    }}</ElButton>
+    <div v-if="profileId" class="status-footer">
+      <ElButton
+        size="small"
+        :icon="Clock"
+        :aria-expanded="historyOpen"
+        @click="historyOpen = !historyOpen"
+        >{{ historyOpen ? '收起历史检测记录' : '查看历史检测记录' }}</ElButton
+      >
+    </div>
     <StatusHistory
       v-if="historyOpen && profileId"
       :camera-id="camera.cameraId"
@@ -228,43 +270,64 @@ const executionReason = computed(() => {
   font-size: var(--camera-card-text, 14px);
   line-height: 1.6;
 }
-.status-heading,
-.execution-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-}
-h3 {
-  margin: 0;
-  font-size: inherit;
+.camera-status-panel.has-summary {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
 .status-actions {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
-  margin: 12px 0 16px;
+  margin-bottom: 16px;
 }
 .status-actions .el-select {
-  flex: 1;
+  flex: 0 0 140px;
+  width: 140px;
   min-width: 0;
 }
 .status-actions .el-button {
   flex-shrink: 0;
   margin: 0;
 }
-.check-buttons,
-.layer-switcher {
+.check-buttons {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 16px;
 }
-.check-buttons .el-button,
-.layer-switcher .el-button {
-  margin-left: 0;
+.status-actions .status-refresh {
+  margin-left: auto;
+  color: #64748b;
 }
 .layer-switcher {
-  padding-top: 4px;
+  display: flex;
+  gap: 24px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.layer-tab {
+  margin: 0 0 -1px;
+  padding: 0 2px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #64748b;
+  font-size: 13px;
+  cursor: pointer;
+}
+.layer-tab:hover,
+.layer-tab.is-active {
+  color: #2563eb;
+}
+.layer-tab.is-active {
+  border-bottom-color: #2563eb;
+  font-weight: 500;
+}
+.layer-tab:focus-visible,
+.check-diagnostics > summary:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 3px;
 }
 .status-note {
   margin: 8px 0;
@@ -273,48 +336,95 @@ h3 {
   overflow-wrap: anywhere;
 }
 .check-execution {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--el-border-color-extra-light);
-}
-.execution-heading > span {
-  color: var(--text-secondary);
-}
-.execution-heading > strong {
-  font-size: var(--camera-card-meta, 13px);
-  font-weight: 500;
+  margin-top: 16px;
 }
 .check-diagnostics {
-  margin-top: 8px;
-  color: var(--text-secondary);
-  font-size: var(--camera-card-meta, 13px);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 13px;
 }
-summary {
-  cursor: pointer;
-  width: fit-content;
-}
-dl {
-  display: grid;
-  gap: 4px;
-  margin: 8px 0 0;
-}
-dl > div {
-  display: grid;
-  grid-template-columns: 5em minmax(0, 1fr);
+.check-diagnostics > summary {
+  display: flex;
+  align-items: center;
   gap: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  font-weight: 500;
+  list-style: none;
 }
-dd {
+.check-diagnostics > summary::-webkit-details-marker {
+  display: none;
+}
+.check-diagnostics > summary::after {
+  content: '';
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  margin-right: 3px;
+  border-right: 1px solid #94a3b8;
+  border-bottom: 1px solid #94a3b8;
+  transform: rotate(45deg);
+}
+.check-diagnostics[open] > summary::after {
+  transform: rotate(225deg);
+}
+.check-summary-state {
+  margin-left: auto;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 400;
+}
+.check-diagnostics dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+  padding: 0 14px 14px;
+  margin: 0;
+}
+.check-diagnostics dl > div {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  min-width: 0;
+}
+.check-diagnostics .check-field-wide {
+  grid-column: 1 / -1;
+}
+.check-diagnostics dt {
+  color: #64748b;
+}
+.check-diagnostics dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
   user-select: text;
 }
+.check-diagnostics code {
+  color: #64748b;
+  font:
+    12px/1.6 Consolas,
+    monospace;
+}
+.status-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.status-footer .el-button {
+  height: 28px;
+  border-color: #dbe2ea;
+  border-radius: 6px;
+  background: #fff;
+  color: #334155;
+}
+.status-footer .el-button:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #0f172a;
+}
 @media (max-width: 420px) {
-  .status-actions {
-    flex-wrap: wrap;
-  }
-  .status-actions .el-select {
-    flex-basis: 100%;
+  .check-diagnostics dl {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

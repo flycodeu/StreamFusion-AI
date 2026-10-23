@@ -277,12 +277,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="content-page access-query">
-    <header class="query-heading">
-      <div>
-        <h2>权限查询</h2>
-      </div>
-      <ElTag effect="plain" type="info">只读</ElTag>
-    </header>
     <div class="query-toolbar">
       <ElRadioGroup v-model="mode" aria-label="权限查询视角">
         <ElRadioButton value="role">按角色查看</ElRadioButton>
@@ -307,6 +301,7 @@ onBeforeUnmount(() => {
         @click="exportPages"
         >导出当前结果（Excel）</ElButton
       >
+      <ElTag class="query-readonly" effect="plain" type="info">只读</ElTag>
     </div>
     <RequestError :error="error" />
     <RequestError :error="exportError" :advice="exportAdvice" />
@@ -563,25 +558,15 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.query-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 20px;
-}
-.query-heading h2 {
-  margin: 0 0 6px;
-  font-size: 21px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
 .query-toolbar {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
   margin-bottom: 16px;
+}
+.query-readonly {
+  margin-left: auto;
 }
 .query-search {
   width: min(320px, 100%);
@@ -619,9 +604,6 @@ small {
 @media (max-width: 640px) {
   .query-search {
     width: 100%;
-  }
-  .query-heading {
-    align-items: center;
   }
 }
 </style>

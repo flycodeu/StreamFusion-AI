@@ -15,7 +15,15 @@ import {
   ElRadioButton,
   vLoading,
 } from 'element-plus'
-import { CircleCheck, Warning, Clock, QuestionFilled, SwitchButton } from '@element-plus/icons-vue'
+import {
+  CircleCheck,
+  Warning,
+  Clock,
+  QuestionFilled,
+  SwitchButton,
+  VideoCamera,
+} from '@element-plus/icons-vue'
+import { getCamera } from '../../api/camera/api'
 import type {
   ObservationFilter,
   StatusChannel,
@@ -33,6 +41,8 @@ import StatusPanel from '../../features/camera-status/StatusPanel.vue'
 import PlanDialog from '../../features/camera-status/PlanDialog.vue'
 import { useStatusPage } from '../../features/camera-status/useStatusPage'
 import { addressLabel, addressText } from '../../features/camera/address'
+import { usePageScope } from '../../composables/usePageScope'
+import { sessionState } from '../../session/state'
 
 defineOptions({ name: 'CameraStatus' })
 const route = useRoute()
@@ -43,6 +53,29 @@ const query = shallowRef<StatusSearch>({ page: 1, size: 20, layer: 'CONTROL' })
 const drawerOpen = ref(false)
 const plansOpen = ref(false)
 const target = shallowRef<{ channel: StatusChannel; profileId: string } | null>(null)
+const deviceModel = ref<string | null>(null)
+const deviceError = ref<unknown>(null)
+const captureScope = usePageScope()
+watch(
+  [() => (drawerOpen.value ? target.value?.channel.cameraId : null), () => sessionState.epoch],
+  async ([cameraId], _previous, onCleanup) => {
+    deviceModel.value = null
+    deviceError.value = null
+    if (!cameraId) return
+    const inScope = captureScope()
+    const controller = new globalThis.AbortController()
+    onCleanup(() => controller.abort())
+    try {
+      const camera = await getCamera(cameraId, controller.signal)
+      if (controller.signal.aborted || !inScope()) return
+      const model = camera.deviceSummary?.model
+      deviceModel.value = typeof model === 'string' && model.trim() ? model.trim() : null
+    } catch (cause) {
+      if (!controller.signal.aborted && inScope()) deviceError.value = cause
+    }
+  },
+  { flush: 'sync' },
+)
 watch(
   () => route?.query.name,
   (value) => {
@@ -252,24 +285,51 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
     <ElDrawer
       v-model="drawerOpen"
       title="状态详情"
-      size="min(560px, 100%)"
+      size="min(760px, 100vw)"
       :destroy-on-close="false"
     >
-      <template v-if="target"
-        ><div class="diagnostic-heading">
-          <h3>{{ target.channel.name }}</h3>
-          <p>
-            {{ addressLabel(target.channel.accessAddress) }} ·
-            {{ addressText(target.channel.accessAddress) }}
-          </p>
-          <p>{{ target.channel.deviceName || '未关联设备名称' }}</p>
-        </div>
+      <template v-if="target">
         <StatusPanel
           :camera="diagnosticTarget"
           :initial-profile-id="target.profileId"
           :initial-layer="query.layer"
           :active="drawerOpen"
-      /></template>
+        >
+          <template #summary="{ connection }">
+            <section class="status-device-summary" aria-label="设备档案摘要">
+              <div class="device-summary-heading">
+                <ElIcon class="device-summary-icon" aria-hidden="true"><VideoCamera /></ElIcon>
+                <h3 :title="target.channel.name">{{ target.channel.name }}</h3>
+                <span
+                  class="device-connection"
+                  :class="`state-${target.channel.lifecycle === 'ENABLED' ? connection.state : 'disabled'}`"
+                  :title="connection.title"
+                >
+                  <i aria-hidden="true" />{{
+                    target.channel.lifecycle === 'DISABLED'
+                      ? '已停用'
+                      : target.channel.lifecycle === 'PENDING_ASSIGNMENT'
+                        ? '待归档'
+                        : connection.label
+                  }}
+                </span>
+              </div>
+              <div class="device-summary-meta">
+                <span
+                  :title="`${addressLabel(target.channel.accessAddress)}：${addressText(target.channel.accessAddress)}`"
+                  >{{ addressLabel(target.channel.accessAddress) }}：{{
+                    addressText(target.channel.accessAddress)
+                  }}</span
+                >
+                <span :title="`型号：${deviceModel || '未获取'}`"
+                  >型号：{{ deviceModel || '未获取' }}</span
+                >
+              </div>
+            </section>
+            <RequestError :error="deviceError" advice="请重新打开状态详情以读取设备档案。" />
+          </template>
+        </StatusPanel>
+      </template>
     </ElDrawer>
   </div>
 </template>
@@ -404,14 +464,84 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
   align-items: stretch;
   min-height: 100px;
 }
-.diagnostic-heading h3 {
-  margin: 0;
-  font-size: 15px;
-  overflow-wrap: anywhere;
+.status-device-summary {
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
 }
-.diagnostic-heading p {
-  color: var(--text-secondary);
-  overflow-wrap: anywhere;
+.device-summary-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.device-summary-icon {
+  flex-shrink: 0;
+  color: #64748b;
+  font-size: 18px;
+}
+.device-summary-heading h3 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.device-connection {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 99px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 500;
+}
+.device-connection.state-accessible {
+  border-color: #a7f3d0;
+  background: #ecfdf5;
+  color: #059669;
+}
+.device-connection.state-failed {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+.device-connection i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.device-summary-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  color: #64748b;
+  font:
+    13px/1.6 Consolas,
+    monospace;
+}
+.device-summary-meta > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.device-summary-meta > span + span {
+  flex: 1;
+  padding-left: 12px;
+  border-left: 1px solid #cbd5e1;
 }
 .empty-list {
   grid-column: 1 / -1;

@@ -180,7 +180,7 @@ onMounted(load)
 
 <template>
   <div class="content-page">
-    <ElForm class="search-form" inline @submit.prevent="search"
+    <ElForm class="search-form scope-search-form" inline @submit.prevent="search"
       ><ElFormItem label="账户"
         ><ElInput
           v-model="name"
@@ -190,11 +190,12 @@ onMounted(load)
       ><ElFormItem
         ><ElButton type="primary" native-type="submit" :loading="loading">查询</ElButton
         ><ElButton @click="resetSearch">重置</ElButton></ElFormItem
+      ><ElFormItem class="scope-search-refresh"
+        ><ElButton :loading="loading" @click="load">刷新</ElButton></ElFormItem
       ></ElForm
     >
     <RequestError :error="error" />
-    <TablePanel
-      ><template #tools><ElButton :loading="loading" @click="load">刷新</ElButton></template>
+    <TablePanel>
       <ElTable
         class="scope-user-table"
         v-loading="loading"
@@ -385,6 +386,15 @@ onMounted(load)
   </div>
 </template>
 <style scoped>
+.scope-search-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.scope-search-form .scope-search-refresh {
+  margin-left: auto;
+  margin-right: 0;
+}
 .scope-departments {
   display: flex;
   flex-wrap: wrap;

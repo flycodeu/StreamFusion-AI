@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { CopyDocument } from '@element-plus/icons-vue'
 import {
   ElButton,
   ElDatePicker,
-  ElDescriptions,
-  ElDescriptionsItem,
   ElDrawer,
   ElEmpty,
   ElForm,
@@ -92,6 +91,17 @@ const columns = useColumns(
 )
 const resultNames: Record<string, string> = { SUCCESS: '成功', FAILURE: '失败', DENIED: '拒绝' }
 const changes = computed(() => auditChanges(detail.value))
+const failureReason = computed(() => {
+  const record = detail.value?.record
+  if (!record || record.result === 'SUCCESS') return ''
+  const reason = auditReason(record.reasonCode).trim()
+  return reason === '—' ? '' : reason
+})
+const detailIdentifiers = computed(() => [
+  { key: 'record', label: '记录 ID', value: detail.value?.record.id },
+  { key: 'actor', label: '操作者 ID', value: detail.value?.record.actorId },
+  { key: 'trace', label: '请求定位', value: detail.value?.record.traceId },
+])
 let sequence = 0
 let detailSequence = 0
 
@@ -183,6 +193,16 @@ async function copyDiagnostics(): Promise<void> {
     if (inScope()) ElMessage.success('排查信息已复制')
   } catch {
     if (inScope()) ElMessage.warning('浏览器未允许复制，可手动选择请求标识')
+  }
+}
+async function copyIdentifier(value: string | null | undefined, label: string): Promise<void> {
+  if (!value) return
+  const inScope = captureScope()
+  try {
+    await globalThis.navigator.clipboard.writeText(value)
+    if (inScope()) ElMessage.success(`${label}已复制`)
+  } catch {
+    if (inScope()) ElMessage.warning('浏览器未允许复制，可手动选择对应标识')
   }
 }
 async function showDetail(id: string): Promise<void> {
@@ -390,8 +410,8 @@ watch(
             @change="load"
         /></template>
       </TablePanel>
-      <ElDrawer v-model="drawer" title="操作详情" size="760px" destroy-on-close>
-        <div v-loading="detailLoading">
+      <ElDrawer v-model="drawer" title="操作详情" size="min(760px, 100vw)" destroy-on-close>
+        <div v-loading="detailLoading" class="audit-detail">
           <RequestError :error="detailError" />
           <ElButton
             v-if="detailError && detailId"
@@ -400,125 +420,471 @@ watch(
             >重新加载详情</ElButton
           >
           <template v-if="detail">
-            <ElDescriptions :column="1" border>
-              <ElDescriptionsItem label="记录ID">{{ detail.record.id }}</ElDescriptionsItem>
-              <ElDescriptionsItem label="操作人">{{ actor(detail.record) }}</ElDescriptionsItem>
-              <ElDescriptionsItem label="操作者ID">{{
-                detail.record.actorId || '—'
-              }}</ElDescriptionsItem>
-              <ElDescriptionsItem label="模块">{{
-                moduleNames[detail.record.module] || detail.record.module
-              }}</ElDescriptionsItem>
-              <ElDescriptionsItem label="动作">{{
-                actionNames[detail.record.action] || detail.record.action
-              }}</ElDescriptionsItem>
-              <ElDescriptionsItem label="操作对象"
-                ><AuditReferenceList
-                  v-if="detail.record.target"
-                  :references="[detail.record.target]"
-                /><span v-else>{{ target(detail.record) }}</span></ElDescriptionsItem
-              >
-              <ElDescriptionsItem label="结果">{{
-                resultNames[detail.record.result] || detail.record.result
-              }}</ElDescriptionsItem>
-              <ElDescriptionsItem label="原因">{{
-                auditReason(detail.record.reasonCode)
-              }}</ElDescriptionsItem>
-              <ElDescriptionsItem label="来源IP">{{ detail.sourceIp || '—' }}</ElDescriptionsItem>
-              <ElDescriptionsItem label="操作时间">{{
-                formatDateTime(detail.record.createdAt)
-              }}</ElDescriptionsItem>
-              <ElDescriptionsItem label="请求定位"
-                ><div class="trace-tools">
-                  <code>{{ detail.record.traceId || '—' }}</code>
-                  <div class="trace-buttons">
-                    <DiagnosticLink
-                      :trace-id="detail.record.traceId"
-                      :time="detail.record.createdAt"
-                      :plan-id="
-                        detail.record.module === 'CAMERA_STATUS_PLAN'
-                          ? detail.record.targetId
-                          : null
-                      "
-                    />
-                    <ElButton plain @click="copyDiagnostics">复制排查信息</ElButton
-                    ><ElButton
-                      v-if="detail.record.traceId"
-                      plain
-                      type="primary"
-                      @click="relatedOperations(detail.record.traceId)"
-                      >查看关联操作</ElButton
+            <section class="audit-summary" aria-label="操作摘要">
+              <div class="audit-summary-heading">
+                <span class="audit-module">{{
+                  moduleNames[detail.record.module] || detail.record.module
+                }}</span>
+                <h3>{{ actionNames[detail.record.action] || detail.record.action }}</h3>
+                <span
+                  class="audit-result"
+                  :class="{
+                    'is-success': detail.record.result === 'SUCCESS',
+                    'is-failure': ['FAILURE', 'DENIED'].includes(detail.record.result),
+                  }"
+                  >{{ resultNames[detail.record.result] || detail.record.result }}</span
+                >
+              </div>
+              <p v-if="failureReason" class="audit-summary-reason">
+                <span>原因</span>{{ failureReason }}
+              </p>
+              <ul class="audit-summary-meta">
+                <li>操作人：{{ actor(detail.record) }}</li>
+                <li>来源 IP：{{ detail.sourceIp || '—' }}</li>
+                <li>时间：{{ formatDateTime(detail.record.createdAt) }}</li>
+              </ul>
+            </section>
+
+            <section aria-label="操作对象">
+              <dl class="audit-object-info">
+                <div>
+                  <dt>操作对象</dt>
+                  <dd class="audit-object-name" :title="target(detail.record)">
+                    {{ target(detail.record) }}
+                  </dd>
+                </div>
+                <div>
+                  <dt>对象快照 ID</dt>
+                  <dd class="audit-identifier">
+                    <code>{{ detail.record.targetId || '—' }}</code>
+                    <button
+                      v-if="detail.record.targetId"
+                      type="button"
+                      class="audit-copy"
+                      title="复制对象快照 ID"
+                      aria-label="复制对象快照 ID"
+                      @click="copyIdentifier(detail.record.targetId, '对象快照 ID')"
                     >
+                      <CopyDocument aria-hidden="true" />
+                    </button>
+                  </dd>
+                </div>
+              </dl>
+            </section>
+
+            <section aria-labelledby="audit-changes-title">
+              <h3 id="audit-changes-title" class="detail-section-title">变更内容</h3>
+              <div v-if="changes.length" class="audit-changes">
+                <ElTable :data="changes">
+                  <ElTableColumn prop="name" label="字段" width="140" />
+                  <ElTableColumn label="内容" min-width="180">
+                    <template #default="{ row }">
+                      <AuditReferenceList
+                        v-if="row.references.length"
+                        :references="row.references"
+                      />
+                      <span v-else class="change-content">{{ row.value }}</span>
+                    </template>
+                  </ElTableColumn>
+                </ElTable>
+              </div>
+              <ElEmpty
+                v-else
+                class="audit-changes-empty"
+                description="无变更摘要"
+                :image-size="48"
+              />
+            </section>
+
+            <details class="audit-technical">
+              <summary>
+                <span
+                  >技术排查<span class="audit-technical-hint"
+                    >记录 ID · 请求定位 · 排查 JSON</span
+                  ></span
+                >
+              </summary>
+              <div class="audit-technical-content">
+                <dl class="audit-technical-fields">
+                  <div
+                    v-for="item in detailIdentifiers"
+                    :key="item.key"
+                    class="audit-technical-field"
+                    :class="{ 'is-wide': item.key === 'trace' }"
+                  >
+                    <dt>{{ item.label }}</dt>
+                    <dd class="audit-identifier">
+                      <code>{{ item.value || '—' }}</code>
+                      <button
+                        v-if="item.value"
+                        type="button"
+                        class="audit-copy"
+                        :title="`复制${item.label}`"
+                        :aria-label="`复制${item.label}`"
+                        @click="copyIdentifier(item.value, item.label)"
+                      >
+                        <CopyDocument aria-hidden="true" />
+                      </button>
+                    </dd>
                   </div>
-                </div></ElDescriptionsItem
-              >
-            </ElDescriptions>
-            <details class="diagnostic-json">
-              <summary>查看排查 JSON</summary>
-              <pre tabindex="0" aria-label="审计排查 JSON">{{
-                JSON.stringify(detail, null, 2)
-              }}</pre>
+                </dl>
+                <details class="diagnostic-json">
+                  <summary>查看排查 JSON</summary>
+                  <pre tabindex="0" aria-label="审计排查 JSON">{{
+                    JSON.stringify(detail, null, 2)
+                  }}</pre>
+                </details>
+              </div>
             </details>
-            <h3 class="detail-section-title">变更内容</h3>
-            <ElTable v-if="changes.length" :data="changes" border
-              ><ElTableColumn prop="name" label="字段" width="150" /><ElTableColumn label="内容"
-                ><template #default="{ row }"
-                  ><AuditReferenceList
-                    v-if="row.references.length"
-                    :references="row.references"
-                  /><span v-else class="change-content">{{ row.value }}</span></template
-                ></ElTableColumn
-              ></ElTable
-            >
-            <ElEmpty v-else description="无变更摘要" :image-size="60" />
           </template>
         </div>
+        <template v-if="detail" #footer>
+          <div class="audit-detail-actions">
+            <DiagnosticLink
+              :trace-id="detail.record.traceId"
+              :time="detail.record.createdAt"
+              :plan-id="
+                detail.record.module === 'CAMERA_STATUS_PLAN' ? detail.record.targetId : null
+              "
+              button-style="secondary"
+            />
+            <ElButton size="small" @click="copyDiagnostics">复制排查信息</ElButton>
+            <ElButton
+              v-if="detail.record.traceId"
+              size="small"
+              @click="relatedOperations(detail.record.traceId)"
+              >查看关联操作</ElButton
+            >
+          </div>
+        </template>
       </ElDrawer>
     </template>
   </div>
 </template>
 
 <style scoped>
-.detail-section-title {
-  margin: 24px 0 12px;
-  font-size: 15px;
+.audit-detail {
+  min-height: 120px;
+  color: #334155;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.audit-summary {
+  padding: 16px;
+  margin-bottom: 20px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+.audit-summary-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+.audit-summary-heading h3 {
+  flex: 1;
+  min-width: 120px;
+  margin: 0;
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.audit-module {
+  padding: 2px 7px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  background: #fff;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.audit-result {
+  flex-shrink: 0;
+  padding: 2px 10px;
+  margin-left: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 99px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 500;
+}
+.audit-result.is-success {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #059669;
+}
+.audit-result.is-failure {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #b91c1c;
+}
+.audit-summary-reason {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 13px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.audit-summary-reason > span {
+  flex-shrink: 0;
   font-weight: 600;
 }
-.trace-tools code {
-  display: block;
+.audit-summary-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 0;
+  padding: 0;
+  margin: 12px 0 0;
+  list-style: none;
+  color: #64748b;
+  font-size: 13px;
+}
+.audit-summary-meta li {
+  display: flex;
+  align-items: baseline;
+  overflow-wrap: anywhere;
+}
+.audit-summary-meta li + li::before {
+  content: '';
+  height: 10px;
+  margin: 0 10px;
+  border-left: 1px solid #cbd5e1;
+}
+.audit-object-info,
+.audit-technical-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 24px;
+  margin: 0;
+}
+.audit-object-info > div {
+  min-width: 0;
+}
+.audit-object-info {
+  padding-bottom: 16px;
+  border-bottom: 1px dashed #e2e8f0;
+}
+.audit-object-info dt {
+  margin-bottom: 4px;
+  color: #64748b;
+  font-size: 13px;
+}
+.audit-object-info dd {
+  margin: 0;
+  color: #1e293b;
+  line-height: 24px;
+  overflow-wrap: anywhere;
+}
+.audit-object-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audit-identifier {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+.audit-identifier code {
+  min-width: 0;
+  color: #64748b;
+  font:
+    12px/24px Consolas,
+    monospace;
   overflow-wrap: anywhere;
   user-select: all;
 }
-.trace-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 10px;
+.audit-copy {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
-.trace-buttons .el-button + .el-button {
-  margin-left: 0;
+.audit-copy svg {
+  width: 14px;
+  height: 14px;
+}
+.audit-copy:hover {
+  background: #e2e8f0;
+  color: #334155;
+}
+.audit-copy:focus-visible,
+.audit-technical summary:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 3px;
+}
+.detail-section-title {
+  margin: 20px 0 10px;
+  color: #1e293b;
+  font-size: 14px;
+  font-weight: 600;
+}
+.audit-changes {
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+.audit-changes :deep(.el-table) {
+  --el-table-border-color: #f1f5f9;
+  --el-table-header-bg-color: #f8fafc;
+  --el-table-header-text-color: #475569;
+  --el-table-row-hover-bg-color: #f8fafc;
+  font-size: 13px;
+}
+.audit-changes :deep(.el-table__inner-wrapper::before) {
+  display: none;
+}
+.audit-changes :deep(.el-table .cell) {
+  padding: 0 14px;
+}
+.audit-changes-empty {
+  padding: 16px 0;
 }
 .change-content {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-.diagnostic-json {
+.audit-technical {
   margin-top: 20px;
+  border-radius: 8px;
+  background: #f8fafc;
   font-size: 13px;
 }
-.diagnostic-json summary {
+.audit-technical > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  color: #475569;
+  font-weight: 500;
   cursor: pointer;
-  color: var(--el-color-primary);
+  list-style: none;
+}
+.audit-technical-hint {
+  margin-left: 8px;
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 400;
+}
+.audit-technical > summary::-webkit-details-marker {
+  display: none;
+}
+.audit-technical > summary::after {
+  content: '';
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  margin-right: 3px;
+  border-right: 1px solid #94a3b8;
+  border-bottom: 1px solid #94a3b8;
+  transform: rotate(45deg);
+}
+.audit-technical[open] > summary::after {
+  transform: rotate(225deg);
+}
+.audit-technical-content {
+  padding: 0 14px 14px;
+}
+.audit-technical-fields {
+  gap: 12px 20px;
+}
+.audit-technical-field {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  align-items: baseline;
+  min-width: 0;
+}
+.audit-technical-field.is-wide {
+  grid-column: 1 / -1;
+}
+.audit-technical-field dt {
+  color: #64748b;
+}
+.audit-technical-field dd {
+  margin: 0;
+}
+.diagnostic-json {
+  margin-top: 14px;
+}
+.diagnostic-json summary {
+  width: fit-content;
+  cursor: pointer;
+  color: #475569;
 }
 .diagnostic-json pre {
-  max-height: 480px;
+  max-height: 240px;
+  margin: 10px 0 0;
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  padding: 14px;
-  background: var(--el-fill-color-light);
+  padding: 12px;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #e2e8f0;
+  scrollbar-width: thin;
+  scrollbar-color: #475569 #0f172a;
   font:
     12px/1.7 Consolas,
     monospace;
+}
+.audit-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+}
+.audit-detail-actions :deep(.el-button) {
+  height: 28px;
+  margin: 0;
+  padding: 0 12px;
+  border-color: #dbe2ea;
+  border-radius: 6px;
+  background: #fff;
+  color: #334155;
+  font-size: 12px;
+}
+.audit-detail-actions :deep(.el-button:hover) {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #0f172a;
+}
+@media (max-width: 640px) {
+  .audit-object-info,
+  .audit-technical-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .audit-summary-meta {
+    display: grid;
+    gap: 4px;
+  }
+  .audit-summary-meta li + li::before {
+    display: none;
+  }
 }
 </style>

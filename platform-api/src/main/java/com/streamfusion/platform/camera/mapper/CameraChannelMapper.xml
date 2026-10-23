@@ -34,7 +34,18 @@
     <sql id="deviceGroupName">CASE WHEN c.device_id IS NULL THEN c.name ELSE COALESCE(NULLIF(d.local_name,''),CASE WHEN s.connection_category='DEVICE' THEN s.name ELSE COALESCE(NULLIF(d.source_name,''),CONCAT('设备 ',d.id)) END) END</sql>
     <sql id="deviceFilters">
         <if test="filter.name != null">
-            AND (LOWER(c.name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!' OR LOWER(s.name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!' OR LOWER(d.source_name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!' OR LOWER(d.local_name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!')
+            AND (LOWER(c.name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!'
+                OR LOWER(s.name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!'
+                OR LOWER(d.source_name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!'
+                OR LOWER(d.local_name) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!'
+                OR EXISTS (
+                    SELECT 1 FROM camera_source_endpoint search_endpoint
+                    WHERE search_endpoint.source_id=s.id
+                        AND ((s.connection_category='PLATFORM' AND search_endpoint.purpose='PLATFORM_HTTP')
+                            OR (s.connection_category='RTSP' AND search_endpoint.purpose='RTSP')
+                            OR (s.connection_category='DEVICE' AND search_endpoint.purpose IN ('DEVICE_HTTP','VENDOR_HTTP','ONVIF','RTSP')))
+                        AND LOWER(search_endpoint.host) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!'
+                ))
         </if>
         <if test="filter.sourceId != null">AND c.source_id=#{filter.sourceId}</if>
         <if test="filter.adapterType != null">AND s.adapter_type=#{filter.adapterType}</if>

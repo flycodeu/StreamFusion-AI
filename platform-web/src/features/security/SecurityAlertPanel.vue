@@ -127,9 +127,11 @@ onBeforeUnmount(clear)
     </ElTable>
     <ElPagination
       v-model:current-page="page"
+      class="security-pagination"
       :page-size="20"
       :total="total"
-      layout="prev, pager, next, total"
+      :pager-count="5"
+      layout="total, prev, pager, next"
       @current-change="load"
     />
     <ElDrawer
@@ -193,6 +195,11 @@ h3 {
 }
 .security-toolbar .el-button {
   flex-shrink: 0;
+}
+.security-pagination {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  row-gap: 10px;
 }
 .security-trace {
   display: flex;
