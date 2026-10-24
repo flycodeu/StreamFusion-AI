@@ -5,7 +5,14 @@ import * as api from '../../api/camera/api'
 import type { Camera, CameraDeviceGroup } from '../../api/camera/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
-import { connectionLabel, lifecycleLabels, streamLabel } from './form'
+import {
+  connectionLabel,
+  effectiveUsage,
+  lifecycleLabels,
+  sourceBrandLabel,
+  streamLabel,
+  usageLabel,
+} from './form'
 import { addressLabel, addressText, streamAddress } from './address'
 import DetailDialog from './DetailDialog.vue'
 import PlacementDialog from './PlacementDialog.vue'
@@ -14,7 +21,11 @@ import DeviceEditor from './DeviceEditor.vue'
 import StatusPanel from '../camera-status/StatusPanel.vue'
 
 const props = defineProps<{ device: CameraDeviceGroup; canManage: boolean }>()
-const emit = defineEmits<{ close: []; changed: [] }>()
+const emit = defineEmits<{
+  close: []
+  changed: []
+  vendorChanged: [vendorHint: string | null]
+}>()
 const channels = ref<Camera[]>([]),
   selectedId = ref<string | null>(null),
   camera = ref<Camera | null>(null),
@@ -29,8 +40,20 @@ const editingId = ref<string | null>(null)
 const placement = ref<{ cameraId: string; action: 'enable' | 'disable' } | null>(null)
 const moving = ref(false)
 const editingDevice = ref(false),
-  editedName = ref<string | null>(null)
+  editedName = ref<string | null>(null),
+  editedVendor = ref<string | null | undefined>(undefined)
 const deviceName = computed(() => editedName.value ?? props.device.name)
+const resolvedBrand = computed(() => {
+  const vendorHint =
+    editedVendor.value !== undefined
+      ? editedVendor.value
+      : (camera.value?.vendorHint ?? channels.value[0]?.vendorHint ?? props.device.vendorHint)
+  const label = sourceBrandLabel({
+    ...props.device,
+    vendorHint,
+  })
+  return label === '未识别品牌' ? props.device.manufacturer : label
+})
 const drawerActive = computed(
   () => !editingId.value && !placement.value && !moving.value && !editingDevice.value,
 )
@@ -45,7 +68,20 @@ async function deviceSaved(name: string) {
   editingDevice.value = false
   await changed()
 }
+function onVendorChanged(vendorHint: string | null) {
+  editedVendor.value = vendorHint
+  emit('vendorChanged', vendorHint)
+}
 const selected = computed(() => channels.value.find((item) => item.cameraId === selectedId.value))
+function profileCardTitle(profile: NonNullable<Camera['profiles']>[number]): string {
+  const base = streamLabel(profile)
+  const role = effectiveUsage(profile)
+  const hasKnownRole = role && role !== 'UNKNOWN' && role !== 'CUSTOM'
+  const isDuplicateOrSameAsCamera =
+    (camera.value?.name && base === camera.value.name) ||
+    (camera.value?.profiles.filter((p) => streamLabel(p) === base).length ?? 0) > 1
+  return isDuplicateOrSameAsCamera && hasKnownRole ? usageLabel(role) : base
+}
 const busy = computed(() => loading.value || detailLoading.value || deleting.value)
 const captureScope = usePageScope()
 let listSequence = 0,
@@ -91,6 +127,9 @@ async function load() {
     }
     channels.value = result.items
     total.value = result.total
+    if (editedVendor.value === undefined && result.items[0]?.vendorHint) {
+      emit('vendorChanged', result.items[0].vendorHint)
+    }
     const next = result.items.find((item) => item.cameraId === selectedId.value) ?? result.items[0]
     selectedId.value = next?.cameraId ?? null
     if (next) await selectChannel(next.cameraId)
@@ -159,44 +198,61 @@ onMounted(load)
     :close-on-press-escape="!deleting"
     :show-close="!deleting"
   >
-    <header class="device-summary">
-      <div class="device-symbol" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-          <rect x="3" y="6" width="12" height="12" rx="3" />
-          <path d="m15 10 6-3v10l-6-3" />
-        </svg>
-      </div>
-      <div>
-        <h2>{{ deviceName }}</h2>
-        <p>
-          {{ [device.manufacturer, device.model].filter(Boolean).join(' · ') || '设备资料未获取' }}
-        </p>
-      </div>
-    </header>
-    <ElTag v-if="!device.identified" type="info" size="small">待关联设备</ElTag>
-    <dl class="device-facts">
-      <div>
-        <dt>{{ addressLabel(device.accessAddress) }}</dt>
-        <dd>{{ addressText(device.accessAddress) }}</dd>
-      </div>
-      <div>
-        <dt>接入方式</dt>
-        <dd>{{ connectionLabel(device.sourceType, device.connectionCategory) }}</dd>
-      </div>
-      <div>
-        <dt>接入来源</dt>
-        <dd>{{ device.sourceDisplayName }}</dd>
-      </div>
-    </dl>
-    <div v-if="canManage" class="device-actions">
-      <ElButton :disabled="busy" @click="editingDevice = true">编辑相机</ElButton>
-      <ElButton :disabled="busy" @click="moving = true">移动分组</ElButton>
+    <div class="device-top-card">
+      <header class="device-summary">
+        <div class="device-symbol" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <rect x="3" y="6" width="12" height="12" rx="3" />
+            <path d="m15 10 6-3v10l-6-3" />
+          </svg>
+        </div>
+        <div class="device-title-wrap">
+          <div class="device-title-row">
+            <h2>{{ deviceName }}</h2>
+            <ElTag v-if="!device.identified" type="info" size="small">待关联设备</ElTag>
+          </div>
+          <p>
+            {{ [resolvedBrand, device.model].filter(Boolean).join(' · ') || '设备资料未获取' }}
+          </p>
+        </div>
+        <div v-if="canManage" class="device-actions">
+          <ElButton :disabled="busy" @click="editingDevice = true">编辑相机</ElButton>
+          <ElButton :disabled="busy" @click="moving = true">移动分组</ElButton>
+        </div>
+      </header>
+      <dl
+        class="device-facts"
+        :class="{
+          'is-two-col': !device.sourceDisplayName || device.sourceDisplayName === deviceName,
+        }"
+      >
+        <div>
+          <dt>{{ addressLabel(device.accessAddress) }}</dt>
+          <dd>{{ addressText(device.accessAddress) }}</dd>
+        </div>
+        <div>
+          <dt>接入方式</dt>
+          <dd>{{ connectionLabel(device.sourceType, device.connectionCategory) }}</dd>
+        </div>
+        <div v-if="device.sourceDisplayName && device.sourceDisplayName !== deviceName">
+          <dt>接入来源</dt>
+          <dd>{{ device.sourceDisplayName }}</dd>
+        </div>
+      </dl>
     </div>
     <RequestError :error="error" />
     <section v-loading="loading" class="channel-section" aria-label="相机通道">
       <div class="section-heading">
         <h3>通道</h3>
-        <span>{{ total }} 个可访问通道</span>
+        <div class="heading-meta">
+          <ElTag
+            v-if="selected"
+            size="small"
+            :type="selected.lifecycle === 'ENABLED' ? 'success' : 'info'"
+            >{{ lifecycleLabels[selected.lifecycle] }}</ElTag
+          >
+          <span>{{ total }} 个可访问通道</span>
+        </div>
       </div>
       <div class="channel-switcher" role="group" aria-label="选择通道">
         <ElButton
@@ -222,12 +278,6 @@ onMounted(load)
       />
       <p v-if="!loading && !channels.length && !error" class="empty-note">暂无可访问通道</p>
       <div v-if="selected" v-loading="detailLoading" class="channel-detail">
-        <div class="channel-caption">
-          <span>{{ selected.groupPath || '未设置视频分组' }}</span>
-          <ElTag size="small" :type="selected.lifecycle === 'ENABLED' ? 'success' : 'info'">{{
-            lifecycleLabels[selected.lifecycle]
-          }}</ElTag>
-        </div>
         <RequestError :error="detailError" />
         <ElButton v-if="detailError" link type="primary" @click="selectChannel(selected.cameraId)"
           >重试读取通道</ElButton
@@ -245,7 +295,7 @@ onMounted(load)
             >
               <div class="stream-info">
                 <div class="stream-title">
-                  <strong :title="profile.label">{{ streamLabel(profile) }}</strong
+                  <strong :title="profile.label">{{ profileCardTitle(profile) }}</strong
                   ><span v-if="!profile.enabled" class="stream-state">已停用</span
                   ><span
                     v-else-if="profile.streamProfileId === camera.defaultPreviewProfileId"
@@ -328,9 +378,16 @@ onMounted(load)
   />
   <DeviceEditor
     v-if="editingDevice"
-    :device="device"
+    :device="{
+      ...device,
+      vendorHint:
+        editedVendor !== undefined
+          ? editedVendor
+          : (camera?.vendorHint ?? channels[0]?.vendorHint ?? device.vendorHint),
+    }"
     @close="editingDevice = false"
     @saved="deviceSaved"
+    @vendor-changed="onVendorChanged"
   />
   <DeviceMoveDialog
     v-if="moving"
@@ -410,21 +467,38 @@ onMounted(load)
 }
 </style>
 <style scoped>
+.device-top-card {
+  background: #f7f8fa;
+  border: 1px solid #e5e8ef;
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: var(--camera-card-section-gap);
+}
 .device-summary {
   display: flex;
-  align-items: center;
-  gap: var(--camera-card-section-gap);
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
 }
-.device-summary > div:last-child {
-  min-width: 0;
+.device-title-wrap {
+  flex: 1;
+  min-width: 180px;
+}
+.device-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
 }
 .device-symbol {
   display: grid;
   place-items: center;
-  width: clamp(46px, 2.5vw, 64px);
-  height: clamp(46px, 2.5vw, 64px);
+  width: 44px;
+  height: 44px;
   flex-shrink: 0;
-  border-radius: 12px;
+  border-radius: 8px;
   color: var(--el-color-primary);
   background: var(--el-color-primary-light-9);
 }
@@ -433,9 +507,9 @@ onMounted(load)
   height: 55%;
 }
 .device-summary h2 {
-  margin: 0 0 8px;
-  font-size: clamp(1.125rem, 0.85rem + 0.4vw, 1.5rem);
-  line-height: 1.4;
+  margin: 0;
+  font-size: clamp(1.05rem, 0.85rem + 0.3vw, 1.3rem);
+  line-height: 1.35;
   overflow-wrap: anywhere;
   color: var(--text-primary);
 }
@@ -444,38 +518,43 @@ onMounted(load)
   margin: 0;
   color: var(--text-secondary);
   font-size: var(--camera-card-meta);
-  line-height: 1.6;
+  line-height: 1.5;
   overflow-wrap: anywhere;
 }
 .device-facts {
-  margin: var(--camera-card-section-gap) 0;
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid #e5e8ef;
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 .device-facts > div {
-  display: grid;
-  grid-template-columns: 5em minmax(0, 1fr);
-  gap: 12px;
-  font-size: var(--camera-card-text);
-  line-height: 1.6;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: var(--camera-card-meta);
+  line-height: 1.5;
 }
 .device-facts dt {
   color: var(--text-secondary);
+  font-size: 12px;
 }
 .device-facts dd {
   margin: 0;
+  font-weight: 500;
+  color: var(--text-primary);
   overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
 }
 .channel-section {
-  border-top: 1px solid var(--el-border-color-lighter);
-  padding-top: var(--camera-card-section-gap);
   min-height: 110px;
 }
 .device-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: var(--camera-card-section-gap);
+  flex-shrink: 0;
 }
 .device-actions .el-button {
   margin-left: 0;
@@ -485,7 +564,7 @@ onMounted(load)
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: var(--camera-card-section-gap);
+  margin-bottom: 12px;
 }
 .section-heading h3 {
   font-size: var(--camera-card-text);
@@ -519,23 +598,40 @@ onMounted(load)
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: var(--camera-card-row-gap) 0;
+  padding: 10px 0;
   line-height: 1.6;
 }
 .channel-caption > span:first-child {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+.device-facts.is-two-col {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.heading-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: var(--camera-card-meta);
+}
 .streams-heading {
-  margin: 4px 0 0;
+  margin: 14px 0 8px;
+}
+.stream-summaries {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .stream-summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: var(--camera-card-row-gap) 0;
-  border-bottom: 1px solid var(--el-border-color-extra-light);
+  padding: 10px 14px;
+  background: #f8fafc;
+  border: 1px solid #e5e8ef;
+  border-radius: 6px;
 }
 .stream-info {
   min-width: 0;
@@ -552,11 +648,14 @@ onMounted(load)
   overflow-wrap: anywhere;
 }
 .stream-default {
-  font-size: var(--camera-card-meta);
+  font-size: 12px;
   color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+  padding: 1px 6px;
+  border-radius: 3px;
 }
 .stream-state {
-  font-size: var(--camera-card-meta);
+  font-size: 12px;
   color: var(--text-secondary);
 }
 .stream-bitrate {
@@ -570,7 +669,7 @@ onMounted(load)
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  padding-top: var(--camera-card-section-gap);
+  padding-top: 12px;
 }
 .channel-actions .el-button {
   margin: 0;
@@ -583,5 +682,10 @@ onMounted(load)
   font-size: var(--camera-card-text);
   line-height: 1.7;
   margin: 16px 0;
+}
+@media (max-width: 680px) {
+  .device-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 </style>

@@ -62,6 +62,7 @@ export interface CameraDeviceGroup {
   name: string
   identified: boolean
   manufacturer: string | null
+  vendorHint?: string | null
   model: string | null
   sourceDisplayName: string
   sourceType: string | null
@@ -136,6 +137,7 @@ export function parseDeviceGroup(value: unknown): CameraDeviceGroup {
     name: string(row.name),
     identified: boolean(row.identified),
     manufacturer: optionalString(row.manufacturer),
+    ...('vendorHint' in row ? { vendorHint: optionalString(row.vendorHint) } : {}),
     model: optionalString(row.model),
     sourceDisplayName: string(row.sourceDisplayName),
     sourceType: optionalString(row.sourceType),

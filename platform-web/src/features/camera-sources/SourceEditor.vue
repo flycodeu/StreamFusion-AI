@@ -30,7 +30,11 @@ import { formError as validationError, secret, sourceBrandLabel } from '../camer
 import BrandSelect from '../camera/BrandSelect.vue'
 const props = defineProps<{ sourceId: string; embedded?: boolean; manufacturer?: string | null }>()
 const adapters = useDeviceAdapters()
-const emit = defineEmits<{ close: []; saved: [] }>()
+const emit = defineEmits<{
+  close: []
+  saved: [vendorHint?: string | null]
+  vendorLoaded: [vendorHint: string | null]
+}>()
 const captureScope = usePageScope(),
   options = ref<SourceOptions | null>(null),
   editing = ref<Source | null>(null)
@@ -65,9 +69,7 @@ const form = reactive({
   rtspPort: 554,
   scheme: 'rtsp' as SourceEndpoint['scheme'],
   authenticated: false,
-  usernameAction: 'REPLACE' as 'KEEP' | 'REPLACE',
   username: '',
-  passwordAction: 'REPLACE' as 'KEEP' | 'REPLACE',
   password: '',
 })
 async function openEdit() {
@@ -93,12 +95,11 @@ async function openEdit() {
       rtspPort: current.rtspPort ?? 554,
       scheme: endpoint.scheme,
       authenticated: endpoint.authMode !== 'NONE',
-      usernameAction: current.credentials.length ? 'KEEP' : 'REPLACE',
       username: '',
-      passwordAction: current.credentials.length ? 'KEEP' : 'REPLACE',
       password: '',
     })
     initialDraft.value = JSON.stringify(form)
+    if (current.vendorHint) emit('vendorLoaded', current.vendorHint)
   } catch (cause) {
     if (active() && sequence === detailSequence) error.value = cause
   }
@@ -130,12 +131,23 @@ async function save() {
     formError.value = validationError('品牌最多填写128个字符。')
     return
   }
+  const hasSavedCredentials = Boolean(editing.value.credentials.length)
+  const usernameAction: 'KEEP' | 'REPLACE' = hasSavedCredentials
+    ? form.username
+      ? 'REPLACE'
+      : 'KEEP'
+    : 'REPLACE'
+  const passwordAction: 'KEEP' | 'REPLACE' = hasSavedCredentials
+    ? form.password
+      ? 'REPLACE'
+      : 'KEEP'
+    : 'REPLACE'
   if (
     !form.name.trim() ||
     !form.host.trim() ||
     (form.authenticated &&
-      ((form.usernameAction === 'REPLACE' && !form.username) ||
-        (form.passwordAction === 'REPLACE' && !form.password)))
+      ((usernameAction === 'REPLACE' && !form.username) ||
+        (passwordAction === 'REPLACE' && !form.password)))
   ) {
     formError.value = validationError('请填写连接名称、主机和需要替换的账号密码。')
     return
@@ -157,15 +169,15 @@ async function save() {
       ? [
           {
             purpose,
-            username: secret(form.usernameAction, form.username),
-            password: secret(form.passwordAction, form.password),
+            username: secret(usernameAction, form.username),
+            password: secret(passwordAction, form.password),
           },
         ]
       : []
     if (
       form.authenticated &&
       !manualStorageReady.value &&
-      (form.usernameAction === 'REPLACE' || form.passwordAction === 'REPLACE')
+      (usernameAction === 'REPLACE' || passwordAction === 'REPLACE')
     )
       throw validationError('凭据加密尚未配置，请联系系统管理员完成配置后保存账号密码。')
     const common = {
@@ -198,14 +210,11 @@ async function save() {
         endpoint.authMode !== previous.authMode
       )
         input.endpointsUpsert = [endpoint]
-      if (
-        form.authenticated &&
-        (form.usernameAction === 'REPLACE' || form.passwordAction === 'REPLACE')
-      )
+      if (form.authenticated && (usernameAction === 'REPLACE' || passwordAction === 'REPLACE'))
         input.credentialsUpsert = credentials
       if (!form.authenticated && original.credentials.length) input.credentialsRemove = [purpose]
       if (Object.keys(input).length === 1) {
-        emit('saved')
+        emit('saved', form.vendorHint.trim() || null)
         return
       }
       await api.updateSource(original.sourceId, input)
@@ -214,7 +223,7 @@ async function save() {
     form.username = ''
     form.password = ''
     initialDraft.value = JSON.stringify(form)
-    emit('saved')
+    emit('saved', form.vendorHint.trim() || null)
     ElMessage.success('连接资料已保存')
   } catch (cause) {
     if (active()) {
@@ -266,15 +275,19 @@ onBeforeUnmount(() => {
     "
   >
     <RequestError :error="formError" />
-    <p class="connection-note">连接配置对共用此连接的相机生效。</p>
     <ElForm label-position="top" :disabled="saving || loading" @submit.prevent="save">
-      <ElFormItem label="品牌">
-        <BrandSelect
-          v-model="form.vendorHint"
-          :adapters="adapters"
-          :placeholder="brandPlaceholder"
-        />
-      </ElFormItem>
+      <div class="connection-fields">
+        <ElFormItem label="连接名称" required
+          ><ElInput v-model="form.name" maxlength="100" placeholder="请输入连接名称"
+        /></ElFormItem>
+        <ElFormItem label="品牌">
+          <BrandSelect
+            v-model="form.vendorHint"
+            :adapters="adapters"
+            :placeholder="brandPlaceholder"
+          />
+        </ElFormItem>
+      </div>
       <div class="connection-fields address-fields">
         <ElFormItem label="连接主机" required
           ><ElInput
@@ -295,29 +308,31 @@ onBeforeUnmount(() => {
         ><ElSwitch v-model="form.authenticated" :disabled="!!platform"
       /></ElFormItem>
       <div v-if="form.authenticated" class="connection-fields credential-fields">
-        <ElFormItem :label="platform?.usernameLabel ?? '设备账号'" required
-          ><ElSelect v-if="editing?.credentials.length" v-model="form.usernameAction"
-            ><ElOption value="KEEP" label="保留已保存账号" /><ElOption
-              value="REPLACE"
-              label="替换账号" /></ElSelect
+        <ElFormItem
+          :label="platform?.usernameLabel ?? '设备账号'"
+          :required="!editing?.credentials.length"
           ><ElInput
-            v-if="form.usernameAction === 'REPLACE'"
             v-model="form.username"
             autocomplete="off"
             maxlength="128"
+            clearable
+            :placeholder="
+              editing?.credentials.length ? '留空表示保持原账号不变' : '请输入设备账号'
+            "
         /></ElFormItem>
-        <ElFormItem :label="platform?.passwordLabel ?? '设备密码'" required
-          ><ElSelect v-if="editing?.credentials.length" v-model="form.passwordAction"
-            ><ElOption value="KEEP" label="保留已保存密码" /><ElOption
-              value="REPLACE"
-              label="替换密码" /></ElSelect
+        <ElFormItem
+          :label="platform?.passwordLabel ?? '设备密码'"
+          :required="!editing?.credentials.length"
           ><ElInput
-            v-if="form.passwordAction === 'REPLACE'"
             v-model="form.password"
             type="password"
             show-password
             autocomplete="new-password"
             maxlength="512"
+            clearable
+            :placeholder="
+              editing?.credentials.length ? '留空表示保持原密码不变' : '请输入设备密码'
+            "
         /></ElFormItem>
       </div>
       <details class="connection-advanced">
@@ -340,9 +355,6 @@ onBeforeUnmount(() => {
             </ElSelect>
           </ElFormItem>
         </template>
-        <ElFormItem label="连接名称" required
-          ><ElInput v-model="form.name" maxlength="100"
-        /></ElFormItem>
         <ElFormItem v-if="options?.networkPolicies.length" label="接入网络">
           <ElSelect v-model="form.networkPolicyKey" placeholder="可暂不设置">
             <ElOption
@@ -366,10 +378,6 @@ onBeforeUnmount(() => {
             ><ElInputNumber v-model="form.rtspPort" :min="1" :max="65535"
           /></ElFormItem>
         </div>
-        <p v-if="editing?.endpointEditable === false" class="connection-note">
-          已有通道的设备地址不可修改。
-        </p>
-        <ElFormItem label="允许新使用"><ElSwitch v-model="form.enabled" /></ElFormItem>
         <ElFormItem label="备注"
           ><ElInput v-model="form.remark" type="textarea" maxlength="500"
         /></ElFormItem>

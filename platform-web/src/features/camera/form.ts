@@ -59,11 +59,21 @@ export function sourceBrandLabel(camera: {
   sourceType: string | null
   sourceDisplayName: string
   manufacturer?: string | null
+  vendorHint?: string | null
 }): string {
+  const vendor = camera.vendorHint?.trim()
+  const vendorUpper = vendor?.toUpperCase()
   const type = camera.sourceType?.toUpperCase()
   const manufacturer = camera.manufacturer?.trim()
   const brand = manufacturer?.toUpperCase()
   return (
+    (vendorUpper &&
+      (sourceBrandLabels[vendorUpper] ||
+        (vendorUpper.includes('HIKVISION')
+          ? '海康'
+          : vendorUpper.includes('DAHUA')
+            ? '大华'
+            : vendor))) ||
     (type && sourceBrandLabels[type]) ||
     (brand && sourceBrandLabels[brand]) ||
     (brand?.includes('HIKVISION') ? '海康' : brand?.includes('DAHUA') ? '大华' : manufacturer) ||

@@ -42,6 +42,7 @@ const api = vi.hoisted(() => ({
   getDeviceChannels: vi.fn(),
   getCameraDevice: vi.fn(),
   updateCameraDevice: vi.fn(),
+  deleteCameraDevice: vi.fn(),
   getCamera: vi.fn(),
   createCamera: vi.fn(),
   updateCamera: vi.fn(),
@@ -53,6 +54,7 @@ const api = vi.hoisted(() => ({
   getSources: vi.fn(),
   getSource: vi.fn(),
   updateSource: vi.fn(),
+  deleteSource: vi.fn(),
   createSource: vi.fn(),
   getPlatformRegions: vi.fn(),
   getScopeUsers: vi.fn(),
@@ -1862,14 +1864,8 @@ describe('camera management interaction boundaries', () => {
       ],
     })
     const root = await mount(SourceEditor, { sourceId: '1' })
-    expect(field(root, '设备密码', 'ElSelect').props.modelValue).toBe('KEEP')
-    expect(
-      nodes(root).some((item) => item.type === 'ElInput' && item.props.type === 'password'),
-    ).toBe(false)
-    await setField(root, '设备密码', 'REPLACE', 'ElSelect')
-    await click(root, '保存配置')
-    expect(api.updateSource).not.toHaveBeenCalled()
-    expect(text(root)).toContain('需要替换的账号密码')
+    expect(field(root, '设备账号').props.modelValue).toBe('')
+    expect(field(root, '设备密码').props.modelValue).toBe('')
     await setField(root, '设备密码', ' example-password ')
     await click(root, '保存配置')
     expect(api.updateSource).toHaveBeenCalledExactlyOnceWith('1', {
@@ -3101,8 +3097,8 @@ describe('camera management interaction boundaries', () => {
     api.getSource.mockResolvedValue(platformSource)
     const root = await mount(SourceEditor, { sourceId: '1' })
     await settle()
-    expect(field(root, 'AppKey', 'ElSelect').props.modelValue).toBe('KEEP')
-    expect(field(root, 'AppSecret', 'ElSelect').props.modelValue).toBe('KEEP')
+    expect(field(root, 'AppKey').props.modelValue).toBe('')
+    expect(field(root, 'AppSecret').props.modelValue).toBe('')
     expect(field(root, '需要认证', 'ElSwitch').props.disabled).toBe(true)
     await setField(root, '连接主机', 'platform-new.test')
     await click(root, '保存配置')
@@ -3142,7 +3138,7 @@ describe('camera management interaction boundaries', () => {
     expect(field(root, '连接主机').props.disabled).toBe(true)
     expect(field(root, '服务端口', 'ElInputNumber').props.disabled).toBe(true)
     expect(field(root, '连接协议', 'ElSelect').props.disabled).toBe(true)
-    expect(text(root)).toContain('设备地址不可修改')
+    expect(text(root)).not.toContain('已有通道的设备地址不可修改')
     await setField(
       nodes(root).find((item) => item.type === 'ElDialog')!,
       '连接名称',
@@ -3150,5 +3146,26 @@ describe('camera management interaction boundaries', () => {
     )
     await click(root, '保存配置')
     expect(api.updateSource).toHaveBeenCalledWith('1', { version: '4', name: '设备新标签' })
+  })
+  it('supports single and batch camera deletion with cascade cleanup of channels, device and source', async () => {
+    const secondDevice = { ...device, groupKey: 'd200', name: '设备二' }
+    api.getCameraDevices.mockResolvedValue({ items: [device, secondDevice], total: 2 })
+    api.getDeviceChannels.mockResolvedValue({
+      items: [{ ...camera, sourceId: '1' }],
+      total: 1,
+      page: 1,
+      size: 100,
+    })
+    const root = await mount(CameraManage)
+    const table = nodes(root).find((item) => item.type === 'ElTable')!
+    expect(button(root, '批量删除').props.disabled).toBe(true)
+    ;(table.props.onSelectionChange as (rows: unknown[]) => void)([device, secondDevice])
+    await nextTick()
+    expect(button(root, '批量删除 (2)').props.disabled).toBe(false)
+    await click(root, '批量删除 (2)')
+    await settle()
+    expect(api.deleteCamera).toHaveBeenCalledWith({ cameraId: '10', version: '3' })
+    expect(api.deleteCameraDevice).toHaveBeenCalledWith('100', '4')
+    expect(api.deleteSource).toHaveBeenCalledWith('1', '4')
   })
 })

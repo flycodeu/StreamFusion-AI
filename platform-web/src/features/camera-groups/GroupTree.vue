@@ -128,14 +128,19 @@ function select(node: GroupNode) {
 <style scoped>
 .group-tree {
   min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
 }
 .group-tree :deep(.el-tree) {
-  margin-top: 12px;
+  margin-top: 10px;
   background: transparent;
-  --el-tree-node-content-height: 38px;
+  --el-tree-node-content-height: 36px;
+  flex: 1;
+  overflow-y: auto;
 }
 .group-tree :deep(.el-tree-node__content) {
-  border-radius: 4px;
+  border-radius: 5px;
 }
 .group-node {
   display: flex;
@@ -150,11 +155,13 @@ function select(node: GroupNode) {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+  font-size: 13px;
 }
 .group-node small {
   color: var(--text-secondary);
   white-space: nowrap;
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .group-choice {
   flex-shrink: 0;
@@ -175,10 +182,20 @@ function select(node: GroupNode) {
   color: var(--el-color-primary);
 }
 .group-shortcuts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+  padding: 3px;
+  background: #f7f8fa;
+  border: 1px solid #e5e8ef;
+  border-radius: 5px;
+}
+.group-shortcuts :deep(.el-button) {
+  margin: 0;
+  width: 100%;
+  height: 30px;
+  font-size: 13px;
 }
 .group-shortcuts :deep(.el-button + .el-button) {
   margin-left: 0;

@@ -179,3 +179,12 @@ export async function updateCameraDevice(
     })
   ).data
 }
+export async function deleteCameraDevice(deviceId: string, version: string): Promise<void> {
+  await request({
+    path: `/camera-devices/${id(deviceId)}`,
+    method: 'DELETE',
+    ifMatch: `"${id(version)}"`,
+    successStatus: 200,
+    decode: empty,
+  })
+}

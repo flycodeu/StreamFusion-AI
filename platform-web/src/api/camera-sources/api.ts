@@ -1,5 +1,5 @@
 import { request } from '../client'
-import { id, page } from '../parse'
+import { empty, id, page } from '../parse'
 import { parseSource, parseSourceOptions } from './types'
 import type { SourceUpdate, SourceCreate } from './types'
 export async function createSource(input: SourceCreate) {
@@ -60,4 +60,13 @@ export async function updateSource(sourceId: string, input: SourceUpdate) {
       decode: parseSource,
     })
   ).data
+}
+export async function deleteSource(sourceId: string, version: string): Promise<void> {
+  await request({
+    path: `/camera-sources/${id(sourceId)}`,
+    method: 'DELETE',
+    ifMatch: `"${id(version)}"`,
+    successStatus: 200,
+    decode: empty,
+  })
 }

@@ -10,6 +10,7 @@ public class CameraDeviceGroupRow {
     private String name;
     private boolean identified;
     private String manufacturer;
+    private String vendorHint;
     private String model;
     private String sourceDisplayName;
     private String sourceType;

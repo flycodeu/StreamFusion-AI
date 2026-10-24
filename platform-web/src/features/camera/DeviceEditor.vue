@@ -15,14 +15,27 @@ import * as api from '../../api/camera/api'
 import type { CameraDeviceGroup } from '../../api/camera/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
-import { formError } from './form'
+import { formError, sourceBrandLabel } from './form'
 import SourceEditor from '../camera-sources/SourceEditor.vue'
 
 const props = defineProps<{ device: CameraDeviceGroup }>()
-const emit = defineEmits<{ close: []; saved: [name: string] }>()
+const emit = defineEmits<{
+  close: []
+  saved: [name: string]
+  vendorChanged: [vendorHint: string | null]
+}>()
 const form = reactive({ name: '', remark: '' })
 const initial = ref<{ name: string; remark: string; version: string } | null>(null)
 const sourceId = ref<string | null>(null)
+const localVendorHint = ref<string | null | undefined>(props.device.vendorHint)
+const displayBrand = computed(() => {
+  const label = sourceBrandLabel({
+    ...props.device,
+    vendorHint:
+      localVendorHint.value !== undefined ? localVendorHint.value : props.device.vendorHint,
+  })
+  return label === '未识别品牌' ? props.device.manufacturer : label
+})
 const tab = ref('basic')
 const connectionEditor = ref<InstanceType<typeof SourceEditor> | null>(null)
 const loading = ref(true),
@@ -42,6 +55,9 @@ async function load() {
     if (!active()) return
     initial.value = { name: value.name, remark: value.remark ?? '', version: value.version }
     sourceId.value = value.sourceId
+    if ('vendorHint' in value && value.vendorHint !== undefined) {
+      localVendorHint.value = value.vendorHint
+    }
     Object.assign(form, { name: value.name, remark: value.remark ?? '' })
   } catch (cause) {
     if (active()) error.value = cause
@@ -80,7 +96,15 @@ async function close() {
   if (connectionEditor.value && !(await connectionEditor.value.confirmLeave())) return
   if (active()) emit('close')
 }
-function connectionSaved() {
+function onVendorLoaded(vendorHint: string | null) {
+  localVendorHint.value = vendorHint
+  emit('vendorChanged', vendorHint)
+}
+function connectionSaved(vendorHint?: string | null) {
+  if (vendorHint !== undefined) {
+    localVendorHint.value = vendorHint
+    emit('vendorChanged', vendorHint)
+  }
   if (initial.value) emit('saved', initial.value.name)
 }
 async function save() {
@@ -142,8 +166,8 @@ onMounted(load)
         <ElFormItem label="备注"
           ><ElInput v-model="form.remark" type="textarea" :rows="3" maxlength="500" show-word-limit
         /></ElFormItem>
-        <div v-if="device.manufacturer || device.model" class="device-observed">
-          <span v-if="device.manufacturer">识别品牌：{{ device.manufacturer }}</span>
+        <div v-if="displayBrand || device.model" class="device-observed">
+          <span v-if="displayBrand">识别品牌：{{ displayBrand }}</span>
           <span v-if="device.model">型号：{{ device.model }}</span>
         </div>
       </ElForm>
@@ -156,6 +180,7 @@ onMounted(load)
       embedded
       @close="tab = 'basic'"
       @saved="connectionSaved"
+      @vendor-loaded="onVendorLoaded"
     />
     <template v-if="tab === 'basic'" #footer
       ><ElButton :disabled="saving" @click="close">取消</ElButton>
@@ -174,6 +199,10 @@ onMounted(load)
   display: flex;
   flex-wrap: wrap;
   gap: 8px 24px;
+  padding: 10px 14px;
+  background: #f7f8fa;
+  border: 1px solid #e5e8ef;
+  border-radius: 6px;
   color: var(--el-text-color-secondary);
   font-size: 13px;
   line-height: 1.6;

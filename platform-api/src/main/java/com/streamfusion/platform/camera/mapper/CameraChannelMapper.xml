@@ -64,7 +64,7 @@
         SELECT <include refid="deviceGroupKey"/> AS group_key,
             <include refid="deviceGroupName"/> AS name,
             CASE WHEN c.device_id IS NULL THEN FALSE ELSE TRUE END AS identified,
-            d.manufacturer,d.model,s.name AS source_display_name,
+            d.manufacturer,s.vendor_hint,d.model,s.name AS source_display_name,
             s.id AS source_id,s.adapter_type AS source_type,s.connection_category,
             COUNT(*) AS channel_count,
             MIN(c.group_id) AS group_id, COUNT(DISTINCT COALESCE(c.group_id,0)) AS group_count,
@@ -76,7 +76,7 @@
         <include refid="deviceFilters"/>
         GROUP BY <include refid="deviceGroupKey"/>,<include refid="deviceGroupName"/>,
             CASE WHEN c.device_id IS NULL THEN FALSE ELSE TRUE END,
-            d.manufacturer,d.model,s.id,s.name,s.adapter_type,s.connection_category
+            d.manufacturer,s.vendor_hint,d.model,s.id,s.name,s.adapter_type,s.connection_category
         ORDER BY MAX(c.created_at) DESC,MAX(c.id) DESC
     </select>
     <select id="pageDeviceChannels" resultType="com.streamfusion.platform.camera.mapper.CameraAssetRow">

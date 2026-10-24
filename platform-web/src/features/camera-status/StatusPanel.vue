@@ -5,7 +5,7 @@ import { Clock, Refresh } from '@element-plus/icons-vue'
 import type { StatusLayer } from '../../api/camera-status/types'
 import { layerKey } from '../../api/camera-status/types'
 import RequestError from '../../components/feedback/RequestError.vue'
-import { streamLabel } from '../camera/form'
+import { effectiveUsage, streamLabel, usageLabel } from '../camera/form'
 import { formatDateTime } from '../../utils/dateTime'
 import { executionLabels, isTerminal, reasonLabel } from './model'
 import { connectionLabels, upstreamLabels } from './health'
@@ -17,10 +17,13 @@ import { useStatusChecks } from './useStatusChecks'
 const props = defineProps<{
   camera: {
     cameraId: string
+    name?: string
     profiles: {
       streamProfileId: string
       label: string
       usageHint: string
+      width?: number | null
+      height?: number | null
       classification?: { usageHint: string; origin: string }
     }[]
   } | null
@@ -28,8 +31,21 @@ const props = defineProps<{
   initialProfileId?: string | null
   initialLayer?: StatusLayer
 }>()
+function profileOptionLabel(profile: NonNullable<typeof props.camera>['profiles'][number]): string {
+  const base = streamLabel(profile)
+  const role = effectiveUsage(profile)
+  const hasKnownRole = role && role !== 'UNKNOWN' && role !== 'CUSTOM'
+  const isDuplicateOrSameAsCamera =
+    (props.camera?.name && base === props.camera.name) ||
+    (props.camera?.profiles.filter((p) => streamLabel(p) === base).length ?? 0) > 1
+  const title = isDuplicateOrSameAsCamera && hasKnownRole ? usageLabel(role) : base
+  if (isDuplicateOrSameAsCamera && profile.width && profile.height) {
+    return `${title} (${profile.width}×${profile.height})`
+  }
+  return title
+}
 const profileId = ref<string | null>(null)
-const layer = ref<StatusLayer>(props.initialLayer ?? 'MEDIA')
+const layer = ref<StatusLayer>(props.initialLayer ?? 'CONTROL')
 const historyOpen = ref(false)
 const cameraId = computed(() => props.camera?.cameraId ?? null)
 const active = computed(() => props.active)
@@ -37,7 +53,7 @@ watch(
   [cameraId, () => props.initialProfileId],
   () => {
     profileId.value = props.initialProfileId ?? null
-    layer.value = props.initialLayer ?? 'MEDIA'
+    layer.value = props.initialLayer ?? 'CONTROL'
   },
   { immediate: true, flush: 'sync' },
 )
@@ -46,7 +62,7 @@ watch(
   (active) => {
     if (active) {
       if (props.initialProfileId) profileId.value = props.initialProfileId
-      layer.value = props.initialLayer ?? 'MEDIA'
+      layer.value = props.initialLayer ?? 'CONTROL'
     }
   },
   { flush: 'sync' },
@@ -76,7 +92,7 @@ const availableLayers = computed<StatusLayer[]>(() => {
   const upstream = selectedProfile.value?.upstream
   return upstream && upstream.blockingReasonCode !== 'STATUS_LAYER_NOT_APPLICABLE'
     ? ['UPSTREAM']
-    : ['MEDIA', 'CONTROL']
+    : ['CONTROL', 'MEDIA']
 })
 watch(availableLayers, (values) => {
   if (!values.includes(layer.value)) layer.value = values[0]!
@@ -148,7 +164,7 @@ const connection = computed(() => {
         <ElOption
           v-for="profile in camera.profiles"
           :key="profile.streamProfileId"
-          :label="streamLabel(profile)"
+          :label="profileOptionLabel(profile)"
           :value="profile.streamProfileId"
         />
       </ElSelect>
@@ -156,7 +172,7 @@ const connection = computed(() => {
         <ElButton
           v-for="target in availableLayers"
           :key="target"
-          :type="target === 'MEDIA' ? 'primary' : 'default'"
+          :type="target === 'CONTROL' || target === 'UPSTREAM' ? 'primary' : 'default'"
           :loading="posting && pending?.input.layer === target"
           :disabled="!canCheck(target)"
           @click="inspect(target)"
@@ -283,9 +299,9 @@ const connection = computed(() => {
   margin-bottom: 16px;
 }
 .status-actions .el-select {
-  flex: 0 0 140px;
-  width: 140px;
-  min-width: 0;
+  flex: 1 1 200px;
+  min-width: 175px;
+  max-width: 260px;
 }
 .status-actions .el-button {
   flex-shrink: 0;

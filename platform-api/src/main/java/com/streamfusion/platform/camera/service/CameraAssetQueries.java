@@ -97,6 +97,7 @@ public class CameraAssetQueries {
                                                 row.getName(),
                                                 row.isIdentified(),
                                                 row.getManufacturer(),
+                                                row.getVendorHint(),
                                                 row.getModel(),
                                                 row.getSourceDisplayName(),
                                                 row.getSourceType(),

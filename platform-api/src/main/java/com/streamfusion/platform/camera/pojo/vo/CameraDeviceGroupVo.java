@@ -9,6 +9,7 @@ public record CameraDeviceGroupVo(
         @Schema(description = "设备显示名称；未关联设备时显示通道名称") String name,
         @Schema(description = "是否已有可靠的设备归属，不表示设备在线状态") boolean identified,
         @Schema(description = "设备报告的制造商", nullable = true) String manufacturer,
+        @Schema(description = "接入来源配置的品牌提示", nullable = true) String vendorHint,
         @Schema(description = "设备报告的型号", nullable = true) String model,
         @Schema(description = "接入来源的显示名称") String sourceDisplayName,
         @Schema(description = "已识别的接入适配器类型", nullable = true) String sourceType,
