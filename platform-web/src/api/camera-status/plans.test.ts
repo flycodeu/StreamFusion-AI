@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import { parseStatusPlan } from './plans'
+import { describe, expect, it, vi } from 'vitest'
+import { deleteStatusPlan, parseStatusPlan } from './plans'
+
+import { request } from '../client'
+vi.mock('../client', () => ({ request: vi.fn() }))
 
 const plan = {
   planId: '9007199254740993',
@@ -17,6 +20,19 @@ const plan = {
   parallelism: 1,
 }
 describe('finite patrol contract', () => {
+  it('deletes with a quoted version header and no fabricated success response', async () => {
+    vi.mocked(request).mockResolvedValue({ data: null } as never)
+    await deleteStatusPlan(plan)
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/camera-status/plans/9007199254740993',
+        method: 'DELETE',
+        ifMatch: '"0"',
+        successStatus: 200,
+      }),
+    )
+    await expect(deleteStatusPlan({ planId: '../hidden', version: '0' })).rejects.toThrow()
+  })
   it('retains target diagnostics and decimal identifiers', () => {
     expect(parseStatusPlan(plan)).toEqual({ ...plan, checkVideo: false })
   })

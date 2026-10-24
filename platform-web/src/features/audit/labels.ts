@@ -81,6 +81,7 @@ export const actionNames: Record<string, string> = {
   CAMERA_STATUS_PLAN_CREATE: '启动巡检任务',
   CAMERA_STATUS_PLAN_STOP: '停止巡检任务',
   CAMERA_STATUS_PLAN_RESUME: '恢复巡检任务',
+  CAMERA_STATUS_PLAN_DELETE: '删除巡检任务',
   CREATE: '新建',
   UPDATE: '修改',
   REMOVE: '移除',

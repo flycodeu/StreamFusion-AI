@@ -30,6 +30,7 @@ const props = defineProps<{
   active: boolean
   initialProfileId?: string | null
   initialLayer?: StatusLayer
+  showProfileSelector?: boolean
 }>()
 function profileOptionLabel(profile: NonNullable<typeof props.camera>['profiles'][number]): string {
   const base = streamLabel(profile)
@@ -156,6 +157,7 @@ const connection = computed(() => {
     <slot name="summary" :connection="connection" />
     <div class="status-actions">
       <ElSelect
+        v-if="showProfileSelector !== false && camera.profiles.length > 1"
         v-model="profileId"
         placeholder="选择要检查的码流"
         aria-label="检查码流"

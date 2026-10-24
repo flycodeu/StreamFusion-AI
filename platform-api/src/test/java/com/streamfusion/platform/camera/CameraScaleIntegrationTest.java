@@ -204,7 +204,8 @@ class CameraScaleIntegrationTest extends CameraTestSupport {
         LocalDateTime historical = LocalDateTime.of(2020, 1, 1, 0, 0);
         for (int index = 0; index < CHANNELS; index++) {
             boolean visible = index < 2500;
-            long camera = cameraId(index), main = profileId(index, 0);
+            // Unknown stream metrics fall back to SUB for detection, independently of preview.
+            long camera = cameraId(index), detectionProfile = profileId(index, 1);
             String name =
                     "scale-" + (visible ? "visible-" : "hidden-") + String.format("%04d", index);
             channelRows.add(
@@ -244,7 +245,7 @@ class CameraScaleIntegrationTest extends CameraTestSupport {
             }
             factRows.add(
                     new Object[] {
-                        main,
+                        detectionProfile,
                         camera,
                         visible ? "ACCESSIBLE" : "FAILED",
                         visible ? "RTSP_DESCRIBE_OK" : "RTSP_CONNECT_FAILED",
@@ -253,7 +254,7 @@ class CameraScaleIntegrationTest extends CameraTestSupport {
                         historical.plusMinutes(5),
                         historical,
                         historical,
-                        main,
+                        detectionProfile,
                         crypto.activeKeyId(),
                         new byte[32]
                     });

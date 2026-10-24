@@ -84,7 +84,7 @@ function select(node: GroupNode) {
       :props="{ label: 'name', children: 'children' }"
       :current-node-key="pending ? undefined : model || undefined"
       :default-expanded-keys="expanded"
-      :expand-on-click-node="false"
+      :expand-on-click-node="true"
       highlight-current
       empty-text="暂无可见分组"
       :filter-node-method="
@@ -102,7 +102,7 @@ function select(node: GroupNode) {
         >
           <span class="group-node" :title="data.path"
             ><span class="group-node-name">{{ data.name }}</span>
-            <small v-if="counts">{{ data.visibleCameraCount }} 通道</small></span
+            <small v-if="counts">{{ data.visibleDeviceCount ?? '—' }} 台相机</small></span
           >
         </GroupNodeActions>
         <span v-else class="group-node" :title="data.path"
@@ -119,7 +119,7 @@ function select(node: GroupNode) {
             >当前 ·
             {{ placements.find((p) => p.groupId === data.groupId)?.channelCount }} 通道</small
           >
-          <small v-if="counts">{{ data.visibleCameraCount }} 通道</small></span
+          <small v-if="counts">{{ data.visibleDeviceCount ?? '—' }} 台相机</small></span
         >
       </template>
     </ElTree>

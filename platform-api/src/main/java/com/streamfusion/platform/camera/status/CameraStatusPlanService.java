@@ -54,6 +54,7 @@ public class CameraStatusPlanService {
     private final Clock clock;
     private final AuditService audit;
     private final com.streamfusion.platform.camera.service.CameraGroupService groups;
+    private final CameraStatusPlanTargetsService targetSelection;
 
     @Transactional
     public CameraStatusPlanVo create(CameraStatusPlanCommand command, AuditContextDto context) {
@@ -103,6 +104,9 @@ public class CameraStatusPlanService {
             DecimalInput.id(key.substring(1), "groupKey");
         }
         var requested = CameraRequestKey.timestamp(command.clientRequestId());
+        var selections = CameraStatusPlanTargetsService.selections(command.targetSelections());
+        if (selections.stream().anyMatch(s -> !keys.contains(s.groupKey())))
+            throw error(ErrorCode.VALIDATION_ERROR);
         var actor = access.lockActor();
         var input =
                 Map.of(
@@ -127,6 +131,10 @@ public class CameraStatusPlanService {
             input = new LinkedHashMap<>(input);
             input.put("checkVideo", true);
         }
+        if (!selections.isEmpty()) {
+            input = new LinkedHashMap<>(input);
+            input.put("targetSelections", selections);
+        }
         var prior = plans.byRequest(actor.userId(), command.clientRequestId());
         if (prior != null) {
             if (!MessageDigest.isEqual(
@@ -137,14 +145,14 @@ public class CameraStatusPlanService {
         }
         CameraRequestKey.requireFresh(requested, clock.instant());
         List<Long> fixedChannels = null;
+        List<CameraStatusPlanTargetEntity> fixedTargets = List.of();
         if (reusedPlanId != 0) {
             var reused = plans.selectById(reusedPlanId);
             if (reused == null || reused.getActorUserId() != actor.userId())
                 throw error(ErrorCode.NOT_FOUND);
+            fixedTargets = targets.forPlan(reusedPlanId);
             fixedChannels =
-                    targets.forPlan(reusedPlanId).stream()
-                            .map(CameraStatusPlanTargetEntity::getCameraId)
-                            .toList();
+                    fixedTargets.stream().map(CameraStatusPlanTargetEntity::getCameraId).toList();
             if (fixedChannels.size() != reused.getTargetCount())
                 throw error(ErrorCode.CONFLICT).diagnosed("PLAN_TARGET_UNAVAILABLE");
         }
@@ -191,7 +199,10 @@ public class CameraStatusPlanService {
                         .toList();
         if (!present.equals(keys))
             throw error(ErrorCode.NOT_FOUND).diagnosed("PLAN_TARGET_UNAVAILABLE");
-        var chosen = profiles.statusRepresentatives(rows.stream().map(row -> row.getId()).toList());
+        var resolved =
+                targetSelection.resolve(rows, fixedTargets, selections, access.visibility(actor));
+        rows = resolved.rows();
+        var chosen = resolved.profiles();
         if (chosen.size() != rows.size())
             throw error(ErrorCode.CONFLICT).diagnosed("PLAN_PROFILE_MISSING");
         String keyId = crypto.activeKeyId();
@@ -324,6 +335,35 @@ public class CameraStatusPlanService {
                             "STOPPED"));
         }
         return view(plan);
+    }
+
+    @Transactional
+    public void delete(String id, String version, AuditContextDto context) {
+        var actor = access.lockActor();
+        var plan = plans.lock(DecimalInput.id(id, "planId"));
+        if (plan == null || plan.getActorUserId() != actor.userId())
+            throw error(ErrorCode.NOT_FOUND);
+        if (plan.getVersion() != DecimalInput.version(version, "version"))
+            throw error(ErrorCode.CONFLICT).diagnosed("PLAN_VERSION_CHANGED");
+        targets.delete(
+                new LambdaQueryWrapper<CameraStatusPlanTargetEntity>()
+                        .eq(CameraStatusPlanTargetEntity::getPlanId, plan.getId()));
+        plans.deleteById(plan.getId());
+        audit.record(
+                actor.userId(),
+                "CAMERA_STATUS_PLAN",
+                plan.getId(),
+                "CAMERA_STATUS_PLAN_DELETE",
+                "SUCCESS",
+                null,
+                context,
+                Map.of(
+                        "name",
+                        "巡检任务 " + plan.getId(),
+                        "beforeState",
+                        plan.getState(),
+                        "targetCount",
+                        Integer.toString(plan.getTargetCount())));
     }
 
     public void tick() {

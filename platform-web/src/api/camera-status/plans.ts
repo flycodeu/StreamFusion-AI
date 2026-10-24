@@ -1,6 +1,7 @@
 import { request } from '../client'
-import { id, integer, list, object, string } from '../parse'
+import { empty, id, integer, list, object, string } from '../parse'
 import { isUtcTimestamp } from '../../lib/http/error'
+import type { TargetSelection } from './planTargets'
 
 export interface StatusPlan {
   planId: string
@@ -38,6 +39,7 @@ export interface StatusPlanInput {
   groupIds?: string[]
   planId?: string
   checkVideo?: boolean
+  targetSelections?: TargetSelection[]
 }
 export function parseStatusPlan(value: unknown): StatusPlan {
   const row = object(value),
@@ -153,4 +155,16 @@ export async function resumeStatusPlan(plan: StatusPlan) {
       decode: parseStatusPlan,
     })
   ).data
+}
+
+export async function deleteStatusPlan(
+  plan: Pick<StatusPlan, 'planId' | 'version'>,
+): Promise<void> {
+  await request({
+    path: `/camera-status/plans/${id(plan.planId)}`,
+    method: 'DELETE',
+    ifMatch: `"${id(plan.version)}"`,
+    successStatus: 200,
+    decode: empty,
+  })
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, onMounted, onScopeDispose, ref } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onScopeDispose, ref } from 'vue'
 import {
   ElButton,
   ElDialog,
@@ -23,6 +23,7 @@ import {
   getStatusPlans,
   stopStatusPlan,
   resumeStatusPlan,
+  deleteStatusPlan,
 } from '../../api/camera-status/plans'
 import { getGroupTree } from '../../api/camera-groups/api'
 import { groupTree } from '../camera-groups/tree'
@@ -34,12 +35,14 @@ import { formatDateTime } from '../../utils/dateTime'
 import { ApiRequestError } from '../../lib/http/error'
 import { reasonLabel } from './model'
 import { inspectPlanTargets } from '../../api/camera-status/planTargets'
-import type { PlanTarget } from '../../api/camera-status/planTargets'
+import type { PlanTarget, TargetSelection, TargetScope } from '../../api/camera-status/planTargets'
 import PlanCameraPicker from './PlanCameraPicker.vue'
+import PlanTargetSettings from './PlanTargetSettings.vue'
 
-const props = defineProps<{ groupKeys: string[] }>()
+const props = withDefaults(defineProps<{ groupKeys?: string[] }>(), { groupKeys: () => [] })
 const scope = ref<'PAGE' | 'ALL' | 'PLAN' | 'GROUPS'>(props.groupKeys.length ? 'PAGE' : 'GROUPS')
 const selectedKeys = ref([...new Set(props.groupKeys)])
+const targetSelections = ref<TargetSelection[]>([])
 const tab = ref('create')
 const step = ref(0)
 // 新增前端字段：现有 API 没有名称字段；备注只保留在当前弹窗会话，不写入请求。
@@ -49,7 +52,7 @@ const nameTouched = ref(false)
 const taskState = ref('ALL')
 const taskSearch = ref('')
 const reportPlanId = ref<string | null>(null)
-const steps = ['选择相机', '连接检测', '视频检测', '检测周期']
+const steps = ['选择相机', '在线状态检测', '视频检测', '检测周期']
 const progressItems = [
   { key: 'success', label: '成功' },
   { key: 'failed', label: '异常' },
@@ -59,6 +62,7 @@ const progressItems = [
 ] as const
 const selectedGroups = ref<string[]>([])
 const pickerBusy = ref(false)
+const navigationBusy = ref(false)
 const groupNodes = ref<GroupNode[]>([])
 const layer = ref<'CONTROL' | 'MEDIA'>('CONTROL')
 const checkVideo = ref(false)
@@ -67,6 +71,7 @@ const parallelism = ref(1)
 const reusedPlan = ref<StatusPlan | null>(null)
 const createPanel = ref<globalThis.HTMLElement | null>(null)
 const limitExceeded = ref(false)
+const totalCount = ref<number | null>(null)
 let inspectionId = 0
 const emit = defineEmits<{ close: []; changed: [] }>()
 const plans = ref<StatusPlan[]>([]),
@@ -77,7 +82,7 @@ const busy = ref(false),
   error = ref<unknown>(null),
   pending = ref<StatusPlanInput | null>(null)
 const capture = usePageScope()
-const errorOperation = ref<'load' | 'create' | 'stop' | 'resume'>('load')
+const errorOperation = ref<'load' | 'create' | 'stop' | 'resume' | 'delete'>('load')
 const groupError = ref<unknown>(null)
 const now = ref(Date.now())
 const pollPaused = ref(false)
@@ -110,7 +115,7 @@ function planState(plan: StatusPlan) {
       : 'STOPPED'
 }
 function checkLabel(plan: StatusPlan) {
-  return plan.layer === 'MEDIA' ? '视频收帧' : plan.checkVideo ? '连接 / 视频' : '连接 / 平台状态'
+  return plan.layer === 'MEDIA' ? '视频收帧' : plan.checkVideo ? '在线状态 / 视频' : '在线状态'
 }
 const expiryFormatter = new Intl.DateTimeFormat('zh-CN', {
   timeZone: 'Asia/Shanghai',
@@ -149,7 +154,7 @@ const selectedCount = computed(() =>
     ? selectedKeys.value.length
     : scope.value === 'GROUPS' && !selectedGroups.value.length
       ? 0
-      : inspecting.value || inspectionError.value || limitExceeded.value
+      : inspectionError.value || limitExceeded.value
         ? null
         : targets.value.length,
 )
@@ -172,28 +177,30 @@ const canCreate = computed(
     hours.value * 60 >= interval.value,
 )
 async function inspectTargets() {
-  if (pickerBusy.value) return
   const active = capture()
   const requestId = ++inspectionId
   inspecting.value = true
   inspectionError.value = null
-  targets.value = []
   limitExceeded.value = false
   if (scope.value === 'GROUPS' && !selectedGroups.value.length) {
     inspecting.value = false
     return
   }
   try {
-    const result = await inspectPlanTargets(
+    const query: TargetScope =
       scope.value === 'GROUPS'
         ? { scope: 'GROUPS', groupIds: [...selectedGroups.value] }
         : scope.value === 'ALL'
           ? { scope: 'ALL' }
           : scope.value === 'PLAN' && reusedPlan.value
             ? { scope: 'PLAN', planId: reusedPlan.value.planId }
-            : { scope: 'PAGE', groupKeys: [...selectedKeys.value] },
-    )
+            : { scope: 'PAGE', groupKeys: [...selectedKeys.value] }
+    const result = await inspectPlanTargets({
+      ...query,
+      ...(targetSelections.value.length ? { targetSelections: [...targetSelections.value] } : {}),
+    })
     if (active() && requestId === inspectionId) {
+      totalCount.value = result.totalCount ?? null
       targets.value = result.targets
       limitExceeded.value = result.limitExceeded
     }
@@ -205,6 +212,7 @@ async function inspectTargets() {
 }
 async function reuse(plan: StatusPlan) {
   if (busy.value || pending.value || pickerBusy.value) return
+  targetSelections.value = []
   reusedPlan.value = plan
   taskName.value = defaultTaskName()
   nameTouched.value = false
@@ -225,33 +233,58 @@ async function reuse(plan: StatusPlan) {
   createPanel.value?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
 }
 async function nextStep() {
-  if (busy.value || pending.value || inspecting.value || pickerBusy.value) return
-  if (step.value === 0) {
-    nameTouched.value = true
-    if (nameError.value) return
-    if (scope.value === 'PAGE' && !selectedKeys.value.length) return
-    if (scope.value === 'GROUPS' && !selectedGroups.value.length) return
-    const requestId = inspectionId + 1
-    await inspectTargets()
-    if (
-      requestId !== inspectionId ||
-      inspectionError.value ||
-      limitExceeded.value ||
-      !eligibleKeys.value.length
-    )
-      return
+  if (busy.value || pending.value || navigationBusy.value || pickerBusy.value) return
+  const requiresInspection = step.value === 0
+  if (requiresInspection) navigationBusy.value = true
+  try {
+    if (requiresInspection) {
+      nameTouched.value = true
+      if (nameError.value) return
+      if (scope.value === 'PAGE' && !selectedKeys.value.length) return
+      if (scope.value === 'GROUPS' && !selectedGroups.value.length) return
+      const requestId = inspectionId + 1
+      await inspectTargets()
+      if (
+        requestId !== inspectionId ||
+        inspectionError.value ||
+        limitExceeded.value ||
+        !eligibleKeys.value.length
+      )
+        return
+    }
+    step.value = Math.min(3, step.value + 1)
+  } finally {
+    if (requiresInspection) navigationBusy.value = false
   }
-  step.value = Math.min(3, step.value + 1)
 }
 function changeScope() {
+  targetSelections.value = []
   ++inspectionId
-  targets.value = []
   inspectionError.value = null
   inspecting.value = false
   limitExceeded.value = false
+  if (
+    (scope.value === 'PAGE' && !selectedKeys.value.length) ||
+    (scope.value === 'GROUPS' && !selectedGroups.value.length)
+  )
+    targets.value = []
+}
+async function selectedChanged() {
+  changeScope()
+  // Group selection emits its final keys before releasing the picker lock.
+  await nextTick()
+  if (scope.value === 'PAGE' && selectedKeys.value.length) await inspectTargets()
+}
+async function setTargetSelection(selection: TargetSelection) {
+  if (busy.value || pending.value || inspecting.value) return
+  targetSelections.value = [
+    ...targetSelections.value.filter((item) => item.groupKey !== selection.groupKey),
+    selection,
+  ]
+  await inspectTargets()
 }
 async function selectGroups(keys: string[]) {
-  if (busy.value || pending.value || inspecting.value) return
+  if (busy.value || pending.value) return
   selectedGroups.value = keys
   selectedKeys.value = []
   scope.value = 'GROUPS'
@@ -259,7 +292,7 @@ async function selectGroups(keys: string[]) {
   if (keys.length) await inspectTargets()
 }
 async function selectAll() {
-  if (busy.value || pending.value || inspecting.value || pickerBusy.value) return
+  if (busy.value || pending.value) return
   selectedKeys.value = []
   selectedGroups.value = []
   scope.value = 'ALL'
@@ -271,6 +304,7 @@ const planErrorAdvice = computed(() => {
   if (error.value.status === 429 && ['create', 'resume'].includes(errorOperation.value))
     return '巡检容量已满，请减少目标、增大检测间隔，或停止不需要的任务。'
   if (error.value.status !== 409) return undefined
+  if (errorOperation.value === 'delete') return '任务状态已变化，请刷新后重试删除。'
   if (errorOperation.value === 'stop') return '任务状态已变化，请刷新任务后确认是否仍需停止。'
   if (errorOperation.value === 'resume') return '任务已到期或配置已变化，请刷新任务并核对目标。'
   if (errorOperation.value !== 'create') return undefined
@@ -330,6 +364,13 @@ async function create() {
       layer.value === 'MEDIA' || checkVideo.value || dispatchMode.value === 'POLLING'
         ? 1
         : parallelism.value,
+    ...(targetSelections.value.length
+      ? {
+          targetSelections: targetSelections.value.filter((item) =>
+            eligibleKeys.value.includes(item.groupKey),
+          ),
+        }
+      : {}),
     ...(scope.value === 'GROUPS' ? { groupIds: [...selectedGroups.value] } : {}),
     ...(scope.value === 'PLAN' ? { planId: reusedPlan.value!.planId } : {}),
   }
@@ -406,6 +447,40 @@ async function resume(plan: StatusPlan) {
     if (active()) busy.value = false
   }
 }
+async function remove(plan: StatusPlan) {
+  if (busy.value || pending.value) return
+  const active = capture()
+  try {
+    await ElMessageBox.confirm(
+      `删除“${planTitle(plan)}”？删除后停止后续巡检，已产生的检测记录保留。`,
+      '删除巡检任务',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  if (!active() || busy.value || pending.value) return
+  invalidateRead()
+  busy.value = true
+  error.value = null
+  errorOperation.value = 'delete'
+  try {
+    await deleteStatusPlan(plan)
+    if (!active()) return
+    delete taskNames.value[plan.planId]
+    if (reportPlanId.value === plan.planId) reportPlanId.value = null
+    emit('changed')
+    await load()
+  } catch (cause) {
+    if (active()) {
+      error.value = cause
+      if (cause instanceof ApiRequestError && [404, 409].includes(cause.status ?? 0))
+        await load(true)
+    }
+  } finally {
+    if (active()) busy.value = false
+  }
+}
 async function close() {
   if (busy.value) return
   if (pending.value) {
@@ -434,6 +509,7 @@ onMounted(() => {
   void load()
   const active = capture()
   void loadGroups()
+  if (scope.value === 'PAGE' && selectedKeys.value.length) void inspectTargets()
   timer = globalThis.setInterval(() => {
     if (!pageActive || !active() || globalThis.document?.hidden) return
     now.value = Date.now() + clockOffset
@@ -463,7 +539,7 @@ onDeactivated(() => {
     class="management-dialog patrol-dialog"
     append-to-body
     :before-close="close"
-    :close-on-click-modal="false"
+    :close-on-click-modal="!busy && !pending"
   >
     <RequestError class="patrol-request-error" :error="error" :advice="planErrorAdvice" />
     <ElTabs v-model="tab" class="patrol-tabs">
@@ -496,7 +572,7 @@ onDeactivated(() => {
         </div>
         <ElForm
           label-position="top"
-          :disabled="busy || !!pending || inspecting || pickerBusy"
+          :disabled="busy || !!pending || navigationBusy"
           @submit.prevent="step === 3 ? create() : nextStep()"
         >
           <div :hidden="step !== 0" class="wizard-stage">
@@ -522,10 +598,11 @@ onDeactivated(() => {
               :checked-groups="selectedGroups"
               :group-error="groupError"
               :targets="targets"
+              :total-count="totalCount"
               :inspecting="inspecting"
               :range-ready="!inspectionError && !limitExceeded"
-              :disabled="busy || !!pending || inspecting || pickerBusy"
-              @update:model-value="changeScope"
+              :disabled="busy || !!pending || navigationBusy"
+              @update:model-value="selectedChanged"
               @groups="selectGroups"
               @all="selectAll"
               @resolving="pickerBusy = $event"
@@ -535,33 +612,47 @@ onDeactivated(() => {
                   selectedKeys = keys
                   selectedGroups = []
                   scope = 'PAGE'
-                  changeScope()
+                  selectedChanged()
                 }
               "
             />
           </div>
           <div v-if="step === 1" class="wizard-stage settings-stage">
             <header class="stage-heading">
-              <h3>配置相机连接检查</h3>
+              <h3>配置在线状态检测</h3>
             </header>
             <ElFormItem v-if="layer === 'MEDIA'" label="复用旧任务">
-              <ElButton @click="layer = 'CONTROL'">改为先检测连接</ElButton>
+              <ElButton @click="layer = 'CONTROL'">改为先检测在线状态</ElButton>
             </ElFormItem>
-            <div class="patrol-settings">
-              <ElFormItem label="调度方式"
-                ><ElSelect v-model="dispatchMode" @change="parallelism = 1"
-                  ><ElOption value="POLLING" label="逐个轮询" /><ElOption
-                    value="PARALLEL"
-                    label="有界并行" /></ElSelect
-              ></ElFormItem>
-              <ElFormItem v-if="dispatchMode === 'PARALLEL'" label="并发请求数"
-                ><ElSelect v-model="parallelism" :disabled="layer === 'MEDIA' || checkVideo"
-                  ><ElOption
+            <div class="setting-list" aria-label="在线状态检测调度设置">
+              <ElFormItem label="调度方式" class="setting-row">
+                <div class="setting-row-copy">
+                  <strong>调度方式</strong>
+                  <span>控制设备检查请求的发送节奏</span>
+                </div>
+                <ElSelect v-model="dispatchMode" aria-label="调度方式" @change="parallelism = 1">
+                  <ElOption value="POLLING" label="逐个轮询" />
+                  <ElOption value="PARALLEL" label="有界并行" />
+                </ElSelect>
+              </ElFormItem>
+              <ElFormItem v-if="dispatchMode === 'PARALLEL'" label="并发请求数" class="setting-row">
+                <div class="setting-row-copy">
+                  <strong>并发请求数</strong>
+                  <span>同时发起的在线状态检查数量</span>
+                </div>
+                <ElSelect
+                  v-model="parallelism"
+                  aria-label="并发请求数"
+                  :disabled="layer === 'MEDIA' || checkVideo"
+                >
+                  <ElOption
                     v-for="count in layer === 'MEDIA' || checkVideo ? [1] : [1, 2, 3, 4]"
                     :key="count"
                     :value="count"
-                    :label="`${count} 个请求`" /></ElSelect
-              ></ElFormItem>
+                    :label="`${count} 个请求`"
+                  />
+                </ElSelect>
+              </ElFormItem>
             </div>
           </div>
           <div v-else-if="step === 2" class="wizard-stage settings-stage">
@@ -570,44 +661,63 @@ onDeactivated(() => {
             </header>
             <div class="video-setting">
               <div>
-                <strong>{{ layer === 'MEDIA' ? '视频收帧检查' : '连接通过后检查视频' }}</strong>
+                <strong>{{ layer === 'MEDIA' ? '视频收帧检查' : '在线状态通过后检查视频' }}</strong>
               </div>
-              <ElFormItem v-if="layer === 'CONTROL'" label="连接通过后检查视频"
+              <ElFormItem
+                v-if="layer === 'CONTROL'"
+                label="在线状态通过后检查视频"
+                class="video-check-toggle"
                 ><ElSwitch
                   v-model="checkVideo"
-                  aria-label="连接通过后检查视频"
+                  aria-label="在线状态通过后检查视频"
                   @change="parallelism = 1"
               /></ElFormItem>
               <span v-else class="config-chip">沿用视频检测</span>
             </div>
+            <PlanTargetSettings
+              v-if="checkVideo || layer === 'MEDIA'"
+              :targets="targets"
+              :disabled="busy || !!pending || inspecting"
+              @change="setTargetSelection"
+            />
           </div>
           <div v-else-if="step === 3" class="wizard-stage settings-stage">
             <header class="stage-heading">
               <h3>设置执行频率与有效期</h3>
             </header>
-            <div class="patrol-settings">
-              <ElFormItem label="检测间隔"
-                ><ElSelect v-model="interval" aria-label="检测间隔"
-                  ><ElOption
+            <div class="setting-list period-settings" aria-label="检测周期设置">
+              <ElFormItem label="检测间隔" class="setting-row">
+                <div class="setting-row-copy">
+                  <strong>检测间隔</strong>
+                  <span>每台设备再次执行在线状态检查的时间</span>
+                </div>
+                <ElSelect v-model="interval" aria-label="检测间隔">
+                  <ElOption
                     v-for="minutes in [5, 10, 15, 30, 60, 120, 1440]"
                     :key="minutes"
                     :value="minutes"
-                    :label="
-                      minutes >= 60 ? `每 ${minutes / 60} 小时` : `每 ${minutes} 分钟`
-                    " /></ElSelect
-              ></ElFormItem>
-              <ElFormItem label="持续时间"
-                ><ElSelect v-model="hours" aria-label="持续时间"
-                  ><ElOption
+                    :label="minutes >= 60 ? `每 ${minutes / 60} 小时` : `每 ${minutes} 分钟`"
+                  />
+                </ElSelect>
+              </ElFormItem>
+              <ElFormItem label="持续时间" class="setting-row">
+                <div class="setting-row-copy">
+                  <strong>有效时长</strong>
+                  <span>任务持续运行后自动结束</span>
+                </div>
+                <ElSelect v-model="hours" aria-label="持续时间">
+                  <ElOption
                     v-for="value in [1, 6, 24, 72, 168]"
                     :key="value"
                     :value="value"
-                    :label="`${value} 小时`" /></ElSelect
-              ></ElFormItem>
+                    :label="`${value} 小时`"
+                  />
+                </ElSelect>
+              </ElFormItem>
             </div>
             <div class="configuration-summary">
               <span class="config-chip">{{
-                layer === 'MEDIA' ? '视频收帧' : checkVideo ? '连接 → 视频' : '相机连接'
+                layer === 'MEDIA' ? '视频收帧' : checkVideo ? '在线状态 → 视频' : '在线状态'
               }}</span>
               <span class="config-chip">{{
                 dispatchMode === 'POLLING' ? '逐个轮询' : `有界并行 · ${parallelism} 个请求`
@@ -630,16 +740,14 @@ onDeactivated(() => {
           >
           <div
             v-if="
-              (step > 0 || blockedTargets.length || limitExceeded || inspecting) &&
-              (inspecting || targets.length || limitExceeded)
+              !inspecting &&
+              (step > 0 || blockedTargets.length || limitExceeded) &&
+              (targets.length || limitExceeded)
             "
             class="patrol-target-summary"
             role="status"
           >
-            <span v-if="inspecting">正在核对代表流配置…</span>
-            <span v-else-if="limitExceeded"
-              >授权范围超过 2000 台，请缩小范围；未截取部分设备下发。</span
-            >
+            <span v-if="limitExceeded">授权范围超过 2000 台，请缩小范围；未截取部分设备下发。</span>
             <span v-else-if="!inspectionError"
               ><strong>{{ eligibleKeys.length }}</strong> 台可检测<span>
                 / {{ targets.length }} 台 · {{ blockedTargets.length }} 台跳过</span
@@ -776,7 +884,7 @@ onDeactivated(() => {
                     <ElDropdownItem disabled title="当前服务尚未提供按任务立即巡检接口"
                       >立即巡检</ElDropdownItem
                     >
-                    <ElDropdownItem disabled title="当前服务尚未提供删除巡检任务接口"
+                    <ElDropdownItem :disabled="busy || !!pending" @click="remove(plan)"
                       >删除</ElDropdownItem
                     >
                   </ElDropdownMenu>
@@ -814,9 +922,7 @@ onDeactivated(() => {
           <template v-if="selectedCount !== null"
             >已选择 <strong>{{ selectedCount }}</strong> 台相机设备</template
           ><template v-else
-            >已选择{{
-              scope === 'GROUPS' ? ` ${selectedGroups.length} 个分组` : '范围'
-            }}，待核对设备数</template
+            >已选择{{ scope === 'GROUPS' ? ` ${selectedGroups.length} 个分组` : '范围' }}</template
           >
         </p>
         <div class="footer-actions">
@@ -833,11 +939,12 @@ onDeactivated(() => {
             <ElButton
               v-if="step < 3"
               type="primary"
-              :loading="inspecting || pickerBusy"
+              class="patrol-next-button"
+              :loading="navigationBusy"
               :disabled="
                 busy ||
                 !!pending ||
-                inspecting ||
+                navigationBusy ||
                 pickerBusy ||
                 (step === 0 &&
                   (!!nameError ||
@@ -863,6 +970,10 @@ onDeactivated(() => {
 </template>
 
 <style scoped>
+:global(.el-dialog.patrol-dialog) {
+  --el-dialog-margin-top: 3vh;
+  max-height: 94dvh;
+}
 :global(.el-dialog.patrol-dialog > .el-dialog__body) {
   display: flex;
   flex-direction: column;
@@ -884,8 +995,8 @@ onDeactivated(() => {
   font-weight: 600;
 }
 .patrol-content {
-  flex: 0 1 600px;
-  height: 600px;
+  flex: 0 1 700px;
+  height: min(700px, calc(94dvh - 220px));
   min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
@@ -903,7 +1014,7 @@ onDeactivated(() => {
 .is-picking .patrol-create > .el-form {
   display: flex;
   flex-direction: column;
-  flex: 0 1 auto;
+  flex: 1;
   min-height: 0;
 }
 .is-picking .wizard-stage {
@@ -1024,13 +1135,58 @@ onDeactivated(() => {
   color: var(--el-text-color-primary);
   margin: 8px 0;
 }
-.patrol-settings {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+.setting-list {
+  max-width: 760px;
+  overflow: hidden;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-bg-color);
 }
-.patrol-settings :deep(.el-select) {
-  width: 100%;
+.setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  align-items: center;
+  gap: 24px;
+  min-height: 68px;
+  padding: 12px 16px;
+  margin: 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.setting-row:last-child {
+  border-bottom: 0;
+}
+.setting-row :deep(.el-form-item__label) {
+  display: none;
+}
+.setting-row :deep(.el-form-item__content) {
+  display: contents;
+  margin: 0;
+}
+.setting-row :deep(.el-select) {
+  width: 220px;
+  justify-self: end;
+}
+.setting-row-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 3px;
+}
+.setting-row-copy strong {
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+.setting-row-copy span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.video-check-toggle :deep(.el-form-item__label) {
+  display: none;
+}
+.video-check-toggle :deep(.el-form-item__content) {
+  margin-left: 0 !important;
 }
 .video-setting {
   display: flex;
@@ -1042,6 +1198,7 @@ onDeactivated(() => {
   background: var(--el-fill-color-extra-light);
   border-radius: 8px;
 }
+
 .video-setting :deep(.el-form-item) {
   margin: 0;
   flex-shrink: 0;
@@ -1295,6 +1452,9 @@ onDeactivated(() => {
   margin-left: auto;
   flex-shrink: 0;
 }
+.patrol-next-button {
+  min-width: 88px;
+}
 .selection-count {
   display: flex;
   align-items: center;
@@ -1357,9 +1517,12 @@ onDeactivated(() => {
   .patrol-toolbar {
     flex-wrap: wrap;
   }
-  .patrol-settings {
-    grid-template-columns: 1fr;
-    gap: 0;
+  .setting-row {
+    grid-template-columns: minmax(0, 1fr) 160px;
+    gap: 12px;
+  }
+  .setting-row :deep(.el-select) {
+    width: 160px;
   }
   .video-setting {
     padding: 16px;

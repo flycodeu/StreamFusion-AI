@@ -20,6 +20,8 @@ export const changeNames: Record<string, string> = {
   removedGroupCount: '移除分组数量',
   addedCameraCount: '新增相机数量',
   removedCameraCount: '移除相机数量',
+  addedDeviceCount: '新增相机设备数量',
+  removedDeviceCount: '移除相机设备数量',
   groupIdsSummary: '分组编号摘要',
   cameraIdsSummary: '相机编号摘要',
   beforeGroupId: '变更前分组编号',

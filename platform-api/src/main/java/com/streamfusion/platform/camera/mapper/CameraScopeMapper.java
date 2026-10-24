@@ -14,6 +14,29 @@ public interface CameraScopeMapper extends BaseMapper<CameraUserScopeEntity> {
 
     List<Long> grantedCameras(@Param("userId") long userId);
 
+    List<Long> grantedDevices(@Param("userId") long userId);
+
+    List<CameraChannelScopeRow> devices(@Param("ids") List<Long> ids);
+
+    List<CameraChannelScopeRow> deviceGroups(@Param("ids") List<Long> ids);
+
+    List<CameraGroupDeviceRow> visibleGroupDevices(@Param("visibility") Visibility visibility);
+
+    long visibleDeviceCount(
+            @Param("visibility") Visibility visibility, @Param("enabledOnly") boolean enabledOnly);
+
+    long deviceGrantCount(@Param("deviceId") long deviceId);
+
+    int addDevice(
+            @Param("userId") long userId,
+            @Param("deviceId") long deviceId,
+            @Param("actorId") long actorId,
+            @Param("now") LocalDateTime now);
+
+    int removeDevice(@Param("userId") long userId, @Param("deviceId") long deviceId);
+
+    List<CameraChannelScopeRow> deviceMembersForImpact(@Param("cameraId") long cameraId);
+
     CameraChannelScopeRow channel(@Param("id") long id);
 
     long visibleCamera(@Param("id") long id, @Param("visibility") Visibility visibility);

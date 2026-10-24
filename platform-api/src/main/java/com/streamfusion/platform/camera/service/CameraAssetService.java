@@ -7,6 +7,7 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.streamfusion.platform.camera.mapper.CameraChannelMapper;
 import com.streamfusion.platform.camera.mapper.CameraDeviceMapper;
 import com.streamfusion.platform.camera.mapper.CameraProfileMapper;
+import com.streamfusion.platform.camera.mapper.CameraScopeMapper;
 import com.streamfusion.platform.camera.pojo.dto.CameraCreateDto;
 import com.streamfusion.platform.camera.pojo.dto.CameraDeviceUpdateDto;
 import com.streamfusion.platform.camera.pojo.dto.CameraInitialProfileDto;
@@ -55,6 +56,7 @@ public class CameraAssetService {
     private final CameraChannelMapper channels;
     private final CameraProfileMapper profiles;
     private final CameraDeviceMapper devices;
+    private final CameraScopeMapper scopes;
     private final CameraAccessService access;
     private final CameraSourceService sources;
     private final CameraLocatorService locators;
@@ -301,6 +303,14 @@ public class CameraAssetService {
                 camera.getVersion(), DecimalInput.version(requestedVersion, "version"), true);
         long grantCount = channels.directGrantCount(id);
         if (grantCount > 0) throw referenced("DIRECT_CAMERA_GRANT", grantCount);
+        if (camera.getDeviceId() != null
+                && channels.selectCount(
+                                new LambdaQueryWrapper<CameraChannelEntity>()
+                                        .eq(CameraChannelEntity::getDeviceId, camera.getDeviceId()))
+                        == 1) {
+            long deviceGrants = scopes.deviceGrantCount(camera.getDeviceId());
+            if (deviceGrants > 0) throw referenced("DIRECT_DEVICE_GRANT", deviceGrants);
+        }
         // Profiles and locators are owned children. Explicit cleanup preserves all external FKs.
         if (camera.getDefaultPreviewProfileId() != null)
             requireWrite(
@@ -541,6 +551,8 @@ public class CameraAssetService {
                         new LambdaQueryWrapper<CameraChannelEntity>()
                                 .eq(CameraChannelEntity::getDeviceId, id));
         if (count > 0) throw referenced("CAMERA_CHANNEL", count);
+        long deviceGrants = scopes.deviceGrantCount(id);
+        if (deviceGrants > 0) throw referenced("DIRECT_DEVICE_GRANT", deviceGrants);
         requireWrite(devices.deleteById(id));
         record(actor, "CAMERA_DEVICE", id, "CAMERA_DEVICE_DELETE", device.getSourceName(), context);
     }

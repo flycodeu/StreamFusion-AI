@@ -21,7 +21,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -73,6 +72,15 @@ public class CameraStatusQueryService {
 
     @Transactional(readOnly = true)
     public CameraStatusPageVo page(CameraStatusPageQuery query) {
+        return page(query, false);
+    }
+
+    @Transactional(readOnly = true)
+    public CameraStatusPageVo devicePage(CameraStatusPageQuery query) {
+        return page(query, true);
+    }
+
+    private CameraStatusPageVo page(CameraStatusPageQuery query, boolean devices) {
         if (query == null || query.getLayer() == null) throw error(ErrorCode.VALIDATION_ERROR);
         var actor = cameras.readActor();
         String name = query.getName() == null ? null : query.getName().strip();
@@ -90,12 +98,19 @@ public class CameraStatusQueryService {
                 && !Set.of("NEVER", "ACCESSIBLE", "FAILED", "UNSUPPORTED").contains(observation))
             throw error(ErrorCode.VALIDATION_ERROR);
         var page =
-                channels.pageStatus(
-                        query.toPage(),
-                        name,
-                        observation,
-                        query.getLayer().name(),
-                        cameras.visibility(actor));
+                devices
+                        ? channels.pageDeviceStatus(
+                                query.toPage(),
+                                name,
+                                observation,
+                                query.getLayer().name(),
+                                cameras.visibility(actor))
+                        : channels.pageStatus(
+                                query.toPage(),
+                                name,
+                                observation,
+                                query.getLayer().name(),
+                                cameras.visibility(actor));
         var rows = page.getRecords();
         var addresses =
                 sources.displayAddresses(
@@ -136,8 +151,8 @@ public class CameraStatusQueryService {
             var profile =
                     representative == null
                             ? null
-                            : representative.upstream().canCheck()
-                                            || representative.upstream().observation() != null
+                            : !"STATUS_LAYER_NOT_APPLICABLE"
+                                            .equals(representative.upstream().blockingReasonCode())
                                     ? representative.upstream()
                                     : layer == CameraStatusLayer.UPSTREAM
                                             ? representative.upstream()
@@ -161,19 +176,11 @@ public class CameraStatusQueryService {
     }
 
     private static CameraStatusPageVo.Profile representativeProfile(CameraStatusPageVo.Item item) {
-        var enabled = item.profiles().stream().filter(CameraStatusPageVo.Profile::enabled).toList();
-        return enabled.stream()
-                .filter(
-                        profile ->
-                                Objects.equals(
-                                        profile.streamProfileId(), item.defaultPreviewProfileId()))
+        // Mapper ordering is shared by status filtering, summaries and patrol creation.
+        return item.profiles().stream()
+                .filter(CameraStatusPageVo.Profile::enabled)
                 .findFirst()
-                .orElseGet(
-                        () ->
-                                enabled.stream()
-                                        .filter(profile -> "MAIN".equals(profile.streamKind()))
-                                        .findFirst()
-                                        .orElse(enabled.isEmpty() ? null : enabled.getFirst()));
+                .orElse(null);
     }
 
     public Map<String, CameraDeviceStatusVo> deviceSummaries(
@@ -195,7 +202,8 @@ public class CameraStatusQueryService {
                     key,
                     profile == null
                             ? null
-                            : profile.upstream().canCheck()
+                            : !"STATUS_LAYER_NOT_APPLICABLE"
+                                            .equals(profile.upstream().blockingReasonCode())
                                     ? profile.upstream()
                                     : profile.control());
         }

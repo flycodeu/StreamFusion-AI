@@ -1,17 +1,30 @@
 import { request } from '../client'
-import { boolean, object, string } from '../parse'
+import { boolean, id, integer, object, string } from '../parse'
+
+export interface TargetSelection {
+  groupKey: string
+  cameraId: string
+  streamProfileId: string
+}
 
 export interface PlanTarget {
   groupKey: string
   name: string
   reasonCode: string | null
+  groupIds?: string[]
+  cameraId?: string | null
+  channelName?: string | null
+  streamProfileId?: string | null
+  profileName?: string | null
+  videoSupported?: boolean
 }
 
-export type TargetScope =
+export type TargetScope = (
   | { scope: 'PAGE'; groupKeys: string[] }
   | { scope: 'ALL' }
   | { scope: 'PLAN'; planId: string }
   | { scope: 'GROUPS'; groupIds: string[] }
+) & { targetSelections?: TargetSelection[] }
 
 export function parsePlanTargets(value: unknown) {
   const row = object(value)
@@ -21,10 +34,22 @@ export function parsePlanTargets(value: unknown) {
     const item = object(value),
       groupKey = string(item.groupKey)
     if (!/^[dc][1-9][0-9]{0,18}$/.test(groupKey)) throw new Error('plan target key')
+    let groupIds: string[] | undefined
+    if (item.groupIds != null) {
+      if (!Array.isArray(item.groupIds) || item.groupIds.length > 10000)
+        throw new Error('target groups')
+      groupIds = item.groupIds.map(id)
+    }
     return {
       groupKey,
       name: string(item.name),
       reasonCode: item.reasonCode == null ? null : string(item.reasonCode),
+      groupIds,
+      cameraId: item.cameraId == null ? null : id(item.cameraId),
+      channelName: item.channelName == null ? null : string(item.channelName),
+      streamProfileId: item.streamProfileId == null ? null : id(item.streamProfileId),
+      profileName: item.profileName == null ? null : string(item.profileName),
+      videoSupported: item.videoSupported == null ? undefined : boolean(item.videoSupported),
     }
   })
   const limitExceeded = boolean(row.limitExceeded)
@@ -34,7 +59,9 @@ export function parsePlanTargets(value: unknown) {
     (limitExceeded && targets.length > 0)
   )
     throw new Error('plan target bounds')
-  return { targets, limitExceeded }
+  const totalCount = row.totalCount == null ? undefined : integer(row.totalCount)
+  if (totalCount != null && totalCount < 0) throw new Error('plan total count')
+  return { targets, limitExceeded, ...(totalCount == null ? {} : { totalCount }) }
 }
 
 export async function inspectPlanTargets(scope: TargetScope) {

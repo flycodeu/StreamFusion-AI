@@ -149,12 +149,12 @@ class CameraDeviceBrowseIntegrationTest extends CameraTestSupport {
         var visibility = new Visibility(false, 999, List.of(allowedGroup));
         var visible = channels.pageDeviceGroups(new Page<>(1, 20), filter, visibility);
         assertThat(visible.getTotal()).isOne();
-        assertThat(visible.getRecords().getFirst().getChannelCount()).isOne();
+        assertThat(visible.getRecords().getFirst().getChannelCount()).isEqualTo(2);
         assertThat(
                         channels.pageDeviceChannels(new Page<>(1, 20), "d701", filter, visibility)
                                 .getRecords())
                 .extracting(row -> row.getId().toString())
-                .containsExactly(a);
+                .containsExactly(a, b);
         assertThat(
                         channels.pageDeviceChannels(new Page<>(1, 20), "d702", filter, visibility)
                                 .getTotal())

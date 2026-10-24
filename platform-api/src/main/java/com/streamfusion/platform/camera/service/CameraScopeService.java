@@ -47,6 +47,15 @@ public class CameraScopeService {
         var gids = scopes.grantedGroups(uid);
         var cids = scopes.grantedCameras(uid);
         if (gids.size() > 200 || cids.size() > 2000) throw CameraGroupRules.conflict();
+        var legacy = scopes.channels(cids);
+        var dids = new TreeSet<>(scopes.grantedDevices(uid));
+        legacy.stream()
+                .map(CameraChannelScopeRow::getDeviceId)
+                .filter(Objects::nonNull)
+                .forEach(dids::add);
+        var fallback = legacy.stream().filter(c -> c.getDeviceId() == null).toList();
+        if (gids.size() > 200 || cids.size() > 2000 || dids.size() + fallback.size() > 2000)
+            throw CameraGroupRules.conflict();
         var visibility = new CameraAccessService.Visibility(admin, uid, tree.descendants(gids));
         var groupViews =
                 gids.stream()
@@ -62,20 +71,27 @@ public class CameraScopeService {
                                             tree.path(id));
                                 })
                         .toList();
-        var cameraViews = scopes.channels(cids).stream().map(c -> cameraView(c, tree)).toList();
+        var cameraViews = cameraViews(fallback, tree);
+        var deviceViews = cameraViews(scopes.devices(List.copyOf(dids)), tree);
         return new CameraScopeVo(
                 Long.toString(uid),
                 row == null ? "0" : row.getVersion().toString(),
                 admin ? "ALL" : "CUSTOM",
                 gids.stream().map(Object::toString).toList(),
-                cids.stream().map(Object::toString).toList(),
+                fallback.stream().map(c -> c.getId().toString()).toList(),
+                dids.stream().map(Object::toString).toList(),
                 groupViews,
                 cameraViews,
+                deviceViews,
                 Map.of(
                         "effectiveCameraCount",
                         scopes.visibleCount(null, visibility),
                         "enabledCameraCount",
                         scopes.enabledCount(visibility),
+                        "effectiveDeviceCount",
+                        scopes.visibleDeviceCount(visibility, false),
+                        "enabledDeviceCount",
+                        scopes.visibleDeviceCount(visibility, true),
                         "computedAt",
                         clock.instant()),
                 row == null
@@ -92,6 +108,12 @@ public class CameraScopeService {
                 expected = DecimalInput.version(input.version(), "version");
         var desiredGroups = ids(input.groupIds(), 200, "groupIds");
         var desiredCameras = ids(input.cameraIds(), 2000, "cameraIds");
+        var desiredDevices =
+                new TreeSet<>(
+                        ids(
+                                input.deviceIds() == null ? List.of() : input.deviceIds(),
+                                2000,
+                                "deviceIds"));
         var actor = access.lockActor();
         access.requireSuper(actor);
         if (users.lockById(uid) == null) throw BusinessException.error(ErrorCode.NOT_FOUND);
@@ -103,14 +125,36 @@ public class CameraScopeService {
         desiredGroups.forEach(tree::require);
         Set<Long> oldGroups = new HashSet<>(scopes.grantedGroups(uid)),
                 oldCameras = new HashSet<>(scopes.grantedCameras(uid));
+        Set<Long> oldDevices = new HashSet<>(scopes.grantedDevices(uid));
+        scopes.channels(List.copyOf(oldCameras)).stream()
+                .map(CameraChannelScopeRow::getDeviceId)
+                .filter(Objects::nonNull)
+                .forEach(oldDevices::add);
+        // Old clients cannot round-trip the new field. Preserve device grants unless explicitly
+        // supplied.
+        if (input.deviceIds() == null) desiredDevices.addAll(oldDevices);
         var found = scopes.channels(desiredCameras);
         if (found.size() != desiredCameras.size()) throw CameraGroupRules.invalid();
-        for (var c : found)
-            if (!oldCameras.contains(c.getId()) && !"ENABLED".equals(c.getLifecycle()))
-                throw CameraGroupRules.invalid();
+        Set<Long> fallback = new TreeSet<>();
+        for (var c : found) {
+            if (c.getDeviceId() != null) desiredDevices.add(c.getDeviceId());
+            else fallback.add(c.getId());
+            if (c.getDeviceId() == null
+                    && !oldCameras.contains(c.getId())
+                    && !"ENABLED".equals(c.getLifecycle())) throw CameraGroupRules.invalid();
+        }
+        if (desiredDevices.size() + fallback.size() > 2000) throw CameraGroupRules.invalid();
+        var deviceRows = scopes.devices(List.copyOf(desiredDevices));
+        if (deviceRows.size() != desiredDevices.size()) throw CameraGroupRules.invalid();
+        for (var device : deviceRows)
+            if (!oldDevices.contains(device.getDeviceId())
+                    && !"ENABLED".equals(device.getLifecycle())) throw CameraGroupRules.invalid();
         Set<Long> newGroups = new HashSet<>(desiredGroups),
-                newCameras = new HashSet<>(desiredCameras);
-        if (oldGroups.equals(newGroups) && oldCameras.equals(newCameras)) return read(uid);
+                newCameras = new HashSet<>(fallback),
+                persistedDevices = new HashSet<>(scopes.grantedDevices(uid));
+        if (oldGroups.equals(newGroups)
+                && oldCameras.equals(newCameras)
+                && persistedDevices.equals(desiredDevices)) return read(uid);
         VersionCounter.requireIncrementable(current);
         LocalDateTime now = LocalDateTime.ofInstant(clock.instant(), ZoneId.of("Asia/Shanghai"));
         if (row == null) {
@@ -127,10 +171,14 @@ public class CameraScopeService {
                 removedGroups = difference(oldGroups, newGroups),
                 addedCameras = difference(newCameras, oldCameras),
                 removedCameras = difference(oldCameras, newCameras);
+        Set<Long> addedDevices = difference(desiredDevices, persistedDevices),
+                removedDevices = difference(persistedDevices, desiredDevices);
         removedGroups.stream().sorted().forEach(g -> scopes.removeGroup(uid, g));
         removedCameras.stream().sorted().forEach(c -> scopes.removeCamera(uid, c));
+        removedDevices.stream().sorted().forEach(d -> scopes.removeDevice(uid, d));
         addedGroups.stream().sorted().forEach(g -> scopes.addGroup(uid, g, actor.userId(), now));
         addedCameras.stream().sorted().forEach(c -> scopes.addCamera(uid, c, actor.userId(), now));
+        addedDevices.stream().sorted().forEach(d -> scopes.addDevice(uid, d, actor.userId(), now));
         if (scopes.update(
                         null,
                         new LambdaUpdateWrapper<CameraUserScopeEntity>()
@@ -160,7 +208,11 @@ public class CameraScopeService {
                         "addedCameraCount",
                         Integer.toString(addedCameras.size()),
                         "removedCameraCount",
-                        Integer.toString(removedCameras.size())));
+                        Integer.toString(removedCameras.size()),
+                        "addedDeviceCount",
+                        Integer.toString(addedDevices.size()),
+                        "removedDeviceCount",
+                        Integer.toString(removedDevices.size())));
         return read(uid);
     }
 
@@ -206,10 +258,7 @@ public class CameraScopeService {
                                         : List.of(gid);
         var rows = scopes.cameraOptions(term, groupIds, (long) (page - 1) * size, size);
         return new PageResultVo<>(
-                rows.stream().map(c -> cameraView(c, tree)).toList(),
-                page,
-                size,
-                scopes.cameraOptionCount(term, groupIds));
+                cameraViews(rows, tree), page, size, scopes.cameraOptionCount(term, groupIds));
     }
 
     @Transactional(readOnly = true)
@@ -220,13 +269,25 @@ public class CameraScopeService {
         var c = scopes.channel(cid);
         if (c == null) throw BusinessException.error(ErrorCode.NOT_FOUND);
         var tree = new CameraGroupTree(groups.allBounded());
-        var ancestors = tree.ancestors(c.getGroupId());
+        var members = scopes.deviceMembersForImpact(cid);
+        CameraGroupRules.bounded(members.size());
+        var ancestors = new HashSet<Long>();
+        for (var member : members)
+            if (!"PENDING_ASSIGNMENT".equals(member.getLifecycle()))
+                ancestors.addAll(tree.ancestors(member.getGroupId()));
         var grants =
                 scopes.grantedGroups(uid).stream()
                         .filter(ancestors::contains)
                         .map(g -> Map.of("groupId", g.toString(), "path", tree.path(g)))
                         .toList();
-        boolean direct = scopes.grantedCameras(uid).contains(cid);
+        var memberIds =
+                members.stream()
+                        .map(CameraChannelScopeRow::getId)
+                        .collect(java.util.stream.Collectors.toSet());
+        boolean direct =
+                scopes.grantedCameras(uid).stream().anyMatch(memberIds::contains)
+                        || (c.getDeviceId() != null
+                                && scopes.grantedDevices(uid).contains(c.getDeviceId()));
         return Map.of(
                 "cameraId",
                 cameraId,
@@ -242,9 +303,40 @@ public class CameraScopeService {
                 clock.instant());
     }
 
-    private Map<String, Object> cameraView(CameraChannelScopeRow c, CameraGroupTree tree) {
+    private List<Map<String, Object>> cameraViews(
+            List<CameraChannelScopeRow> rows, CameraGroupTree tree) {
+        var deviceIds =
+                rows.stream()
+                        .map(CameraChannelScopeRow::getDeviceId)
+                        .filter(Objects::nonNull)
+                        .distinct()
+                        .toList();
+        var placements = scopes.deviceGroups(deviceIds);
+        CameraGroupRules.bounded(placements.size());
+        Map<Long, List<String>> groupIds = new HashMap<>();
+        for (var placement : placements)
+            groupIds.computeIfAbsent(placement.getDeviceId(), key -> new ArrayList<>())
+                    .add(placement.getGroupId().toString());
+        return rows.stream()
+                .map(
+                        c ->
+                                cameraView(
+                                        c,
+                                        tree,
+                                        groupIds.getOrDefault(
+                                                c.getDeviceId(),
+                                                c.getGroupId() == null
+                                                        ? List.of()
+                                                        : List.of(c.getGroupId().toString()))))
+                .toList();
+    }
+
+    private Map<String, Object> cameraView(
+            CameraChannelScopeRow c, CameraGroupTree tree, List<String> groupIds) {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("cameraId", c.getId().toString());
+        value.put("deviceId", CameraGroupRules.strOrNull(c.getDeviceId()));
+        value.put("groupIds", groupIds);
         value.put("name", c.getName());
         value.put("groupId", CameraGroupRules.strOrNull(c.getGroupId()));
         value.put("path", tree.path(c.getGroupId()));

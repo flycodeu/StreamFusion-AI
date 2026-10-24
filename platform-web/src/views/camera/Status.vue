@@ -23,7 +23,9 @@ import {
   SwitchButton,
   VideoCamera,
 } from '@element-plus/icons-vue'
-import { getCamera } from '../../api/camera/api'
+import { getCamera, getDeviceChannels } from '../../api/camera/api'
+import type { Camera, CameraProfile } from '../../api/camera/types'
+import { getCameraStatus } from '../../api/camera-status/api'
 import type {
   ObservationFilter,
   StatusChannel,
@@ -53,29 +55,106 @@ const query = shallowRef<StatusSearch>({ page: 1, size: 20, layer: 'CONTROL' })
 const drawerOpen = ref(false)
 const plansOpen = ref(false)
 const target = shallowRef<{ channel: StatusChannel; profileId: string } | null>(null)
+const selectedChannelId = ref<string | null>(null)
+const selectedProfileId = ref<string | null>(null)
+const channelOptions = ref<Camera[]>([])
+const channelPage = ref(0)
+const channelTotal = ref(0)
+const channelLoading = ref(false)
+const channelError = shallowRef<unknown>(null)
+const detailLoading = ref(false)
+const diagnosticTarget = shallowRef<{
+  cameraId: string
+  name: string
+  profiles: CameraProfile[]
+} | null>(null)
 const deviceModel = ref<string | null>(null)
 const deviceError = ref<unknown>(null)
 const captureScope = usePageScope()
 watch(
-  [() => (drawerOpen.value ? target.value?.channel.cameraId : null), () => sessionState.epoch],
-  async ([cameraId], _previous, onCleanup) => {
+  () => sessionState.epoch,
+  () => {
+    drawerOpen.value = false
+    target.value = null
+    selectedChannelId.value = null
+    selectedProfileId.value = null
+  },
+  { flush: 'sync' },
+)
+watch(
+  () => (drawerOpen.value ? selectedChannelId.value : null),
+  async (cameraId, _previous, onCleanup) => {
     deviceModel.value = null
     deviceError.value = null
+    diagnosticTarget.value = null
+    detailLoading.value = false
     if (!cameraId) return
     const inScope = captureScope()
     const controller = new globalThis.AbortController()
     onCleanup(() => controller.abort())
+    detailLoading.value = true
     try {
-      const camera = await getCamera(cameraId, controller.signal)
+      const [camera, status] = await Promise.all([
+        getCamera(cameraId, controller.signal),
+        getCameraStatus(cameraId, controller.signal),
+      ])
       if (controller.signal.aborted || !inScope()) return
       const model = camera.deviceSummary?.model
       deviceModel.value = typeof model === 'string' && model.trim() ? model.trim() : null
+      const byId = new Map(camera.profiles.map((profile) => [profile.streamProfileId, profile]))
+      const profiles = status.profiles.flatMap((profile) => {
+        const detail = byId.get(profile.streamProfileId)
+        return detail?.enabled ? [detail] : []
+      })
+      diagnosticTarget.value = { cameraId, name: camera.name, profiles }
+      selectedProfileId.value =
+        cameraId === target.value?.channel.cameraId &&
+        profiles.some((profile) => profile.streamProfileId === target.value?.profileId)
+          ? target.value.profileId
+          : (profiles[0]?.streamProfileId ?? null)
     } catch (cause) {
       if (!controller.signal.aborted && inScope()) deviceError.value = cause
+    } finally {
+      if (!controller.signal.aborted && inScope()) detailLoading.value = false
     }
   },
   { flush: 'sync' },
 )
+let channelRevision = 0
+watch(
+  () => (drawerOpen.value ? target.value?.channel.groupKey : null),
+  (groupKey) => {
+    ++channelRevision
+    channelOptions.value = []
+    channelPage.value = 0
+    channelTotal.value = 0
+    channelError.value = null
+    channelLoading.value = false
+    if (groupKey) void loadChannels()
+  },
+  { flush: 'sync' },
+)
+async function loadChannels() {
+  const groupKey = target.value?.channel.groupKey
+  if (!drawerOpen.value || !groupKey || channelLoading.value) return
+  const revision = channelRevision
+  const inScope = captureScope()
+  channelLoading.value = true
+  channelError.value = null
+  try {
+    const result = await getDeviceChannels(groupKey, { page: channelPage.value + 1, size: 50 })
+    if (revision !== channelRevision || !drawerOpen.value || !inScope()) return
+    const known = new Map(channelOptions.value.map((camera) => [camera.cameraId, camera]))
+    for (const camera of result.items) known.set(camera.cameraId, camera)
+    channelOptions.value = [...known.values()]
+    channelPage.value = result.page
+    channelTotal.value = result.total
+  } catch (cause) {
+    if (revision === channelRevision && inScope()) channelError.value = cause
+  } finally {
+    if (revision === channelRevision && inScope()) channelLoading.value = false
+  }
+}
 watch(
   () => route?.query.name,
   (value) => {
@@ -118,40 +197,15 @@ const summaryLabel = computed(() =>
     ? stateOrder.map((state) => `${stateLabels.value[state]} ${summary.value![state]}`).join('，')
     : '状态尚未读取',
 )
-const planGroups = computed(() => [
-  ...new Set(
-    rows.value
-      .filter((row) => row.lifecycle === 'ENABLED')
-      .flatMap((row) => (row.groupKey ? [row.groupKey] : [])),
-  ),
-])
 const observationLabels = computed<Record<ObservationFilter, string>>(() => ({
   NEVER: '尚未检查',
   ACCESSIBLE: '最近检查通过',
   FAILED: '最近检查异常',
   UNSUPPORTED: '检测待适配',
 }))
-function profileName(profile: StatusProfile) {
-  return (
-    profile.name ||
-    (profile.streamKind ? usageLabel(profile.streamKind) : `码流 ${profile.streamProfileId}`)
-  )
-}
-const diagnosticTarget = computed(() =>
-  target.value
-    ? {
-        cameraId: target.value.channel.cameraId,
-        profiles: target.value.channel.profiles.map((profile) => ({
-          streamProfileId: profile.streamProfileId,
-          label: profileName(profile),
-          usageHint: profile.streamKind ?? 'UNKNOWN',
-        })),
-      }
-    : null,
-)
 const capacityHint = computed(() =>
   error.value instanceof ApiRequestError && error.value.code === 'CONFLICT'
-    ? '请缩小设备/通道搜索范围；仍失败时提供请求标识给管理员核对码流数量与授权配置。'
+    ? '请缩小相机搜索范围；仍失败时提供请求标识给管理员核对码流数量与授权配置。'
     : '',
 )
 function search() {
@@ -179,6 +233,8 @@ function changePage(page: number, size = query.value.size) {
 }
 function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
   target.value = { channel, profileId: profile.streamProfileId }
+  selectedChannelId.value = channel.cameraId
+  selectedProfileId.value = profile.streamProfileId
   drawerOpen.value = true
 }
 </script>
@@ -192,8 +248,8 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
           <ElRadioButton value="MEDIA">视频检查</ElRadioButton>
         </ElRadioGroup>
       </ElFormItem>
-      <ElFormItem label="设备 / 通道">
-        <ElInput v-model="name" placeholder="搜索设备或通道名称" clearable maxlength="128" />
+      <ElFormItem label="相机">
+        <ElInput v-model="name" placeholder="搜索相机名称 / IP" clearable maxlength="128" />
       </ElFormItem>
       <ElFormItem label="最近检查结果">
         <ElSelect v-model="observation" clearable placeholder="全部结果（含历史）">
@@ -206,7 +262,7 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
         </ElSelect>
       </ElFormItem>
       <ElFormItem
-        ><ElButton type="primary" native-type="submit" :loading="loading">查询</ElButton
+        ><ElButton type="primary" native-type="submit" :loading="loading && !result">查询</ElButton
         ><ElButton @click="reset">重置</ElButton></ElFormItem
       >
     </ElForm>
@@ -216,7 +272,7 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
       <header class="overview-heading">
         <div>
           <h3>{{ layer === 'CONTROL' ? '连接检查' : '视频检查' }}</h3>
-          <span>当前页 {{ summary?.total ?? '—' }} 个通道</span>
+          <span>当前页 {{ summary?.total ?? '—' }} 台相机</span>
         </div>
       </header>
       <div class="status-metrics">
@@ -250,17 +306,19 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
       <template #actions
         ><ElButton type="primary" @click="plansOpen = true">巡检任务</ElButton></template
       >
-      <template #tools><ElButton :loading="loading" @click="refresh">刷新结果</ElButton></template>
-      <div v-loading="loading" class="camera-card-grid">
+      <template #tools
+        ><ElButton :loading="loading && !result" @click="refresh">刷新结果</ElButton></template
+      >
+      <div v-loading="loading && !result" class="camera-card-grid" :aria-busy="loading">
         <StatusCard
           v-for="channel in rows"
-          :key="channel.cameraId"
+          :key="channel.groupKey || channel.cameraId"
           :channel="channel"
           :layer="query.layer"
           @details="showDiagnostic"
         />
         <p v-if="!rows.length && !loading" class="empty-list">
-          {{ error ? '状态未读取，请重试刷新' : result ? '暂无符合条件的通道' : '状态未读取' }}
+          {{ error ? '状态未读取，请重试刷新' : result ? '暂无符合条件的相机' : '状态未读取' }}
         </p>
       </div>
       <p v-if="paused" class="read-paused" role="status">已暂停读取检查进度，请点击“刷新结果”。</p>
@@ -269,19 +327,14 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
           :current-page="query.page"
           :page-size="query.size"
           :total="total"
-          :disabled="loading || !result"
+          :disabled="!result"
           :page-sizes="[20, 50, 100]"
           layout="total, sizes, prev, pager, next, jumper"
           @update:current-page="changePage($event)"
           @update:page-size="changePage(1, $event)"
       /></template>
     </TablePanel>
-    <PlanDialog
-      v-if="plansOpen"
-      :group-keys="planGroups"
-      @close="plansOpen = false"
-      @changed="refresh"
-    />
+    <PlanDialog v-if="plansOpen" @close="plansOpen = false" @changed="refresh" />
     <ElDrawer
       v-model="drawerOpen"
       title="状态详情"
@@ -289,46 +342,96 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
       :destroy-on-close="false"
     >
       <template v-if="target">
-        <StatusPanel
-          :camera="diagnosticTarget"
-          :initial-profile-id="target.profileId"
-          :initial-layer="query.layer"
-          :active="drawerOpen"
-        >
-          <template #summary="{ connection }">
-            <section class="status-device-summary" aria-label="设备档案摘要">
-              <div class="device-summary-heading">
-                <ElIcon class="device-summary-icon" aria-hidden="true"><VideoCamera /></ElIcon>
-                <h3 :title="target.channel.name">{{ target.channel.name }}</h3>
-                <span
-                  class="device-connection"
-                  :class="`state-${target.channel.lifecycle === 'ENABLED' ? connection.state : 'disabled'}`"
-                  :title="connection.title"
-                >
-                  <i aria-hidden="true" />{{
-                    target.channel.lifecycle === 'DISABLED'
-                      ? '已停用'
-                      : target.channel.lifecycle === 'PENDING_ASSIGNMENT'
-                        ? '待归档'
-                        : connection.label
-                  }}
-                </span>
-              </div>
-              <div class="device-summary-meta">
-                <span
-                  :title="`${addressLabel(target.channel.accessAddress)}：${addressText(target.channel.accessAddress)}`"
-                  >{{ addressLabel(target.channel.accessAddress) }}：{{
-                    addressText(target.channel.accessAddress)
-                  }}</span
-                >
-                <span :title="`型号：${deviceModel || '未获取'}`"
-                  >型号：{{ deviceModel || '未获取' }}</span
-                >
-              </div>
-            </section>
-            <RequestError :error="deviceError" advice="请重新打开状态详情以读取设备档案。" />
-          </template>
-        </StatusPanel>
+        <RequestError :error="deviceError" advice="请重新打开状态详情以读取相机档案。" />
+        <div v-loading="detailLoading">
+          <StatusPanel
+            :camera="diagnosticTarget"
+            :initial-profile-id="selectedProfileId"
+            :initial-layer="query.layer"
+            :show-profile-selector="false"
+            :active="drawerOpen"
+          >
+            <template #summary="{ connection }">
+              <section class="status-device-summary" aria-label="设备档案摘要">
+                <div class="device-summary-heading">
+                  <ElIcon class="device-summary-icon" aria-hidden="true"><VideoCamera /></ElIcon>
+                  <h3 :title="target.channel.deviceName || target.channel.name">
+                    {{ target.channel.deviceName || target.channel.name }}
+                  </h3>
+                  <span
+                    class="device-connection"
+                    :class="`state-${target.channel.lifecycle === 'ENABLED' ? connection.state : 'disabled'}`"
+                    :title="connection.title"
+                  >
+                    <i aria-hidden="true" />{{
+                      target.channel.lifecycle === 'DISABLED'
+                        ? '已停用'
+                        : target.channel.lifecycle === 'PENDING_ASSIGNMENT'
+                          ? '待归档'
+                          : connection.label
+                    }}
+                  </span>
+                </div>
+                <div class="device-summary-meta">
+                  <span
+                    :title="`${addressLabel(target.channel.accessAddress)}：${addressText(target.channel.accessAddress)}`"
+                    >{{ addressLabel(target.channel.accessAddress) }}：{{
+                      addressText(target.channel.accessAddress)
+                    }}</span
+                  >
+                  <span :title="`型号：${deviceModel || '未获取'}`"
+                    >型号：{{ deviceModel || '未获取' }}</span
+                  >
+                </div>
+              </section>
+              <details
+                v-if="channelTotal > 1 || (diagnosticTarget?.profiles.length ?? 0) > 1"
+                class="detection-target-options"
+              >
+                <summary>检测设置</summary>
+                <div class="detection-target-controls">
+                  <ElSelect
+                    v-if="channelTotal > 1"
+                    v-model="selectedChannelId"
+                    filterable
+                    aria-label="检测通道"
+                    placeholder="选择检测通道"
+                    :loading="channelLoading"
+                  >
+                    <ElOption
+                      v-for="camera in channelOptions"
+                      :key="camera.cameraId"
+                      :value="camera.cameraId"
+                      :label="camera.name"
+                      :disabled="camera.lifecycle !== 'ENABLED'"
+                    />
+                  </ElSelect>
+                  <ElSelect
+                    v-if="(diagnosticTarget?.profiles.length ?? 0) > 1"
+                    v-model="selectedProfileId"
+                    aria-label="检测码流"
+                    placeholder="选择检测码流"
+                  >
+                    <ElOption
+                      v-for="profile in diagnosticTarget?.profiles"
+                      :key="profile.streamProfileId"
+                      :value="profile.streamProfileId"
+                      :label="profile.label || usageLabel(profile.usageHint)"
+                    />
+                  </ElSelect>
+                  <ElButton
+                    v-if="channelOptions.length < channelTotal"
+                    :loading="channelLoading"
+                    @click="loadChannels"
+                    >加载更多通道</ElButton
+                  >
+                </div>
+                <p>默认检测一路低负载码流；结果只代表所选通道最近一次检查。</p>
+              </details>
+              <RequestError :error="channelError" advice="可重新打开状态详情以加载通道选项。" />
+            </template>
+          </StatusPanel>
+        </div>
       </template>
     </ElDrawer>
   </div>
@@ -470,6 +573,35 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #f8fafc;
+}
+.detection-target-options {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 13px;
+}
+.detection-target-options summary {
+  cursor: pointer;
+  color: #334155;
+  font-weight: 500;
+}
+.detection-target-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+.detection-target-controls :deep(.el-select) {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.detection-target-options p {
+  margin: 10px 0 0;
+  color: #94a3b8;
+  font-size: 12px;
 }
 .device-summary-heading {
   display: flex;

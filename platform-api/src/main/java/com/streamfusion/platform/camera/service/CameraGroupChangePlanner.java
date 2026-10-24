@@ -139,18 +139,22 @@ class CameraGroupChangePlanner {
                     .computeIfAbsent(grant.getTargetId(), x -> new HashSet<>())
                     .add(grant.getUserId());
         Set<Long> gained = new HashSet<>(), lost = new HashSet<>();
+        Set<Long> memberGroups = new HashSet<>();
+        for (var member : members)
+            if (!"PENDING_ASSIGNMENT".equals(member.getLifecycle()) && member.getGroupId() != null)
+                memberGroups.add(member.getGroupId());
         for (var member : members) {
             var row = new CameraChannelScopeRow();
             row.setId(member.getId());
             row.setGroupId(member.getGroupId());
             Set<Long> before =
                     "ENABLED".equals(member.getLifecycle())
-                            ? usersFromMaps(tree, row, groupUsers, directUsers)
+                            ? usersFromMaps(tree, row, groupUsers, directUsers, memberGroups)
                             : new HashSet<>();
             row.setGroupId(target);
             Set<Long> after =
                     "ENABLED".equals(movedLifecycle(member))
-                            ? usersFromMaps(tree, row, groupUsers, directUsers)
+                            ? usersFromMaps(tree, row, groupUsers, directUsers, Set.of(target))
                             : new HashSet<>();
             var plus = new HashSet<>(after);
             plus.removeAll(before);
@@ -242,10 +246,22 @@ class CameraGroupChangePlanner {
             directUsers
                     .computeIfAbsent(grant.getTargetId(), x -> new HashSet<>())
                     .add(grant.getUserId());
+        Map<String, Set<Long>> deviceGroups = new HashMap<>();
+        for (var camera : affected) {
+            if ("PENDING_ASSIGNMENT".equals(camera.getLifecycle()) || camera.getGroupId() == null)
+                continue;
+            deviceGroups
+                    .computeIfAbsent(deviceKey(camera), key -> new HashSet<>())
+                    .add(camera.getGroupId());
+        }
+        Set<String> visitedDevices = new HashSet<>();
         for (var camera : affected) {
             if (!"ENABLED".equals(camera.getLifecycle())) continue;
-            Set<Long> before = usersFromMaps(tree, camera, groupUsers, directUsers);
-            Set<Long> after = usersFromMaps(afterTree, camera, groupUsers, directUsers);
+            if (!visitedDevices.add(deviceKey(camera))) continue;
+            var memberGroups = deviceGroups.getOrDefault(deviceKey(camera), Set.of());
+            Set<Long> before = usersFromMaps(tree, camera, groupUsers, directUsers, memberGroups);
+            Set<Long> after =
+                    usersFromMaps(afterTree, camera, groupUsers, directUsers, memberGroups);
             Set<Long> plus = new HashSet<>(after);
             plus.removeAll(before);
             gained.addAll(plus);
@@ -271,17 +287,43 @@ class CameraGroupChangePlanner {
             CameraGroupTree tree,
             CameraChannelScopeRow c,
             Map<Long, Set<Long>> groups,
-            Map<Long, Set<Long>> direct) {
+            Map<Long, Set<Long>> direct,
+            Set<Long> memberGroups) {
         Set<Long> result = new HashSet<>(direct.getOrDefault(c.getId(), Set.of()));
-        for (long gid : tree.ancestors(c.getGroupId()))
-            result.addAll(groups.getOrDefault(gid, Set.of()));
+        for (long memberGroup : memberGroups)
+            for (long gid : tree.ancestors(memberGroup))
+                result.addAll(groups.getOrDefault(gid, Set.of()));
         return result;
+    }
+
+    private static String deviceKey(CameraChannelScopeRow row) {
+        return row.getDeviceId() == null ? "c" + row.getId() : "d" + row.getDeviceId();
     }
 
     private Set<Long> usersForCamera(
             CameraChannelScopeRow row, CameraGroupTree tree, Long groupId, String state) {
-        if (!"ENABLED".equals(state)) return new HashSet<>();
-        var inherited = scopes.usersForGroups(tree.ancestors(groupId));
+        var members = scopes.deviceMembersForImpact(row.getId());
+        bounded(members.size());
+        if (members.stream()
+                .noneMatch(
+                        member ->
+                                "ENABLED"
+                                        .equals(
+                                                Objects.equals(member.getId(), row.getId())
+                                                        ? state
+                                                        : member.getLifecycle())))
+            return new HashSet<>();
+        Set<Long> ancestors = new HashSet<>();
+        // The current channel may move; its sibling placements keep their independent group links.
+        for (var member : members) {
+            Long placement =
+                    Objects.equals(member.getId(), row.getId()) ? groupId : member.getGroupId();
+            String lifecycle =
+                    Objects.equals(member.getId(), row.getId()) ? state : member.getLifecycle();
+            if (!"PENDING_ASSIGNMENT".equals(lifecycle))
+                ancestors.addAll(tree.ancestors(placement));
+        }
+        var inherited = scopes.usersForGroups(List.copyOf(ancestors));
         var direct = scopes.usersForCamera(row.getId());
         bounded(inherited.size());
         bounded(direct.size());
@@ -365,7 +407,9 @@ class CameraGroupChangePlanner {
         List<CameraChannelScopeRow> affected =
                 "GROUP_MOVE".equals(kind)
                         ? scopes.channelsInGroups(tree.descendants(List.of(id)))
-                        : List.of();
+                        : "CAMERA_CHANGE".equals(kind)
+                                ? scopes.deviceMembersForImpact(id)
+                                : List.of();
         bounded(affected.size());
         return List.of(
                 kind,

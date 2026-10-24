@@ -7,7 +7,9 @@ export interface CameraGroup {
   remark: string | null
   version: string
   hasChildren: boolean
+  // Legacy field counts channels; device counts are independently deduplicated by the server.
   visibleCameraCount: number
+  visibleDeviceCount?: number | null
   countObservedAt: string | null
 }
 export interface Impact {
@@ -32,6 +34,7 @@ export function parseGroup(value: unknown): CameraGroup {
     version: id(row.version),
     hasChildren: boolean(row.hasChildren),
     visibleCameraCount: integer(row.visibleCameraCount),
+    visibleDeviceCount: row.visibleDeviceCount == null ? null : integer(row.visibleDeviceCount),
     countObservedAt: optionalString(row.countObservedAt),
   }
 }

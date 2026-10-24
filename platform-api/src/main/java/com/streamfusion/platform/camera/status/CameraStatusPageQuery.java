@@ -16,7 +16,7 @@ public class CameraStatusPageQuery extends PageQueryDto {
     private String name;
 
     @Schema(
-            description = "匹配所选层启用代表码流最近事实；默认流优先，其次MAIN、最小ID。NEVER含无代表流/无事实",
+            description = "匹配所选层低负载代表码流最近事实。设备入口先选授权代表通道，再筛选事实；NEVER含无代表流/无事实",
             allowableValues = {"NEVER", "ACCESSIBLE", "FAILED", "UNSUPPORTED"},
             nullable = true)
     private String observation;

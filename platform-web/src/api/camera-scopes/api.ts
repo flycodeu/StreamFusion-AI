@@ -28,6 +28,7 @@ export async function getScopeCameras(query: {
   size: number
   name?: string
   groupId?: string
+  includeDescendants?: boolean
 }) {
   return (
     await request({
@@ -51,7 +52,7 @@ export async function getCameraScope(userId: string) {
 }
 export async function updateCameraScope(
   userId: string,
-  input: { version: string; groupIds: string[]; cameraIds: string[] },
+  input: { version: string; groupIds: string[]; cameraIds: string[]; deviceIds?: string[] },
 ) {
   return (
     await request({

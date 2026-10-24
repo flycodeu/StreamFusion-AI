@@ -352,7 +352,8 @@ describe('aggregate camera status page read owner', () => {
     const pending = deferred<StatusPage>()
     api.page.mockReturnValueOnce(pending.promise)
     query.value = { page: 2, size: 20, layer: 'CONTROL' }
-    expect(controls.result.value).toBeNull()
+    expect(controls.result.value?.page).toBe(1)
+    expect(controls.rows.value[0]?.cameraId).toBe('1')
     expect(controls.total.value).toBe(21)
     expect(controls.loading.value).toBe(true)
     pending.resolve({ ...page(null, '2'), page: 2, total: 21 })

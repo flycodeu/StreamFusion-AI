@@ -13,4 +13,5 @@ public record CameraGroupVo(
         @Schema(description = "编辑版本") String version,
         @Schema(description = "是否有当前账户可见的直接下级组") boolean hasChildren,
         @Schema(description = "本组及后代范围内可见的已归档相机数") long visibleCameraCount,
+        @Schema(description = "本组及后代范围内可见设备数；同设备跨组在祖先范围内去重") long visibleDeviceCount,
         @Schema(description = "统计观测时间，UTC") Instant countObservedAt) {}

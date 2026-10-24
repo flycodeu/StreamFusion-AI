@@ -92,9 +92,6 @@ const creating = ref<'manual' | 'scan' | 'platform' | 'rtsp' | null>(null),
   storageReady = ref(true)
 const selectedDevice = ref<CameraDeviceGroup | null>(null)
 const plansOpen = ref(false)
-const planGroups = computed(() =>
-  rows.value.filter((row) => row.enabledCount > 0).map((row) => row.groupKey),
-)
 const editingDevice = ref<CameraDeviceGroup | null>(null)
 function loadVendorHints(): Record<string, string | null> {
   if (import.meta.env.MODE === 'test') return {}
@@ -456,11 +453,11 @@ onMounted(refresh)
           <span class="scope-count">共 {{ total }} 台</span>
         </div>
         <ElForm class="search-form camera-search-form" inline @submit.prevent="search"
-          ><ElFormItem label="设备 / 通道"
+          ><ElFormItem label="相机"
             ><ElInput
               v-model="name"
               class="search-field"
-              placeholder="搜索设备或通道名称"
+              placeholder="搜索相机名称 / IP"
               clearable
               maxlength="128"
           /></ElFormItem>
@@ -518,7 +515,7 @@ onMounted(refresh)
             ><ColumnPicker
               v-model="columns"
               :options="[
-                { key: 'name', label: '相机设备' },
+                { key: 'name', label: '相机名称' },
                 { key: 'source', label: '品牌' },
                 { key: 'model', label: '型号' },
                 { key: 'channels', label: '通道数量' },
@@ -532,7 +529,7 @@ onMounted(refresh)
           :data="rows"
           row-key="groupKey"
           border
-          empty-text="暂无可访问设备"
+          empty-text="暂无可访问相机"
           @selection-change="setSelection"
         >
           <template #empty>
@@ -540,10 +537,10 @@ onMounted(refresh)
               :image-size="64"
               :description="
                 error
-                  ? '设备列表读取失败'
+                  ? '相机列表读取失败'
                   : name || lifecycle || groupId || pendingOnly
-                    ? '未找到符合条件的设备'
-                    : '暂无可访问设备'
+                    ? '未找到符合条件的相机'
+                    : '暂无可访问相机'
               "
             >
               <ElButton v-if="error" @click="load">重新加载</ElButton>
@@ -562,7 +559,7 @@ onMounted(refresh)
             align="center"
             :selectable="() => !deviceDeleting"
           />
-          <ElTableColumn v-if="columns.includes('name')" label="相机设备" min-width="180"
+          <ElTableColumn v-if="columns.includes('name')" label="相机名称" min-width="180"
             ><template #default="{ row }">
               <div class="device-name" :title="row.name">
                 {{ row.name
@@ -708,7 +705,7 @@ onMounted(refresh)
               </ElDropdown>
             </TableActions>
           </article>
-          <p v-if="!loading && !rows.length" class="mobile-empty">暂无可访问设备</p>
+          <p v-if="!loading && !rows.length" class="mobile-empty">暂无可访问相机</p>
         </div>
         <template #footer
           ><ElPagination
@@ -751,12 +748,7 @@ onMounted(refresh)
       @changed="refresh"
       @vendor-changed="(hint) => updateDeviceVendor(selectedDevice?.groupKey, hint)"
     />
-    <PlanDialog
-      v-if="plansOpen"
-      :group-keys="planGroups"
-      @close="plansOpen = false"
-      @changed="refresh"
-    />
+    <PlanDialog v-if="plansOpen" @close="plansOpen = false" @changed="refresh" />
     <ImportTasksDialog v-if="importTasksOpen" @close="closeImportTasks" />
     <ManualCreateDialog
       v-if="creating === 'manual'"

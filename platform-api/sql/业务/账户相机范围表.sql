@@ -5,7 +5,7 @@ SET FOREIGN_KEY_CHECKS = 1;
 DROP TABLE IF EXISTS `camera_user_scope`;
 CREATE TABLE camera_user_scope (
  user_id BIGINT NOT NULL COMMENT '授权所属用户ID',
- version BIGINT NOT NULL DEFAULT 0 COMMENT '两类关系的聚合编辑版本',
+ version BIGINT NOT NULL DEFAULT 0 COMMENT '分组、设备与独立相机授权的聚合编辑版本',
  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '首次保存时间',
  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '最近变更时间',
  created_by BIGINT NULL COMMENT '创建人ID快照',

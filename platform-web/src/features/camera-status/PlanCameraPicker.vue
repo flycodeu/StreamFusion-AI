@@ -17,6 +17,7 @@ const props = withDefaults(
     disabled: boolean
     mode?: 'PAGE' | 'ALL' | 'PLAN' | 'GROUPS'
     targets?: PlanTarget[]
+    totalCount?: number | null
     inspecting?: boolean
     rangeReady?: boolean
     groups?: GroupNode[]
@@ -60,11 +61,17 @@ const selectionNotice = ref('')
 const expanded = new Set(['all'])
 const capture = usePageScope()
 const searching = computed(() => !!name.value.trim())
-const activeKeys = computed(() =>
-  props.mode === 'PAGE' ? selected.value : props.targets.map((target) => target.groupKey),
-)
+const activeKeys = computed(() => {
+  if (props.mode === 'PAGE') return selected.value
+  // Once all group selections are removed, an old preview must not keep
+  // camera rows checked while the parent is settling the empty range.
+  if (props.mode === 'GROUPS' && !props.checkedGroups.length) return []
+  return props.targets.map((target) => target.groupKey)
+})
 const activeSet = computed(() => new Set(activeKeys.value))
-const locked = computed(() => props.disabled || resolving.value)
+// Resolving a range is a background refresh. Keep the tree interactive so a quick
+// select/cancel sequence can supersede the previous request without a disabled flash.
+const locked = computed(() => props.disabled)
 const groupIndex = computed(() => {
   const index = new Map<string, GroupNode>()
   const visit = (groups: GroupNode[]) => {
@@ -76,6 +83,36 @@ const groupIndex = computed(() => {
   visit(props.groups)
   return index
 })
+// Count each device once per ancestor, even when it belongs to sibling groups.
+const selectedGroupCounts = computed(() => {
+  const counts = new Map<string, number>()
+  for (const target of props.targets) {
+    if (!activeSet.value.has(target.groupKey)) continue
+    const ancestors = new Set<string>()
+    for (const id of target.groupIds ?? []) {
+      let group = groupIndex.value.get(id)
+      for (let depth = 0; group && depth < 16; depth++) {
+        ancestors.add(group.groupId)
+        group = group.parentId ? groupIndex.value.get(group.parentId) : undefined
+      }
+    }
+    for (const id of ancestors) counts.set(id, (counts.get(id) ?? 0) + 1)
+  }
+  return counts
+})
+const allChecked = computed(
+  () =>
+    props.mode === 'ALL' ||
+    (props.rangeReady &&
+      props.totalCount != null &&
+      props.totalCount > 0 &&
+      activeSet.value.size === props.totalCount &&
+      props.targets.length === props.totalCount &&
+      props.targets.every(
+        (target) =>
+          activeSet.value.has(target.groupKey) && target.reasonCode !== 'TARGET_UNAVAILABLE',
+      )),
+)
 const groupStates = computed(
   () => new Map([...groupIndex.value.keys()].map((id) => [id, groupState(id)])),
 )
@@ -103,13 +140,24 @@ function covered(groupId: string) {
 }
 function groupState(groupId: string) {
   if (covered(groupId)) return { checked: true, partial: false }
+  if (props.mode === 'GROUPS') {
+    return {
+      checked: false,
+      partial: props.checkedGroups.some((id) => contains(groupId, id)),
+    }
+  }
   const range = groupRanges.value.get(groupId)
   if (range?.length) {
     const count = range.filter((key) => activeSet.value.has(key)).length
     if (count === range.length) return { checked: true, partial: false }
     if (count) return { checked: false, partial: true }
   }
+  const selectedCount = selectedGroupCounts.value.get(groupId) ?? 0
+  const total = groupIndex.value.get(groupId)?.visibleDeviceCount
+  if (selectedCount && total != null && selectedCount === total)
+    return { checked: true, partial: false }
   const hasSelectedChild =
+    selectedCount > 0 ||
     [...pages.value].some(
       ([id, page]) =>
         contains(groupId, id) && page.items.some((camera) => activeSet.value.has(camera.groupKey)),
@@ -117,8 +165,7 @@ function groupState(groupId: string) {
     searchPage.value.items.some((camera) => {
       const id = searchGroups.value.get(camera.groupKey)
       return !!id && contains(groupId, id) && activeSet.value.has(camera.groupKey)
-    }) ||
-    (props.mode === 'GROUPS' && props.checkedGroups.some((id) => contains(groupId, id)))
+    })
   return { checked: false, partial: hasSelectedChild }
 }
 function cameraNode(camera: CameraDeviceGroup, parent: string): PickerNode {
@@ -308,14 +355,22 @@ watch(locked, (value) => {
   if (!value && searching.value && !searchPage.value.page && !searchPage.value.error)
     void searchMore()
 })
-watch([() => props.targets, () => props.checkedGroups, () => props.mode], () => {
-  if (props.mode === 'GROUPS' && props.checkedGroups.length === 1 && props.targets.length) {
-    groupRanges.value.set(
-      props.checkedGroups[0]!,
-      props.targets.map((target) => target.groupKey),
-    )
-  }
-})
+watch(
+  [() => props.targets, () => props.checkedGroups, () => props.mode, () => props.inspecting],
+  () => {
+    if (
+      !props.inspecting &&
+      props.mode === 'GROUPS' &&
+      props.checkedGroups.length === 1 &&
+      props.targets.length
+    ) {
+      groupRanges.value.set(
+        props.checkedGroups[0]!,
+        props.targets.map((target) => target.groupKey),
+      )
+    }
+  },
+)
 interface ExpandableNode {
   expanded: boolean
   expand(): void
@@ -343,6 +398,18 @@ function clickNode(data: PickerNode, node?: ExpandableNode) {
     }
   }
 }
+function toggleTreeNode(data: PickerNode) {
+  if (data.kind === 'camera') {
+    toggleCamera(data.camera!.groupKey, !activeSet.value.has(data.camera!.groupKey))
+    return
+  }
+  if (data.kind === 'action') {
+    clickNode(data)
+    return
+  }
+  const node = tree.value?.getNode(data.key) as ExpandableNode | undefined
+  if (node) clickNode(data, node)
+}
 watch(
   nodes,
   async () => {
@@ -365,6 +432,7 @@ watch(
 
 function toggleCamera(key: string, value: unknown) {
   if (locked.value || !props.rangeReady) return
+  invalidateSelection()
   const keys = new Set(activeKeys.value)
   if (value) {
     if (keys.size >= 2000 && !keys.has(key)) return
@@ -377,6 +445,7 @@ function toggleCamera(key: string, value: unknown) {
 }
 async function toggleGroup(groupId: string, value: unknown) {
   if (locked.value) return
+  invalidateSelection()
   selectionNotice.value = ''
   if (value && (props.mode === 'GROUPS' || (props.mode === 'PAGE' && !activeKeys.value.length))) {
     const ids = props.checkedGroups.filter((id) => !contains(groupId, id))
@@ -432,8 +501,16 @@ async function toggleGroup(groupId: string, value: unknown) {
     }
   }
 }
+function invalidateSelection() {
+  ++selectionRevision
+  if (resolving.value) {
+    resolving.value = false
+    emit('resolving', false)
+  }
+}
 function toggleAll(value: unknown) {
   if (locked.value) return
+  invalidateSelection()
   groupRanges.value.clear()
   selectionNotice.value = ''
   if (value) emit('all')
@@ -441,6 +518,7 @@ function toggleAll(value: unknown) {
 }
 function clear() {
   if (locked.value) return
+  invalidateSelection()
   groupRanges.value.clear()
   selectionNotice.value = ''
   if (props.mode === 'PAGE') selected.value = []
@@ -469,8 +547,7 @@ onScopeDispose(() => {
         />
         <div class="selection-summary" aria-live="polite">
           <span class="selection-pill">
-            <template v-if="inspecting || resolving">正在核对…</template>
-            <template v-else-if="!rangeReady">待核对设备数</template>
+            <template v-if="!rangeReady">待核对设备数</template>
             <template v-else
               >已选 <strong>{{ activeKeys.length }}</strong> 台</template
             >
@@ -485,14 +562,14 @@ onScopeDispose(() => {
       </header>
       <div class="tree-grid">
         <div class="tree-header" aria-hidden="true">
-          <span class="tree-heading">分组 / 相机通道</span>
+          <span class="tree-heading">分组 / 相机名称</span>
           <div class="tree-meta">
             <span class="address-heading">IP / 主机地址</span>
             <span class="status-heading">当前状态</span>
           </div>
         </div>
         <div
-          v-loading="resolving || (searchPage.loading && !searchPage.items.length)"
+          v-loading="searchPage.loading && !searchPage.items.length"
           class="tree-scroll"
           :aria-busy="resolving || searchPage.loading"
         >
@@ -542,13 +619,14 @@ onScopeDispose(() => {
                 v-else
                 class="tree-row"
                 :class="{ 'is-selected': data.camera && activeSet.has(data.camera.groupKey) }"
+                @click.stop="toggleTreeNode(data)"
               >
                 <div class="tree-main">
                   <ElCheckbox
                     v-if="data.kind === 'all'"
-                    :model-value="mode === 'ALL'"
+                    :model-value="allChecked"
                     :indeterminate="
-                      mode !== 'ALL' && (activeKeys.length > 0 || checkedGroups.length > 0)
+                      !allChecked && (activeKeys.length > 0 || checkedGroups.length > 0)
                     "
                     :disabled="locked"
                     aria-label="选择全部已授权相机"
@@ -670,6 +748,7 @@ onScopeDispose(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  flex: 1;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   overflow: hidden;
@@ -678,6 +757,7 @@ onScopeDispose(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  flex: 1;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior: contain;
@@ -686,8 +766,8 @@ onScopeDispose(() => {
 }
 .tree-scroll {
   box-sizing: border-box;
-  flex: 0 1 280px;
-  height: 280px;
+  flex: 1;
+  height: 100%;
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;

@@ -65,6 +65,14 @@ class CameraStatusNetworkIntegrationTest extends CameraTestSupport {
         try (var fixture = new RtspFixture(response)) {
             var auth = admin();
             var camera = simulatedCamera(auth, fixture.port());
+            String detectionProfileId =
+                    jdbc.queryForObject(
+                                    "SELECT id FROM camera_stream_profile WHERE channel_id=? AND usage_hint='SUB'",
+                                    Long.class,
+                                    camera.path("cameraId").asLong())
+                            .toString();
+            assertThat(detectionProfileId)
+                    .isNotEqualTo(camera.path("defaultPreviewProfileId").asText());
             var plan = start(auth, camera);
             auth.session().invalidate();
             makeDue(plan);
@@ -83,13 +91,12 @@ class CameraStatusNetworkIntegrationTest extends CameraTestSupport {
                     .isEqualTo(
                             "DESCRIBE rtsp://127.0.0.1:"
                                     + fixture.port()
-                                    + "/private-main RTSP/1.0");
+                                    + "/private-sub RTSP/1.0");
             var fact = snapshots.forCamera(camera.path("cameraId").asLong()).getFirst();
             assertThat(fact.getValue()).isEqualTo(value);
             assertThat(fact.getReasonCode()).isEqualTo(reason);
             assertThat(fact.getStateSince()).isNotNull();
-            assertThat(fact.getProfileId())
-                    .isEqualTo(camera.path("defaultPreviewProfileId").asLong());
+            assertThat(fact.getProfileId()).isEqualTo(Long.valueOf(detectionProfileId));
             var renewed = login("CameraAdmin", "AdminPass1!");
             var status = read("/cameras/" + camera.path("cameraId").asText() + "/status", renewed);
             var profiles = new ArrayList<JsonNode>();
@@ -100,9 +107,7 @@ class CameraStatusNetworkIntegrationTest extends CameraTestSupport {
                                     p ->
                                             p.path("streamProfileId")
                                                     .asText()
-                                                    .equals(
-                                                            camera.path("defaultPreviewProfileId")
-                                                                    .asText()))
+                                                    .equals(detectionProfileId))
                             .findFirst()
                             .orElseThrow();
             assertThat(selected.path("control").path("observation").path("reasonCode").asText())

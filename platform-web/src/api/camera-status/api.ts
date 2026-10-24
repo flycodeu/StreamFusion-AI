@@ -60,7 +60,7 @@ export async function getStatusHistory(
 export async function getStatusPage(query: StatusSearch, signal?: AbortSignal) {
   return (
     await request({
-      path: '/camera-status',
+      path: '/camera-status/devices',
       method: 'GET',
       params: { ...query },
       successStatus: 200,

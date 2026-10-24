@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.streamfusion.platform.camera.mapper.CameraProfileMapper">
+    <!-- Detection defaults prefer SUB, then MAIN, then rarely-used THIRD; preview defaults stay independent. -->
+    <sql id="statusProfileOrder">
+        CASE
+            WHEN p.usage_hint='SUB' OR (p.usage_hint='UNKNOWN' AND LOWER(CONCAT_WS(' ',p.label,p.source_label,p.external_profile_key)) REGEXP '(^|[^a-z])sub[ -]?stream([^a-z]|$)') THEN 0
+            WHEN p.usage_hint='MAIN' OR (p.usage_hint='UNKNOWN' AND LOWER(CONCAT_WS(' ',p.label,p.source_label,p.external_profile_key)) REGEXP '(^|[^a-z])main[ -]?stream([^a-z]|$)') THEN 1
+            WHEN p.usage_hint='THIRD' OR (p.usage_hint='UNKNOWN' AND LOWER(CONCAT_WS(' ',p.label,p.source_label,p.external_profile_key)) REGEXP '(^|[^a-z])third[ -]?stream([^a-z]|$)') THEN 2
+            ELSE 3
+        END,
+        CASE WHEN p.bitrate_kbps&gt;0 THEN 0 ELSE 1 END,
+        CASE WHEN p.bitrate_kbps&gt;0 THEN p.bitrate_kbps ELSE NULL END,
+        CASE WHEN p.width&gt;0 AND p.height&gt;0 THEN 0 ELSE 1 END,
+        CASE WHEN p.width&gt;0 AND p.height&gt;0 THEN CAST(p.width AS DECIMAL(20,0))*p.height ELSE NULL END,
+        p.id
+    </sql>
+    <select id="statusRepresentatives" resultType="com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity">
+        SELECT selected.* FROM camera_channel c
+        JOIN camera_stream_profile selected ON selected.id=(
+            SELECT p.id FROM camera_stream_profile p
+            WHERE p.channel_id=c.id AND p.enabled=1
+            ORDER BY <include refid="statusProfileOrder"/> LIMIT 1
+        )
+        WHERE c.id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY c.id
+    </select>
+    <select id="statusProfiles" resultType="com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity">
+        SELECT p.* FROM camera_stream_profile p WHERE p.channel_id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY p.channel_id,<include refid="statusProfileOrder"/> LIMIT #{limit}
+    </select>
+</mapper>

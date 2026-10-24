@@ -129,9 +129,9 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
         var first = read("/cameras/" + f.cameraId + "/status", f.auth);
         var next = read("/cameras/" + f.cameraId + "/status", f.auth);
         assertThat(first.path("profiles")).hasSize(2);
-        assertThat(first.path("profiles").get(0).path("control").path("freshness").asText())
+        assertThat(profileStatus(first, f.profileId).path("control").path("freshness").asText())
                 .isEqualTo("NEVER");
-        assertThat(first.path("profiles").get(0).path("control").path("observation").isNull())
+        assertThat(profileStatus(first, f.profileId).path("control").path("observation").isNull())
                 .isTrue();
         assertThat(next.path("profiles")).isEqualTo(first.path("profiles"));
         assertThat(countChecks()).isZero();
@@ -229,9 +229,9 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
         var replay = create(f, oldKey);
         assertThat(replay.path("checkId")).isEqualTo(created.path("checkId"));
         assertThat(
-                        read("/cameras/" + f.cameraId + "/status", f.auth)
-                                .path("profiles")
-                                .get(0)
+                        profileStatus(
+                                        read("/cameras/" + f.cameraId + "/status", f.auth),
+                                        f.profileId)
                                 .path("control")
                                 .path("canCheck")
                                 .asBoolean())
@@ -308,9 +308,9 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
         Csrf ordinary = login("StatusViewer", "Initial1!");
         read(path(f) + "/" + adminReceipt.path("checkId").asText(), ordinary);
         assertThat(
-                        read("/cameras/" + f.cameraId + "/status", ordinary)
-                                .path("profiles")
-                                .get(0)
+                        profileStatus(
+                                        read("/cameras/" + f.cameraId + "/status", ordinary),
+                                        f.profileId)
                                 .path("control")
                                 .path("latestCheck")
                                 .path("checkId"))
@@ -367,7 +367,11 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
         var firstStatus = read("/cameras/" + f.cameraId + "/status", f.auth);
         var secondStatus = read("/cameras/" + f.cameraId + "/status", f.auth);
         assertThat(secondStatus.path("profiles")).isEqualTo(firstStatus.path("profiles"));
-        assertThat(secondStatus.path("profiles").get(0).path("control").path("freshness").asText())
+        assertThat(
+                        profileStatus(secondStatus, f.profileId)
+                                .path("control")
+                                .path("freshness")
+                                .asText())
                 .isEqualTo("CURRENT");
         assertThat(snapshots.get(Long.valueOf(f.profileId), "CONTROL").getObservedAt())
                 .isEqualTo(before.getObservedAt());
@@ -443,7 +447,7 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
         assertThat(media.getCheckId()).isEqualTo(mediaId);
         assertThat(media.getMediaFirstFrames()).isEqualTo(15);
         assertThat(media.getMediaLastFrames()).isEqualTo(120);
-        var read = read("/cameras/" + f.cameraId + "/status", f.auth).path("profiles").get(0);
+        var read = profileStatus(read("/cameras/" + f.cameraId + "/status", f.auth), f.profileId);
         assertThat(read.has("observation")).isFalse();
         assertThat(read.path("control").path("latestCheck").path("checkId").asLong())
                 .isEqualTo(controlId);
@@ -480,14 +484,12 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
             assertThat(snapshots.get(Long.valueOf(f.profileId), "MEDIA").getCheckId())
                     .isEqualTo(mediaId);
         }
-        assertThat(
-                        read("/cameras/devices/page", f.auth)
-                                .path("items")
-                                .get(0)
-                                .path("statusSummary")
-                                .path("state")
-                                .asText())
-                .isEqualTo("FAILED");
+        // A manual MAIN check cannot become evidence for the automatically selected SUB stream.
+        var summary =
+                read("/cameras/devices/page", f.auth).path("items").get(0).path("statusSummary");
+        assertThat(summary.path("state").asText()).isEqualTo("NEVER");
+        assertThat(summary.path("failedCount").asInt()).isZero();
+        assertThat(summary.path("unknownCount").asInt()).isOne();
     }
 
     @Test
@@ -621,17 +623,16 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
             }
         }
         var beforePruning =
-                read("/cameras/" + f.cameraId + "/status", f.auth)
-                        .path("profiles")
-                        .get(0)
+                profileStatus(read("/cameras/" + f.cameraId + "/status", f.auth), f.profileId)
                         .path("control")
                         .path("timeline");
+        assertThat(beforePruning.isObject()).isTrue();
         jdbc.update(
                 "DELETE FROM camera_status_check WHERE profile_id=?", Long.valueOf(f.profileId));
         assertThat(
-                        read("/cameras/" + f.cameraId + "/status", f.auth)
-                                .path("profiles")
-                                .get(0)
+                        profileStatus(
+                                        read("/cameras/" + f.cameraId + "/status", f.auth),
+                                        f.profileId)
                                 .path("control")
                                 .path("timeline"))
                 .isEqualTo(beforePruning);
@@ -825,6 +826,12 @@ class CameraStatusServiceIntegrationTest extends CameraTestSupport {
         assertThat(checks.selectById(1001L).getExecutionState()).isEqualTo("QUEUED");
         assertThat(countChecks()).isEqualTo(102);
         verifyNoInteractions(worker);
+    }
+
+    private static JsonNode profileStatus(JsonNode status, String profileId) {
+        for (var profile : status.path("profiles"))
+            if (profile.path("streamProfileId").asText().equals(profileId)) return profile;
+        throw new AssertionError("Missing status for explicitly checked profile " + profileId);
     }
 
     private Fixture fixture() throws Exception {

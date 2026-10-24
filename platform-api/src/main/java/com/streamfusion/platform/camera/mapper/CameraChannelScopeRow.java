@@ -7,6 +7,7 @@ import lombok.Setter;
 @Setter
 public class CameraChannelScopeRow {
     private Long id;
+    private Long deviceId;
     private Long groupId;
     private Long version;
     private String lifecycle;

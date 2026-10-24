@@ -108,7 +108,7 @@ describe('camera status page response and read API', () => {
     )
     const [path, options] = fetchMock.mock.calls[0]!
     const url = new URL(path, 'http://localhost')
-    expect(url.pathname).toBe('/api/camera-status')
+    expect(url.pathname).toBe('/api/camera-status/devices')
     expect(Object.fromEntries(url.searchParams)).toEqual({
       layer: 'MEDIA',
       page: '2',

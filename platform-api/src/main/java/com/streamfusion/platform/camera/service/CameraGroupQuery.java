@@ -74,12 +74,13 @@ class CameraGroupQuery {
                         .toList();
         long offset = (long) (page - 1) * size;
         var counts = visibleCounts(tree, directCounts);
+        var deviceCounts = visibleDeviceCounts(tree, visibility);
         Instant observedAt = clock.instant();
         return new PageResultVo<>(
                 rows.stream()
                         .skip(offset)
                         .limit(size)
-                        .map(g -> vo(g, tree, visible, counts, observedAt))
+                        .map(g -> vo(g, tree, visible, counts, deviceCounts, observedAt))
                         .toList(),
                 page,
                 size,
@@ -95,10 +96,11 @@ class CameraGroupQuery {
         if (actor.superAdmin()) tree.all().forEach(g -> visible.add(g.getId()));
         else for (var count : directCounts) visible.addAll(tree.ancestors(count.getGroupId()));
         var counts = visibleCounts(tree, directCounts);
+        var deviceCounts = visibleDeviceCounts(tree, visibility);
         var observedAt = clock.instant();
         return tree.all().stream()
                 .filter(g -> visible.contains(g.getId()))
-                .map(g -> vo(g, tree, visible, counts, observedAt))
+                .map(g -> vo(g, tree, visible, counts, deviceCounts, observedAt))
                 .toList();
     }
 
@@ -111,6 +113,7 @@ class CameraGroupQuery {
                 tree,
                 new HashSet<>(tree.all().stream().map(CameraGroupEntity::getId).toList()),
                 visibleCounts(tree, access.visibility(actor)),
+                visibleDeviceCounts(tree, access.visibility(actor)),
                 clock.instant());
     }
 
@@ -173,6 +176,7 @@ class CameraGroupQuery {
             CameraGroupTree tree,
             Set<Long> visible,
             Map<Long, Long> counts,
+            Map<Long, Long> deviceCounts,
             Instant observedAt) {
         return new CameraGroupVo(
                 str(row.getId()),
@@ -187,6 +191,21 @@ class CameraGroupQuery {
                                         Objects.equals(g.getParentId(), row.getId())
                                                 && visible.contains(g.getId())),
                 counts.getOrDefault(row.getId(), 0L),
+                deviceCounts.getOrDefault(row.getId(), 0L),
                 observedAt);
+    }
+
+    private Map<Long, Long> visibleDeviceCounts(
+            CameraGroupTree tree, CameraAccessService.Visibility visibility) {
+        var placements = scopes.visibleGroupDevices(visibility);
+        bounded(placements.size());
+        Map<Long, Set<String>> keys = new HashMap<>();
+        for (var placement : placements)
+            for (Long ancestor : tree.ancestors(placement.getGroupId()))
+                keys.computeIfAbsent(ancestor, key -> new HashSet<>())
+                        .add(placement.getDeviceKey());
+        Map<Long, Long> counts = new HashMap<>();
+        keys.forEach((id, devices) -> counts.put(id, (long) devices.size()));
+        return counts;
     }
 }

@@ -1,6 +1,6 @@
 # 数据库
 
-要求 MySQL 8.0.17+。新安装只需执行 [streamfusion-mysql.sql](streamfusion-mysql.sql)，包含35张应用表、索引、约束和初始数据。应用启动只检查结构，不自动建表或迁移。
+要求 MySQL 8.0.17+。新安装只需执行 [streamfusion-mysql.sql](streamfusion-mysql.sql)，包含44张应用表、索引、约束和初始数据。应用启动只检查结构，不自动建表或迁移。
 
 **初始化文件包含 DROP TABLE，只能用于专用空库；已有数据的库禁止重复导入。**
 
@@ -45,7 +45,7 @@ SHOW TABLES;
 | 相机与接入 | camera_source、camera_device、camera_channel、camera_stream_profile 及凭据、端点、定位和导入表 |
 | 状态与巡检 | camera_status_check、camera_status_snapshot、camera_status_plan、camera_status_plan_target |
 | 本机及可选远程预览 | preview_node、preview_source、preview_output、preview_viewer、preview_operation |
-| 视频分组与范围 | camera_group、camera_user_scope、camera_user_group_grant、camera_user_channel_grant |
+| 视频分组与范围 | camera_group、camera_user_scope、camera_user_group_grant、camera_user_device_grant、camera_user_channel_grant |
 
 设备、通道、码流分别保存。状态快照以 `(profile_id, layer)` 为主键，区分控制连接、媒体收帧和平台状态；巡检计划保存固定范围、执行间隔、期限和并发方式。检查时间是采样时间，不是设备真实上下线时间。
 
@@ -54,6 +54,18 @@ SHOW TABLES;
 保留业务数据时，先备份数据库及相机加密密钥，核对实际表、列、索引和约束，再制定针对当前结构的变更。在隔离副本验证数据保留和应用启动后，停写执行并保留恢复点。MySQL DDL 隐式提交，失败后应核对已执行内容，不能盲目重试。
 
 本目录只交付当前安装结构，不要求新用户依次执行开发阶段的历史 SQL。已有菜单通过菜单管理维护，新增页面会自动关联超级管理员，普通角色须明确授权。
+
+### 设备授权增量（2026-10-24）
+
+相机管理、授权与状态以设备为单位；例如一台16路NVR计为一台相机。授权某个设备或包含其任一已归档成员的分组，会覆盖该设备全部已归档通道及未来归档成员；待归档通道仍对普通账号隐藏。旧的局部通道授权也按所属设备解释，这是明确的权限范围扩大，升级前须核对受影响账户。
+
+已有库先备份、停写，在隔离副本演练 [设备授权增量](升级/20261024-camera-device-grants.sql)。脚本新增 `camera_user_device_grant`，将旧通道授权按设备去重回填；授予时间和授予人取最早记录，同时间取最小通道ID。旧授权行保留，后续显式保存范围时才规范化，禁止重放完整初始化。应用启动仅检查新表，不自动升级；自动化源码测试使用隔离H2，各目标MySQL库须独立验证。
+
+新接口增加 `deviceIds`：缺省时保留已有设备授权，显式传空数组才清除；`cameraIds` 接受旧通道ID，有设备时转为设备授权，无设备时保持独立相机授权。旧客户端不能删除自己不识别的设备授权，须升级界面。两类直接授权合计最多2000个对象。
+
+已有目录的未知码流分类可按需应用 [子码流默认值修正](升级/20261024-camera-substream-defaults.sql)：仅依据名称/外部键识别 `UNKNOWN`，不会覆盖明确分类；仅把缺省或旧 `UNKNOWN`/`THIRD` 预览默认切换到启用的 SUB，多条 SUB 按稳定 ID 选择。明确选择的 MAIN/CUSTOM 保留。该脚本修改数据，执行前同样需要备份和隔离演练，不由应用自动运行。
+
+回退代码时保留新增表及备份；设备授权没有对应旧通道锚点，旧代码不能完整理解这些授权。不得仅回退应用后假定授权仍一致，需在维护窗口按备份恢复原授权关系并重新验收。
 
 ### 相机列表与巡检查询索引
 

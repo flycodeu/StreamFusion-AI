@@ -107,4 +107,39 @@ describe('camera API response boundaries', () => {
     expect(parseCameraScope(data).cameraIds).toHaveLength(2000)
     expect(() => parseCameraScope({ ...data, cameraIds: [...ids, '2001'] })).toThrow()
   })
+
+  it('keeps stable device grants and separate device counts instead of inferring them from channels', () => {
+    const parsed = parseCameraScope({
+      userId: '1',
+      version: '2',
+      mode: 'CUSTOM',
+      groupIds: [],
+      cameraIds: [],
+      deviceIds: ['90'],
+      groupGrants: [],
+      cameraGrants: [],
+      deviceGrants: [
+        {
+          cameraId: '10',
+          deviceId: '90',
+          name: '厂区 NVR',
+          groupId: '2',
+          groupIds: ['2', '3'],
+          path: '厂区',
+          lifecycle: 'ENABLED',
+        },
+      ],
+      effectiveSummary: {
+        effectiveCameraCount: 16,
+        enabledCameraCount: 16,
+        effectiveDeviceCount: 1,
+        enabledDeviceCount: 1,
+        computedAt: '2026-10-24T00:00:00Z',
+      },
+    })
+    expect(parsed.deviceIds).toEqual(['90'])
+    expect(parsed.deviceGrants[0]?.groupIds).toEqual(['2', '3'])
+    expect(parsed.effectiveSummary.effectiveDeviceCount).toBe(1)
+    expect(parsed.effectiveSummary.effectiveCameraCount).toBe(16)
+  })
 })

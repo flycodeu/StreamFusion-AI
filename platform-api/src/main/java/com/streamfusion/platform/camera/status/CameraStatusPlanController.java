@@ -2,6 +2,7 @@ package com.streamfusion.platform.camera.status;
 
 import com.streamfusion.platform.common.response.R;
 import com.streamfusion.platform.common.security.ModuleAccess;
+import com.streamfusion.platform.common.web.VersionHeader;
 import com.streamfusion.platform.monitor.audit.pojo.dto.AuditContextDto;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -22,7 +23,9 @@ public class CameraStatusPlanController {
     private final CameraStatusPlanTargetsService targets;
 
     @PostMapping("/targets/preview")
-    @Operation(summary = "核对巡检范围内可检测的相机", description = "只核对接入配置和授权，不连接相机；支持全量、指定设备及已有任务范围。")
+    @Operation(
+            summary = "核对巡检范围内可检测的相机",
+            description = "只核对接入配置和授权，不连接相机；支持全量、指定设备及已有任务范围，可逐台指定检测通道和码流。")
     public R<CameraStatusPlanTargetsService.Preview> preview(
             @RequestBody CameraStatusPlanTargetsService.Query query) {
         return R.success(targets.preview(query));
@@ -38,10 +41,20 @@ public class CameraStatusPlanController {
     @ResponseStatus(HttpStatus.CREATED)
     @Operation(
             summary = "创建并启动定时巡检任务",
-            description = "每台设备选择一路代表通道，错峰检查；登出后继续执行，到期停止。相同请求编号和配置不会重复创建。")
+            description = "每台设备选择一路代表通道和低负载码流，可逐台覆盖，错峰检查；登出后继续执行，到期停止。相同请求编号和配置不会重复创建。")
     public R<CameraStatusPlanVo> create(
             @RequestBody CameraStatusPlanCommand command, HttpServletRequest request) {
         return R.success(service.create(command, AuditContextDto.from(request)));
+    }
+
+    @DeleteMapping("/{id}")
+    @Operation(summary = "删除本人巡检任务", description = "删除任务及调度目标，停止后续执行；检测历史与状态记录保留。")
+    public R<Void> delete(
+            @PathVariable String id,
+            @RequestHeader(name = "If-Match", required = false) String ifMatch,
+            HttpServletRequest request) {
+        service.delete(id, VersionHeader.require(ifMatch), AuditContextDto.from(request));
+        return R.success();
     }
 
     public record StopCommand(@Schema(description = "任务当前版本，用于并发校验") String version) {}

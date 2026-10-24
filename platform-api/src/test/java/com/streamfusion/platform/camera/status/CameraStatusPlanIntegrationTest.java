@@ -86,7 +86,8 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                         bean(PlatformTransactionManager.class),
                         clock,
                         bean(com.streamfusion.platform.monitor.audit.service.AuditService.class),
-                        bean(CameraGroupService.class));
+                        bean(CameraGroupService.class),
+                        bean(CameraStatusPlanTargetsService.class));
         when(worker.trySubmit(any())).thenAnswer(call -> recordSubmission(call.getArgument(0)));
         when(worker.trySubmitBatch(anyList()))
                 .thenAnswer(
@@ -445,7 +446,11 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                 requestCamera(request),
                 requestCamera(request));
         for (var item : read("/cameras/devices/page", signedIn).path("items")) {
-            assertThat(item.path("statusSummary").path("state").asText()).isEqualTo("NEVER");
+            assertThat(item.path("statusSummary").path("state").asText())
+                    .isEqualTo(
+                            item.path("groupKey").asText().equals("c" + requestCamera(request))
+                                    ? "ACCESSIBLE"
+                                    : "NEVER");
         }
         assertThat(submitted).hasSize(1);
     }
@@ -697,7 +702,7 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
     }
 
     @Test
-    void devicePlanChecksOnlyOneStableEnabledChannelAndHonorsDefaultProfile() throws Exception {
+    void devicePlanChecksOnlyOneStableEnabledChannelIndependentOfPreviewDefault() throws Exception {
         var auth = admin();
         var first = enabled(auth);
         var second = camera(auth, first.path("sourceId").asText(), "另一路");
@@ -708,7 +713,6 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                 "UPDATE camera_channel SET device_id=7000,group_id=?,lifecycle='ENABLED' WHERE source_id=?",
                 first.path("groupId").asLong(),
                 first.path("sourceId").asLong());
-        long main = first.path("defaultPreviewProfileId").asLong();
         long sub =
                 jdbc.queryForObject(
                         "SELECT id FROM camera_stream_profile WHERE channel_id=? AND usage_hint='SUB'",
@@ -734,7 +738,7 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                                 "SELECT profile_id FROM camera_status_plan_target WHERE plan_id=?",
                                 Long.class,
                                 fallback.path("planId").asLong()))
-                .isEqualTo(main);
+                .isEqualTo(sub);
         jdbc.update(
                 "UPDATE camera_channel SET lifecycle='DISABLED' WHERE id=?",
                 first.path("cameraId").asLong());
@@ -866,6 +870,12 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                         "cameraIds",
                         List.of(camera.path("cameraId").asText())),
                 200);
+        write(
+                delete("/camera-status/plans/" + plan.path("planId").asText())
+                        .header("If-Match", "\"0\""),
+                ordinary,
+                Map.of(),
+                404);
         var own = create(ordinary, camera, 60, 1);
         assertThat(
                         write(
@@ -964,6 +974,7 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                         200);
         assertThat(preview.path("limitExceeded").asBoolean()).isFalse();
         assertThat(preview.path("targets")).hasSize(4);
+        assertThat(preview.path("totalCount").asLong()).isEqualTo(4);
         assertThat(preview.toString()).contains("LOCATOR_NOT_CONFIGURED", "PROFILE_NOT_CONFIGURED");
         var page =
                 write(
@@ -976,6 +987,7 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                                 List.of("c" + direct.path("cameraId").asText())),
                         200);
         assertThat(page.path("targets")).hasSize(1);
+        assertThat(page.path("totalCount").asLong()).isEqualTo(4);
         assertThat(page.path("targets").get(0).path("reasonCode").isNull()).isTrue();
         assertThat(bean(CameraStatusPlanMapper.class).selectList(null)).isEmpty();
         assertThat(bean(CameraStatusCheckMapper.class).selectList(null)).isEmpty();
@@ -1160,6 +1172,32 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
         var history = read("/cameras/7001/status-checks?streamProfileId=7002&layer=UPSTREAM", auth);
         assertThat(history.path("accessible").asInt()).isEqualTo(1);
         verify(platformApi).online(any(), eq("camera-A"));
+        jdbc.update("UPDATE camera_source SET enabled=FALSE WHERE id=?", source);
+        var disabledSourcePage = read("/camera-status/devices?layer=CONTROL&name=平台相机", auth);
+        var upstream =
+                disabledSourcePage.path("items").get(0).path("profiles").get(0).path("upstream");
+        assertThat(upstream.path("canCheck").asBoolean()).isFalse();
+        assertThat(upstream.path("blockingReasonCode").asText()).isEqualTo("SOURCE_DISABLED");
+        assertThat(upstream.path("observation").path("value").asText()).isEqualTo("ACCESSIBLE");
+        var management =
+                read("/cameras/devices/page?name=平台相机", auth)
+                        .path("items")
+                        .get(0)
+                        .path("statusSummary");
+        assertThat(management.path("checkedAt").isTextual()).isTrue();
+        jdbc.update("UPDATE camera_source_endpoint SET port=443 WHERE source_id=?", source);
+        assertThat(
+                        read("/camera-status/devices?layer=CONTROL&name=平台相机", auth)
+                                .path("items")
+                                .get(0)
+                                .path("profiles")
+                                .get(0)
+                                .path("upstream")
+                                .path("freshness")
+                                .asText())
+                .isEqualTo("STALE");
+        jdbc.update("UPDATE camera_source SET enabled=TRUE WHERE id=?", source);
+        jdbc.update("UPDATE camera_source_endpoint SET port=442 WHERE source_id=?", source);
         clock.value = clock.value.plusSeconds(1800);
         scheduler.tick();
         assertThat(submitted.values()).anyMatch(value -> value.layer() == CameraStatusLayer.MEDIA);
@@ -1613,7 +1651,7 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
     }
 
     @Test
-    void groupScopeAndReusedPlanKeepTheChannelInsideItsSelectedVideoGroup() throws Exception {
+    void groupScopeUsesStableDeviceRepresentativeAndReusedPlanKeepsItsTarget() throws Exception {
         var auth = admin();
         var first = enabled(auth);
         var second = camera(auth, first.path("sourceId").asText(), "同设备另一组通道");
@@ -1639,7 +1677,10 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                                 "groupIds",
                                 List.of(secondGroup.path("groupId").asText())),
                         200);
-        assertThat(preview.path("targets").get(0).path("name").asText()).isEqualTo("同设备另一组通道");
+        assertThat(preview.path("targets")).hasSize(1);
+        assertThat(preview.path("targets").get(0).path("name").asText()).isEqualTo("设备 7000");
+        assertThat(preview.path("targets").get(0).path("channelName"))
+                .isEqualTo(first.path("name"));
         var command = new HashMap<>(input(List.of("d7000"), 60, 24));
         command.put("groupIds", List.of(secondGroup.path("groupId").asText()));
         var plan = write(post("/camera-status/plans"), auth, command, 201);
@@ -1651,7 +1692,7 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                                 .forPlan(next.path("planId").asLong())
                                 .getFirst()
                                 .getCameraId())
-                .isEqualTo(second.path("cameraId").asLong());
+                .isEqualTo(first.path("cameraId").asLong());
     }
 
     @Test
@@ -1685,6 +1726,314 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
                         org.springframework.test.web.servlet.result.MockMvcResultMatchers.status()
                                 .isBadRequest());
         assertThat(submitted).hasSize(1);
+    }
+
+    @Test
+    void selectedDeviceChannelAndProfileArePreviewedPersistedReusedAndDispatched()
+            throws Exception {
+        var auth = admin();
+        var first = enabled(auth);
+        var second = camera(auth, first.path("sourceId").asText(), "通道二");
+        var otherGroup = write(post("/camera-groups"), auth, Map.of("name", "乙组"), 201);
+        jdbc.update(
+                "INSERT INTO camera_device(id,source_id,external_device_key,device_type,local_name) VALUES(7000,?,'recorder','NVR','厂区录像机')",
+                first.path("sourceId").asLong());
+        jdbc.update(
+                "UPDATE camera_channel SET device_id=7000,group_id=?,lifecycle='ENABLED' WHERE source_id=?",
+                first.path("groupId").asLong(),
+                first.path("sourceId").asLong());
+        jdbc.update(
+                "UPDATE camera_channel SET group_id=? WHERE id=?",
+                otherGroup.path("groupId").asLong(),
+                second.path("cameraId").asLong());
+        String main =
+                jdbc.queryForObject(
+                                "SELECT id FROM camera_stream_profile WHERE channel_id=? AND usage_hint='MAIN'",
+                                Long.class,
+                                second.path("cameraId").asLong())
+                        .toString();
+        var defaultIds =
+                jdbc.queryForList(
+                        "SELECT id,default_preview_profile_id FROM camera_channel ORDER BY id");
+        var selection =
+                Map.of(
+                        "groupKey",
+                        "d7000",
+                        "cameraId",
+                        second.path("cameraId").asText(),
+                        "streamProfileId",
+                        main);
+        var query =
+                Map.of(
+                        "scope",
+                        "PAGE",
+                        "groupKeys",
+                        List.of("d7000"),
+                        "targetSelections",
+                        List.of(selection));
+        var preview =
+                write(post("/camera-status/plans/targets/preview"), auth, query, 200)
+                        .path("targets")
+                        .get(0);
+        assertThat(preview.path("name").asText()).isEqualTo("厂区录像机");
+        assertThat(preview.path("cameraId")).isEqualTo(second.path("cameraId"));
+        assertThat(preview.path("streamProfileId").asText()).isEqualTo(main);
+        assertThat(preview.path("videoSupported").asBoolean()).isTrue();
+        assertThat(preview.path("groupIds")).hasSize(2);
+        assertThat(preview.path("groupIds").toString())
+                .contains(first.path("groupId").asText(), otherGroup.path("groupId").asText());
+        var command = new HashMap<>(input(List.of("d7000"), 60, 24));
+        command.put("targetSelections", List.of(selection));
+        command.put("checkVideo", true);
+        var plan = write(post("/camera-status/plans"), auth, command, 201);
+        assertThat(write(post("/camera-status/plans"), auth, command, 201).path("planId"))
+                .isEqualTo(plan.path("planId"));
+        var target =
+                bean(CameraStatusPlanTargetMapper.class)
+                        .forPlan(plan.path("planId").asLong())
+                        .getFirst();
+        assertThat(target.getCameraId()).isEqualTo(second.path("cameraId").asLong());
+        assertThat(target.getProfileId()).isEqualTo(Long.valueOf(main));
+        command.put(
+                "targetSelections",
+                List.of(
+                        Map.of(
+                                "groupKey",
+                                "d7000",
+                                "cameraId",
+                                first.path("cameraId").asText(),
+                                "streamProfileId",
+                                first.path("profiles").get(0).path("streamProfileId").asText())));
+        write(post("/camera-status/plans"), auth, command, 409);
+        var reused =
+                write(
+                                post("/camera-status/plans/targets/preview"),
+                                auth,
+                                Map.of("scope", "PLAN", "planId", plan.path("planId").asText()),
+                                200)
+                        .path("targets")
+                        .get(0);
+        assertThat(reused.path("cameraId")).isEqualTo(preview.path("cameraId"));
+        assertThat(reused.path("streamProfileId")).isEqualTo(preview.path("streamProfileId"));
+        var reuse = new HashMap<>(input(List.of("d7000"), 60, 24));
+        reuse.put("planId", plan.path("planId").asText());
+        var copied = write(post("/camera-status/plans"), auth, reuse, 201);
+        assertThat(
+                        bean(CameraStatusPlanTargetMapper.class)
+                                .forPlan(copied.path("planId").asLong())
+                                .getFirst()
+                                .getProfileId())
+                .isEqualTo(Long.valueOf(main));
+        write(
+                post("/camera-status/plans/" + copied.path("planId").asText() + "/stop"),
+                auth,
+                Map.of("version", copied.path("version").asText()),
+                200);
+        assertThat(
+                        jdbc.queryForList(
+                                "SELECT id,default_preview_profile_id FROM camera_channel ORDER BY id"))
+                .isEqualTo(defaultIds);
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        scheduler.tick();
+        assertThat(submitted).hasSize(1);
+        var request = submitted.values().iterator().next();
+        assertThat(requestCamera(request)).isEqualTo(second.path("cameraId").asLong());
+        assertThat(request.streamProfileId()).isEqualTo(Long.valueOf(main));
+        completeConnection(request, CameraProbeResult.Outcome.ACCESSIBLE);
+        scheduler.tick();
+        var media =
+                submitted.values().stream()
+                        .filter(r -> r.layer() == CameraStatusLayer.MEDIA)
+                        .findFirst()
+                        .orElseThrow();
+        assertThat(requestCamera(media)).isEqualTo(second.path("cameraId").asLong());
+        assertThat(media.streamProfileId()).isEqualTo(Long.valueOf(main));
+    }
+
+    @Test
+    void selectedTargetsRejectCrossDeviceCrossChannelDisabledAndDuplicateProfiles()
+            throws Exception {
+        var auth = admin();
+        var first = enabled(auth);
+        var other = enabled(auth);
+        String key = "c" + first.path("cameraId").asText();
+        String firstProfile = first.path("profiles").get(0).path("streamProfileId").asText();
+        String otherProfile = other.path("profiles").get(0).path("streamProfileId").asText();
+        var query = new HashMap<String, Object>(Map.of("scope", "PAGE", "groupKeys", List.of(key)));
+        var command = new HashMap<>(input(List.of(key), 60, 24));
+        var wrongDevice =
+                List.of(
+                        Map.of(
+                                "groupKey",
+                                key,
+                                "cameraId",
+                                other.path("cameraId").asText(),
+                                "streamProfileId",
+                                otherProfile));
+        query.put("targetSelections", wrongDevice);
+        command.put("targetSelections", wrongDevice);
+        write(post("/camera-status/plans/targets/preview"), auth, query, 404);
+        write(post("/camera-status/plans"), auth, command, 404);
+        var wrongProfile =
+                List.of(
+                        Map.of(
+                                "groupKey",
+                                key,
+                                "cameraId",
+                                first.path("cameraId").asText(),
+                                "streamProfileId",
+                                otherProfile));
+        query.put("targetSelections", wrongProfile);
+        command.put("targetSelections", wrongProfile);
+        write(post("/camera-status/plans/targets/preview"), auth, query, 409);
+        write(post("/camera-status/plans"), auth, command, 409);
+        var selected =
+                Map.of(
+                        "groupKey",
+                        key,
+                        "cameraId",
+                        first.path("cameraId").asText(),
+                        "streamProfileId",
+                        firstProfile);
+        query.put("targetSelections", List.of(selected, selected));
+        write(post("/camera-status/plans/targets/preview"), auth, query, 400);
+        query.put("targetSelections", List.of(selected));
+        command.put("targetSelections", List.of(selected));
+        jdbc.update(
+                "UPDATE camera_stream_profile SET enabled=FALSE WHERE id=?",
+                Long.valueOf(firstProfile));
+        write(post("/camera-status/plans/targets/preview"), auth, query, 409);
+        write(post("/camera-status/plans"), auth, command, 409);
+        jdbc.update(
+                "UPDATE camera_channel SET lifecycle='DISABLED' WHERE id=?",
+                first.path("cameraId").asLong());
+        write(post("/camera-status/plans/targets/preview"), auth, query, 404);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM camera_status_plan", Integer.class))
+                .isZero();
+        verifyNoInteractions(worker);
+    }
+
+    @Test
+    void deletingActivePlanRemovesTargetsButPreservesHistoryAndPreventsFurtherDispatch()
+            throws Exception {
+        var auth = admin();
+        var camera = enabled(auth);
+        var body = new HashMap<>(input(List.of("c" + camera.path("cameraId").asText()), 60, 24));
+        body.put("checkVideo", true);
+        var plan = write(post("/camera-status/plans"), auth, body, 201);
+        clock.value = Instant.parse(plan.path("startAt").asText());
+        scheduler.tick();
+        var request = submitted.values().iterator().next();
+        completeConnection(request, CameraProbeResult.Outcome.ACCESSIBLE);
+        long factCount =
+                jdbc.queryForObject("SELECT COUNT(*) FROM camera_status_snapshot", Long.class);
+        assertThat(factCount).isPositive();
+        write(
+                delete("/camera-status/plans/" + plan.path("planId").asText())
+                        .header("If-Match", "\"0\""),
+                auth,
+                Map.of(),
+                200);
+        assertThat(read("/camera-status/plans", auth)).isEmpty();
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM camera_status_plan_target", Long.class))
+                .isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM camera_status_check", Long.class))
+                .isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM camera_status_snapshot", Long.class))
+                .isEqualTo(factCount);
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM sys_operation_log WHERE action='CAMERA_STATUS_PLAN_DELETE'",
+                                Long.class))
+                .isOne();
+        scheduler.tick();
+        clock.value = clock.value.plusSeconds(3600);
+        scheduler.tick();
+        assertThat(submitted).hasSize(1); // No connection-to-video hand-off after deletion.
+        write(
+                post("/camera-status/plans/" + plan.path("planId").asText() + "/resume"),
+                auth,
+                Map.of("version", "0"),
+                404);
+    }
+
+    @Test
+    void deletingPlanFencesAlreadyQueuedAndRunningChecks() throws Exception {
+        var auth = admin();
+        var first = enabled(auth);
+        var second = enabled(auth);
+        var queued = create(auth, first, 60, 24);
+        var running = create(auth, second, 60, 24);
+        clock.value = Instant.parse(running.path("startAt").asText());
+        scheduler.tick();
+        assertThat(submitted).hasSize(2);
+        var active =
+                submitted.values().stream()
+                        .filter(r -> requestCamera(r) == second.path("cameraId").asLong())
+                        .findFirst()
+                        .orElseThrow();
+        active.beforeProbe().run();
+        for (var plan : List.of(queued, running))
+            write(
+                    delete("/camera-status/plans/" + plan.path("planId").asText())
+                            .header("If-Match", "\"0\""),
+                    auth,
+                    Map.of(),
+                    200);
+        var waiting =
+                submitted.values().stream()
+                        .filter(r -> r.checkId() != active.checkId())
+                        .findFirst()
+                        .orElseThrow();
+        assertThatThrownBy(waiting.beforeProbe()::run)
+                .isInstanceOf(
+                        com.streamfusion.platform.camera.access.adapter.CameraAdapterException
+                                .class);
+        futures.get(active.checkId())
+                .complete(
+                        new CameraProbeResult(
+                                CameraProbeResult.Outcome.ACCESSIBLE,
+                                "RTSP_DESCRIBE_OK",
+                                200,
+                                5,
+                                null));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM camera_status_snapshot", Long.class))
+                .isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM camera_status_check", Long.class))
+                .isEqualTo(2);
+        assertThat(jdbc.queryForList("SELECT reason_code FROM camera_status_check"))
+                .allSatisfy(
+                        row ->
+                                assertThat(row.get("reason_code"))
+                                        .isEqualTo("PLAN_NO_LONGER_ACTIVE"));
+    }
+
+    @Test
+    void deleteRequiresCurrentVersionAndCanRemoveStoppedOrExpiredOwnedPlans() throws Exception {
+        var auth = admin();
+        var camera = enabled(auth);
+        for (String state : List.of("STOPPED", "EXPIRED")) {
+            var plan = create(auth, camera, 60, 24);
+            var url = "/camera-status/plans/" + plan.path("planId").asText();
+            write(delete(url), auth, Map.of(), 428);
+            write(delete(url).header("If-Match", "0"), auth, Map.of(), 400);
+            jdbc.update(
+                    "UPDATE camera_status_plan SET state=?,version=1 WHERE id=?",
+                    state,
+                    plan.path("planId").asLong());
+            write(delete(url).header("If-Match", "\"0\""), auth, Map.of(), 409);
+            assertThat(
+                            jdbc.queryForObject(
+                                    "SELECT COUNT(*) FROM camera_status_plan_target WHERE plan_id=?",
+                                    Long.class,
+                                    plan.path("planId").asLong()))
+                    .isOne();
+            write(delete(url).header("If-Match", "\"1\""), auth, Map.of(), 200);
+            write(delete(url).header("If-Match", "\"1\""), auth, Map.of(), 404);
+        }
+        verifyNoInteractions(worker);
     }
 
     private Map<String, Object> input(List<String> keys, int interval, int hours) {

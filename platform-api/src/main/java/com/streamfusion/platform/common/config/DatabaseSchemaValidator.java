@@ -62,6 +62,9 @@ public class DatabaseSchemaValidator implements ApplicationRunner {
         required.put(
                 "camera_user_channel_grant",
                 Set.of("user_id", "channel_id", "created_at", "created_by"));
+        required.put(
+                "camera_user_device_grant",
+                Set.of("user_id", "device_id", "created_at", "created_by"));
         // Layer snapshots have a composite key and use explicit mapper statements.
         required.put(
                 "camera_status_snapshot",

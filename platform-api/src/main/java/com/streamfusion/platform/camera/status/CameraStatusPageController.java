@@ -23,4 +23,11 @@ public class CameraStatusPageController {
             @ParameterObject @ModelAttribute CameraStatusPageQuery query) {
         return R.success(service.page(query));
     }
+
+    @GetMapping("/camera-status/devices")
+    @Operation(summary = "按当前授权设备分页读取代表通道状态；每设备仅选一路，不推断所有通道健康")
+    public R<CameraStatusPageVo> devices(
+            @ParameterObject @ModelAttribute CameraStatusPageQuery query) {
+        return R.success(service.devicePage(query));
+    }
 }

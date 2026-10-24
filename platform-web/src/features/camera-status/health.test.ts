@@ -101,10 +101,10 @@ describe('channel connection summary', () => {
       ).current,
     ).toBe(0)
   })
-  it('prefers the enabled default preview even when it is not MAIN', () => {
+  it('uses server detection priority independently of the preview default', () => {
     const sub = { ...profile, streamProfileId: '5', streamKind: 'SUB' }
     expect(
-      representativeProfile({ ...channel, defaultPreviewProfileId: '5', profiles: [profile, sub] }),
+      representativeProfile({ ...channel, defaultPreviewProfileId: '2', profiles: [sub, profile] }),
     ).toBe(sub)
     expect(
       representativeProfile({
@@ -114,11 +114,11 @@ describe('channel connection summary', () => {
       }),
     ).toBe(profile)
   })
-  it('uses stable numeric IDs for fallback without sorting the source array', () => {
+  it('preserves server cost ordering without sorting or mutating the source array', () => {
     const larger = { ...profile, streamProfileId: '100', streamKind: 'UNKNOWN' }
     const smaller = { ...profile, streamProfileId: '9', streamKind: 'UNKNOWN' }
     const profiles = [larger, smaller]
-    expect(representativeProfile({ ...channel, profiles })).toBe(smaller)
+    expect(representativeProfile({ ...channel, profiles })).toBe(larger)
     expect(profiles).toEqual([larger, smaller])
   })
   it('summarizes the representative only and never mistakes another stream for the chosen stream', () => {
@@ -135,8 +135,8 @@ describe('channel connection summary', () => {
     expect(
       representativeConnection({
         ...channel,
-        defaultPreviewProfileId: '4',
-        profiles: [profile, failed],
+        defaultPreviewProfileId: '2',
+        profiles: [failed, profile],
       }),
     ).toBe('failed')
   })
@@ -166,9 +166,9 @@ describe('channel connection summary', () => {
       ),
     ).toBe('stale')
   })
-  it('selects one enabled MAIN profile ahead of other enabled profiles', () => {
+  it('does not reselect MAIN ahead of the server-selected lower-cost stream', () => {
     const sub = { ...profile, streamProfileId: '5', streamKind: 'SUB' }
-    expect(representativeProfile({ ...channel, profiles: [sub, profile] })).toBe(profile)
+    expect(representativeProfile({ ...channel, profiles: [sub, profile] })).toBe(sub)
   })
   it('falls back to the first enabled profile, never to a disabled MAIN', () => {
     const sub = { ...profile, streamProfileId: '5', streamKind: 'SUB' }

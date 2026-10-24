@@ -33,6 +33,42 @@ describe('patrol scope preview', () => {
       }).targets[0]?.reasonCode,
     ).toBe('LOCATOR_NOT_CONFIGURED')
   })
+  it('retains membership and the effective channel/profile with decimal identifiers', () => {
+    const selected = {
+      ...target,
+      groupIds: ['9007199254740993', '5'],
+      cameraId: '21',
+      channelName: '通道 A',
+      streamProfileId: '22',
+      profileName: '主码流',
+      videoSupported: true,
+    }
+    expect(parsePlanTargets({ targets: [selected], limitExceeded: false }).targets[0]).toEqual(
+      selected,
+    )
+    expect(() =>
+      parsePlanTargets({ targets: [{ ...selected, groupIds: ['invalid'] }], limitExceeded: false }),
+    ).toThrow()
+    expect(() =>
+      parsePlanTargets({
+        targets: [{ ...selected, cameraId: 9007199254740992 }],
+        limitExceeded: false,
+      }),
+    ).toThrow()
+    expect(() =>
+      parsePlanTargets({ targets: [{ ...selected, videoSupported: 'yes' }], limitExceeded: false }),
+    ).toThrow()
+  })
+  it('retains the global authorized device count independently of the selected range', () => {
+    expect(
+      parsePlanTargets({ targets: [target], totalCount: 6, limitExceeded: false }).totalCount,
+    ).toBe(6)
+    expect(parsePlanTargets({ targets: [], totalCount: 0, limitExceeded: false }).totalCount).toBe(
+      0,
+    )
+    expect(() => parsePlanTargets({ targets: [], totalCount: -1, limitExceeded: false })).toThrow()
+    expect(() => parsePlanTargets({ targets: [], totalCount: '6', limitExceeded: false })).toThrow()
+  })
   it.each([
     { targets: [target, target], limitExceeded: false },
     { targets: [{ ...target, groupKey: 'invalid' }], limitExceeded: false },

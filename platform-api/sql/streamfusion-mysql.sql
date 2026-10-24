@@ -26,6 +26,7 @@ DROP TABLE IF EXISTS preview_source;
 DROP TABLE IF EXISTS preview_node;
 DROP TABLE IF EXISTS `camera_access_import_item`;
 DROP TABLE IF EXISTS `camera_access_job`;
+DROP TABLE IF EXISTS `camera_user_device_grant`;
 DROP TABLE IF EXISTS `camera_user_channel_grant`;
 DROP TABLE IF EXISTS `camera_user_group_grant`;
 DROP TABLE IF EXISTS `camera_user_scope`;
@@ -747,7 +748,7 @@ CREATE TABLE camera_status_plan_target (
 -- 账户相机范围表.sql
 CREATE TABLE camera_user_scope (
  user_id BIGINT NOT NULL COMMENT '授权所属用户ID',
- version BIGINT NOT NULL DEFAULT 0 COMMENT '两类关系的聚合编辑版本',
+ version BIGINT NOT NULL DEFAULT 0 COMMENT '分组、设备与独立相机授权的聚合编辑版本',
  created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '首次保存时间',
  updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '最近变更时间',
  created_by BIGINT NULL COMMENT '创建人ID快照',
@@ -780,6 +781,18 @@ CREATE TABLE camera_user_channel_grant (
  CONSTRAINT fk_camera_channel_grant_channel FOREIGN KEY(channel_id) REFERENCES camera_channel(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='账户直接相机授权';
 CREATE INDEX ix_camera_channel_grant_channel ON camera_user_channel_grant(channel_id,user_id);
+
+-- 账户设备授权表.sql
+CREATE TABLE camera_user_device_grant (
+ user_id BIGINT NOT NULL COMMENT '授权所属用户ID',
+ device_id BIGINT NOT NULL COMMENT '授予的物理设备ID，动态包含其全部已归档通道',
+ created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '授予时间',
+ created_by BIGINT NULL COMMENT '授予人ID快照',
+ PRIMARY KEY(user_id,device_id),
+ CONSTRAINT fk_camera_device_grant_scope FOREIGN KEY(user_id) REFERENCES camera_user_scope(user_id) ON DELETE CASCADE,
+ CONSTRAINT fk_camera_device_grant_device FOREIGN KEY(device_id) REFERENCES camera_device(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='账户直接设备授权';
+CREATE INDEX ix_camera_device_grant_device ON camera_user_device_grant(device_id,user_id);
 
 -- 相机接入任务表.sql
 CREATE TABLE camera_access_job (

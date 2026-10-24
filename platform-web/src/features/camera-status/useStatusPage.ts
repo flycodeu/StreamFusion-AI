@@ -118,10 +118,12 @@ export function useStatusPage(query: Ref<StatusSearch>, active: Ref<boolean>) {
   )
   watch(
     [query, enabled, () => sessionState.me?.user.id, authorized],
-    ([nextQuery, , nextUser], [previousQuery, , previousUser]) => {
+    ([, , nextUser], [, , previousUser]) => {
       stop()
-      if (nextQuery !== previousQuery || nextUser !== previousUser || !authorized.value)
-        result.value = null
+      // Keep the last page visible while a new filter/page is loading. Clearing it here
+      // makes the table, summary and pagination disappear for a single request round trip.
+      // A user switch still needs a hard reset so data never crosses identities.
+      if (nextUser !== previousUser || !authorized.value) result.value = null
       if (nextUser !== previousUser) total.value = 0
       error.value = null
       reads = 0

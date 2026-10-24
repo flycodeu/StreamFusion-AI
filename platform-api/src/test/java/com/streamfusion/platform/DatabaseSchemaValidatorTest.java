@@ -58,7 +58,8 @@ class DatabaseSchemaValidatorTest {
                 "sys_login_record",
                 "sys_user_role",
                 "sys_user_dept",
-                "sys_role_menu"
+                "sys_role_menu",
+                "camera_user_device_grant"
             })
     void everyMissingBusinessTableIsReportedBeforeLogin(String table) throws Exception {
         try (var connection = source.getConnection();

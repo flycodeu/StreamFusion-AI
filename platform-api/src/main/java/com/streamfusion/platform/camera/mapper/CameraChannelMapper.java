@@ -47,6 +47,13 @@ public interface CameraChannelMapper extends BaseMapper<CameraChannelEntity> {
             @Param("layer") String layer,
             @Param("visibility") Visibility visibility);
 
+    IPage<CameraStatusPageRow> pageDeviceStatus(
+            Page<CameraStatusPageRow> page,
+            @Param("name") String name,
+            @Param("observation") String observation,
+            @Param("layer") String layer,
+            @Param("visibility") Visibility visibility);
+
     CameraAssetRow visible(@Param("id") long id, @Param("visibility") Visibility visibility);
 
     List<CameraStatusPageRow> statusDeviceRepresentatives(

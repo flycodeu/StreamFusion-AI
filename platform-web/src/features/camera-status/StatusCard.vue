@@ -17,6 +17,7 @@ const props = withDefaults(defineProps<{ channel: StatusChannel; layer?: StatusL
 })
 const emit = defineEmits<{ details: [channel: StatusChannel, profile: StatusProfile] }>()
 const profile = computed(() => representativeProfile(props.channel))
+const displayName = computed(() => props.channel.deviceName || props.channel.name)
 const state = computed(() => representativeConnection(props.channel, props.layer))
 const platform = computed(
   () =>
@@ -41,18 +42,12 @@ const statusLabel = computed(() =>
   <article class="camera-card" :class="`state-${state}`">
     <header class="camera-card-heading">
       <div class="camera-identity">
-        <h3 :title="channel.name">{{ channel.name }}</h3>
+        <h3 :title="displayName">{{ displayName }}</h3>
         <p
           class="camera-address"
           :title="`${addressLabel(channel.accessAddress)}：${addressText(channel.accessAddress)}`"
         >
           {{ addressLabel(channel.accessAddress) }} · {{ addressText(channel.accessAddress) }}
-        </p>
-        <p
-          v-if="channel.deviceName && channel.deviceName !== channel.name"
-          :title="channel.deviceName"
-        >
-          {{ channel.deviceName }}
         </p>
       </div>
       <ElIcon class="camera-symbol" aria-hidden="true"><VideoCamera /></ElIcon>

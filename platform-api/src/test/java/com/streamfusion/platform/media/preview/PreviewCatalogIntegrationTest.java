@@ -122,20 +122,21 @@ class PreviewCatalogIntegrationTest extends CameraTestSupport {
         var worker = login("PreviewWorker", "Initial1!");
 
         var catalog = read("/preview/catalog", worker);
-        assertThat(catalog.path("total").asInt()).isEqualTo(3);
+        assertThat(catalog.path("total").asInt()).isEqualTo(4);
         assertThat(catalog.path("items"))
                 .extracting(row -> row.path("cameraId").asText())
-                .containsExactlyInAnyOrder(direct, grouped, disabled);
-        assertThat(catalog.toString()).doesNotContain("同设备隐藏通道");
+                .containsExactlyInAnyOrder(direct, hidden, grouped, disabled);
         assertThat(catalog.path("items"))
                 .anyMatch(
                         row ->
                                 row.path("cameraId").asText().equals(disabled)
                                         && row.path("lifecycle").asText().equals("DISABLED"));
         var device = read("/preview/catalog?device=d701", worker);
-        assertThat(device.path("total").asInt()).isOne();
-        assertThat(device.path("items").get(0).path("cameraId").asText()).isEqualTo(direct);
-        assertThat(read("/preview/catalog?name=隐藏", worker).path("total").asInt()).isZero();
+        assertThat(device.path("total").asInt()).isEqualTo(2);
+        assertThat(device.path("items"))
+                .extracting(row -> row.path("cameraId").asText())
+                .containsExactlyInAnyOrder(direct, hidden);
+        assertThat(read("/preview/catalog?name=隐藏", worker).path("total").asInt()).isEqualTo(1);
         assertThat(
                         read("/preview/catalog?device=c" + disabled, worker)
                                 .path("items")
@@ -147,7 +148,15 @@ class PreviewCatalogIntegrationTest extends CameraTestSupport {
         write(
                 put("/camera-scopes/users/" + user),
                 auth,
-                Map.of("version", "1", "groupIds", List.of(), "cameraIds", List.of()),
+                Map.of(
+                        "version",
+                        "1",
+                        "groupIds",
+                        List.of(),
+                        "cameraIds",
+                        List.of(),
+                        "deviceIds",
+                        List.of()),
                 200);
         assertThat(read("/preview/catalog", worker).path("total").asInt()).isZero();
         assertThat(read("/preview/catalog?device=d701", worker).path("items")).isEmpty();

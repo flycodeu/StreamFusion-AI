@@ -155,24 +155,21 @@ class CameraStatusPageIntegrationTest extends CameraTestSupport {
     }
 
     @Test
-    void summaryPrefersEnabledDefaultPreviewAndFallsBackToMainWhenDefaultIsDisabled()
+    void summaryPrefersLowestCostUnclassifiedProfileAndFallsBackWhenItIsDisabled()
             throws Exception {
         var auth = admin();
         var camera = camera(auth, source(auth).path("sourceId").asText(), "默认代表流");
         enable(auth, camera);
         addFact(camera, 0, "FAILED", false);
         addFact(camera, 1, "ACCESSIBLE", false);
-        long defaultId = camera.path("profiles").get(1).path("streamProfileId").asLong();
-        jdbc.update(
-                "UPDATE camera_channel SET default_preview_profile_id=? WHERE id=?",
-                defaultId,
-                camera.path("cameraId").asLong());
+        long lowCostId = camera.path("profiles").get(1).path("streamProfileId").asLong();
+        jdbc.update("UPDATE camera_stream_profile SET bitrate_kbps=32 WHERE id=?", lowCostId);
         var page = read("/camera-status?layer=CONTROL", auth);
         assertThat(page.path("items").get(0).path("defaultPreviewProfileId").asText())
-                .isEqualTo(Long.toString(defaultId));
+                .isEqualTo(camera.path("defaultPreviewProfileId").asText());
         assertThat(page.path("summary").path("accessible").asInt()).isOne();
         assertThat(page.path("summary").path("failed").asInt()).isZero();
-        jdbc.update("UPDATE camera_stream_profile SET enabled=FALSE WHERE id=?", defaultId);
+        jdbc.update("UPDATE camera_stream_profile SET enabled=FALSE WHERE id=?", lowCostId);
         assertThat(
                         read("/camera-status?layer=CONTROL", auth)
                                 .path("summary")
@@ -535,6 +532,17 @@ class CameraStatusPageIntegrationTest extends CameraTestSupport {
                 .isZero();
         verifyNoInteractions(snapshots, checks, targets);
         verifyNoInteractions(worker);
+    }
+
+    @Override
+    protected JsonNode camera(Csrf auth, String sourceId, String name) throws Exception {
+        var camera = super.camera(auth, sourceId, name);
+        // These history/pagination fixtures use unclassified profiles with a stable first profile.
+        // SUB/MAIN/THIRD priority is covered by CameraStatusProfileSelectionIntegrationTest.
+        jdbc.update(
+                "UPDATE camera_stream_profile SET bitrate_kbps=CASE usage_hint WHEN 'MAIN' THEN 64 ELSE 1024 END,usage_hint='UNKNOWN' WHERE channel_id=?",
+                camera.path("cameraId").asLong());
+        return camera;
     }
 
     private void enable(Csrf auth, JsonNode camera) throws Exception {

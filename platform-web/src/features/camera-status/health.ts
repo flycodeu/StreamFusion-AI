@@ -2,18 +2,8 @@ import type { StatusChannel, StatusLayer, StatusSummary } from '../../api/camera
 import { layerKey } from '../../api/camera-status/types'
 
 export function representativeProfile(channel: StatusChannel) {
-  const enabled = channel.profiles.filter((profile) => profile.enabled)
-  enabled.sort(
-    (a, b) =>
-      a.streamProfileId.length - b.streamProfileId.length ||
-      a.streamProfileId.localeCompare(b.streamProfileId),
-  )
-  return (
-    enabled.find((profile) => profile.streamProfileId === channel.defaultPreviewProfileId) ??
-    enabled.find((profile) => profile.streamKind === 'MAIN') ??
-    enabled[0] ??
-    null
-  )
+  // Server order follows detection cost; preview defaults serve a separate purpose.
+  return channel.profiles.find((profile) => profile.enabled) ?? null
 }
 
 export type ConnectionState = Exclude<keyof StatusSummary, 'total'>

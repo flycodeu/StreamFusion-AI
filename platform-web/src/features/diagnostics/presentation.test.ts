@@ -51,6 +51,7 @@ describe('diagnostic and audit labels', () => {
       'CAMERA_PROFILE_UPDATE',
       'CAMERA_STATUS_PLAN_CREATE',
       'CAMERA_STATUS_PLAN_STOP',
+      'CAMERA_STATUS_PLAN_DELETE',
     ])
       expect(actionNames[name]).toMatch(/[\u4e00-\u9fff]/)
     expect(changeNames.intervalMinutes).toBe('检测间隔（分钟）')

@@ -12,9 +12,12 @@ public record CameraScopeVo(
         @Schema(description = "授权模式，超级管理员为ALL，其他账户为CUSTOM") String mode,
         @Schema(description = "显式授权的视频组ID集合") List<String> groupIds,
         @Schema(description = "显式授权的相机ID集合") List<String> cameraIds,
+        @Schema(description = "显式设备授权ID集合，包含旧通道授权映射的设备") List<String> deviceIds,
         @Schema(description = "显式视频组授权详情，含groupId、name、path") List<Map<String, Object>> groupGrants,
         @Schema(description = "显式相机授权详情，含cameraId、name、groupId、path、lifecycle")
                 List<Map<String, Object>> cameraGrants,
+        @Schema(description = "设备授权详情，含deviceId、代表cameraId、name、groupId、groupIds、path、lifecycle")
+                List<Map<String, Object>> deviceGrants,
         @Schema(description = "当前有效数据范围统计，含effectiveCameraCount、enabledCameraCount、computedAt")
                 Map<String, Object> effectiveSummary,
         @Schema(description = "最后修改时间，尚未保存时为空，UTC") Instant updatedAt,

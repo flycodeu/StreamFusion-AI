@@ -177,7 +177,7 @@ class CameraDeviceMoveIntegrationTest extends CameraTestSupport {
     }
 
     @Test
-    void ordinaryAccountSeesOnlyAuthorizedTreeAncestorsAndCannotMoveDevice() throws Exception {
+    void ordinaryAccountSeesAllDeviceMemberGroupsButCannotMoveDevice() throws Exception {
         var auth = admin();
         device(auth, 2);
         String root = group(auth, "厂区"), hidden = group(auth, "隐藏区域");
@@ -214,10 +214,11 @@ class CameraDeviceMoveIntegrationTest extends CameraTestSupport {
                                 .isForbidden());
         write(put("/camera-devices/701"), worker, Map.of("version", "0", "localName", "越权改名"), 403);
         var tree = read("/camera-groups/tree", worker);
-        assertThat(tree).hasSize(2);
+        assertThat(tree).hasSize(3);
         for (var node : tree) {
-            assertThat(node.path("groupId").asText()).isIn(root, child);
+            assertThat(node.path("groupId").asText()).isIn(root, child, hidden);
             assertThat(node.path("visibleCameraCount").asInt()).isOne();
+            assertThat(node.path("visibleDeviceCount").asInt()).isOne();
         }
         write(
                 post("/cameras/devices/d701/move-preview"),

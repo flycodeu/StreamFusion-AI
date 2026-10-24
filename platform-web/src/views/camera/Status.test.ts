@@ -187,7 +187,7 @@ describe('independent camera status page presentation', () => {
   it('shows graphical current-page counts rather than pretending the filtered total is online', async () => {
     mock.rows = [channel()]
     const html = await renderPage()
-    expect(html).toContain('当前页 1 个通道')
+    expect(html).toContain('当前页 1 台相机')
     expect(html).toContain('status-distribution')
     expect(html).toContain('role="img"')
     expect(html).toContain('配置已变更 1')
@@ -198,21 +198,11 @@ describe('independent camera status page presentation', () => {
     expect(html).not.toContain('<h2>相机状态</h2>')
     expect(html).not.toMatch(/在线率|视频正常率|历史趋势/)
   })
-  it('uses the enabled default preview as the card representative without displaying profile lists', async () => {
+  it('uses the server-ordered detection profile instead of the preview default without displaying profile lists', async () => {
     const row = channel()
     const base = row.profiles[0]!
-    row.defaultPreviewProfileId = '5'
+    row.defaultPreviewProfileId = '2'
     row.profiles = [
-      {
-        ...base,
-        streamProfileId: '2',
-        streamKind: 'MAIN',
-        media: {
-          ...base.media,
-          freshness: 'CURRENT',
-          observation: { ...base.control.observation! },
-        },
-      },
       {
         ...base,
         streamProfileId: '5',
@@ -221,6 +211,16 @@ describe('independent camera status page presentation', () => {
           ...base.media,
           freshness: 'CURRENT',
           observation: { ...base.control.observation!, value: 'FAILED' },
+        },
+      },
+      {
+        ...base,
+        streamProfileId: '2',
+        streamKind: 'MAIN',
+        media: {
+          ...base.media,
+          freshness: 'CURRENT',
+          observation: { ...base.control.observation! },
         },
       },
     ]
@@ -342,7 +342,7 @@ describe('independent camera status page presentation', () => {
     })
     const html = await renderPage()
     expect(html).toContain('状态未读取，请重试刷新')
-    expect(html).toContain('请缩小设备/通道搜索范围')
+    expect(html).toContain('请缩小相机搜索范围')
     expect(html).not.toContain('暂无符合条件的通道')
   })
 })

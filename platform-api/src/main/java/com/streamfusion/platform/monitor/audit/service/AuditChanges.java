@@ -32,6 +32,8 @@ public class AuditChanges {
                     "removedGroupCount",
                     "addedCameraCount",
                     "removedCameraCount",
+                    "addedDeviceCount",
+                    "removedDeviceCount",
                     "groupIdsSummary",
                     "cameraIdsSummary",
                     "beforeGroupId",
