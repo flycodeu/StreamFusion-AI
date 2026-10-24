@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { genderOptions, userStatusLabel } from '../../features/user/presentation'
 import { computed, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
@@ -94,7 +95,7 @@ async function save(): Promise<void> {
           <dt>账号状态</dt>
           <dd>
             <ElTag :type="form.status === 1 ? 'success' : 'info'" size="small">{{
-              form.status === 1 ? '正常' : form.status === 0 ? '待改密' : '停用'
+              userStatusLabel(form.status)
             }}</ElTag>
           </dd>
         </div>
@@ -123,9 +124,11 @@ async function save(): Promise<void> {
               /></ElFormItem>
               <ElFormItem label="性别"
                 ><ElSelect v-model="form.gender"
-                  ><ElOption label="未设置" :value="0" /><ElOption label="男" :value="1" /><ElOption
-                    label="女"
-                    :value="2" /></ElSelect
+                  ><ElOption
+                    v-for="option in genderOptions"
+                    :key="option.value"
+                    :label="option.label"
+                    :value="option.value" /></ElSelect
               ></ElFormItem>
               <ElFormItem label="电话" :error="submitted ? phoneError : ''"
                 ><ElInput
@@ -169,9 +172,15 @@ async function save(): Promise<void> {
 .identity-card {
   position: sticky;
   top: 20px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .profile-card {
   min-height: 470px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .profile-card :deep(.el-tabs__header) {
   margin-bottom: 28px;

@@ -41,6 +41,9 @@ const statusLabel = computed(() =>
 <template>
   <article class="camera-card" :class="`state-${state}`">
     <header class="camera-card-heading">
+      <div class="camera-symbol-wrap" aria-hidden="true">
+        <ElIcon class="camera-symbol"><VideoCamera /></ElIcon>
+      </div>
       <div class="camera-identity">
         <h3 :title="displayName">{{ displayName }}</h3>
         <p
@@ -50,17 +53,14 @@ const statusLabel = computed(() =>
           {{ addressLabel(channel.accessAddress) }} · {{ addressText(channel.accessAddress) }}
         </p>
       </div>
-      <ElIcon class="camera-symbol" aria-hidden="true"><VideoCamera /></ElIcon>
     </header>
-    <div class="card-states">
+    <footer class="camera-card-footer">
       <div class="video-state">
         <span>{{ platform ? '平台状态' : layer === 'CONTROL' ? '相机连接' : '视频收帧' }}</span
         ><strong :title="layer === 'CONTROL' && !platform ? '最近一次相机连接检查结果' : undefined"
           ><i class="state-dot" aria-hidden="true" />{{ statusLabel }}</strong
         >
       </div>
-    </div>
-    <footer class="camera-card-footer">
       <ElButton v-if="profile" link type="primary" @click="emit('details', channel, profile)"
         >详情</ElButton
       >
@@ -70,31 +70,66 @@ const statusLabel = computed(() =>
 
 <style scoped>
 .camera-card {
+  --state-soft-bg: #f1f5f9;
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border: 1px solid var(--el-border-color-lighter);
-  border-top: 3px solid var(--state-color);
-  border-radius: 6px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
   overflow: hidden;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
+}
+.camera-card.state-accessible {
+  --state-soft-bg: #ecfdf5;
+}
+.camera-card.state-failed {
+  --state-soft-bg: #fef2f2;
+  border-color: #fecaca;
+}
+.camera-card.state-checking {
+  --state-soft-bg: #eff6ff;
+}
+.camera-card.state-stale {
+  --state-soft-bg: #fffbeb;
+}
+.camera-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
 }
 .camera-card-heading {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 12px 12px 8px;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+}
+.camera-symbol-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  background: var(--state-soft-bg);
+  color: var(--state-color);
+  flex-shrink: 0;
+}
+.camera-symbol {
+  font-size: 18px;
 }
 .camera-identity {
+  flex: 1;
   min-width: 0;
 }
 .camera-identity h3 {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
   overflow: hidden;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   margin: 0;
+  color: #0f172a;
   font-size: 14px;
   font-weight: 600;
   line-height: 20px;
@@ -104,37 +139,42 @@ const statusLabel = computed(() =>
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text-secondary);
+  color: #64748b;
   font-size: 12px;
   line-height: 18px;
+  font-variant-numeric: tabular-nums;
 }
-.camera-symbol {
-  color: var(--el-text-color-placeholder);
-  font-size: 18px;
-  flex-shrink: 0;
-}
-.card-states {
-  display: grid;
-  gap: 6px;
-  padding: 4px 12px 8px;
-  font-size: 13px;
-}
-.video-state {
+.camera-card-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
+  margin-top: auto;
+  padding: 9px 16px;
+  background: #f8fafc;
+  border-top: 1px solid #f1f5f9;
 }
-.card-states span {
-  color: var(--text-secondary);
+.video-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.video-state span {
+  color: #64748b;
+  font-size: 12px;
 }
 .video-state strong {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--state-soft-bg);
   color: var(--state-color);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
+  line-height: 18px;
 }
 .state-dot {
   width: 6px;
@@ -143,18 +183,8 @@ const statusLabel = computed(() =>
   background: currentColor;
   flex-shrink: 0;
 }
-.camera-card-footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: auto;
-  padding: 6px 12px;
-  min-height: 32px;
-  background: var(--el-fill-color-extra-light);
-  border-top: 1px solid var(--el-border-color-lighter);
-}
 .camera-card-footer > .el-button {
   flex-shrink: 0;
+  font-weight: 500;
 }
 </style>

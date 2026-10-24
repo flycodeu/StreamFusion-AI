@@ -48,6 +48,7 @@ onBeforeUnmount(clear)
     </ElBadge>
     <ElDrawer
       v-model="open"
+      class="camera-detail-drawer"
       title="安全监测"
       size="min(1000px, 100vw)"
       append-to-body

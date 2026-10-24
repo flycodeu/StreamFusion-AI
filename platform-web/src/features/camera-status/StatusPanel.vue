@@ -5,7 +5,7 @@ import { Clock, Refresh } from '@element-plus/icons-vue'
 import type { StatusLayer } from '../../api/camera-status/types'
 import { layerKey } from '../../api/camera-status/types'
 import RequestError from '../../components/feedback/RequestError.vue'
-import { effectiveUsage, streamLabel, usageLabel } from '../camera/form'
+import { streamLabel } from '../camera/streamLabels'
 import { formatDateTime } from '../../utils/dateTime'
 import { executionLabels, isTerminal, reasonLabel } from './model'
 import { connectionLabels, upstreamLabels } from './health'
@@ -33,14 +33,8 @@ const props = defineProps<{
   showProfileSelector?: boolean
 }>()
 function profileOptionLabel(profile: NonNullable<typeof props.camera>['profiles'][number]): string {
-  const base = streamLabel(profile)
-  const role = effectiveUsage(profile)
-  const hasKnownRole = role && role !== 'UNKNOWN' && role !== 'CUSTOM'
-  const isDuplicateOrSameAsCamera =
-    (props.camera?.name && base === props.camera.name) ||
-    (props.camera?.profiles.filter((p) => streamLabel(p) === base).length ?? 0) > 1
-  const title = isDuplicateOrSameAsCamera && hasKnownRole ? usageLabel(role) : base
-  if (isDuplicateOrSameAsCamera && profile.width && profile.height) {
+  const title = streamLabel(profile, props.camera?.profiles, props.camera?.name)
+  if (profile.width && profile.height) {
     return `${title} (${profile.width}×${profile.height})`
   }
   return title
@@ -155,63 +149,8 @@ const connection = computed(() => {
     aria-label="相机状态检查"
   >
     <slot name="summary" :connection="connection" />
-    <div class="status-actions">
-      <ElSelect
-        v-if="showProfileSelector !== false && camera.profiles.length > 1"
-        v-model="profileId"
-        placeholder="选择要检查的码流"
-        aria-label="检查码流"
-        :disabled="posting"
-      >
-        <ElOption
-          v-for="profile in camera.profiles"
-          :key="profile.streamProfileId"
-          :label="profileOptionLabel(profile)"
-          :value="profile.streamProfileId"
-        />
-      </ElSelect>
-      <div class="check-buttons">
-        <ElButton
-          v-for="target in availableLayers"
-          :key="target"
-          :type="target === 'CONTROL' || target === 'UPSTREAM' ? 'primary' : 'default'"
-          :loading="posting && pending?.input.layer === target"
-          :disabled="!canCheck(target)"
-          @click="inspect(target)"
-        >
-          {{
-            pending?.uncertain && pending.input.layer === target
-              ? '重试原检查'
-              : target === 'UPSTREAM'
-                ? '查询平台状态'
-                : target === 'MEDIA'
-                  ? '检查视频'
-                  : '检查连接'
-          }}
-        </ElButton>
-      </div>
-      <ElButton
-        class="status-refresh"
-        link
-        :icon="Refresh"
-        :loading="reading"
-        :disabled="!active || reading"
-        @click="refresh"
-        >刷新</ElButton
-      >
-    </div>
-    <p v-if="pending?.uncertain" class="status-note" role="status">
-      {{
-        pendingHere
-          ? '响应未确认，重试将使用原检查请求。'
-          : `通道 ${pending.cameraId} 的码流 ${pending.input.streamProfileId} 有未确认请求，请返回原目标重试。`
-      }}
-    </p>
-    <p v-else-if="selected && !selected.canCheck" class="status-note">
-      {{ reasonLabel(selected.blockingReasonCode) || '当前不能执行手动检查' }}
-    </p>
-    <template v-if="profileId">
-      <div class="layer-switcher" role="group" aria-label="检查结果层级">
+    <div class="status-panel-header">
+      <div v-if="profileId" class="layer-switcher" role="group" aria-label="检查结果层级">
         <button
           v-for="target in availableLayers"
           :key="target"
@@ -224,6 +163,63 @@ const connection = computed(() => {
           {{ target === 'UPSTREAM' ? '平台状态' : target === 'MEDIA' ? '视频收帧' : '连接检查' }}
         </button>
       </div>
+      <div class="status-actions">
+        <ElSelect
+          v-if="showProfileSelector !== false && camera.profiles.length > 1"
+          v-model="profileId"
+          placeholder="选择要检查的码流"
+          aria-label="检查码流"
+          :disabled="posting"
+        >
+          <ElOption
+            v-for="profile in camera.profiles"
+            :key="profile.streamProfileId"
+            :label="profileOptionLabel(profile)"
+            :value="profile.streamProfileId"
+          />
+        </ElSelect>
+        <div class="check-buttons">
+          <ElButton
+            v-for="target in availableLayers"
+            :key="target"
+            :type="target === 'CONTROL' || target === 'UPSTREAM' ? 'primary' : 'default'"
+            :loading="posting && pending?.input.layer === target"
+            :disabled="!canCheck(target)"
+            @click="inspect(target)"
+          >
+            {{
+              pending?.uncertain && pending.input.layer === target
+                ? '重试原检查'
+                : target === 'UPSTREAM'
+                  ? '查询平台状态'
+                  : target === 'MEDIA'
+                    ? '检查视频'
+                    : '检查连接'
+            }}
+          </ElButton>
+        </div>
+        <ElButton
+          class="status-refresh"
+          link
+          :icon="Refresh"
+          :loading="reading"
+          :disabled="!active || reading"
+          @click="refresh"
+          >刷新</ElButton
+        >
+      </div>
+    </div>
+    <p v-if="pending?.uncertain" class="status-note" role="status">
+      {{
+        pendingHere
+          ? '响应未确认，重试将使用原检查请求。'
+          : `通道 ${pending.cameraId} 的码流 ${pending.input.streamProfileId} 有未确认请求，请返回原目标重试。`
+      }}
+    </p>
+    <p v-else-if="selected && !selected.canCheck" class="status-note">
+      {{ reasonLabel(selected.blockingReasonCode) || '当前不能执行手动检查' }}
+    </p>
+    <template v-if="profileId">
       <StatusFact :profile="selected" />
       <div v-if="check" class="check-execution" aria-live="polite">
         <p v-if="executionReason" class="status-note">{{ executionReason }}</p>
@@ -293,17 +289,64 @@ const connection = computed(() => {
   padding-top: 0;
   border-top: 0;
 }
+.status-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  margin-bottom: 12px;
+}
+.layer-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+}
+.layer-tab {
+  margin: 0;
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.layer-tab:hover {
+  color: #0f172a;
+}
+.layer-tab.is-active {
+  background: #fff;
+  color: #2563eb;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+}
+.layer-tab:focus-visible,
+.check-diagnostics > summary:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
 .status-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 16px;
+  margin-left: auto;
 }
 .status-actions .el-select {
-  flex: 1 1 200px;
-  min-width: 175px;
-  max-width: 260px;
+  flex: 1 1 170px;
+  min-width: 155px;
+  max-width: 220px;
 }
 .status-actions .el-button {
   flex-shrink: 0;
@@ -315,48 +358,24 @@ const connection = computed(() => {
   gap: 8px;
 }
 .status-actions .status-refresh {
-  margin-left: auto;
   color: #64748b;
-}
-.layer-switcher {
-  display: flex;
-  gap: 24px;
-  margin-bottom: 16px;
-  border-bottom: 1px solid #e2e8f0;
-}
-.layer-tab {
-  margin: 0 0 -1px;
-  padding: 0 2px 10px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: #64748b;
-  font-size: 13px;
-  cursor: pointer;
-}
-.layer-tab:hover,
-.layer-tab.is-active {
-  color: #2563eb;
-}
-.layer-tab.is-active {
-  border-bottom-color: #2563eb;
-  font-weight: 500;
-}
-.layer-tab:focus-visible,
-.check-diagnostics > summary:focus-visible {
-  outline: 2px solid #2563eb;
-  outline-offset: 3px;
+  padding: 4px 6px;
 }
 .status-note {
-  margin: 8px 0;
+  margin: 8px 0 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
   color: var(--text-secondary);
   font-size: var(--camera-card-meta, 13px);
   overflow-wrap: anywhere;
 }
 .check-execution {
-  margin-top: 16px;
+  margin-top: 12px;
 }
 .check-diagnostics {
+  border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #f8fafc;
   color: #475569;
@@ -366,7 +385,7 @@ const connection = computed(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 14px;
+  padding: 10px 14px;
   cursor: pointer;
   font-weight: 500;
   list-style: none;
@@ -396,13 +415,13 @@ const connection = computed(() => {
 .check-diagnostics dl {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 20px;
-  padding: 0 14px 14px;
+  gap: 10px 16px;
+  padding: 0 14px 12px;
   margin: 0;
 }
 .check-diagnostics dl > div {
   display: grid;
-  grid-template-columns: 80px minmax(0, 1fr);
+  grid-template-columns: 72px minmax(0, 1fr);
   min-width: 0;
 }
 .check-diagnostics .check-field-wide {
@@ -418,7 +437,7 @@ const connection = computed(() => {
   user-select: text;
 }
 .check-diagnostics code {
-  color: #64748b;
+  color: #475569;
   font:
     12px/1.6 Consolas,
     monospace;
@@ -426,10 +445,10 @@ const connection = computed(() => {
 .status-footer {
   display: flex;
   justify-content: flex-end;
-  margin-top: 16px;
+  margin-top: 12px;
 }
 .status-footer .el-button {
-  height: 28px;
+  height: 30px;
   border-color: #dbe2ea;
   border-radius: 6px;
   background: #fff;

@@ -22,7 +22,7 @@ import type {
   RolePage,
   UserIdentity,
 } from '../../api/access-query/types'
-import { eligibilityText, reasonText } from '../../api/access-query/types'
+import { eligibilityText, reasonText } from '../../features/access-query/presentation'
 import RequestError from '../../components/feedback/RequestError.vue'
 import TablePanel from '../../components/table/TablePanel.vue'
 import { usePageScope } from '../../composables/usePageScope'
@@ -398,13 +398,9 @@ onBeforeUnmount(() => {
           @size-change="resize"
       /></template>
     </TablePanel>
-    <p class="query-note">
-      统计当前授权配置，不是访问行为记录。<span v-if="mode === 'page'"
-        >导出包含当前结果的全部页面及具备资格的账号，不限当前页。</span
-      >
-    </p>
     <ElDrawer
       v-model="drawer"
+      class="camera-detail-drawer"
       :title="
         detailRole
           ? `${detailRole.role.name} · 角色明细`
@@ -432,6 +428,7 @@ onBeforeUnmount(() => {
         v-loading="detailLoading"
         :data="roleUsers"
         border
+        :max-height="460"
         empty-text="没有关联账号"
       >
         <ElTableColumn label="账号 / 昵称" min-width="200"
@@ -464,6 +461,7 @@ onBeforeUnmount(() => {
         v-loading="detailLoading"
         :data="rolePages"
         border
+        :max-height="460"
         empty-text="没有获授页面"
       >
         <ElTableColumn label="页面" min-width="220"
@@ -485,6 +483,7 @@ onBeforeUnmount(() => {
         v-loading="detailLoading"
         :data="pageUsers"
         border
+        :max-height="460"
         empty-text="没有获授账号"
       >
         <ElTableColumn label="账号 / 昵称" min-width="170"
@@ -526,6 +525,7 @@ onBeforeUnmount(() => {
         v-loading="detailLoading"
         :data="pageRoles"
         border
+        :max-height="460"
         empty-text="没有获授角色"
       >
         <ElTableColumn label="角色" min-width="170"
@@ -563,7 +563,12 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  padding: 14px 18px;
+  margin-bottom: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .query-readonly {
   margin-left: auto;
@@ -572,11 +577,13 @@ onBeforeUnmount(() => {
   width: min(320px, 100%);
 }
 .table-context {
-  font-size: 13px;
-  font-weight: 600;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
 }
 .primary-cell {
-  font-weight: 500;
+  color: #0f172a;
+  font-weight: 600;
 }
 small {
   display: block;
@@ -587,18 +594,16 @@ small {
 .status-tag {
   margin-left: 8px;
 }
-.query-note {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-  line-height: 1.7;
-  margin-top: 12px;
-}
 .detail-heading {
-  display: grid;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 .detail-pagination {
+  display: flex;
+  justify-content: flex-end;
   margin-top: 14px;
 }
 @media (max-width: 640px) {

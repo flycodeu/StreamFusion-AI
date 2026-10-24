@@ -34,6 +34,9 @@ const api = vi.hoisted(() => ({
   setRoleMenus: vi.fn(),
   getUsers: vi.fn(),
   getUser: vi.fn(),
+  createUser: vi.fn(),
+  updateUser: vi.fn(),
+  getRoleOptions: vi.fn(),
   changeUserStatus: vi.fn(),
   getDepartmentOptions: vi.fn(),
   deleteUser: vi.fn(),
@@ -47,6 +50,8 @@ const api = vi.hoisted(() => ({
   success: vi.fn(),
   warning: vi.fn(),
   confirm: vi.fn(),
+  refreshIdentity: vi.fn(),
+  replaceRoute: vi.fn(),
 }))
 vi.mock('../../src/api/departments/api', () => api)
 vi.mock('../../src/api/menus/api', () => api)
@@ -55,11 +60,11 @@ vi.mock('../../src/api/user/api', () => api)
 vi.mock('../../src/api/audit/api', () => api)
 vi.mock('../../src/api/login-records/api', () => api)
 vi.mock('../../src/api/security/api', () => api)
-vi.mock('../../src/session/session', () => ({ refreshIdentity: vi.fn() }))
+vi.mock('../../src/session/session', () => ({ refreshIdentity: api.refreshIdentity }))
 vi.mock('vue-router', async (importOriginal) => ({
   ...(await importOriginal<typeof import('vue-router')>()),
   useRoute: () => ({ path: '/system/Menu', query: {}, hash: '' }),
-  useRouter: () => ({ replace: vi.fn() }),
+  useRouter: () => ({ replace: api.replaceRoute }),
 }))
 vi.mock('../../src/components/table/ColumnPicker.vue', async () => {
   const { defineComponent, h } = await import('vue')
@@ -314,6 +319,7 @@ beforeEach(() => {
   api.setRoleMenus.mockResolvedValue(undefined)
   api.getUsers.mockResolvedValue({ items: [], total: 0, page: 1, size: 20 })
   api.getDepartmentOptions.mockResolvedValue([])
+  api.getRoleOptions.mockResolvedValue([])
   api.getAuditPage.mockResolvedValue({ items: [], total: 0, page: 1, size: 20 })
   api.getLoginRecords.mockResolvedValue({ items: [], total: 0, page: 1, size: 20 })
   api.getIpBlocks.mockResolvedValue({ items: [], total: 0, page: 1, size: 20 })
@@ -614,41 +620,156 @@ describe('management page interactions', () => {
     expect(findAll(parent, 'ElOption').map((item) => item.props.value)).toEqual([])
   })
 
-  it('queries menus once on form submission and retains hidden-child delete protection', async () => {
-    const child: MenuNode = {
-      id: '2',
-      parentId: '1',
-      name: '下级',
-      type: 'DIRECTORY',
-      icon: null,
-      sortOrder: 0,
-      visible: true,
-      enabled: true,
-      version: '0',
-      page: null,
-      children: [],
-    }
-    const complete: MenuNode = {
-      ...child,
-      id: '1',
-      parentId: null,
-      name: '监控面板',
-      children: [child],
-    }
-    api.getMenus.mockImplementation((query: { name?: string }) =>
-      Promise.resolve(query.name ? [{ ...complete, children: [] }] : [complete]),
-    )
+  it('requests only menu roots and preserves hidden-child delete protection when filtering', async () => {
+    const rootMenu = { ...menu('1'), name: '监控面板', hasChildren: true }
+    api.getMenus.mockResolvedValue([rootMenu])
     const root = await mount(MenuView)
+    expect(api.getMenus).toHaveBeenCalledExactlyOnceWith({ lazy: true })
+    expect(findAll(root, 'ElTable')[0]!.props.defaultExpandAll).toBeUndefined()
+    expect(findAll(root, 'ElTable')[0]!.props.lazy).toBe(true)
     await input(findAll(root, 'ElInput')[0]!, '监控')
-    expect(findAll(root, 'ElInput')[0]!.props.onKeyup).toBeUndefined()
     api.getMenus.mockClear()
     await (findAll(root, 'ElForm')[0]!.props.onSubmit as (event: unknown) => Promise<void>)({
       preventDefault() {},
     })
     await flush()
-    expect(api.getMenus).toHaveBeenCalledTimes(2)
-    expect(api.getMenus.mock.calls.filter(([query]) => query.name === '监控')).toHaveLength(1)
+    expect(api.getMenus).toHaveBeenCalledExactlyOnceWith({ name: '监控', lazy: true })
     expect(button(root, '删除').props.disabled).toBe(true)
+  })
+
+  it('loads direct menu children using the applied filters and permits retry after failure', async () => {
+    const rootMenu = { ...menu('1'), hasChildren: true }
+    api.getMenus.mockResolvedValue([rootMenu])
+    const root = await mount(MenuView)
+    await input(findAll(root, 'ElInput')[0]!, '尚未提交的筛选')
+    const loadChildren = findAll(root, 'ElTable')[0]!.props.load as (
+      row: MenuNode,
+      tree: { loading: boolean },
+      resolve: (rows: MenuNode[]) => void,
+    ) => Promise<void>
+    const tree = { loading: true },
+      resolve = vi.fn()
+    api.getMenus.mockRejectedValueOnce(new Error('offline'))
+    await loadChildren(rootMenu, tree, resolve)
+    expect(tree.loading).toBe(false)
+    expect(resolve).not.toHaveBeenCalled()
+    await flush()
+    expect(content(root)).toContain('操作未完成')
+    const child = { ...menu('2'), parentId: '1' }
+    api.getMenus.mockResolvedValueOnce([child])
+    await loadChildren(rootMenu, tree, resolve)
+    expect(api.getMenus).toHaveBeenLastCalledWith({ lazy: true, parentId: '1' })
+    expect(resolve).toHaveBeenCalledExactlyOnceWith([child])
+    await flush()
+    expect(content(root)).not.toContain('操作未完成')
+  })
+
+  it('discards children from a previous menu refresh and loads parent choices only for editing', async () => {
+    const rootMenu = { ...menu('1'), hasChildren: true }
+    api.getMenus.mockResolvedValue([rootMenu])
+    const root = await mount(MenuView)
+    const table = findAll(root, 'ElTable')[0]!
+    const request = deferred<MenuNode[]>(),
+      resolve = vi.fn()
+    api.getMenus.mockReturnValueOnce(request.promise)
+    const loading = (
+      table.props.load as (row: MenuNode, tree: object, resolve: unknown) => Promise<void>
+    )(rootMenu, { loading: true }, resolve)
+    await click(button(root, '刷新'))
+    request.resolve([menu('2')])
+    await loading
+    expect(resolve).not.toHaveBeenCalled()
+    api.getMenus.mockClear().mockResolvedValue([rootMenu])
+    await click(button(root, '编辑', 1))
+    expect(api.getMenus).toHaveBeenCalledExactlyOnceWith({ type: 'DIRECTORY' })
+  })
+
+  it('creates users with roles in the same form and cancels without writing', async () => {
+    api.getRoleOptions.mockResolvedValue([{ id: '2', code: 'OPS', name: '运维' }])
+    api.createUser.mockResolvedValue({ ...user('10'), temporaryPassword: 'TestOnly123!' })
+    const root = await mount(UserView)
+    await click(button(root, '新建用户'))
+    await input(findAll(field(root, '账号'), 'ElInput')[0]!, 'Worker01')
+    const roles = findAll(field(root, '角色'), 'ElSelect')[0]!
+    ;(roles.props['onUpdate:modelValue'] as (ids: string[]) => void)(['2'])
+    await flush()
+    await click(button(root, '取消'))
+    expect(api.createUser).not.toHaveBeenCalled()
+    await click(button(root, '新建用户'))
+    await input(findAll(field(root, '账号'), 'ElInput')[0]!, 'Worker02')
+    ;(
+      findAll(field(root, '角色'), 'ElSelect')[0]!.props['onUpdate:modelValue'] as (
+        ids: string[],
+      ) => void
+    )(['2'])
+    await click(button(root, '保存'))
+    expect(api.createUser).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        username: 'Worker02',
+        roleIds: ['2'],
+        departmentIds: [],
+      }),
+    )
+  })
+
+  it('preserves unavailable assigned roles and retains the edit draft on save failure', async () => {
+    const target = { ...user('2'), roles: [{ id: '9', code: 'OLD', name: '历史角色' }] }
+    api.getUsers.mockResolvedValue({ items: [target], total: 1, page: 1, size: 20 })
+    api.getUser.mockResolvedValue(target)
+    api.updateUser.mockRejectedValueOnce(new Error('conflict'))
+    const root = await mount(UserView)
+    expect(findAll(root, 'ElButton').some((item) => content(item) === '角色')).toBe(false)
+    await click(button(root, '编辑', 1))
+    expect(findAll(field(root, '角色'), 'ElSelect')[0]!.props.modelValue).toEqual(['9'])
+    expect(findAll(field(root, '角色'), 'ElOption')[0]!.props.label).toContain('历史角色')
+    await input(findAll(field(root, '昵称'), 'ElInput')[0]!, '新昵称')
+    await click(button(root, '保存'))
+    expect(api.updateUser).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        id: '2',
+        nickname: '新昵称',
+        roleIds: ['9'],
+        version: '0',
+      }),
+    )
+    expect(findAll(field(root, '昵称'), 'ElInput')[0]!.props.modelValue).toBe('新昵称')
+  })
+
+  it('locks own super administrator role while editing relations in the user form', async () => {
+    signInAsSuperAdmin('1')
+    const target = { ...user('1'), roles: [{ id: '1', code: 'SUPER_ADMIN', name: '超级管理员' }] }
+    api.getUsers.mockResolvedValue({ items: [target], total: 1, page: 1, size: 20 })
+    api.getUser.mockResolvedValue(target)
+    const root = await mount(UserView)
+    await click(button(root, '编辑', 1))
+    const roleField = field(root, '角色')
+    expect(findAll(roleField, 'ElOption')[0]!.props.disabled).toBe(true)
+    ;(findAll(roleField, 'ElSelect')[0]!.props['onUpdate:modelValue'] as (ids: string[]) => void)(
+      [],
+    )
+    await flush()
+    expect(findAll(roleField, 'ElSelect')[0]!.props.modelValue).toEqual(['1'])
+    expect(findAll(field(root, '昵称'), 'ElInput')[0]!.props.disabled).toBe(true)
+  })
+
+  it('rechecks current route permission after saving own roles and omits protected departments', async () => {
+    setIdentity({ user: user('1'), modules: ['user'], roles: [], routes: [], isSuperAdmin: false })
+    const target = { ...user('1'), roles: [{ id: '2', code: 'OPS', name: '运维' }] }
+    api.getUsers.mockResolvedValue({ items: [target], total: 1, page: 1, size: 20 })
+    api.getUser.mockResolvedValue(target)
+    const root = await mount(UserView)
+    await click(button(root, '编辑', 1))
+    expect(findAll(field(root, '所属部门'), 'ElTreeSelect')[0]!.props.disabled).toBe(true)
+    await click(button(root, '保存'))
+    expect(api.updateUser).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        id: '1',
+        departmentIds: undefined,
+        roleIds: ['2'],
+      }),
+    )
+    expect(api.refreshIdentity).toHaveBeenCalledOnce()
+    expect(api.replaceRoute).toHaveBeenCalledOnce()
   })
 
   it('keeps the latest chosen role and its menus together when responses arrive out of order', async () => {

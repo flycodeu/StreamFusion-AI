@@ -8,7 +8,7 @@ import type { PlanTarget, TargetSelection } from '../../api/camera-status/planTa
 import { sessionState } from '../../session/state'
 import { usePageScope } from '../../composables/usePageScope'
 import RequestError from '../../components/feedback/RequestError.vue'
-import { usageLabel } from '../camera/form'
+import { streamLabel } from '../camera/streamLabels'
 import { reasonLabel } from './model'
 
 const props = defineProps<{ targets: PlanTarget[]; disabled: boolean }>()
@@ -165,8 +165,7 @@ function save() {
   cancel()
 }
 function profileLabel(profile: CameraProfile) {
-  const role = usageLabel(profile.usageHint)
-  return `${profile.label || role}${profile.label && profile.label !== role ? ` · ${role}` : ''}${profile.bitrateKbps ? ` · ${profile.bitrateKbps} kbps` : ''}`
+  return `${streamLabel(profile, profiles.value)}${profile.bitrateKbps ? ` · ${profile.bitrateKbps} kbps` : ''}`
 }
 onScopeDispose(cancel)
 </script>
@@ -185,7 +184,8 @@ onScopeDispose(cancel)
           class="target-description"
           :title="target.reasonCode ? reasonLabel(target.reasonCode) : undefined"
         >
-          {{ target.channelName || '自动选择通道' }} / {{ target.profileName || '低负载码流' }}
+          {{ target.channelName || '自动选择通道' }} /
+          {{ target.profileName ? streamLabel({ label: target.profileName }) : '低负载码流' }}
         </span>
         <ElButton
           v-if="target.videoSupported !== false"

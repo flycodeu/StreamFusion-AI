@@ -1,4 +1,10 @@
 import type { AuditDetail, AuditReference } from '../../api/audit/types'
+import { usageLabels } from '../camera/streamLabels'
+import { lifecycleLabels } from '../camera/presentation'
+import { planStateLabels } from '../camera-status/presentation'
+import { previewNodeLabels, previewMaintenanceLabels } from '../preview/nodePresentation'
+import { retentionModeLabels } from './maintenancePresentation'
+import { labelOf } from '../../utils/display'
 
 export const changeNames: Record<string, string> = {
   mode: '策略模式',
@@ -58,7 +64,7 @@ const reasonNames: Record<string, string> = {
 }
 
 export function auditReason(code: string | null): string {
-  return code ? reasonNames[code] || code : '—'
+  return labelOf(reasonNames, code)
 }
 
 export function referenceName(reference: AuditReference | null, fallback = '—'): string {
@@ -76,41 +82,42 @@ export function referenceSource(reference: AuditReference): string {
       : '无名称记录'
 }
 
-export function auditChanges(detail: Pick<AuditDetail, 'changes' | 'relations'> | null) {
+export function auditChanges(
+  detail:
+    | (Pick<AuditDetail, 'changes' | 'relations'> & {
+        record?: Pick<AuditDetail['record'], 'module'>
+      })
+    | null,
+) {
   return Object.entries(detail?.changes ?? {}).map(([key, value]) => ({
     key,
-    name: changeNames[key] ?? key,
-    value: changeValue(key, value),
-    references: detail?.relations[key] ?? [],
+    name: labelOf(changeNames, key),
+    value: changeValue(key, value, detail?.record?.module),
+    references: detail && Object.hasOwn(detail.relations, key) ? (detail.relations[key] ?? []) : [],
   }))
 }
 
-function changeValue(key: string, value: string | string[] | null) {
+const previewModes = { ...previewNodeLabels, ...previewMaintenanceLabels }
+const changeEnums: Record<string, Readonly<Record<string, string>>> = {
+  enabled: { true: '是', false: '否' },
+  lifecycle: { ...lifecycleLabels, DRAFT: '待配置' },
+  state: planStateLabels,
+  usageHint: { ...usageLabels, OTHER: '其他' },
+}
+
+function changeValue(key: string, value: string | string[] | null, module?: string) {
   if (Array.isArray(value)) return value.join('、') || '无'
   if (value == null) return '无'
-  const enums: Record<string, Record<string, string>> = {
-    mode: {
-      AGE: '按时间',
-      COUNT: '按数量',
-      ENABLED: '已启用',
-      DISABLED: '已停用',
-      DRAINING: '排空中',
-      LOCAL: '本地',
-      REMOTE: '远程',
-      OPEN: '正常开放',
-      SEALED: '已准备维护',
-      CLAIMED: '维护中',
-      COMPLETE: '维护完成',
-    },
-    enabled: { true: '是', false: '否' },
-    lifecycle: { ENABLED: '已启用', DISABLED: '已停用', DRAFT: '待配置' },
-    state: { ACTIVE: '执行中', STOPPED: '已停止', EXPIRED: '已到期' },
-    usageHint: { MAIN: '主码流', SUB: '辅码流', THIRD: '第三码流', OTHER: '其他' },
-  }
   const field = key.replace(/^(before|after)([A-Z])/, (_, _prefix, first: string) =>
     first.toLowerCase(),
   )
-  return enums[field]?.[value] ?? value
+  if (field === 'mode') {
+    if (module === 'AUDIT_RETENTION') return labelOf(retentionModeLabels, value)
+    if (module === 'PREVIEW_NODE') return labelOf(previewModes, value)
+    return value
+  }
+  if (field === 'state' && module && module !== 'CAMERA_STATUS_PLAN') return value
+  return Object.hasOwn(changeEnums, field) ? labelOf(changeEnums[field]!, value) : value
 }
 
 export function normalizedTraceId(value: string): string | null {

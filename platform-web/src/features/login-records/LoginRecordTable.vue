@@ -76,12 +76,19 @@ onUnmounted(() => {
 <template>
   <div class="login-records">
     <RequestError :error="error" />
-    <TablePanel>
+    <TablePanel embedded>
       <template #tools>
         <ElButton :loading="loading" @click="load">刷新</ElButton>
         <ColumnPicker v-model="columns" :options="options" />
       </template>
-      <ElTable v-loading="loading" :data="rows" row-key="id" border empty-text="暂无登录记录">
+      <ElTable
+        v-loading="loading"
+        :data="rows"
+        row-key="id"
+        border
+        :max-height="440"
+        empty-text="暂无登录记录"
+      >
         <ElTableColumn v-if="columns.includes('loginAt')" label="登录时间" min-width="175"
           ><template #default="{ row }">{{ formatDateTime(row.loginAt) }}</template></ElTableColumn
         >

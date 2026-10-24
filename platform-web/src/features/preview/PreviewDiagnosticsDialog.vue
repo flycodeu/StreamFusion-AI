@@ -4,6 +4,7 @@ import { ElButton, ElDialog } from 'element-plus'
 import DiagnosticLink from '../diagnostics/DiagnosticLink.vue'
 import { formatDateTime } from '../../utils/dateTime'
 import type { PreviewFailure } from './failure'
+import { streamLabel } from '../camera/streamLabels'
 
 defineProps<{ failure: PreviewFailure }>()
 const emit = defineEmits<{ close: [] }>()
@@ -13,8 +14,10 @@ const open = ref(true)
 <template>
   <ElDialog
     v-model="open"
+    class="management-dialog"
     title="预览排查信息"
-    width="min(600px, calc(100vw - 32px))"
+    width="min(620px, calc(100vw - 32px))"
+    align-center
     append-to-body
     destroy-on-close
     @closed="emit('close')"
@@ -43,7 +46,7 @@ const open = ref(true)
       <div>
         <dt>码流</dt>
         <dd>
-          {{ failure.profileName || '—'
+          {{ failure.profileName ? streamLabel({ label: failure.profileName }) : '—'
           }}<span v-if="failure.streamProfileId"> · {{ failure.streamProfileId }}</span>
         </dd>
       </div>
@@ -51,7 +54,7 @@ const open = ref(true)
         <dt>预览租约</dt>
         <dd>{{ failure.leaseId }}</dd>
       </div>
-      <div v-if="failure.traceId">
+      <div v-if="failure.traceId" class="field-wide">
         <dt>请求标识</dt>
         <dd>{{ failure.traceId }}</dd>
       </div>
@@ -70,56 +73,78 @@ const open = ref(true)
 
 <style scoped>
 .failure-message {
-  margin: 0 0 18px;
-  color: var(--el-text-color-primary);
-  line-height: 1.6;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #991b1b;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
 }
 .failure-fields {
   display: grid;
-  gap: 10px;
-  margin: 0 0 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
 }
 .failure-fields > div {
   display: grid;
-  grid-template-columns: 6em minmax(0, 1fr);
-  gap: 12px;
+  gap: 3px;
+  min-width: 0;
 }
-.failure-fields dt,
-.failure-note {
-  color: var(--el-text-color-secondary);
+.failure-fields > div.field-wide {
+  grid-column: 1 / -1;
+}
+.failure-fields dt {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 500;
 }
 .failure-fields dd {
   margin: 0;
+  color: #0f172a;
+  font-size: 12.5px;
+  font-weight: 500;
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
 }
 .failure-note {
-  font-size: 13px;
-  line-height: 1.6;
+  margin: 10px 0 0;
+  color: #64748b;
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 .failure-json {
-  margin-top: 18px;
-  font-size: 13px;
+  margin-top: 14px;
+  font-size: 12.5px;
 }
 .failure-json summary {
   width: fit-content;
   cursor: pointer;
   color: var(--el-color-primary);
+  font-weight: 500;
 }
 .failure-json pre {
-  max-height: 280px;
+  max-height: 220px;
   overflow: auto;
-  padding: 12px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 4px;
-  background: var(--el-fill-color-light);
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  font-size: 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-@media (max-width: 420px) {
-  .failure-fields > div {
-    grid-template-columns: 5em minmax(0, 1fr);
-    gap: 8px;
+@media (max-width: 540px) {
+  .failure-fields {
+    grid-template-columns: 1fr;
   }
 }
 </style>

@@ -98,12 +98,14 @@ watch(
 .preview-camera-tree {
   background: transparent;
   color: var(--preview-ink);
-  --el-tree-node-content-height: 38px;
+  --el-tree-node-content-height: 36px;
   --el-tree-node-hover-bg-color: var(--preview-hover);
 }
 .preview-camera-tree :deep(.el-tree-node__content) {
-  border-radius: 5px;
+  border-radius: 6px;
   padding-right: 8px;
+  margin-bottom: 1px;
+  transition: background-color 120ms ease;
 }
 .preview-camera-tree :deep(.el-tree-node__expand-icon) {
   color: var(--preview-muted);
@@ -112,7 +114,8 @@ watch(
   color: transparent;
 }
 .preview-camera-tree :deep(.is-current > .el-tree-node__content) {
-  background: var(--preview-hover);
+  background: #eff6ff;
+  color: #1d4ed8;
 }
 .catalog-node {
   display: flex;
@@ -130,20 +133,35 @@ watch(
 }
 .catalog-group .catalog-label {
   font-weight: 600;
+  color: #0f172a;
 }
 .catalog-icon {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   flex-shrink: 0;
   color: var(--preview-muted);
 }
 .catalog-device .catalog-icon {
   color: var(--preview-accent);
 }
+.catalog-channel .catalog-icon {
+  color: #0ea5e9;
+}
 .catalog-node small {
-  color: var(--preview-muted);
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
   font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+.catalog-channel small {
+  background: #fef3c7;
+  color: #b45309;
 }
 @media (pointer: coarse) {
   .preview-camera-tree {

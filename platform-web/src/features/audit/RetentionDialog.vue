@@ -25,6 +25,8 @@ import {
 import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
+import { labelOf } from '../../utils/display'
+import { retentionResults, retentionModeLabels } from './maintenancePresentation'
 defineEmits<{ close: [] }>()
 const form = reactive({
   enabled: false,
@@ -47,15 +49,6 @@ const unchanged = computed(
     form.maxRecords === policy.value.maxRecords &&
     form.version === policy.value.version,
 )
-const results: Record<string, string> = {
-  RUNNING: '正在清理',
-  COMPLETED: '已完成',
-  PAUSED: '已暂停',
-  PARTIAL: '本轮完成，等待续清',
-  FAILED: '清理失败',
-  STOPPED: '已停止',
-  INTERRUPTED: '已中断',
-}
 let timer: ReturnType<typeof globalThis.setTimeout> | undefined
 let alive = true
 let revision = 0
@@ -131,6 +124,7 @@ onBeforeUnmount(() => {
     title="日志保留策略"
     width="680px"
     class="management-dialog"
+    align-center
     @close="$emit('close')"
   >
     <RequestError :error="error" />
@@ -140,8 +134,9 @@ onBeforeUnmount(() => {
       /></ElFormItem>
       <ElFormItem label="保留方式"
         ><ElRadioGroup v-model="form.mode"
-          ><ElRadio value="AGE">按时间</ElRadio
-          ><ElRadio value="COUNT">按数量</ElRadio></ElRadioGroup
+          ><ElRadio v-for="(label, value) in retentionModeLabels" :key="value" :value="value">{{
+            label
+          }}</ElRadio></ElRadioGroup
         ></ElFormItem
       >
       <ElFormItem v-if="form.mode === 'AGE'" label="保留时间"
@@ -173,7 +168,7 @@ onBeforeUnmount(() => {
         formatDateTime(policy.lastFinishedAt || policy.lastStartedAt)
       }}</ElDescriptionsItem>
       <ElDescriptionsItem label="执行结果"
-        >{{ policy.lastResult ? results[policy.lastResult] || policy.lastResult : '尚未执行' }} ·
+        >{{ labelOf(retentionResults, policy.lastResult, '尚未执行') }} ·
         {{ policy.lastDeleted }} 条</ElDescriptionsItem
       >
     </ElDescriptions>
@@ -218,10 +213,12 @@ onBeforeUnmount(() => {
 .retention-preview {
   display: grid;
   gap: 8px;
-  padding: 14px;
+  padding: 12px 14px;
   margin: 10px 0 18px;
-  background: var(--el-fill-color-light);
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1e3a8a;
   font-size: 13px;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 </style>

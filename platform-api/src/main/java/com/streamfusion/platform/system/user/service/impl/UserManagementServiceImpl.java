@@ -13,7 +13,10 @@ import com.streamfusion.platform.system.access.pojo.vo.RoleVo;
 import com.streamfusion.platform.system.access.service.AccessService;
 import com.streamfusion.platform.system.auth.service.CurrentUserService;
 import com.streamfusion.platform.system.auth.service.PasswordService;
+import com.streamfusion.platform.system.department.pojo.dto.UserDepartmentsUpdateDto;
 import com.streamfusion.platform.system.department.service.DepartmentService;
+import com.streamfusion.platform.system.role.pojo.dto.UserRolesUpdateDto;
+import com.streamfusion.platform.system.role.service.UserRoleService;
 import com.streamfusion.platform.system.user.converter.UserVoConverter;
 import com.streamfusion.platform.system.user.pojo.dto.UserCreateDto;
 import com.streamfusion.platform.system.user.pojo.dto.UserManagementUpdateDto;
@@ -58,6 +61,7 @@ public class UserManagementServiceImpl implements UserManagementService {
     private final UserVoConverter converter;
     private final DepartmentService departments;
     private final LoginRecordService loginRecords;
+    private final UserRoleService userRoles;
 
     @Override
     @Transactional(readOnly = true)
@@ -139,6 +143,7 @@ public class UserManagementServiceImpl implements UserManagementService {
         if (input.getDepartmentIds() != null) {
             departments.assignForUserWrite(user.getId(), input.getDepartmentIds(), context);
         }
+        assignRoles(user.getId(), input.getRoleIds(), context);
         audit.record(
                 actor.getId(),
                 "USER",
@@ -148,7 +153,7 @@ public class UserManagementServiceImpl implements UserManagementService {
                 null,
                 context,
                 userSummary(user));
-        UserVo result = view(user);
+        UserVo result = view(find(user.getId()));
         result.setTemporaryPassword(temporaryPassword);
         return result;
     }
@@ -164,8 +169,35 @@ public class UserManagementServiceImpl implements UserManagementService {
         String email = rules.email(input.getEmail());
         int gender = rules.gender(input.getGender());
         UserEntity actor = lockAndRequireActor();
-        UserEntity target = lockOrdinaryTarget(userId, actor);
+        UserEntity target = users.lockById(userId);
+        if (target == null) throw BusinessException.error(ErrorCode.NOT_FOUND);
+        boolean protectedTarget =
+                Objects.equals(actor.getId(), userId) || access.isSuperAdmin(userId);
+        if (protectedTarget
+                && (input.getRoleIds() == null
+                        || (!access.isSuperAdmin(actor.getId()) && access.isSuperAdmin(userId)))) {
+            throw BusinessException.error(ErrorCode.PROTECTED_ACCOUNT);
+        }
         requireVersion(target, version, ErrorCode.VERSION_CONFLICT);
+        if (protectedTarget) {
+            // Integrated editing exposes only the existing relation actions on protected accounts.
+            // Profile changes still use the personal-account workflow, never this management form.
+            if (!Objects.equals(target.getNickname(), nickname)
+                    || !Objects.equals(target.getAvatarKey(), avatarKey)
+                    || !Objects.equals(target.getPhone(), phone)
+                    || !Objects.equals(target.getEmail(), email)
+                    || !Objects.equals(target.getGender(), gender)) {
+                throw BusinessException.error(ErrorCode.PROTECTED_ACCOUNT);
+            }
+            if (input.getDepartmentIds() != null) {
+                var assignment = new UserDepartmentsUpdateDto();
+                assignment.setVersion(target.getVersion().toString());
+                assignment.setDepartmentIds(input.getDepartmentIds());
+                departments.assign(id, assignment, context);
+            }
+            assignRoles(userId, input.getRoleIds(), context);
+            return view(find(userId));
+        }
         if (users.updateProfile(
                         userId,
                         version,
@@ -182,6 +214,7 @@ public class UserManagementServiceImpl implements UserManagementService {
         if (input.getDepartmentIds() != null) {
             departments.assignForUserWrite(userId, input.getDepartmentIds(), context);
         }
+        assignRoles(userId, input.getRoleIds(), context);
         UserEntity updated = find(userId);
         audit.record(
                 actor.getId(),
@@ -326,10 +359,21 @@ public class UserManagementServiceImpl implements UserManagementService {
         return user;
     }
 
+    /** Join the caller's transaction; relation failures roll back profile and department writes. */
+    private void assignRoles(long userId, List<String> roleIds, AuditContextDto context) {
+        if (roleIds == null) return;
+        var assignment = new UserRolesUpdateDto();
+        assignment.setVersion(find(userId).getVersion().toString());
+        assignment.setRoleIds(roleIds);
+        userRoles.update(Long.toString(userId), assignment, context);
+    }
+
     private UserVo view(UserEntity user) {
         List<DepartmentVo> assigned =
                 departments.forUsers(List.of(user.getId())).getOrDefault(user.getId(), List.of());
-        return converter.detail(user, accessMapper.findRoles(user.getId()), assigned);
+        // Management editing needs every assigned role, including disabled roles kept on the user.
+        // Authentication continues to resolve only effective roles through AccessService.
+        return converter.detail(user, userRoles.get(user.getId().toString()).roles(), assigned);
     }
 
     private List<UserSummaryVo> summaries(List<UserEntity> page) {

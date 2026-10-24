@@ -25,6 +25,9 @@ onMounted(() => {
 .required-password-card {
   max-width: 760px;
   margin: 24px auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .required-password-card h2 {
   margin: 0;

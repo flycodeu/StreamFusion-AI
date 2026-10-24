@@ -1,6 +1,6 @@
+import { eligibilityText, reasonText } from '../../features/access-query/presentation'
 import { describe, expect, it } from 'vitest'
 import {
-  eligibilityText,
   parsePage,
   parsePageRole,
   parsePageOverview,
@@ -10,7 +10,6 @@ import {
   parseRolePage,
   parseUser,
   parseUserPage,
-  reasonText,
 } from './types'
 
 const user = {

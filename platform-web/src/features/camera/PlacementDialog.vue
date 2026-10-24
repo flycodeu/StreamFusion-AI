@@ -11,6 +11,7 @@ const saving = ref(false)
   <ElDialog
     append-to-body
     class="management-dialog"
+    align-center
     :model-value="true"
     :title="action === 'move' ? '调整相机分组' : action === 'enable' ? '启用相机' : '停用相机'"
     width="600px"

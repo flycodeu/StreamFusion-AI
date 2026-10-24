@@ -125,6 +125,7 @@ function refreshExecution() {
 <template>
   <ElDialog
     :model-value="true"
+    class="management-dialog"
     title="删除文件夹及内容"
     width="min(560px,94vw)"
     align-center

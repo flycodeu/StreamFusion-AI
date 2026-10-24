@@ -114,8 +114,10 @@ async function check(apply = false) {
 <template>
   <ElDialog
     :model-value="true"
+    class="management-dialog"
     :title="bound ? '同步 Ops 配置' : '关联现有 Ops 实例'"
     width="min(680px, calc(100vw - 32px))"
+    align-center
     append-to-body
     destroy-on-close
     :close-on-click-modal="!busy"
@@ -124,10 +126,10 @@ async function check(apply = false) {
     @close="emit('close')"
   >
     <div class="ops-sync">
-      <p>
+      <p class="sync-node-banner">
         <strong>{{ node.name }}</strong> · <code>{{ node.nodeId }}</code>
       </p>
-      <p v-if="node.mode !== 'DRAINING'" role="status">
+      <p v-if="node.mode !== 'DRAINING'" class="sync-status-warn" role="status">
         请先停止接新预览、排空资源，再打开此入口。
       </p>
       <p v-if="loading" role="status">正在核对 Ops 已发布实例…</p>
@@ -243,29 +245,58 @@ async function check(apply = false) {
 <style scoped>
 .ops-sync {
   display: grid;
-  gap: 16px;
+  gap: 14px;
 }
 .ops-sync p,
 .ops-sync h4 {
   margin: 0;
 }
+.sync-node-banner {
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #0f172a;
+}
+.sync-status-warn {
+  padding: 8px 12px;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 13px;
+}
 .ops-sync label {
   display: grid;
-  gap: 8px;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #334155;
 }
 .ops-sync select {
   width: 100%;
   min-height: 36px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 4px;
-  background: var(--el-bg-color);
-  padding: 6px 10px;
-  color: inherit;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 6px 12px;
+  color: #0f172a;
+  font-size: 13px;
+}
+.ops-sync select:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  outline: none;
 }
 .sync-summary {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  font-size: 13px;
 }
 .sync-summary > div {
   display: grid;
@@ -273,22 +304,33 @@ async function check(apply = false) {
   gap: 12px;
 }
 .sync-summary dt {
-  color: var(--el-text-color-secondary);
+  color: #64748b;
+  font-weight: 500;
 }
 .sync-summary dd {
   margin: 0;
+  color: #0f172a;
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
 .sync-review {
-  padding: 16px;
-  background: var(--el-fill-color-light);
-  border-radius: 6px;
+  padding: 14px;
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  border-radius: 10px;
   display: grid;
-  gap: 14px;
+  gap: 12px;
+}
+.sync-review h4 {
+  color: #166534;
+  font-size: 13.5px;
+}
+.sync-review .sync-summary {
+  background: #ffffff;
 }
 .sync-note {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
+  color: #64748b;
+  font-size: 12.5px;
   line-height: 1.6;
 }
 .sync-actions {
@@ -296,6 +338,7 @@ async function check(apply = false) {
   gap: 8px;
   justify-content: flex-end;
   flex-wrap: wrap;
+  padding-top: 4px;
 }
 @media (max-width: 600px) {
   .sync-summary > div {

@@ -34,6 +34,10 @@ const display = computed(() => factPresentation(props.profile))
           <dt>检查时间</dt>
           <dd>{{ formatDateTime(profile.observation.observedAt) }}</dd>
         </div>
+        <div>
+          <dt>结果说明</dt>
+          <dd>{{ reasonLabel(profile.observation.reasonCode) || display.label }}</dd>
+        </div>
         <template v-if="profile.configurationCurrent && profile.timeline">
           <div>
             <dt>{{ stateSinceLabel(profile) }}</dt>
@@ -95,15 +99,31 @@ const display = computed(() => factPresentation(props.profile))
         </template>
       </dl>
     </template>
+    <dl v-else class="fact-grid">
+      <div>
+        <dt>检查时间</dt>
+        <dd class="fact-muted">暂无检查记录</dd>
+      </div>
+      <div>
+        <dt>检查条件</dt>
+        <dd>
+          {{
+            profile?.canCheck
+              ? '支持手动与定时巡检'
+              : reasonLabel(profile?.blockingReasonCode ?? null) || '当前不可执行检查'
+          }}
+        </dd>
+      </div>
+    </dl>
   </div>
 </template>
 
 <style scoped>
 .status-fact {
   min-width: 0;
-  padding: 16px;
+  padding: 16px 18px;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border-radius: 10px;
   background: #fff;
   font-size: 13px;
 }
@@ -113,9 +133,11 @@ const display = computed(() => factPresentation(props.profile))
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f1f5f9;
 }
 .fact-heading > span:first-child {
-  color: #1e293b;
+  color: #0f172a;
   font-size: 14px;
   font-weight: 600;
 }
@@ -126,7 +148,7 @@ const display = computed(() => factPresentation(props.profile))
   background: #f1f5f9;
   color: #64748b;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
 }
 .fact-status.tone-success {
   border-color: #a7f3d0;
@@ -139,39 +161,51 @@ const display = computed(() => factPresentation(props.profile))
   color: #b91c1c;
 }
 .fact-reason {
-  margin: 10px 0 0;
-  color: #64748b;
+  margin: 12px 0 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #f8fafc;
+  border-left: 3px solid #cbd5e1;
+  color: #475569;
   overflow-wrap: anywhere;
 }
 .fact-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px 24px;
-  margin: 16px 0 0;
+  gap: 12px 16px;
+  margin: 14px 0 0;
 }
 .fact-grid > div {
   min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #f1f5f9;
 }
 .fact-grid dt {
   margin-bottom: 4px;
   color: #64748b;
+  font-size: 12px;
 }
 .fact-grid dd {
   margin: 0;
-  color: #1e293b;
-  line-height: 1.6;
+  color: #0f172a;
+  font-weight: 500;
+  line-height: 1.5;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 .fact-grid .fact-muted {
   color: #94a3b8;
+  font-weight: 400;
 }
 .fact-wide {
   grid-column: 1 / -1;
 }
 @media (max-width: 420px) {
   .fact-grid {
-    gap: 12px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
   }
 }
 </style>

@@ -2,29 +2,31 @@ import { request } from '../client'
 import { boolean, id, integer, list, object, page, string } from '../parse'
 import { isUtcTimestamp } from '../../lib/http/error'
 
-export const securityRules = {
-  LOGIN_FAILURE_BURST: '登录失败集中出现',
-  ACCESS_DENIAL_BURST: '频繁触发权限拒绝',
-  PATH_SCAN: '疑似路径扫描',
-  CSRF_FAILURE_BURST: '请求凭证连续异常',
-  MIXED_PROBING: '同源多类异常',
-} as const
-export const securityCategories = {
-  LOGIN_FAILURE: '登录失败',
-  ACCESS_DENIED: '权限拒绝',
-  PATH_PROBE: '路径探测',
-  CSRF_FAILURE: 'CSRF 异常',
-} as const
+export const securityRuleCodes = [
+  'LOGIN_FAILURE_BURST',
+  'ACCESS_DENIAL_BURST',
+  'PATH_SCAN',
+  'CSRF_FAILURE_BURST',
+  'MIXED_PROBING',
+] as const
+export const securityCategoryCodes = [
+  'LOGIN_FAILURE',
+  'ACCESS_DENIED',
+  'PATH_PROBE',
+  'CSRF_FAILURE',
+] as const
+export type SecurityRule = (typeof securityRuleCodes)[number]
+export type SecurityCategory = (typeof securityCategoryCodes)[number]
 export interface SecurityAlert {
   id: string
-  rule: keyof typeof securityRules
+  rule: SecurityRule
   sourceIp: string
   firstSeen: string
   lastSeen: string
   windowSeconds: number
   eventCount: number
   distinctPaths: number
-  categories: Partial<Record<keyof typeof securityCategories, number>>
+  categories: Partial<Record<SecurityCategory, number>>
   actorIds: string[]
   traceIds: string[]
 }
@@ -74,12 +76,12 @@ export function parseSecurityFeed(value: unknown): SecurityFeed {
 }
 export function parseSecurityAlert(value: unknown): SecurityAlert {
   const row = object(value)
-  const rule = string(row.rule) as keyof typeof securityRules
-  if (!Object.hasOwn(securityRules, rule)) throw new Error('rule')
+  const rule = string(row.rule) as SecurityRule
+  if (!securityRuleCodes.includes(rule)) throw new Error('rule')
   const categories: SecurityAlert['categories'] = {}
   for (const [key, count] of Object.entries(object(row.categories))) {
-    if (!Object.hasOwn(securityCategories, key)) throw new Error('category')
-    categories[key as keyof typeof securityCategories] = bounded(count, 1, 128)
+    if (!securityCategoryCodes.includes(key as SecurityCategory)) throw new Error('category')
+    categories[key as SecurityCategory] = bounded(count, 1, 128)
   }
   const result: SecurityAlert = {
     id: uuid(row.id),

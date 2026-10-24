@@ -1,17 +1,19 @@
-import type { ExecutionState, LayerStatus, StatusCheck } from '../../api/camera-status/types'
+import { labelOf } from '../../utils/display'
+import type { LayerStatus, StatusCheck } from '../../api/camera-status/types'
 
-export const executionLabels: Record<ExecutionState, string> = {
-  QUEUED: '等待执行',
-  RUNNING: '正在检查',
-  COMPLETED: '检查结束',
-  SKIPPED: '未执行',
-  CANCELLED: '已取消',
-  INTERRUPTED: '执行中断',
-}
+import { factLabels } from './presentation'
+export { executionLabels } from './presentation'
 export function isTerminal(check: StatusCheck): boolean {
   return check.executionState !== 'QUEUED' && check.executionState !== 'RUNNING'
 }
 const reasons: Record<string, string> = {
+  PLAN_REQUEST_REUSED: '同一请求编号提交了不同的巡检配置',
+  PLAN_ACTIVE_LIMIT: '执行中的巡检任务已达到上限',
+  PLAN_TARGET_RANGE_INVALID: '巡检范围为空或超过设备数量上限',
+  PLAN_TARGET_UNAVAILABLE: '巡检目标已移除或不在授权范围',
+  PLAN_PROFILE_MISSING: '部分设备缺少代表码流',
+  PLAN_VERSION_CHANGED: '任务已变化，请刷新后重试',
+
   RTSP_ACCESSIBLE: 'RTSP 描述可访问',
   AUTH_REJECTED: '认证未通过',
   AUTH_UNSUPPORTED: '认证方式不支持',
@@ -65,7 +67,7 @@ const reasons: Record<string, string> = {
   PLATFORM_API_REJECTED: '平台拒绝请求，请核对密钥和接口权限',
   PLAN_CAPACITY_EXCEEDED: '巡检容量不足，请增加检查间隔或减少目标',
   MEDIA_PLAN_CAPACITY_EXCEEDED: '视频采样容量不足，请增加检查间隔或减少目标',
-  PLAN_TARGET_NOT_CHECKABLE: '原目标配置已变化，请重新创建任务',
+  PLAN_TARGET_NOT_CHECKABLE: '部分巡检目标不可检测，请核对设备、码流配置和授权范围',
   PLAN_EXPIRED: '任务已经到期',
   CONFIGURATION_UNAVAILABLE: '连接配置暂不可用',
   CHANNEL_DISABLED: '通道未启用',
@@ -87,7 +89,7 @@ const reasons: Record<string, string> = {
   MEDIA_RUNTIME_UNAVAILABLE: '媒体服务暂不可用',
 }
 export function reasonLabel(reasonCode: string | null): string {
-  return reasonCode ? (reasons[reasonCode] ?? reasonCode) : ''
+  return labelOf(reasons, reasonCode, '')
 }
 export function factPresentation(profile: LayerStatus | null) {
   if (!profile) return { label: '状态未读取', tone: 'info' as const, historical: false }
@@ -96,26 +98,14 @@ export function factPresentation(profile: LayerStatus | null) {
     return { label: '待刷新', tone: 'info' as const, historical: true }
   if (profile.freshness !== 'CURRENT')
     return { label: '待刷新', tone: 'info' as const, historical: true }
-  const values = {
-    ACCESSIBLE: {
-      label:
-        profile.layer === 'UPSTREAM'
-          ? '平台在线'
-          : profile.layer === 'MEDIA'
-            ? '采样收帧正常'
-            : '连接检查通过',
-      tone: 'success' as const,
-    },
-    FAILED: {
-      label:
-        profile.layer === 'UPSTREAM'
-          ? '平台离线'
-          : profile.layer === 'MEDIA'
-            ? '采样收帧异常'
-            : '连接检查异常',
-      tone: 'warning' as const,
-    },
-    UNSUPPORTED: { label: '检测待适配', tone: 'info' as const },
+  return {
+    label: factLabels[profile.layer][profile.observation.value],
+    tone:
+      profile.observation.value === 'ACCESSIBLE'
+        ? ('success' as const)
+        : profile.observation.value === 'FAILED'
+          ? ('warning' as const)
+          : ('info' as const),
+    historical: false,
   }
-  return { ...values[profile.observation.value], historical: false }
 }

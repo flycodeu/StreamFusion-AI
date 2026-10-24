@@ -14,7 +14,6 @@ describe('permission query initial page', () => {
     expect(html).toContain('按角色查看')
     expect(html).toContain('按页面查看')
     expect(html).toContain('角色授权概览')
-    expect(html).toContain('不是访问行为记录')
     expect(html).not.toContain('所有数据只读')
     expect(html).not.toContain('对象级保护和其他业务限制')
     expect(html).not.toContain('先选择一个页面或用户')

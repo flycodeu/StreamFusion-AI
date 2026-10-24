@@ -18,4 +18,5 @@ public record MenuNodeVo(
         @Schema(description = "启用状态") boolean enabled,
         @Schema(description = "编辑版本") String version,
         @Schema(description = "页面路由配置") MenuPageVo page,
-        @Schema(description = "下级菜单") List<MenuNodeVo> children) {}
+        @Schema(description = "下级菜单") List<MenuNodeVo> children,
+        @Schema(description = "是否有实际下级；按层查询不返回下级内容") boolean hasChildren) {}

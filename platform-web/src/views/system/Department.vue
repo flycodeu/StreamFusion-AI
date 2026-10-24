@@ -201,17 +201,17 @@ onMounted(load)
         />
         <ElTableColumn
           label="操作"
-          min-width="264"
+          min-width="190"
           fixed="right"
           class-name="table-actions-column"
           :resizable="false"
           ><template #default="{ row }"
-            ><TableActions>
-              <ElButton plain type="primary" @click="openEdit(asDepartment(row))">编辑</ElButton>
-              <ElButton plain type="primary" @click="openCreate(asDepartment(row))"
+            ><TableActions compact>
+              <ElButton link type="primary" @click="openEdit(asDepartment(row))">编辑</ElButton>
+              <ElButton link type="primary" @click="openCreate(asDepartment(row))"
                 >新增下级</ElButton
               ><ElButton
-                plain
+                link
                 class="table-action-end"
                 type="danger"
                 :disabled="
@@ -231,6 +231,8 @@ onMounted(load)
       v-model="dialog"
       :title="editing ? '编辑部门' : '新建部门'"
       width="520px"
+      class="management-dialog"
+      align-center
       destroy-on-close
       :close-on-click-modal="!saving"
       :close-on-press-escape="!saving"

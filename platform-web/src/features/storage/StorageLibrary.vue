@@ -773,8 +773,10 @@ const firstSelected = computed(() => selectedFiles.value[0])
     />
     <ElDialog
       :model-value="!!copiedLink"
+      class="management-dialog"
       title="预览链接"
       width="min(560px,94vw)"
+      align-center
       @update:model-value="copiedLink = ''"
       ><ElInput
         :model-value="copiedLink"
@@ -782,7 +784,7 @@ const firstSelected = computed(() => selectedFiles.value[0])
         aria-label="预览链接"
         @focus="($event.target as HTMLInputElement).select()"
       />
-      <p>打开链接时需要登录平台并具有图床访问权限。</p></ElDialog
+      <p class="link-dialog-note">打开链接时需要登录平台并具有图床访问权限。</p></ElDialog
     >
     <StorageUpload
       v-model="uploadDialog"
@@ -818,12 +820,13 @@ const firstSelected = computed(() => selectedFiles.value[0])
 .directory-resizer {
   cursor: col-resize;
   touch-action: none;
-  background: var(--el-fill-color-extra-light);
-  border-inline: 2px solid var(--el-bg-color);
+  background: #f8fafc;
+  border-inline: 2px solid #ffffff;
+  transition: background-color 120ms ease;
 }
 .directory-resizer:hover,
 .directory-resizer:focus-visible {
-  background: var(--el-color-primary-light-5);
+  background: #93c5fd;
   outline: none;
 }
 .file-pagination {
@@ -839,7 +842,7 @@ const firstSelected = computed(() => selectedFiles.value[0])
 }
 .file-browser {
   min-width: 0;
-  padding: 20px 24px;
+  padding: 18px 22px;
 }
 .file-toolbar,
 .breadcrumbs,
@@ -850,7 +853,7 @@ const firstSelected = computed(() => selectedFiles.value[0])
   gap: 10px;
 }
 .file-toolbar {
-  margin-bottom: 22px;
+  margin-bottom: 14px;
 }
 .spacer {
   flex: 1;
@@ -863,40 +866,54 @@ const firstSelected = computed(() => selectedFiles.value[0])
   margin-left: 4px;
 }
 .breadcrumbs {
-  margin-bottom: 22px;
-  color: var(--el-text-color-placeholder);
+  margin-bottom: 14px;
+  padding: 6px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #94a3b8;
   font-size: 13px;
 }
 .breadcrumbs button {
   background: none;
   border: 0;
-  padding: 3px 0;
-  color: var(--el-text-color-secondary);
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: #475569;
   font: inherit;
+  font-weight: 500;
   cursor: pointer;
   overflow-wrap: anywhere;
   text-align: left;
 }
+.breadcrumbs button:hover:not(:disabled) {
+  background: #e2e8f0;
+  color: #0f172a;
+}
 .breadcrumbs button:last-child {
-  color: var(--el-text-color-primary);
+  color: #0f172a;
+  font-weight: 600;
 }
 .file-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
-  gap: 18px;
+  grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+  gap: 14px;
   align-items: start;
 }
 .file-card {
   position: relative;
   min-width: 0;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 7px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
   overflow: hidden;
-  background: var(--el-bg-color);
-  transition: border-color 0.15s;
+  background: #ffffff;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 .file-card:hover {
-  border-color: var(--el-color-primary-light-5);
+  border-color: #93c5fd;
+  box-shadow: 0 6px 16px -6px rgba(15, 23, 42, 0.08);
 }
 .file-card-main {
   display: flex;
@@ -916,12 +933,12 @@ const firstSelected = computed(() => selectedFiles.value[0])
   cursor: default;
 }
 .folder-cover {
-  height: 142px;
+  height: 136px;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--el-color-warning);
-  background: var(--el-fill-color-extra-light);
+  color: #f59e0b;
+  background: #f8fafc;
 }
 .file-name {
   display: -webkit-box;
@@ -929,53 +946,65 @@ const firstSelected = computed(() => selectedFiles.value[0])
   -webkit-box-orient: vertical;
   overflow: hidden;
   overflow-wrap: anywhere;
-  margin: 12px 13px 4px;
+  margin: 10px 12px 4px;
   font-size: 13px;
+  font-weight: 500;
+  color: #0f172a;
   min-height: 20px;
 }
 .file-meta {
-  margin: 0 13px 12px;
-  color: var(--el-text-color-secondary);
+  margin: 0 12px 10px;
+  color: #64748b;
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .file-card.selected {
-  border-color: var(--el-color-primary);
-  box-shadow: 0 0 0 1px var(--el-color-primary);
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.16);
 }
 .card-controls {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 38px;
+  height: 36px;
   padding: 4px 8px;
-  border-bottom: 1px solid var(--el-border-color-extra-light);
+  border-bottom: 1px solid #f1f5f9;
+  background: #ffffff;
 }
 .card-select {
-  background: var(--el-bg-color);
+  background: #ffffff;
   padding: 0 6px;
   border-radius: 4px;
-  height: 28px;
+  height: 26px;
 }
 .card-controls .entry-more {
   margin-left: auto;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   padding: 4px;
-  background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 5px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
 }
 .selection-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  min-height: 32px;
-  margin: 0 0 18px;
+  min-height: 36px;
+  padding: 4px 12px;
+  margin: 0 0 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
 }
 .selection-count {
-  font-size: 13px;
-  color: var(--el-color-primary);
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #eff6ff;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1d4ed8;
 }
 .selection-toolbar :deep(.el-button + .el-button) {
   margin-left: 0;
@@ -993,24 +1022,36 @@ const firstSelected = computed(() => selectedFiles.value[0])
   background: none;
   border: 0;
   font: inherit;
-  color: var(--el-text-color-primary);
+  font-weight: 500;
+  color: #0f172a;
   cursor: pointer;
   text-align: left;
   overflow-wrap: anywhere;
 }
+.list-name:hover:not(:disabled) {
+  color: #2563eb;
+}
 .list-name .el-icon {
-  color: var(--el-color-warning);
+  color: #f59e0b;
   flex-shrink: 0;
 }
 .file-footer {
-  margin-top: 26px;
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid #f1f5f9;
   justify-content: flex-end;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+.link-dialog-note {
+  margin: 10px 0 0;
+  color: #64748b;
+  font-size: 12.5px;
 }
 @media (max-width: 1000px) {
   .file-browser {
-    padding: 18px;
+    padding: 16px;
   }
   .file-grid {
     gap: 12px;

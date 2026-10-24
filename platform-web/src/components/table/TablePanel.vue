@@ -1,9 +1,9 @@
 <script setup lang="ts">
-defineProps<{ initialLoading?: boolean }>()
+defineProps<{ initialLoading?: boolean; embedded?: boolean }>()
 </script>
 
 <template>
-  <section class="table-panel">
+  <section class="table-panel" :class="{ 'is-embedded': embedded }">
     <div class="table-panel__toolbar">
       <div class="table-panel__actions"><slot name="actions" /></div>
       <div class="table-panel__tools"><slot name="tools" /></div>
@@ -21,10 +21,18 @@ defineProps<{ initialLoading?: boolean }>()
 <style scoped>
 .table-panel {
   min-width: 0;
-  padding: 16px;
+  padding: 16px 18px;
   background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow);
+}
+.table-panel.is-embedded {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 .table-skeleton {
   padding: 8px 0;

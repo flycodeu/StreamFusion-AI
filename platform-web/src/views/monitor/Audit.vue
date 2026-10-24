@@ -24,13 +24,14 @@ import { getAuditDetail, getAuditPage } from '../../api/audit/api'
 import type { AuditDetail, AuditEntry } from '../../api/audit/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import DiagnosticLink from '../../features/diagnostics/DiagnosticLink.vue'
-import { moduleNames, actionNames } from '../../features/audit/labels'
+import { moduleNames, actionNames, resultNames } from '../../features/audit/labels'
 import TablePanel from '../../components/table/TablePanel.vue'
 import TableActions from '../../components/table/TableActions.vue'
 import ColumnPicker from '../../components/table/ColumnPicker.vue'
 import { useColumns } from '../../composables/table/useColumns'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
+import { labelOf } from '../../utils/display'
 import IpBlockPanel from '../../features/security/IpBlockPanel.vue'
 import SecurityAlertPanel from '../../features/security/SecurityAlertPanel.vue'
 import { sessionState } from '../../session/state'
@@ -89,7 +90,6 @@ const columns = useColumns(
   ['user', 'module', 'action', 'target', 'result', 'time'],
   columnOptions.map((item) => item.key),
 )
-const resultNames: Record<string, string> = { SUCCESS: '成功', FAILURE: '失败', DENIED: '拒绝' }
 const changes = computed(() => auditChanges(detail.value))
 const failureReason = computed(() => {
   const record = detail.value?.record
@@ -181,9 +181,9 @@ async function copyDiagnostics(): Promise<void> {
   const text = [
     `时间：${formatDateTime(value.record.createdAt)}`,
     `操作人：${actor(value.record)}`,
-    `操作：${actionNames[value.record.action] || value.record.action}`,
+    `操作：${labelOf(actionNames, value.record.action)}`,
     `对象：${target(value.record)}`,
-    `结果：${resultNames[value.record.result] || value.record.result}`,
+    `结果：${labelOf(resultNames, value.record.result)}`,
     `原因：${auditReason(value.record.reasonCode)}`,
     `记录ID：${value.record.id}`,
     marker ? `后端日志检索：${marker}` : '该记录无请求标识',
@@ -250,7 +250,10 @@ watch(
       <ElTabPane label="安全告警" name="security" />
     </ElTabs>
     <IpBlockPanel v-if="activeTab === 'ip' && sessionState.me?.isSuperAdmin" />
-    <SecurityAlertPanel v-else-if="activeTab === 'security' && sessionState.me?.isSuperAdmin" />
+    <SecurityAlertPanel
+      v-else-if="activeTab === 'security' && sessionState.me?.isSuperAdmin"
+      class="audit-tab-card"
+    />
     <template v-else>
       <RetentionDialog
         v-if="retentionOpen && sessionState.me?.isSuperAdmin"
@@ -339,7 +342,7 @@ watch(
           >
           <ElTableColumn v-if="columns.includes('module')" label="模块" min-width="95"
             ><template #default="{ row }">{{
-              moduleNames[row.module] || row.module
+              labelOf(moduleNames, row.module)
             }}</template></ElTableColumn
           >
           <ElTableColumn
@@ -348,7 +351,7 @@ watch(
             min-width="150"
             show-overflow-tooltip
             ><template #default="{ row }">{{
-              actionNames[row.action] || row.action
+              labelOf(actionNames, row.action)
             }}</template></ElTableColumn
           >
           <ElTableColumn
@@ -369,7 +372,7 @@ watch(
                       : 'danger'
                 "
                 effect="plain"
-                >{{ resultNames[row.result] || row.result }}</ElTag
+                >{{ labelOf(resultNames, row.result) }}</ElTag
               ></template
             ></ElTableColumn
           >
@@ -387,13 +390,13 @@ watch(
           />
           <ElTableColumn
             label="操作"
-            min-width="100"
+            width="80"
             fixed="right"
             class-name="table-actions-column"
             :resizable="false"
             ><template #default="{ row }"
-              ><TableActions
-                ><ElButton plain type="primary" @click="showDetail(row.id)"
+              ><TableActions compact
+                ><ElButton link type="primary" @click="showDetail(row.id)"
                   >详情</ElButton
                 ></TableActions
               ></template
@@ -410,7 +413,13 @@ watch(
             @change="load"
         /></template>
       </TablePanel>
-      <ElDrawer v-model="drawer" title="操作详情" size="min(760px, 100vw)" destroy-on-close>
+      <ElDrawer
+        v-model="drawer"
+        class="camera-detail-drawer"
+        title="操作详情"
+        size="min(760px, 100vw)"
+        destroy-on-close
+      >
         <div v-loading="detailLoading" class="audit-detail">
           <RequestError :error="detailError" />
           <ElButton
@@ -422,17 +431,15 @@ watch(
           <template v-if="detail">
             <section class="audit-summary" aria-label="操作摘要">
               <div class="audit-summary-heading">
-                <span class="audit-module">{{
-                  moduleNames[detail.record.module] || detail.record.module
-                }}</span>
-                <h3>{{ actionNames[detail.record.action] || detail.record.action }}</h3>
+                <span class="audit-module">{{ labelOf(moduleNames, detail.record.module) }}</span>
+                <h3>{{ labelOf(actionNames, detail.record.action) }}</h3>
                 <span
                   class="audit-result"
                   :class="{
                     'is-success': detail.record.result === 'SUCCESS',
                     'is-failure': ['FAILURE', 'DENIED'].includes(detail.record.result),
                   }"
-                  >{{ resultNames[detail.record.result] || detail.record.result }}</span
+                  >{{ labelOf(resultNames, detail.record.result) }}</span
                 >
               </div>
               <p v-if="failureReason" class="audit-summary-reason">
@@ -856,8 +863,13 @@ watch(
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
-  padding-top: 12px;
-  border-top: 1px solid #e2e8f0;
+}
+.audit-tab-card {
+  padding: 16px 18px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .audit-detail-actions :deep(.el-button) {
   height: 28px;

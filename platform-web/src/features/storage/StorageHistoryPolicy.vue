@@ -96,6 +96,7 @@ async function save() {
 <template>
   <ElDialog
     :model-value="modelValue"
+    class="management-dialog"
     :title="instanceId ? '当前图床 · 记录清理策略' : '全局 · 记录清理策略'"
     width="min(500px, 94vw)"
     align-center

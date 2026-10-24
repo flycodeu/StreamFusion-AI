@@ -10,6 +10,61 @@ import {
 } from './presentation'
 
 describe('readable historical audit evidence', () => {
+  it('interprets shared field names only in their owning module', () => {
+    const changes = { mode: 'COUNT', beforeMode: 'LOCAL', afterMode: 'SEALED', state: 'ACTIVE' }
+    const detail = (module: string) => ({ record: { module }, changes, relations: {} })
+    expect(auditChanges(detail('AUDIT_RETENTION')).map((item) => item.value)).toEqual([
+      '按数量',
+      'LOCAL',
+      'SEALED',
+      'ACTIVE',
+    ])
+    expect(auditChanges(detail('PREVIEW_NODE')).map((item) => item.value)).toEqual([
+      'COUNT',
+      '不接新预览',
+      '已签发，等待 Ops 领取',
+      'ACTIVE',
+    ])
+    expect(auditChanges(detail('USER')).map((item) => item.value)).toEqual([
+      'COUNT',
+      'LOCAL',
+      'SEALED',
+      'ACTIVE',
+    ])
+    expect(auditChanges(detail('CAMERA_STATUS_PLAN'))[3]?.value).toBe('运行中')
+    expect(changes).toEqual({
+      mode: 'COUNT',
+      beforeMode: 'LOCAL',
+      afterMode: 'SEALED',
+      state: 'ACTIVE',
+    })
+  })
+  it('covers current and historical lifecycle values without interpreting names as codes', () => {
+    const detail = {
+      changes: { beforeLifecycle: 'DRAFT', afterLifecycle: 'PENDING_ASSIGNMENT', name: 'ENABLED' },
+      relations: {},
+    }
+    expect(auditChanges(detail).map((item) => item.value)).toEqual(['待配置', '待归档', 'ENABLED'])
+  })
+  it('retains unfamiliar field names and codes without resolving inherited properties', () => {
+    const changes = { ['__proto__']: 'constructor', futureStatus: 'FUTURE' }
+    expect(auditChanges({ changes, relations: {} })).toEqual([
+      { key: '__proto__', name: '__proto__', value: 'constructor', references: [] },
+      { key: 'futureStatus', name: 'futureStatus', value: 'FUTURE', references: [] },
+    ])
+  })
+  it('uses the shared Chinese stream types without rewriting historical evidence', () => {
+    const detail = {
+      changes: { usageHint: 'SUB', beforeUsageHint: 'MAIN', afterUsageHint: 'CUSTOM' },
+      relations: {},
+    }
+    expect(auditChanges(detail).map((change) => change.value)).toEqual([
+      '子码流',
+      '主码流',
+      '自定义',
+    ])
+    expect(detail.changes.usageHint).toBe('SUB')
+  })
   it('describes known reasons and preserves unknown reason codes for troubleshooting', () => {
     expect(auditReason('INVALID_CREDENTIALS')).toBe('账号或密码不正确')
     expect(auditReason('LOGIN_FAILURE_THRESHOLD')).toBe('登录失败次数超限')

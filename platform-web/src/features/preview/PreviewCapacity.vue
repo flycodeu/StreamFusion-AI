@@ -51,15 +51,24 @@ const { capacity, error, loading, paused, refresh } = usePreviewCapacity(
   margin-right: auto;
   min-width: 0;
   font-size: 12px;
-  color: var(--el-text-color-secondary);
+  color: #475569;
 }
 .capacity-line {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 4px 12px;
+  gap: 6px;
 }
 .capacity-line > span {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #334155;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 @media (max-width: 680px) {

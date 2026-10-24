@@ -138,6 +138,10 @@ public class MenuRules {
         if (input.getType() != null
                 && !"DIRECTORY".equals(input.getType())
                 && !"PAGE".equals(input.getType())) throw invalid("type");
+        if (input.getParentId() != null) {
+            if (!Boolean.TRUE.equals(input.getLazy())) throw invalid("parentId");
+            DecimalInput.id(input.getParentId(), "parentId");
+        }
         return input;
     }
 

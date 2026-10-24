@@ -147,6 +147,7 @@ onMounted(load)
     title="编辑相机"
     width="760px"
     class="management-dialog camera-edit-dialog"
+    align-center
     :before-close="close"
     :close-on-click-modal="!saving && !connectionEditor?.saving"
     :close-on-press-escape="!saving && !connectionEditor?.saving"

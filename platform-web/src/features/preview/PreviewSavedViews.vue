@@ -120,7 +120,10 @@ onBeforeUnmount(() => globalThis.removeEventListener?.('storage', stored))
       <ElButton size="small" :icon="Star" :disabled="!userId || busy">收藏视图</ElButton>
     </template>
     <section class="saved-views" aria-label="收藏视图">
-      <header><strong>收藏视图</strong><span>仅当前账号 · 此浏览器</span></header>
+      <header>
+        <strong>收藏视图</strong>
+        <span>{{ views.length }} / {{ MAX_SAVED_VIEWS }}</span>
+      </header>
       <form class="save-current" @submit.prevent="create">
         <ElInput
           v-model="name"
@@ -129,10 +132,12 @@ onBeforeUnmount(() => globalThis.removeEventListener?.('storage', stored))
           placeholder="例如：日常巡看 6×6"
           size="small"
         />
-        <ElButton native-type="submit" size="small" :disabled="busy">保存当前</ElButton>
+        <ElButton native-type="submit" size="small" type="primary" plain :disabled="busy"
+          >保存当前</ElButton
+        >
       </form>
       <p v-if="failure" class="saved-error" role="alert">{{ failure }}；现有预览不受影响。</p>
-      <p v-else-if="note" role="status">{{ note }}</p>
+      <p v-else-if="note" class="saved-note" role="status">{{ note }}</p>
       <div class="saved-list">
         <article v-for="view in views" :key="view.id">
           <div class="saved-title">
@@ -155,7 +160,7 @@ onBeforeUnmount(() => globalThis.removeEventListener?.('storage', stored))
             <ElButton size="small" :disabled="busy" @click="remove(view.id)">删除</ElButton>
           </div>
         </article>
-        <p v-if="!views.length && !failure">还没有收藏，先配置画面后保存。</p>
+        <p v-if="!views.length && !failure" class="saved-empty">还没有收藏，先配置画面后保存。</p>
       </div>
     </section>
   </ElPopover>
@@ -164,7 +169,7 @@ onBeforeUnmount(() => globalThis.removeEventListener?.('storage', stored))
 <style scoped>
 .saved-views {
   display: grid;
-  gap: 12px;
+  gap: 10px;
   color: var(--el-text-color-primary);
 }
 header,
@@ -177,6 +182,7 @@ header,
 }
 header {
   justify-content: space-between;
+  font-size: 13px;
 }
 header span,
 .saved-title span,
@@ -184,23 +190,36 @@ p {
   color: var(--el-text-color-secondary);
   font-size: 12px;
 }
+header span,
+.saved-title span {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .save-current :deep(.el-input),
 .saved-title :deep(.el-input) {
   min-width: 0;
   width: 100%;
 }
 .saved-list {
-  max-height: min(420px, 60dvh);
+  display: grid;
+  gap: 8px;
+  max-height: min(380px, 56dvh);
   overflow: auto;
 }
 article {
   display: grid;
   gap: 8px;
-  padding: 12px 0;
-  border-top: 1px solid var(--el-border-color-lighter);
-}
-.saved-title span {
-  white-space: nowrap;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
 }
 .saved-actions {
   flex-wrap: wrap;
@@ -212,7 +231,23 @@ p {
   margin: 0;
   overflow-wrap: anywhere;
 }
+.saved-note {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.saved-empty {
+  padding: 16px 12px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  text-align: center;
+}
 .saved-error {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #fef2f2;
   color: var(--el-color-danger);
 }
 </style>

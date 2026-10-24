@@ -12,6 +12,7 @@ export interface MenuNode {
   version: string
   page: { routeName: string; path: string; componentKey: string; moduleKey: string } | null
   children: MenuNode[]
+  hasChildren?: boolean
 }
 
 export function parseMenuNode(value: unknown, depth = 0): MenuNode {
@@ -41,5 +42,9 @@ export function parseMenuNode(value: unknown, depth = 0): MenuNode {
           },
     children:
       row.children == null ? [] : list(row.children, (child) => parseMenuNode(child, depth + 1)),
+    hasChildren:
+      row.hasChildren == null
+        ? Array.isArray(row.children) && row.children.length > 0
+        : boolean(row.hasChildren),
   }
 }

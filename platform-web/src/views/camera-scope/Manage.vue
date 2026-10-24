@@ -301,6 +301,7 @@ onMounted(load)
     </TablePanel>
     <ElDialog
       class="management-dialog camera-scope-dialog"
+      align-center
       v-model="dialog"
       :title="`相机范围 · ${target?.nickname || target?.username || ''}`"
       width="900px"

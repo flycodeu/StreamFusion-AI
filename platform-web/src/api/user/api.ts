@@ -49,6 +49,7 @@ export async function createUser(input: {
   gender: number
   avatarKey: string | null
   departmentIds?: string[]
+  roleIds?: string[]
 }): Promise<UserCredentialResult> {
   return (
     await request({
@@ -62,7 +63,7 @@ export async function createUser(input: {
 }
 
 export async function updateUser(
-  input: UserDetail & { departmentIds?: string[] },
+  input: UserDetail & { departmentIds?: string[]; roleIds?: string[] },
 ): Promise<UserDetail> {
   return (
     await request({
@@ -75,6 +76,7 @@ export async function updateUser(
         email: input.email,
         gender: input.gender,
         departmentIds: input.departmentIds,
+        roleIds: input.roleIds,
         version: input.version,
       },
       successStatus: 200,

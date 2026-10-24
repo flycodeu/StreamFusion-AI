@@ -267,7 +267,7 @@ class IdentityIntegrationTest extends SecureLoginSupport {
                                 .session(admin)
                                 .header(csrf.header(), csrf.token())
                                 .contentType("application/json")
-                                .content("{\"username\":\"Worker01\",\"roleIds\":[\"1\"]}"))
+                                .content("{\"username\":\"Worker01\",\"isSuperAdmin\":true}"))
                 .andExpect(status().isBadRequest());
         assertThat(users.count()).isEqualTo(1);
     }

@@ -16,7 +16,7 @@ import SourceEditor from '../camera-sources/SourceEditor.vue'
 import type { Source } from '../../api/camera-sources/types'
 import { usePageScope } from '../../composables/usePageScope'
 import RequestError from '../../components/feedback/RequestError.vue'
-import { methodLabels } from './form'
+import { accessMethodLabel } from './presentation'
 import type { ConnectionDraft } from './form'
 import { getPlatformConnection } from './platformConnection'
 
@@ -57,10 +57,7 @@ const isRtsp = computed(
 )
 const platform = computed(() => getPlatformConnection(model.value.method))
 const isPlatform = computed(() => descriptor.value?.category === 'PLATFORM' || !!platform.value)
-const label = (method: string) =>
-  props.options.adapters?.find((item) => item.type === method)?.label ??
-  methodLabels[method] ??
-  method
+const label = (method: string) => accessMethodLabel(method, props.options.adapters)
 const sources = ref<Source[]>([]),
   selectedSource = ref<Source | null>(null),
   searching = ref(false),

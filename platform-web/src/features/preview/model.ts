@@ -1,5 +1,6 @@
 import type { PreviewChannel, PreviewProfile } from '../../api/preview/types'
 import type { MenuRoute } from '../../api/auth/types'
+export { usageLabels } from '../camera/streamLabels'
 
 export type StreamUsage = 'MAIN' | 'SUB'
 export type PreviewMenuAction = 'snapshot' | 'maximize' | 'reconnect' | 'close' | 'diagnostics'
@@ -11,13 +12,6 @@ export interface PreviewDevice {
 export interface PreviewGroup {
   path: string
   devices: PreviewDevice[]
-}
-export const usageLabels: Record<string, string> = {
-  MAIN: '主码流',
-  SUB: '辅码流',
-  THIRD: '第三码流',
-  CUSTOM: '自定义',
-  UNKNOWN: '未指定',
 }
 export function selectProfile(channel: PreviewChannel, usage: StreamUsage): PreviewProfile | null {
   return (
@@ -124,7 +118,7 @@ export function previewReason(code: string | null): string {
     NO_PROFILE: '没有可用码流，请检查通道配置',
     PROFILE_UNAVAILABLE: '所选码流不可用',
     NO_MAIN_PROFILE: '没有可用主码流',
-    NO_SUB_PROFILE: '没有可用辅码流',
+    NO_SUB_PROFILE: '没有可用子码流',
     CAMERA_DISABLED: '通道已停用',
     ZLM_UNAVAILABLE: '媒体服务不可用',
     ZLM_NOT_READY: '媒体服务尚未就绪，请检测运行环境',

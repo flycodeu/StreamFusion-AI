@@ -182,7 +182,7 @@ watch(
 </script>
 
 <template>
-  <section class="diagnostics-page">
+  <section class="diagnostics-page" :class="{ 'content-page': !context }">
     <CaptureDialog
       v-if="captureOpen && sessionState.me?.isSuperAdmin"
       @close="captureOpen = false"
@@ -296,11 +296,8 @@ watch(
           ></ElTableColumn
         >
         <template #empty
-          ><ElEmpty description="没有找到日志，请检查时间范围和筛选条件" :image-size="72" />
-          <p class="empty-guidance">
-            诊断日志按当前服务实例的文件和保留期查询，与操作记录分别保存；历史日志可能已轮转清理。
-          </p></template
-        >
+          ><ElEmpty description="没有找到日志，请检查时间范围和筛选条件" :image-size="72"
+        /></template>
       </ElTable>
       <template #footer>
         <div class="log-pagination">
@@ -329,6 +326,8 @@ watch(
       v-model="drawer"
       title="诊断详情"
       width="min(820px, calc(100vw - 32px))"
+      class="management-dialog"
+      align-center
       append-to-body
       destroy-on-close
     >
@@ -410,7 +409,7 @@ watch(
           <pre>{{ JSON.stringify(selected.response, null, 2) }}</pre>
         </details>
         <p v-if="!selected.request && !selected.response" class="last-read">
-          该记录仅有基础诊断信息，未采集请求参数或返回内容。临时详细记录仅对开启后匹配的业务接口生效；登录等敏感接口不采集正文，旧记录不会补录。
+          未采集请求参数或返回内容。
         </p>
       </template>
     </ElDialog>
@@ -508,15 +507,6 @@ watch(
   overflow-wrap: anywhere;
   padding: 14px;
   background: var(--el-fill-color-light);
-  line-height: 1.7;
-  font-size: 12px;
-}
-.empty-guidance {
-  margin: 0 auto 20px;
-  max-width: 560px;
-  padding: 0 16px;
-  color: var(--el-text-color-secondary);
-  white-space: normal;
   line-height: 1.7;
   font-size: 12px;
 }

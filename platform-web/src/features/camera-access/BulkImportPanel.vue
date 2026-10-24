@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useAccessAdapters } from './useDeviceAdapters'
+import { accessJobLabel, accessMethodLabel } from './presentation'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import {
   ElAlert,
@@ -21,8 +23,8 @@ import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import { isRequestRejected, useCreateRequest } from '../camera/form'
 import { formatDateTime } from '../../utils/dateTime'
-import { methodLabels } from './form'
 
+const accessAdapters = useAccessAdapters()
 const props = withDefaults(
   defineProps<{ initialJob: AccessJob; groupId?: string | null; closeLabel?: string }>(),
   { closeLabel: '完成' },
@@ -60,15 +62,6 @@ const canRetry = computed(
     !!job.value.sourceId &&
     !!job.value.sourceVersion,
 )
-const statusLabels: Record<AccessJob['status'], string> = {
-  QUEUED: '等待导入',
-  RUNNING: '正在导入',
-  SUCCEEDED: '导入完成',
-  PARTIAL: '部分完成',
-  FAILED: '导入中断',
-  CANCELLED: '已取消',
-  EXPIRED: '已到期',
-}
 let timer: ReturnType<typeof globalThis.setTimeout> | undefined,
   sequence = 0,
   failureSequence = 0,
@@ -244,8 +237,8 @@ onBeforeUnmount(() => {
     </template>
     <template v-else>
       <div class="progress-heading">
-        <h3>{{ statusLabels[job.status] }}</h3>
-        <ElTag>{{ methodLabels[job.method] ?? job.method }}</ElTag>
+        <h3>{{ accessJobLabel(job) }}</h3>
+        <ElTag>{{ accessMethodLabel(job.method, accessAdapters) }}</ElTag>
       </div>
       <template v-if="job.bulk">
         <p class="progress-count">

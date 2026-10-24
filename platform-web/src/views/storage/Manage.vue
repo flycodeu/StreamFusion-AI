@@ -176,13 +176,19 @@ onMounted(async () => {
   <div class="storage-workspace">
     <header class="workspace-heading" :class="{ 'list-heading': !selectedId }">
       <template v-if="selectedId"
-        ><ElButton text @click="back">← 图床列表</ElButton
+        ><ElButton text class="back-btn" @click="back">← 图床列表</ElButton
         ><span v-if="instance" class="instance-name">{{ instance.name }}</span></template
       >
-      <div v-else class="list-actions">
-        <ElButton @click="policyOpen = true">全局清理策略</ElButton
-        ><ElButton type="primary" @click="edit(null)">新增图床</ElButton>
-      </div>
+      <template v-else>
+        <div class="list-title">
+          <h2>对象存储</h2>
+          <span class="list-count">共 {{ total }} 个实例</span>
+        </div>
+        <div class="list-actions">
+          <ElButton @click="policyOpen = true">全局清理策略</ElButton
+          ><ElButton type="primary" @click="edit(null)">新增图床</ElButton>
+        </div>
+      </template>
       <nav v-if="selectedId" class="workspace-navigation" aria-label="图床管理分区">
         <button
           v-for="view in views"
@@ -297,87 +303,133 @@ onMounted(async () => {
 .workspace-heading {
   display: flex;
   flex-wrap: wrap;
-  gap: 18px;
+  gap: 14px;
   align-items: center;
   margin-bottom: 16px;
-  padding: 14px 20px;
-  background: #fff;
+  padding: 12px 20px;
+  background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+}
+.list-heading {
+  justify-content: space-between;
+}
+.list-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.list-title h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: -0.01em;
+}
+.list-count {
+  padding: 2px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.back-btn {
+  font-weight: 500;
+  color: #475569;
 }
 .instance-name {
   color: #0f172a;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   overflow-wrap: anywhere;
-}
-.list-heading {
-  justify-content: flex-end;
 }
 .list-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
 }
 .list-actions :deep(.el-button + .el-button) {
   margin-left: 0;
 }
 .server-list {
-  padding: 20px 24px;
+  padding: 18px 22px;
   min-width: 0;
 }
 .server-list :deep(.el-table__body .el-table__cell) {
-  padding-top: 18px;
-  padding-bottom: 18px;
+  padding-top: 13px;
+  padding-bottom: 13px;
+  font-variant-numeric: tabular-nums;
 }
 .server-list :deep(.el-table__header .el-table__cell) {
-  padding-top: 14px;
-  padding-bottom: 14px;
+  padding-top: 11px;
+  padding-bottom: 11px;
+  background: #f8fafc;
+  color: #475569;
+  font-weight: 600;
 }
 .server-search {
   display: flex;
-  gap: 12px;
-  margin-bottom: 22px;
+  gap: 10px;
+  margin-bottom: 16px;
 }
 .server-search .el-input {
-  width: 340px;
+  width: 320px;
   max-width: 55%;
 }
 .server-list .el-pagination {
-  margin-top: 22px;
+  margin-top: 16px;
   justify-content: flex-end;
   flex-wrap: wrap;
   row-gap: 10px;
   overflow-x: auto;
-  padding-bottom: 6px;
+  padding-bottom: 4px;
 }
 .workspace-navigation {
-  display: flex;
-  gap: 6px;
+  display: inline-flex;
+  gap: 4px;
   margin-left: auto;
+  padding: 3px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
   flex-wrap: wrap;
 }
 .workspace-navigation button {
   border: 0;
-  border-bottom: 2px solid transparent;
-  background: none;
-  padding: 9px 18px;
+  background: transparent;
+  padding: 6px 14px;
   border-radius: 7px;
-  color: var(--el-text-color-regular);
+  color: #475569;
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease;
+}
+.workspace-navigation button:hover:not(.active) {
+  color: #0f172a;
 }
 .workspace-navigation button.active {
-  color: var(--el-color-primary);
-  background: #eff6ff;
+  color: #1d4ed8;
+  background: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
 }
 .workspace-content {
   min-height: 360px;
   min-width: 0;
-  background: var(--el-bg-color);
-  border: 1px solid var(--el-border-color-lighter);
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
   border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  overflow: hidden;
 }
 .workspace-error {
   margin-bottom: 16px;
@@ -387,7 +439,7 @@ onMounted(async () => {
     padding: 12px;
   }
   .workspace-heading {
-    margin-bottom: 18px;
+    margin-bottom: 14px;
   }
   .workspace-navigation {
     margin-left: 0;
@@ -396,7 +448,7 @@ onMounted(async () => {
   }
   .workspace-navigation button {
     flex: 1;
-    padding: 9px 10px;
+    padding: 7px 10px;
   }
 }
 </style>

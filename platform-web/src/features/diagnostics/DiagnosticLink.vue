@@ -37,6 +37,8 @@ const context = computed(() => {
       v-model="open"
       title="关联诊断日志"
       width="min(1280px, calc(100vw - 32px))"
+      class="management-dialog"
+      align-center
       append-to-body
       destroy-on-close
     >

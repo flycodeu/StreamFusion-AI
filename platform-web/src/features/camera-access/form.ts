@@ -5,16 +5,9 @@ import type {
   CandidateSelection,
   AccessAdapter,
 } from '../../api/camera-access/types'
-import { getPlatformConnection, hikPlatformConnection } from './platformConnection'
+import { getPlatformConnection } from './platformConnection'
 
-export const methodLabels: Record<AccessMethod, string> = {
-  AUTO: '设备自动识别',
-  ONVIF: 'ONVIF 设备',
-  HIKVISION: '海康设备',
-  DAHUA: '大华设备',
-  HIK_PLATFORM: hikPlatformConnection.defaultName,
-  RTSP: '完整 RTSP 地址',
-}
+export { methodLabels } from './presentation'
 const warningLabels: Record<string, string> = {
   RTSP_CONFIGURATION_ONLY: '本次只整理视频地址，尚未连接相机验证；编码、分辨率和码率暂未获取。',
   DEVICE_IDENTITY_UNVERIFIED: '未确认设备唯一标识，请核对设备信息后再导入。',

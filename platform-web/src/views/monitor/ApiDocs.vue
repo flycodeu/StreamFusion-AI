@@ -101,14 +101,20 @@ onMounted(load)
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 10px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .api-docs-frame {
   flex: 1;
   width: 100%;
   min-height: 640px;
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
   background: white;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 </style>

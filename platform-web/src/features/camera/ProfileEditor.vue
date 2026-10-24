@@ -22,6 +22,7 @@ import {
   usageOptions,
   useCreateRequest,
   effectiveUsage,
+  streamLabel,
 } from './form'
 import type { UsageHint } from './form'
 import { usePageScope } from '../../composables/usePageScope'
@@ -193,7 +194,7 @@ onBeforeUnmount(() => {
             )"
             :key="item.streamProfileId"
             :value="item.streamProfileId"
-            :label="item.label" /></ElSelect
+            :label="streamLabel(item, camera?.profiles, camera?.name)" /></ElSelect
         ><span>当前默认码流将停用，需明确换选或清空。</span></ElFormItem
       >
       <template v-if="manual">

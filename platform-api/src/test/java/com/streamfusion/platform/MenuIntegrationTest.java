@@ -625,6 +625,110 @@ class MenuIntegrationTest extends SecureLoginSupport {
         assertThat(json.readTree(changes).path("name").asText()).isEqualTo("新增用户页");
     }
 
+    @Test
+    void lazyTreeReturnsOnlyTheRequestedLayerAndKeepsFilteringAndFullTreeCompatible()
+            throws Exception {
+        Csrf actor = admin();
+        JsonNode root =
+                create(
+                        actor,
+                        "{\"name\":\"分层目录\",\"type\":\"DIRECTORY\",\"sortOrder\":0,\"visible\":true,\"enabled\":true}");
+        String rootId = root.path("id").asText();
+        JsonNode nested =
+                create(
+                        actor,
+                        "{\"parentId\":\"%s\",\"name\":\"下级目录\",\"type\":\"DIRECTORY\",\"sortOrder\":0,\"visible\":true,\"enabled\":true}"
+                                .formatted(rootId));
+        String nestedId = nested.path("id").asText();
+        JsonNode page =
+                create(
+                        actor,
+                        "{\"parentId\":\"%s\",\"name\":\"分层目标页\",\"type\":\"PAGE\",\"routeName\":\"LazyUsers\",\"path\":\"/lazy/users\",\"componentKey\":\"/system/User\",\"moduleKey\":\"user\",\"sortOrder\":0,\"visible\":true,\"enabled\":true}"
+                                .formatted(nestedId));
+        mvc.perform(
+                        get("/menus")
+                                .session(actor.session())
+                                .param("lazy", "true")
+                                .param("name", "分层目标页"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].id").value(rootId))
+                .andExpect(jsonPath("$.data[0].children.length()").value(0))
+                .andExpect(jsonPath("$.data[0].hasChildren").value(true));
+        mvc.perform(
+                        get("/menus")
+                                .session(actor.session())
+                                .param("lazy", "true")
+                                .param("parentId", rootId)
+                                .param("name", "分层目标页"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].id").value(nestedId))
+                .andExpect(jsonPath("$.data[0].children.length()").value(0))
+                .andExpect(jsonPath("$.data[0].hasChildren").value(true));
+        mvc.perform(
+                        get("/menus")
+                                .session(actor.session())
+                                .param("lazy", "true")
+                                .param("parentId", nestedId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].id").value(page.path("id").asText()))
+                .andExpect(jsonPath("$.data[0].hasChildren").value(false));
+        mvc.perform(get("/menus").session(actor.session()).param("name", "分层目标页"))
+                .andExpect(status().isOk())
+                .andExpect(
+                        jsonPath("$.data[0].children[0].children[0].id")
+                                .value(page.path("id").asText()));
+        // A filter must not make a parent with hidden children look safe to delete.
+        mvc.perform(
+                        get("/menus")
+                                .session(actor.session())
+                                .param("lazy", "true")
+                                .param("name", "分层目录"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].hasChildren").value(true));
+        mvc.perform(
+                        get("/menus")
+                                .session(actor.session())
+                                .param("lazy", "true")
+                                .param("parentId", rootId)
+                                .param("name", "分层目录"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(0));
+    }
+
+    @Test
+    void lazyTreeValidatesParentAndDoesNotChangePublishedNavigation() throws Exception {
+        Csrf actor = admin();
+        for (String invalid : List.of("0", "-1", "abc", "9223372036854775808")) {
+            mvc.perform(
+                            get("/menus")
+                                    .session(actor.session())
+                                    .param("lazy", "true")
+                                    .param("parentId", invalid))
+                    .andExpect(status().isBadRequest());
+        }
+        mvc.perform(get("/menus").session(actor.session()).param("parentId", "1001"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(
+                        get("/menus")
+                                .session(actor.session())
+                                .param("lazy", "true")
+                                .param("parentId", "1002"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(
+                        get("/menus")
+                                .session(actor.session())
+                                .param("lazy", "true")
+                                .param("parentId", "999999"))
+                .andExpect(status().isNotFound());
+        mvc.perform(get("/auth/me").session(actor.session()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.routes[1].children").isNotEmpty())
+                .andExpect(jsonPath("$.data.routes[1].hasChildren").doesNotExist());
+    }
+
     private JsonNode write(
             org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request,
             Csrf auth,

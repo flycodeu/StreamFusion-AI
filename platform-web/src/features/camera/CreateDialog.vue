@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { accessJobLabel, accessMethodLabel } from '../camera-access/presentation'
 import { ref } from 'vue'
 import {
   ElAlert,
@@ -22,7 +23,7 @@ import PlatformDirectory from '../camera-access/PlatformDirectory.vue'
 import type { AccessJob } from '../../api/camera-access/types'
 import type { AccessMode, ExistingCameraTarget } from '../camera-access/useAccessWizard'
 import { useAccessWizard } from '../camera-access/useAccessWizard'
-import { accessWarningLabel, methodLabels } from '../camera-access/form'
+import { accessWarningLabel } from '../camera-access/form'
 import { formatDateTime } from '../../utils/dateTime'
 
 const props = withDefaults(
@@ -83,15 +84,6 @@ function retryBulk(value: AccessJob) {
   if (!value.sourceId || !value.sourceVersion) return
   bulkMode.value = false
   void restartFromSource(value)
-}
-const statusLabels = {
-  QUEUED: '等待读取',
-  RUNNING: '正在读取设备',
-  SUCCEEDED: '读取完成',
-  PARTIAL: '读取到部分目录',
-  FAILED: '读取失败',
-  CANCELLED: '已取消',
-  EXPIRED: '读取结果已过期',
 }
 </script>
 
@@ -218,16 +210,12 @@ const statusLabels = {
               >
             </header>
             <div class="job-heading">
-              <strong>{{
-                options?.adapters?.find((adapter) => adapter.type === job?.method)?.label ||
-                methodLabels[job.method] ||
-                job.method
-              }}</strong
+              <strong>{{ accessMethodLabel(job.method, options?.adapters) }}</strong
               ><ElTag
                 :type="
                   job.status === 'FAILED' ? 'danger' : job.status === 'PARTIAL' ? 'warning' : 'info'
                 "
-                >{{ statusLabels[job.status] }}</ElTag
+                >{{ accessJobLabel(job) }}</ElTag
               ><span>有效至 {{ formatDateTime(job.expiresAt) }}</span>
             </div>
             <ElAlert

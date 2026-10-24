@@ -28,6 +28,7 @@ import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import { formError as validationError, secret, sourceBrandLabel } from '../camera/form'
 import BrandSelect from '../camera/BrandSelect.vue'
+import { sourceFieldLabels } from './presentation'
 const props = defineProps<{ sourceId: string; embedded?: boolean; manufacturer?: string | null }>()
 const adapters = useDeviceAdapters()
 const emit = defineEmits<{
@@ -274,7 +275,7 @@ onBeforeUnmount(() => {
       }
     "
   >
-    <RequestError :error="formError" />
+    <RequestError :error="formError" :field-labels="sourceFieldLabels" />
     <ElForm label-position="top" :disabled="saving || loading" @submit.prevent="save">
       <div class="connection-fields">
         <ElFormItem label="连接名称" required

@@ -16,6 +16,7 @@ import type {
 } from '../../api/camera-access/types'
 import { initialSelections } from './form'
 import { usageLabel, effectiveUsage } from '../camera/form'
+import { streamLabel } from '../camera/streamLabels'
 
 const props = defineProps<{
   candidates: AccessCandidate[]
@@ -25,7 +26,25 @@ const props = defineProps<{
 }>()
 const model = defineModel<CandidateSelection[]>({ required: true })
 const page = ref(1)
-const visible = computed(() => props.candidates.slice((page.value - 1) * 12, page.value * 12))
+const candidatesWithLabels = computed(() =>
+  props.candidates.map((candidate) => {
+    const profiles = candidate.profiles.map((profile) => ({
+      ...profile,
+      streamProfileId: profile.profileId,
+      label: profile.name,
+    }))
+    return {
+      ...candidate,
+      profiles: profiles.map((profile) => ({
+        ...profile,
+        displayLabel: streamLabel(profile, profiles),
+      })),
+    }
+  }),
+)
+const visible = computed(() =>
+  candidatesWithLabels.value.slice((page.value - 1) * 12, page.value * 12),
+)
 function selected(candidateId: string) {
   return model.value.find((item) => item.candidateId === candidateId)
 }
@@ -58,7 +77,7 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
     </div>
     <p v-if="!candidates.length" class="empty-state">本页无相机通道。</p>
     <section
-      v-for="candidate in compact ? candidates : visible"
+      v-for="candidate in compact ? candidatesWithLabels : visible"
       :key="candidate.candidateId"
       class="candidate-row"
       :class="{ compact }"
@@ -79,7 +98,7 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
             :model-value="selected(candidate.candidateId)!.profileIds.includes(profile.profileId)"
             :disabled="disabled"
             @update:model-value="toggleProfile(candidate, profile, !!$event)"
-            >{{ profile.name || usageLabel(effectiveUsage(profile)) }}</ElCheckbox
+            >{{ profile.displayLabel }}</ElCheckbox
           >
           <span class="profile-parameters"
             >{{ usageLabel(effectiveUsage(profile)) }} · {{ profile.videoCodec || '编码未获取' }} ·
@@ -107,7 +126,7 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
               )"
               :key="profile.profileId"
               :value="profile.profileId"
-              :label="profile.name || usageLabel(effectiveUsage(profile))" /></ElSelect
+              :label="profile.displayLabel" /></ElSelect
         ></ElFormItem>
       </template>
     </section>

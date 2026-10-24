@@ -276,6 +276,7 @@ onBeforeUnmount(() => {
 <template>
   <ElDialog
     class="management-dialog"
+    align-center
     :model-value="true"
     title="指定网段搜索"
     width="min(980px, calc(100vw - 32px))"
@@ -354,7 +355,7 @@ onBeforeUnmount(() => {
       <p v-if="paused">自动查询已暂停。</p>
       <p v-if="job && !running && !rows.length">未发现开放端口，请检查地址范围和端口。</p>
       <template v-if="rows.length">
-        <ElTable :data="rows" row-key="candidateId" border>
+        <ElTable :data="rows" row-key="candidateId" border :max-height="320">
           <ElTableColumn label="选择" width="66"
             ><template #default="{ row }"
               ><ElCheckbox v-model="row.selected" :disabled="saving || !!row.cameraId" /></template
@@ -401,9 +402,7 @@ onBeforeUnmount(() => {
         </ElTable>
         <ElForm label-width="110px" :disabled="saving">
           <DeviceConnectionFields v-model="form" hide-host :adapters="options?.adapters" />
-          <ElFormItem label="视频分组"
-            ><GroupSelect v-model="groupId" clearable /><span>保存后确认分组。</span></ElFormItem
-          >
+          <ElFormItem label="视频分组"><GroupSelect v-model="groupId" clearable /></ElFormItem>
         </ElForm>
       </template>
     </template>

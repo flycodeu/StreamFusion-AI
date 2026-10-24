@@ -78,11 +78,11 @@ function choose(layout: PreviewLayout) {
 .layout-arrow {
   width: 12px;
   height: 12px;
-  color: #647686;
+  color: #64748b;
 }
 .layout-picker-title {
   margin-bottom: 10px;
-  color: #263744;
+  color: #0f172a;
   font-size: 13px;
   font-weight: 600;
 }
@@ -98,35 +98,41 @@ function choose(layout: PreviewLayout) {
   align-items: center;
   justify-content: center;
   min-width: 0;
-  min-height: 76px;
+  min-height: 74px;
   gap: 8px;
   padding: 10px 4px;
-  border: 1px solid #e1e7ee;
-  border-radius: 5px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
   background: #f8fafc;
-  color: #647686;
+  color: #64748b;
   font: inherit;
   font-size: 11px;
+  font-weight: 500;
   cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease;
 }
 .layout-choice:hover {
-  border-color: #90b6d7;
-  background: #f0f6fc;
-  color: #3574ae;
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #2563eb;
 }
 .layout-choice.active {
-  border-color: #3574ae;
-  background: #eaf3fc;
-  color: #3574ae;
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 600;
 }
 .layout-choice:focus-visible {
-  outline: 2px solid #3574ae;
+  outline: 2px solid #2563eb;
   outline-offset: 2px;
 }
 .layout-check {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 5px;
+  right: 5px;
   width: 12px;
   height: 12px;
 }

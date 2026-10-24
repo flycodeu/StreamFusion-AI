@@ -21,6 +21,7 @@ import type { ServerSnapshot } from '../../api/server/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import TablePanel from '../../components/table/TablePanel.vue'
 import { formatDateTime } from '../../utils/dateTime'
+import { formatBytes } from '../../utils/formatBytes'
 import RuntimePanel from '../../features/media-runtime/RuntimePanel.vue'
 import PreviewNodePanel from '../../features/preview/PreviewNodePanel.vue'
 import { usePageScope } from '../../composables/usePageScope'
@@ -71,7 +72,7 @@ function percent(value?: number | null): string {
   return value == null ? '不可用' : `${value.toFixed(1)}%`
 }
 function bytes(value?: number | null): string {
-  return value == null || value < 0 ? '不可用' : `${(value / 1024 ** 3).toFixed(2)} GB`
+  return formatBytes(value, { unit: 'GiB', empty: '不可用' })
 }
 function uptime(value?: number): string {
   if (value == null) return '不可用'
@@ -260,6 +261,11 @@ onMounted(load)
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
+  padding: 12px 18px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .refresh-controls {
   display: flex;
@@ -281,22 +287,29 @@ onMounted(load)
   font-size: 12px;
 }
 .server-toolbar > span {
-  color: var(--text-secondary);
-  font-size: 14px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
 }
 .server-metrics {
   display: grid;
   grid-template-columns: 1fr 1.3fr;
-  gap: 20px;
+  gap: 16px;
 }
 .server-section {
   min-width: 0;
+  padding: 16px 18px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .server-section h2,
 .table-section-title {
   margin: 0 0 12px;
+  color: #0f172a;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 700;
 }
 .table-section-title {
   margin: 0;

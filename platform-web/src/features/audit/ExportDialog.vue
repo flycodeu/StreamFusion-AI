@@ -22,7 +22,10 @@ import { getAuditPage, type AuditQuery } from '../../api/audit/api'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
-import { actionNames, moduleNames } from './labels'
+import { formatBytes } from '../../utils/formatBytes'
+import { labelOf } from '../../utils/display'
+import { exportStates, exportReasons } from './maintenancePresentation'
+import { actionNames, moduleNames, resultNames } from './labels'
 const props = defineProps<{ filter: AuditQuery }>()
 defineEmits<{ close: [] }>()
 const format = ref('CSV'),
@@ -41,24 +44,6 @@ watch(
     requestKey = undefined
   },
 )
-const states: Record<string, string> = {
-  QUEUED: '等待导出',
-  RUNNING: '正在导出',
-  COMPLETED: '已完成',
-  FAILED: '失败',
-  CANCELLED: '已取消',
-  EXPIRED: '文件已过期',
-}
-const reasons: Record<string, string> = {
-  WORKER_LOST: '服务中断，请重新导出',
-  EXPORT_TIMEOUT: '导出超时，请缩小范围',
-  EXPORT_ROW_LIMIT: '超过10万条，请缩小范围',
-  EXPORT_ROW_TOO_LARGE: '单条日志过大，请缩小范围或联系管理员',
-  EXPORT_PERMISSION_REVOKED: '导出权限已失效',
-  EXPORT_IO_ERROR: '文件生成失败，请检查存储空间',
-  WORKER_STOPPED: '服务已停止',
-  EXPORT_CANCELLED: '任务已取消',
-}
 const asJob = (value: unknown) => value as ExportJob
 function filterSummary(filter: Record<string, unknown>) {
   const text = (key: string) => (typeof filter[key] === 'string' ? (filter[key] as string) : '')
@@ -67,11 +52,9 @@ function filterSummary(filter: Record<string, unknown>) {
   const time = (value: string) =>
     formatDateTime(/(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}+08:00`)
   return [
-    moduleNames[text('module')] || text('module') || '全部模块',
-    actionNames[text('action')] || text('action'),
-    ({ SUCCESS: '成功', FAILURE: '失败', DENIED: '拒绝' } as Record<string, string>)[
-      text('result')
-    ],
+    labelOf(moduleNames, text('module'), '全部模块'),
+    labelOf(actionNames, text('action'), ''),
+    labelOf(resultNames, text('result'), ''),
     text('user') || text('userPattern')
       ? `操作人 ${
           text('user') ||
@@ -164,6 +147,7 @@ onBeforeUnmount(() => {
     title="操作日志导出"
     width="1060px"
     class="management-dialog"
+    align-center
     @close="$emit('close')"
   >
     <div class="export-scope">
@@ -187,7 +171,7 @@ onBeforeUnmount(() => {
     <p v-if="estimated !== null && estimated > 100000" class="export-reason">
       超过10万条，请缩小筛选范围。
     </p>
-    <ElTable :data="rows" row-key="id" stripe>
+    <ElTable :data="rows" row-key="id" border stripe :max-height="380">
       <ElTableColumn type="expand" width="40"
         ><template #default="{ row }">
           <dl class="export-details">
@@ -211,7 +195,7 @@ onBeforeUnmount(() => {
             :type="
               row.state === 'FAILED' ? 'danger' : row.state === 'COMPLETED' ? 'success' : 'info'
             "
-            >{{ states[row.state] || row.state }}</ElTag
+            >{{ labelOf(exportStates, row.state) }}</ElTag
           ></template
         ></ElTableColumn
       >
@@ -220,13 +204,14 @@ onBeforeUnmount(() => {
         ><template #default="{ row }"
           ><div>{{ filterSummary(row.filter) }}</div>
           <div v-if="row.reasonCode" class="export-reason">
-            {{ reasons[row.reasonCode] || row.reasonCode }}
+            {{ labelOf(exportReasons, row.reasonCode) }}
           </div></template
         ></ElTableColumn
       >
       <ElTableColumn label="数量 / 大小" width="125"
         ><template #default="{ row }"
-          >{{ row.rowCount }} 条 · {{ (row.fileBytes / 1024).toFixed(1) }} KB</template
+          >{{ row.rowCount }} 条 ·
+          {{ formatBytes(row.fileBytes, { unit: 'KiB', precision: 1 }) }}</template
         ></ElTableColumn
       >
       <ElTableColumn label="文件有效期" width="170"
@@ -270,7 +255,12 @@ onBeforeUnmount(() => {
 }
 .export-scope {
   margin-bottom: 12px;
-  color: var(--el-text-color-secondary);
+  padding: 10px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 .export-details {

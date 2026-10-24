@@ -4,63 +4,15 @@ import { computed } from 'vue'
 import { WarningFilled } from '@element-plus/icons-vue'
 import { ApiRequestError } from '../../lib/http/error'
 import { formatDateTime } from '../../utils/dateTime'
+import { validationFieldLabel } from '../../lib/http/presentation'
 
-const props = defineProps<{ error: unknown; advice?: string; diagnosticLink?: boolean }>()
+const props = defineProps<{
+  error: unknown
+  advice?: string
+  diagnosticLink?: boolean
+  fieldLabels?: Readonly<Record<string, string>>
+}>()
 const detail = computed(() => (props.error instanceof ApiRequestError ? props.error : null))
-const fieldNames: Record<string, string> = {
-  name: '名称',
-  code: '编码',
-  username: '账号',
-  nickname: '昵称',
-  phone: '电话',
-  email: '邮箱',
-  gender: '性别',
-  avatarKey: '头像',
-  parentId: '上级',
-  sortOrder: '排序',
-  type: '类型',
-  routeName: '唯一标识',
-  path: '页面路径',
-  componentKey: '页面文件',
-  moduleKey: '业务模块',
-  enabled: '启用状态',
-  visible: '导航显示',
-  version: '数据版本',
-  roleIds: '角色',
-  departmentIds: '所属部门',
-  menuIds: '页面授权',
-  currentPassword: '当前密码',
-  newPassword: '新密码',
-  page: '页码',
-  size: '每页条数',
-  keyword: '查询条件',
-  user: '操作人',
-  action: '动作',
-  module: '模块',
-  result: '结果',
-  startTime: '开始时间',
-  endTime: '结束时间',
-  traceId: '请求标识',
-  sourceIp: '来源IP',
-  status: '状态',
-  sourceId: '接入来源',
-  sourceVersion: '来源版本',
-  cameraVersion: '相机版本',
-  cameraId: '相机',
-  streamProfileId: '码流',
-  defaultPreviewProfileId: '默认码流',
-  replacementDefaultProfileId: '替换后的默认码流',
-  networkPolicyKey: '批准网络策略',
-  groupId: '视频分组',
-  groupIds: '分组授权',
-  cameraIds: '相机授权',
-  confirmation: '影响确认',
-  clientRequestId: '创建请求标识',
-  label: '码流标签',
-  host: '媒体主机',
-  port: '媒体端口',
-  lifecycle: '配置状态',
-}
 const fieldErrors = computed(() => {
   const error = detail.value
   if (error?.code !== 'VALIDATION_ERROR' || !error.data || typeof error.data !== 'object') return []
@@ -80,7 +32,7 @@ const fieldErrors = computed(() => {
     if (field.field === 'moduleKey')
       return ['业务模块：新建页面的唯一标识须对应已实现的模块，请核对菜单配置。']
     if (field.field === 'componentKey') return ['页面文件：请核对页面路径与已发布的页面文件。']
-    return [`${fieldNames[field.field] || field.field}：格式不正确，请检查后重试。`]
+    return [`${validationFieldLabel(field.field, props.fieldLabels)}：格式不正确，请检查后重试。`]
   })
 })
 const advice = computed(() => {

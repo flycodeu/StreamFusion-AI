@@ -62,9 +62,21 @@ public class MenuServiceImpl implements MenuService {
         List<MenuEntity> all = load();
         Map<Long, List<MenuEntity>> children = children(all);
         List<MenuNodeVo> roots = new ArrayList<>();
-        for (MenuEntity root : children.getOrDefault(null, List.of())) {
+        Long parentId = query.getParentId() == null ? null : rules.id(query.getParentId());
+        if (parentId != null) {
+            MenuEntity parent = byId(all).get(parentId);
+            if (parent == null) throw BusinessException.error(ErrorCode.NOT_FOUND);
+            if (!"DIRECTORY".equals(parent.getType())) {
+                throw BusinessException.error(ErrorCode.VALIDATION_ERROR);
+            }
+        }
+        for (MenuEntity root : children.getOrDefault(parentId, List.of())) {
             MenuNodeVo matched = filtered(root, children, query);
-            if (matched != null) roots.add(matched);
+            if (matched != null)
+                roots.add(
+                        Boolean.TRUE.equals(query.getLazy())
+                                ? toVo(root, List.of(), matched.hasChildren())
+                                : matched);
         }
         return List.copyOf(roots);
     }
@@ -342,7 +354,10 @@ public class MenuServiceImpl implements MenuService {
     private MenuNodeVo view(long id) {
         MenuEntity entity = menus.selectById(id);
         if (entity == null) throw BusinessException.error(ErrorCode.INTERNAL_ERROR);
-        return toVo(entity, List.of());
+        return toVo(
+                entity,
+                List.of(),
+                menus.exists(new LambdaQueryWrapper<MenuEntity>().eq(MenuEntity::getParentId, id)));
     }
 
     private static MenuNodeVo filtered(
@@ -358,7 +373,8 @@ public class MenuServiceImpl implements MenuService {
                         && (query.getEnabled() == null
                                 || query.getEnabled().equals(menu.getEnabled()));
         if (!direct && matchedChildren.isEmpty()) return null;
-        return toVo(menu, matchedChildren);
+        return toVo(
+                menu, matchedChildren, !children.getOrDefault(menu.getId(), List.of()).isEmpty());
     }
 
     private MenuRouteVo published(
@@ -399,7 +415,8 @@ public class MenuServiceImpl implements MenuService {
                         List.copyOf(descendants));
     }
 
-    private static MenuNodeVo toVo(MenuEntity menu, List<MenuNodeVo> children) {
+    private static MenuNodeVo toVo(
+            MenuEntity menu, List<MenuNodeVo> children, boolean hasChildren) {
         boolean directory = "DIRECTORY".equals(menu.getType());
         return new MenuNodeVo(
                 Long.toString(menu.getId()),
@@ -418,7 +435,8 @@ public class MenuServiceImpl implements MenuService {
                                 menu.getPath(),
                                 menu.getComponentKey(),
                                 menu.getModuleKey()),
-                directory ? List.copyOf(children) : null);
+                directory ? List.copyOf(children) : null,
+                directory && hasChildren);
     }
 
     private static void fill(MenuEntity menu, MenuRules.Values values) {

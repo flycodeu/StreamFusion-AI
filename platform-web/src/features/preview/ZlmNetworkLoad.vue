@@ -21,28 +21,46 @@ defineProps<{ load: PreviewNodeStatus['zlmLoad'] }>()
 
 <style scoped>
 .zlm-network-load {
-  color: var(--text-secondary);
+  margin: 10px 0;
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #64748b;
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.5;
 }
 .zlm-network-load summary {
   width: fit-content;
   cursor: pointer;
-  color: var(--el-text-color-primary);
+  color: #0f172a;
+  font-weight: 600;
 }
 .load-values {
   display: flex;
   flex-wrap: wrap;
-  column-gap: 14px;
-  margin-top: 4px;
+  gap: 6px 10px;
+  margin-top: 6px;
   font-variant-numeric: tabular-nums;
 }
+.load-values > span,
+.load-values > time {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #334155;
+  font-weight: 500;
+}
 .zlm-network-load p {
-  margin: 4px 0 0;
+  margin: 6px 0 0;
 }
 .zlm-network-load small {
   display: block;
-  margin-top: 2px;
+  margin-top: 6px;
   font-size: 11px;
+  color: #94a3b8;
 }
 </style>

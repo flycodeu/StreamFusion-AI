@@ -9,7 +9,7 @@ defineProps<{ embedded?: boolean }>()
     <div class="camera-inline-body"><slot /></div>
     <div v-if="$slots.footer" class="camera-inline-actions"><slot name="footer" /></div>
   </section>
-  <ElDialog v-else v-bind="$attrs" class="management-dialog">
+  <ElDialog v-else v-bind="$attrs" class="management-dialog" align-center>
     <slot />
     <template v-if="$slots.footer" #footer><slot name="footer" /></template>
   </ElDialog>

@@ -24,6 +24,7 @@ const props = defineProps<{
 }>()
 const days = ref(7),
   page = ref(1),
+  size = ref(10),
   loading = ref(false),
   error = ref<unknown>(null)
 const history = ref<Awaited<ReturnType<typeof getStatusHistory>> | null>(null)
@@ -40,7 +41,6 @@ async function load() {
   }
   controller = new globalThis.AbortController()
   loading.value = true
-  history.value = null
   error.value = null
   try {
     const result = await getStatusHistory(
@@ -50,7 +50,7 @@ async function load() {
         layer: props.layer,
         days: days.value,
         page: page.value,
-        size: 20,
+        size: size.value,
       },
       controller.signal,
     )
@@ -60,6 +60,11 @@ async function load() {
   } finally {
     if (active() && current === sequence) loading.value = false
   }
+}
+function changeSize(nextSize: number) {
+  size.value = nextSize
+  page.value = 1
+  void load()
 }
 watch(
   () => [props.cameraId, props.profileId, props.layer, props.active, days.value],
@@ -91,58 +96,77 @@ onScopeDispose(() => {
     </header>
     <RequestError :error="error" />
     <template v-if="history">
-      <div class="sample-counts">
-        <ElTag type="success">通过 {{ history.accessible }}</ElTag>
-        <ElTag type="danger">异常 {{ history.failed }}</ElTag
-        ><ElTag type="info">无确定结果 {{ history.unknown }}</ElTag>
+      <div class="history-summary-bar">
+        <div class="sample-counts">
+          <ElTag type="success" size="small">通过 {{ history.accessible }}</ElTag>
+          <ElTag type="danger" size="small">异常 {{ history.failed }}</ElTag>
+          <ElTag type="info" size="small">无确定结果 {{ history.unknown }}</ElTag>
+        </div>
+        <span v-if="history.truncated" class="truncated-note" role="status"
+          >仅统计最近 1000 次留存检查</span
+        >
       </div>
-      <p v-if="history.truncated" role="status">仅统计最近 1000 次留存检查</p>
-      <ElTable :data="history.items" row-key="checkId" size="small" empty-text="此范围暂无留存检查">
-        <ElTableColumn label="检查时间" min-width="155"
+      <ElTable
+        :data="history.items"
+        row-key="checkId"
+        size="small"
+        max-height="220"
+        class="history-table"
+        empty-text="此范围暂无留存检查"
+      >
+        <ElTableColumn label="检查时间" width="152"
           ><template #default="{ row }">{{
             formatDateTime(row.requestedAt)
           }}</template></ElTableColumn
         >
-        <ElTableColumn label="结果" min-width="130"
+        <ElTableColumn label="结果" min-width="135" show-overflow-tooltip
           ><template #default="{ row }">{{
             row.observation
               ? reasonLabel(row.observation.reasonCode)
               : executionLabels[row.executionState as keyof typeof executionLabels]
           }}</template></ElTableColumn
         >
-        <ElTableColumn label="耗时" width="85"
+        <ElTableColumn label="耗时" width="82"
           ><template #default="{ row }">{{
             row.durationMs == null ? '—' : `${row.durationMs} ms`
           }}</template></ElTableColumn
         >
-        <ElTableColumn label="诊断" min-width="120"
+        <ElTableColumn label="诊断" min-width="140"
           ><template #default="{ row }"
-            ><details>
+            ><details class="diag-details">
               <summary>查看</summary>
-              <div>{{ reasonLabel(row.reasonCode) }}</div>
-              <div>请求 {{ row.traceId }}</div>
+              <div class="diag-body">
+                <div>{{ reasonLabel(row.reasonCode) || '—' }}</div>
+                <div class="diag-trace">请求 {{ row.traceId }}</div>
+              </div>
             </details></template
           ></ElTableColumn
         >
       </ElTable>
-      <ElPagination
-        v-if="history.total > 20"
-        v-model:current-page="page"
-        :page-size="20"
-        :total="history.total"
-        layout="prev, pager, next"
-        :disabled="loading"
-        @current-change="load"
-      />
+      <div class="history-pagination">
+        <ElPagination
+          v-model:current-page="page"
+          v-model:page-size="size"
+          :page-sizes="[5, 10, 20, 50]"
+          :total="history.total"
+          size="small"
+          layout="total, sizes, prev, pager, next"
+          :disabled="loading"
+          @current-change="load"
+          @size-change="changeSize"
+        />
+      </div>
     </template>
   </section>
 </template>
 
 <style scoped>
 .status-history {
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid var(--el-border-color-lighter);
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
 }
 header {
   display: flex;
@@ -152,24 +176,65 @@ header {
 }
 h4 {
   margin: 0 auto 0 0;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 600;
 }
 .el-select {
   width: 115px;
 }
+.history-summary-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
 .sample-counts {
   display: flex;
   gap: 8px;
-  margin: 12px 0;
   flex-wrap: wrap;
 }
-details {
+.truncated-note {
+  color: #64748b;
+  font-size: 12px;
+}
+.history-table {
+  width: 100%;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+}
+.diag-details {
   overflow-wrap: anywhere;
+  word-break: break-all;
 }
-summary {
+.diag-details summary {
   cursor: pointer;
+  color: #2563eb;
+  user-select: none;
 }
-.el-pagination {
+.diag-body {
+  margin-top: 4px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.diag-trace {
+  color: #64748b;
+  font-family: Consolas, monospace;
+}
+.history-pagination {
+  display: flex;
   justify-content: flex-end;
   margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #e2e8f0;
+}
+.history-pagination :deep(.el-pagination) {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px 0;
 }
 </style>

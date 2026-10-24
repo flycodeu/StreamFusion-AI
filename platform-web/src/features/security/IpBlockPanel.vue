@@ -211,15 +211,15 @@ onBeforeUnmount(() => {
         </ElTableColumn>
         <ElTableColumn
           label="操作"
-          min-width="140"
+          min-width="100"
           fixed="right"
           class-name="table-actions-column"
           :resizable="false"
         >
           <template #default="{ row }">
-            <TableActions>
+            <TableActions compact>
               <ElButton
-                plain
+                link
                 type="primary"
                 :disabled="row.status !== 'BLOCKED' || loading || !!unblocking"
                 :loading="unblocking === row.id"

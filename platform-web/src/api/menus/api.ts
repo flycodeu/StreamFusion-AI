@@ -21,6 +21,8 @@ export async function getMenus(query: {
   name?: string
   type?: string
   enabled?: boolean
+  lazy?: boolean
+  parentId?: string
 }): Promise<MenuNode[]> {
   return (
     await request({

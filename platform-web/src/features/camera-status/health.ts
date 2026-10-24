@@ -1,12 +1,13 @@
-import type { StatusChannel, StatusLayer, StatusSummary } from '../../api/camera-status/types'
+import type { StatusChannel, StatusLayer } from '../../api/camera-status/types'
 import { layerKey } from '../../api/camera-status/types'
+import type { ConnectionState } from './presentation'
+export type { ConnectionState } from './presentation'
+export { mediaLabels, connectionLabels, upstreamLabels } from './presentation'
 
 export function representativeProfile(channel: StatusChannel) {
   // Server order follows detection cost; preview defaults serve a separate purpose.
   return channel.profiles.find((profile) => profile.enabled) ?? null
 }
-
-export type ConnectionState = Exclude<keyof StatusSummary, 'total'>
 
 function representativeLayer(channel: StatusChannel, layer: StatusLayer) {
   const profile = representativeProfile(channel)
@@ -46,29 +47,4 @@ export function representativeConnection(
   if (profile.observation.value === 'ACCESSIBLE') return 'accessible'
   if (profile.observation.value === 'FAILED') return 'failed'
   return 'unknown'
-}
-export const mediaLabels: Record<ConnectionState, string> = {
-  accessible: '采样收帧正常',
-  failed: '采样收帧异常',
-  checking: '检测中',
-  stale: '配置已变更',
-  unknown: '尚未检查',
-  disabled: '未启用',
-}
-
-export const connectionLabels: Record<ConnectionState, string> = {
-  accessible: '在线',
-  failed: '连接异常',
-  checking: '检测中',
-  stale: '配置已变更',
-  unknown: '未确认',
-  disabled: '未启用',
-}
-export const upstreamLabels: Record<ConnectionState, string> = {
-  accessible: '平台在线',
-  failed: '平台离线',
-  checking: '查询中',
-  stale: '配置已变更',
-  unknown: '未获取',
-  disabled: '未启用',
 }

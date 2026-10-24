@@ -93,7 +93,7 @@ const asRow = (row: unknown): StorageTask => row as StorageTask
       </div>
     </header>
     <RequestError v-if="error" :error="error" />
-    <ElTable :data="rows" row-key="taskId">
+    <ElTable :data="rows" row-key="taskId" max-height="320">
       <ElTableColumn label="任务" min-width="130"
         ><template #default="{ row }">{{ label(row.type) }}</template></ElTableColumn
       >
@@ -130,8 +130,9 @@ const asRow = (row: unknown): StorageTask => row as StorageTask
     />
     <ElDialog
       :model-value="!!selected"
+      class="management-dialog"
       title="任务详情"
-      width="min(800px, 94vw)"
+      width="min(780px, 94vw)"
       align-center
       destroy-on-close
       @update:model-value="selected = null"
@@ -144,20 +145,24 @@ const asRow = (row: unknown): StorageTask => row as StorageTask
 
 <style scoped>
 .storage-records {
-  margin-top: 30px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid #e2e8f0;
   min-width: 0;
 }
 .record-tools {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 .record-tools h3 {
   margin: 0;
-  font-size: 16px;
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
 }
 .el-pagination {
   justify-content: flex-end;
@@ -165,26 +170,25 @@ const asRow = (row: unknown): StorageTask => row as StorageTask
   row-gap: 10px;
   margin-top: 12px;
 }
-.record-tools {
-  flex-wrap: wrap;
-}
 .record-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
 }
 .record-actions :deep(.el-button + .el-button) {
   margin-left: 0;
 }
 .storage-records :deep(.el-table__cell) {
-  padding: 14px 0;
+  padding: 11px 0;
+  font-variant-numeric: tabular-nums;
 }
 .storage-records :deep(.el-tag) {
   background: #e0f2fe;
   color: #0284c7;
   border: 0;
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 2px 8px;
+  font-weight: 500;
 }
 </style>

@@ -17,4 +17,10 @@ public class MenuTreeQueryDto {
 
     @Schema(description = "启用状态")
     private Boolean enabled;
+
+    @Schema(description = "按层读取；true仅返回parentId的直接下级，未指定parentId时返回根节点；省略保持整树查询")
+    private Boolean lazy;
+
+    @Schema(description = "按层查询的父节点ID，仅lazy=true时可使用")
+    private String parentId;
 }

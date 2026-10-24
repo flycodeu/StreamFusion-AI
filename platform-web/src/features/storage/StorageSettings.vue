@@ -182,6 +182,7 @@ const asScope = (row: unknown) => row as StorageScope
     <StorageHistoryPolicy v-if="instance" v-model="policyOpen" :instance-id="instance.instanceId" />
     <ElDialog
       v-model="adding"
+      class="management-dialog"
       title="添加存储目录"
       width="min(540px,94vw)"
       align-center
@@ -222,36 +223,43 @@ const asScope = (row: unknown) => row as StorageScope
   gap: 16px;
   align-items: center;
   flex-wrap: wrap;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
 }
 h2 {
   margin: 0;
-  font-size: 18px;
-  font-weight: 500;
+  font-size: 17px;
+  font-weight: 700;
+  color: #0f172a;
 }
 h3 {
   margin: 0;
-  font-size: 16px;
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
 }
 .connection-heading {
-  margin-top: 34px;
+  margin-top: 28px;
 }
 .directory-heading {
   margin-top: 0;
 }
 .settings-card {
-  padding: 20px 24px;
+  padding: 20px 22px;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
-  background: #fff;
+  background: #ffffff;
   min-width: 0;
 }
+.settings-card :deep(.el-table__header .el-table__cell) {
+  background: #f8fafc;
+  color: #475569;
+  font-weight: 600;
+}
 .settings-card :deep(.el-table__cell) {
-  padding: 14px 0;
+  padding: 12px 0;
 }
 .settings-card :deep(.el-descriptions__cell) {
-  padding: 12px 0;
+  padding: 10px 0;
 }
 .policy-card {
   display: flex;
@@ -262,7 +270,7 @@ h3 {
 }
 .policy-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 .policy-actions .el-button {
@@ -270,13 +278,14 @@ h3 {
 }
 .secondary {
   display: block;
-  color: #94a3b8;
-  font-size: 13px;
-  margin-top: 8px;
+  color: #64748b;
+  font-size: 12.5px;
+  margin-top: 4px;
 }
 a {
   color: var(--el-color-primary);
   text-decoration: none;
+  font-weight: 500;
 }
 a:hover {
   text-decoration: underline;

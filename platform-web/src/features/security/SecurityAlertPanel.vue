@@ -13,12 +13,8 @@ import {
   ElTag,
   vLoading,
 } from 'element-plus'
-import {
-  getSecurityAlerts,
-  securityRules,
-  securityCategories,
-  securityDegraded,
-} from '../../api/security/alerts'
+import { getSecurityAlerts, securityDegraded } from '../../api/security/alerts'
+import { securityRules, securityCategories } from './presentation'
 import type { SecurityAlert, SecurityFeed } from '../../api/security/alerts'
 import RequestError from '../../components/feedback/RequestError.vue'
 import DiagnosticLink from '../diagnostics/DiagnosticLink.vue'
@@ -136,6 +132,7 @@ onBeforeUnmount(clear)
     />
     <ElDrawer
       v-model="detailOpen"
+      class="camera-detail-drawer"
       title="安全告警详情"
       size="min(680px, 100vw)"
       append-to-body
@@ -182,7 +179,7 @@ onBeforeUnmount(clear)
 <style scoped>
 .security-alerts {
   display: grid;
-  gap: 16px;
+  gap: 14px;
 }
 .security-toolbar {
   display: flex;
@@ -192,6 +189,9 @@ onBeforeUnmount(clear)
 }
 h3 {
   margin: 0;
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 700;
 }
 .security-toolbar .el-button {
   flex-shrink: 0;
@@ -205,8 +205,13 @@ h3 {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  margin: 12px 0;
+  margin: 10px 0;
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
 }
 code,
 pre {
@@ -215,7 +220,11 @@ pre {
   font-size: 12px;
 }
 pre {
-  background: var(--el-fill-color-light);
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
   padding: 14px;
 }
 summary {

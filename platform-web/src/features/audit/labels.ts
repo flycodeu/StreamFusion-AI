@@ -106,3 +106,5 @@ export const actionNames: Record<string, string> = {
   PREVIEW_MAINTENANCE_PREPARE: '准备预览节点维护',
   PREVIEW_MAINTENANCE_RELEASE: '结束预览节点维护',
 }
+
+export const resultNames = { SUCCESS: '成功', FAILURE: '失败', DENIED: '拒绝' } as const

@@ -108,6 +108,7 @@ onBeforeUnmount(() => {
     title="临时详细记录"
     width="720px"
     class="management-dialog"
+    align-center
     append-to-body
     @close="$emit('close')"
   >
@@ -163,9 +164,13 @@ onBeforeUnmount(() => {
   gap: 10px;
   flex-wrap: wrap;
   align-items: center;
-  margin-bottom: 20px;
+  margin-bottom: 18px;
+  padding: 10px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
   font-size: 13px;
-  color: var(--el-text-color-secondary);
+  color: #334155;
 }
 .unit {
   margin-left: 10px;

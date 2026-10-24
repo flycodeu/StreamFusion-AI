@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { menuTypeLabels, menuTypeLabel } from '../../features/menu/presentation'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -49,10 +50,9 @@ const columns = useColumns('menus', [
 ])
 const { singleSelected, setSelection, clearSelection } = useTableSelection<MenuNode>()
 const rows = ref<MenuNode[]>([])
-const allRows = ref<MenuNode[]>([])
-const completeNodes = computed(
-  () => new Map(flattenTree(allRows.value).map((node) => [node.id, node])),
-)
+const parentRows = ref<MenuNode[]>([])
+const tableRevision = ref(0)
+const appliedQuery = ref<Parameters<typeof api.getMenus>[0]>({})
 const name = ref('')
 const type = ref('')
 const enabled = ref<boolean | null>(null)
@@ -66,7 +66,15 @@ const editing = ref<MenuNode | null>(null)
 const submitted = ref(false)
 const form = reactive(newMenuForm())
 const asMenu = (row: unknown): MenuNode => row as MenuNode
-const parentOptions = computed(() => menuParentOptions(allRows.value, editing.value))
+const parentOptions = computed(() =>
+  menuParentOptions(
+    parentRows.value,
+    editing.value
+      ? (flattenTree(parentRows.value).find((node) => node.id === editing.value?.id) ??
+          editing.value)
+      : null,
+  ),
+)
 const pathError = computed(() => {
   if (form.type !== 'PAGE') return ''
   const payload = menuWrite(form, editing.value)
@@ -83,31 +91,61 @@ const keyError = computed(() =>
     : '',
 )
 let sequence = 0
+let editorSequence = 0
+let failedChild: { id: string; cause: unknown } | null = null
+const editorLoading = ref(false)
 
 async function load(): Promise<void> {
   const current = ++sequence
   const inScope = captureScope()
   loading.value = true
   error.value = null
+  failedChild = null
   clearSelection()
   try {
-    const query = {
-      name: name.value.trim() || undefined,
-      type: type.value || undefined,
-      enabled: typeof enabled.value === 'boolean' ? enabled.value : undefined,
-    }
-    const filtered = !!query.name || !!query.type || typeof query.enabled === 'boolean'
-    const [all, result] = await Promise.all([
-      api.getMenus({}),
-      filtered ? api.getMenus(query) : Promise.resolve(null),
-    ])
+    const requested = query()
+    const result = await api.getMenus({ ...requested, lazy: true })
     if (current !== sequence || !inScope()) return
-    rows.value = result || all
-    allRows.value = all
+    rows.value = result
+    appliedQuery.value = requested
+    tableRevision.value++
   } catch (cause) {
     if (current === sequence && inScope()) error.value = cause
   } finally {
     if (current === sequence && inScope()) loading.value = false
+  }
+}
+function query() {
+  return {
+    name: name.value.trim() || undefined,
+    type: type.value || undefined,
+    enabled: typeof enabled.value === 'boolean' ? enabled.value : undefined,
+  }
+}
+async function loadChildren(
+  row: MenuNode,
+  treeNode: { loading?: boolean },
+  resolve: (data: MenuNode[]) => void,
+): Promise<void> {
+  const current = sequence
+  const inScope = captureScope()
+  try {
+    const children = await api.getMenus({ ...appliedQuery.value, lazy: true, parentId: row.id })
+    if (current === sequence && inScope()) {
+      resolve(children)
+      if (failedChild?.id === row.id && error.value === failedChild.cause) {
+        error.value = null
+        failedChild = null
+      }
+    }
+  } catch (cause) {
+    if (current === sequence && inScope()) {
+      failedChild = { id: row.id, cause }
+      error.value = cause
+    }
+    // Keep this node retryable; resolving [] would permanently cache a failed load as empty.
+  } finally {
+    treeNode.loading = false
   }
 }
 function reset(): void {
@@ -116,21 +154,28 @@ function reset(): void {
   enabled.value = null
   void load()
 }
-function blank(parent: MenuNode | null = null): void {
-  if (parent?.type === 'PAGE') return
-  editing.value = null
-  submitted.value = false
+async function openEditor(node: MenuNode | null, parent: MenuNode | null = null): Promise<void> {
+  if (parent?.type === 'PAGE' || saving.value) return
+  const current = ++editorSequence
+  const inScope = captureScope()
+  editorLoading.value = true
   error.value = null
-  Object.assign(form, newMenuForm(parent?.id ?? null))
-  dialog.value = true
+  try {
+    const directories = await api.getMenus({ type: 'DIRECTORY' })
+    if (current !== editorSequence || !inScope()) return
+    parentRows.value = directories
+    editing.value = node
+    submitted.value = false
+    Object.assign(form, node ? editMenuForm(node) : newMenuForm(parent?.id ?? null))
+    dialog.value = true
+  } catch (cause) {
+    if (current === editorSequence && inScope()) error.value = cause
+  } finally {
+    if (current === editorSequence && inScope()) editorLoading.value = false
+  }
 }
-function openEdit(node: MenuNode): void {
-  editing.value = node
-  submitted.value = false
-  error.value = null
-  Object.assign(form, editMenuForm(node))
-  dialog.value = true
-}
+const blank = (parent: MenuNode | null = null) => openEditor(null, parent)
+const openEdit = (node: MenuNode) => openEditor(node)
 async function refreshNavigation(): Promise<void> {
   await refreshIdentity()
   // Re-enter the guard so a renamed, disabled or removed current menu cannot remain mounted.
@@ -189,9 +234,11 @@ onMounted(load)
       /></ElFormItem>
       <ElFormItem label="菜单类型"
         ><ElSelect v-model="type" class="status-field" placeholder="全部" clearable
-          ><ElOption label="目录" value="DIRECTORY" /><ElOption
-            label="页面"
-            value="PAGE" /></ElSelect
+          ><ElOption
+            v-for="(label, value) in menuTypeLabels"
+            :key="value"
+            :label="label"
+            :value="value" /></ElSelect
       ></ElFormItem>
       <ElFormItem label="状态"
         ><ElSelect v-model="enabled" class="status-field" placeholder="全部" clearable
@@ -205,8 +252,10 @@ onMounted(load)
     <RequestError :error="error" />
     <TablePanel :initial-loading="loading && !rows.length">
       <template #actions
-        ><ElButton type="primary" @click="blank()">新建菜单</ElButton
-        ><ElButton :disabled="!singleSelected" @click="singleSelected && openEdit(singleSelected)"
+        ><ElButton type="primary" :disabled="editorLoading" @click="blank()">新建菜单</ElButton
+        ><ElButton
+          :disabled="!singleSelected || editorLoading"
+          @click="singleSelected && openEdit(singleSelected)"
           >编辑</ElButton
         ></template
       >
@@ -227,10 +276,12 @@ onMounted(load)
       <ElTable
         v-loading="loading"
         border
+        :key="tableRevision"
         :data="rows"
         row-key="id"
-        :tree-props="{ children: 'children', checkStrictly: true }"
-        default-expand-all
+        :lazy="true"
+        :load="loadChildren"
+        :tree-props="{ children: 'children', hasChildren: 'hasChildren', checkStrictly: true }"
         style="width: 100%"
         empty-text="暂无菜单"
         @selection-change="setSelection"
@@ -244,9 +295,7 @@ onMounted(load)
           show-overflow-tooltip
         />
         <ElTableColumn v-if="columns.includes('type')" label="类型" width="80"
-          ><template #default="{ row }">{{
-            row.type === 'PAGE' ? '页面' : '目录'
-          }}</template></ElTableColumn
+          ><template #default="{ row }">{{ menuTypeLabel(row.type) }}</template></ElTableColumn
         >
         <ElTableColumn
           v-if="columns.includes('key')"
@@ -282,27 +331,26 @@ onMounted(load)
         />
         <ElTableColumn
           label="操作"
-          min-width="264"
+          min-width="190"
           fixed="right"
           class-name="table-actions-column"
           :resizable="false"
           ><template #default="{ row }"
-            ><TableActions>
-              <ElButton plain type="primary" @click="openEdit(asMenu(row))">编辑</ElButton>
+            ><TableActions compact>
+              <ElButton link type="primary" :disabled="editorLoading" @click="openEdit(asMenu(row))"
+                >编辑</ElButton
+              >
               <ElButton
                 v-if="row.type === 'DIRECTORY'"
-                plain
+                link
                 type="primary"
                 @click="blank(asMenu(row))"
                 >新增下级</ElButton
               ><ElButton
-                plain
+                link
                 class="table-action-end"
                 type="danger"
-                :disabled="
-                  deleting ||
-                  (completeNodes.get(row.id)?.children.length ?? row.children.length) > 0
-                "
+                :disabled="deleting || row.hasChildren || row.children.length > 0"
                 @click="remove(asMenu(row))"
                 >删除</ElButton
               >
@@ -314,14 +362,16 @@ onMounted(load)
     <ElDialog
       v-model="dialog"
       :title="editing ? '编辑菜单' : '新建菜单'"
-      width="600px"
+      width="640px"
+      class="management-dialog"
+      align-center
       destroy-on-close
       :close-on-click-modal="!saving"
       :close-on-press-escape="!saving"
       :show-close="!saving"
     >
       <RequestError :error="error" />
-      <ElForm label-width="100px" :disabled="saving" @submit.prevent="save">
+      <ElForm class="menu-form-grid" label-position="top" :disabled="saving" @submit.prevent="save">
         <ElFormItem
           label="菜单名称"
           required
@@ -330,11 +380,13 @@ onMounted(load)
         /></ElFormItem>
         <ElFormItem label="菜单类型"
           ><ElSelect v-model="form.type" :disabled="!!editing"
-            ><ElOption label="目录" value="DIRECTORY" /><ElOption
-              label="页面"
-              value="PAGE" /></ElSelect
+            ><ElOption
+              v-for="(label, value) in menuTypeLabels"
+              :key="value"
+              :label="label"
+              :value="value" /></ElSelect
         ></ElFormItem>
-        <ElFormItem label="上级目录">
+        <ElFormItem class="menu-form-full" label="上级目录">
           <ElTreeSelect
             v-model="form.parentId"
             :data="parentOptions"
@@ -379,3 +431,20 @@ onMounted(load)
     </ElDialog>
   </div>
 </template>
+
+<style scoped>
+.menu-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 20px;
+}
+.menu-form-full {
+  grid-column: 1 / -1;
+}
+@media (max-width: 640px) {
+  .menu-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+}
+</style>

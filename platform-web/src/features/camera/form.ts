@@ -1,8 +1,8 @@
 import { shallowRef } from 'vue'
 import { ApiRequestError } from '../../lib/http/error'
 import type { SecretAction, SecretWrite } from '../../api/camera/types'
-import type { AccessAdapter } from '../../api/camera-access/types'
 export type { LocatorInput, SecretAction, SecretWrite, UsageHint } from '../../api/camera/types'
+export { effectiveUsage, streamLabel, usageLabel, usageOptions } from './streamLabels'
 
 export const formError = (message: string) => new ApiRequestError('VALIDATION_ERROR', message)
 export const isRequestRejected = (cause: unknown) =>
@@ -11,75 +11,8 @@ export const isRequestRejected = (cause: unknown) =>
   cause.status >= 400 &&
   cause.status < 500
 
-export const usageOptions = [
-  { value: 'MAIN', label: '主码流' },
-  { value: 'SUB', label: '辅码流' },
-  { value: 'THIRD', label: '第三码流' },
-  { value: 'CUSTOM', label: '自定义' },
-  { value: 'UNKNOWN', label: '未指定' },
-] as const
-export function usageLabel(value: string): string {
-  return usageOptions.find((item) => item.value === value)?.label ?? value
-}
-export const lifecycleLabels = {
-  PENDING_ASSIGNMENT: '待归档',
-  ENABLED: '已启用',
-  DISABLED: '已停用',
-} as const
-export function connectionLabel(type: string | null | undefined, category?: string | null): string {
-  const labels: Record<string, string> = {
-    ONVIF: 'ONVIF 设备',
-    HIKVISION: '海康设备',
-    DAHUA: '大华设备',
-    HIK_PLATFORM: '海康 ISC 平台',
-    RTSP: 'RTSP 地址',
-  }
-  return type
-    ? (labels[type] ?? type)
-    : category === 'PLATFORM'
-      ? '平台连接'
-      : '设备连接（未指定方式）'
-}
-const sourceBrandLabels: Record<string, string> = {
-  HIKVISION: '海康',
-  HIK_PLATFORM: '海康',
-  DAHUA: '大华',
-}
-export function brandOptions(adapters: AccessAdapter[]): string[] {
-  return [
-    ...new Set(
-      adapters.flatMap((adapter) => {
-        const label = sourceBrandLabels[adapter.type]
-        return adapter.category === 'DEVICE' && label ? [label] : []
-      }),
-    ),
-  ]
-}
-export function sourceBrandLabel(camera: {
-  sourceType: string | null
-  sourceDisplayName: string
-  manufacturer?: string | null
-  vendorHint?: string | null
-}): string {
-  const vendor = camera.vendorHint?.trim()
-  const vendorUpper = vendor?.toUpperCase()
-  const type = camera.sourceType?.toUpperCase()
-  const manufacturer = camera.manufacturer?.trim()
-  const brand = manufacturer?.toUpperCase()
-  return (
-    (vendorUpper &&
-      (sourceBrandLabels[vendorUpper] ||
-        (vendorUpper.includes('HIKVISION')
-          ? '海康'
-          : vendorUpper.includes('DAHUA')
-            ? '大华'
-            : vendor))) ||
-    (type && sourceBrandLabels[type]) ||
-    (brand && sourceBrandLabels[brand]) ||
-    (brand?.includes('HIKVISION') ? '海康' : brand?.includes('DAHUA') ? '大华' : manufacturer) ||
-    '未识别品牌'
-  )
-}
+export { lifecycleLabels, lifecycleLabel, brandOptions, sourceBrandLabel } from './presentation'
+export { connectionLabel } from '../camera-access/presentation'
 export function secret(action: SecretAction, value: string): SecretWrite {
   return action === 'REPLACE' ? { action, value } : { action }
 }
@@ -100,20 +33,4 @@ export function useCreateRequest<T extends object>() {
       pending.value = null
     },
   }
-}
-
-export function effectiveUsage(profile: {
-  usageHint: string
-  classification?: { usageHint: string }
-}): string {
-  return profile.classification?.usageHint ?? profile.usageHint
-}
-export function streamLabel(profile: {
-  label: string
-  usageHint: string
-  classification?: { usageHint: string; origin: string }
-}): string {
-  return profile.classification?.origin === 'NAME_RULE'
-    ? usageLabel(profile.classification.usageHint)
-    : profile.label
 }

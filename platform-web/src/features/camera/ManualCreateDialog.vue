@@ -73,6 +73,7 @@ onBeforeUnmount(() => {
 <template>
   <ElDialog
     class="management-dialog"
+    align-center
     :model-value="true"
     title="手动添加相机"
     width="min(680px, calc(100vw - 32px))"

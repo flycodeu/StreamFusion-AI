@@ -328,35 +328,36 @@ onMounted(load)
         >
         <ElTableColumn
           label="操作"
-          min-width="360"
+          min-width="240"
           fixed="right"
           class-name="table-actions-column"
           :resizable="false"
           ><template #default="{ row }"
-            ><TableActions>
+            ><TableActions compact>
               <ElButton
-                plain
+                link
                 type="primary"
                 :disabled="row.code === 'SUPER_ADMIN'"
                 @click="openEdit(asRole(row))"
                 >编辑</ElButton
               >
               <ElButton
-                plain
+                link
                 type="primary"
                 :disabled="row.code === 'SUPER_ADMIN'"
                 @click="openMenus(asRole(row))"
                 >配置页面</ElButton
               >
               <ElButton
-                plain
+                link
+                type="primary"
                 :disabled="row.code === 'SUPER_ADMIN'"
                 :loading="statusChanging.includes(row.id)"
                 @click="changeStatus(asRole(row))"
                 >{{ row.status === 'ENABLED' ? '停用' : '启用' }}</ElButton
               >
               <ElButton
-                plain
+                link
                 type="danger"
                 :disabled="row.code === 'SUPER_ADMIN' || deleting"
                 @click="remove(asRole(row))"
@@ -381,6 +382,8 @@ onMounted(load)
       v-model="dialog"
       :title="editing ? '编辑角色' : '新建角色'"
       width="520px"
+      class="management-dialog"
+      align-center
       destroy-on-close
       :close-on-click-modal="!saving"
       :close-on-press-escape="!saving"
@@ -410,21 +413,24 @@ onMounted(load)
       v-model="menuDialog"
       :title="`配置页面 · ${menuRole?.name || ''}`"
       width="600px"
+      class="management-dialog"
+      align-center
       destroy-on-close
       :close-on-click-modal="!saving"
       :close-on-press-escape="!saving"
       :show-close="!saving"
     >
       <RequestError :error="error" />
-      <ElTree
-        v-if="roleMenus"
-        ref="treeRef"
-        :data="menuTree(roleMenus.tree)"
-        node-key="id"
-        :props="{ label: 'name', children: 'children', disabled: 'disabled' }"
-        show-checkbox
-        default-expand-all
-      />
+      <div v-if="roleMenus" class="role-menu-tree-box">
+        <ElTree
+          ref="treeRef"
+          :data="menuTree(roleMenus.tree)"
+          node-key="id"
+          :props="{ label: 'name', children: 'children', disabled: 'disabled' }"
+          show-checkbox
+          default-expand-all
+        />
+      </div>
       <template #footer
         ><ElButton :disabled="saving" @click="menuDialog = false">取消</ElButton
         ><ElButton type="primary" :loading="saving" @click="saveMenus">保存</ElButton></template
@@ -432,3 +438,17 @@ onMounted(load)
     </ElDialog>
   </div>
 </template>
+
+<style scoped>
+.role-menu-tree-box {
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.role-menu-tree-box :deep(.el-tree) {
+  background: transparent;
+}
+</style>

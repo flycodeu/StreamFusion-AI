@@ -3,6 +3,7 @@ import { parseEvent } from '../../api/diagnostics/api'
 import { eventReason, eventResult } from './presentation'
 import { moduleNames, actionNames } from '../audit/labels'
 import { changeNames, auditChanges } from '../audit/presentation'
+import { reasonLabel } from '../camera-status/model'
 
 const base = {
   occurredAt: '2026-10-14T12:00:00Z',
@@ -23,16 +24,32 @@ describe('diagnostic and audit labels', () => {
       planId: '9223372036854775806',
       reasonCode: 'RTSP_TIMEOUT',
     })
-    expect(eventResult(check)).toBe('连接异常')
+    expect(eventResult(check)).toBe('检查异常')
     expect(eventReason(check)).toBe('RTSP 检查超时')
     expect(check.planId).toBe('9223372036854775806')
-    expect(eventResult({ ...check, state: 'QUEUED', result: null })).toBe('等待检查')
+    expect(eventResult({ ...check, state: 'QUEUED', result: null })).toBe('等待执行')
   })
   it('explains plan conflicts and keeps technical codes outside ordinary labels', () => {
     expect(eventReason(parseEvent({ ...base, reasonCode: 'PLAN_PROFILE_MISSING' }))).toBe(
       '部分设备缺少代表码流',
     )
     expect(eventReason(parseEvent({ ...base, errorCode: 'CONFLICT' }))).toBe('操作与当前状态冲突')
+    expect(eventReason(parseEvent({ ...base, reasonCode: 'PLAN_TARGET_NOT_CHECKABLE' }))).toBe(
+      reasonLabel('PLAN_TARGET_NOT_CHECKABLE'),
+    )
+  })
+  it('does not mislabel media or old unlayered events as connection results', () => {
+    const media = parseEvent({
+      ...base,
+      kind: 'CAMERA_CHECK',
+      state: 'COMPLETED',
+      result: 'FAILED',
+      reasonCode: 'MEDIA_NO_FRAMES',
+    })
+    expect(eventResult(media)).toBe('检查异常')
+    expect(eventResult({ ...media, result: 'ACCESSIBLE' })).toBe('检查通过')
+    expect(eventResult({ ...media, state: 'FUTURE_STATE', result: null })).toBe('FUTURE_STATE')
+    expect(eventResult({ ...media, state: null, result: null })).toBe('状态未确认')
   })
   it('covers camera modules, operations and safe change fields', () => {
     for (const name of [
@@ -64,7 +81,7 @@ describe('diagnostic and audit labels', () => {
       },
       relations: {},
     })
-    expect(changes.map((item) => item.value)).toEqual(['执行中', '已停用', '是', 'ACTIVE'])
+    expect(changes.map((item) => item.value)).toEqual(['运行中', '已停用', '是', 'ACTIVE'])
   })
   it('rejects malformed rows', () => {
     expect(() => parseEvent({ ...base, durationMs: '12' })).toThrow()

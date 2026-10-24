@@ -260,7 +260,17 @@ onBeforeUnmount(() => {
   display: grid;
   gap: 20px;
 }
-.settings-heading,
+.settings-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+}
 .settings-actions,
 .runtime-tool > header {
   display: flex;
@@ -269,24 +279,27 @@ onBeforeUnmount(() => {
   gap: 16px;
 }
 .settings-heading h2 {
-  margin: 0 0 8px;
-  font-size: 20px;
+  margin: 0 0 4px;
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 700;
 }
 .settings-heading span {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12px;
 }
 .runtime-tools {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 22px;
+  gap: 16px;
 }
 .runtime-tool {
   min-width: 0;
-  padding: clamp(20px, 2vw, 30px);
+  padding: clamp(18px, 2vw, 24px);
   background: var(--el-bg-color);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .runtime-tool h3 {
   margin: 0;

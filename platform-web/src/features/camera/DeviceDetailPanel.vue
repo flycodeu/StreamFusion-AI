@@ -1,18 +1,12 @@
 <script setup lang="ts">
+import { useAccessAdapters } from '../camera-access/useDeviceAdapters'
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElButton, ElDrawer, ElMessageBox, ElPagination, ElTag, vLoading } from 'element-plus'
 import * as api from '../../api/camera/api'
 import type { Camera, CameraDeviceGroup } from '../../api/camera/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
-import {
-  connectionLabel,
-  effectiveUsage,
-  lifecycleLabels,
-  sourceBrandLabel,
-  streamLabel,
-  usageLabel,
-} from './form'
+import { connectionLabel, lifecycleLabel, sourceBrandLabel, streamLabel } from './form'
 import { addressLabel, addressText, streamAddress } from './address'
 import DetailDialog from './DetailDialog.vue'
 import PlacementDialog from './PlacementDialog.vue'
@@ -20,6 +14,7 @@ import DeviceMoveDialog from './DeviceMoveDialog.vue'
 import DeviceEditor from './DeviceEditor.vue'
 import StatusPanel from '../camera-status/StatusPanel.vue'
 
+const accessAdapters = useAccessAdapters()
 const props = defineProps<{ device: CameraDeviceGroup; canManage: boolean }>()
 const emit = defineEmits<{
   close: []
@@ -73,15 +68,6 @@ function onVendorChanged(vendorHint: string | null) {
   emit('vendorChanged', vendorHint)
 }
 const selected = computed(() => channels.value.find((item) => item.cameraId === selectedId.value))
-function profileCardTitle(profile: NonNullable<Camera['profiles']>[number]): string {
-  const base = streamLabel(profile)
-  const role = effectiveUsage(profile)
-  const hasKnownRole = role && role !== 'UNKNOWN' && role !== 'CUSTOM'
-  const isDuplicateOrSameAsCamera =
-    (camera.value?.name && base === camera.value.name) ||
-    (camera.value?.profiles.filter((p) => streamLabel(p) === base).length ?? 0) > 1
-  return isDuplicateOrSameAsCamera && hasKnownRole ? usageLabel(role) : base
-}
 const busy = computed(() => loading.value || detailLoading.value || deleting.value)
 const captureScope = usePageScope()
 let listSequence = 0,
@@ -232,7 +218,9 @@ onMounted(load)
         </div>
         <div>
           <dt>接入方式</dt>
-          <dd>{{ connectionLabel(device.sourceType, device.connectionCategory) }}</dd>
+          <dd>
+            {{ connectionLabel(device.sourceType, device.connectionCategory, accessAdapters) }}
+          </dd>
         </div>
         <div v-if="device.sourceDisplayName && device.sourceDisplayName !== deviceName">
           <dt>接入来源</dt>
@@ -249,7 +237,7 @@ onMounted(load)
             v-if="selected"
             size="small"
             :type="selected.lifecycle === 'ENABLED' ? 'success' : 'info'"
-            >{{ lifecycleLabels[selected.lifecycle] }}</ElTag
+            >{{ lifecycleLabel(selected.lifecycle) }}</ElTag
           >
           <span>{{ total }} 个可访问通道</span>
         </div>
@@ -295,7 +283,9 @@ onMounted(load)
             >
               <div class="stream-info">
                 <div class="stream-title">
-                  <strong :title="profile.label">{{ profileCardTitle(profile) }}</strong
+                  <strong :title="profile.label">{{
+                    streamLabel(profile, camera.profiles, camera.name)
+                  }}</strong
                   ><span v-if="!profile.enabled" class="stream-state">已停用</span
                   ><span
                     v-else-if="profile.streamProfileId === camera.defaultPreviewProfileId"

@@ -20,16 +20,6 @@ export function roleChoices(
   }))
 }
 
-export function filterRoleChoices(roles: readonly RoleChoice[], query: string): RoleChoice[] {
-  const keyword = query.trim().toLocaleLowerCase()
-  return roles.filter(
-    (role) =>
-      !keyword ||
-      role.name.toLocaleLowerCase().includes(keyword) ||
-      role.code.toLocaleLowerCase().includes(keyword),
-  )
-}
-
 export function protectedRoleSelection(
   ids: readonly string[],
   roles: readonly RoleChoice[],
@@ -39,21 +29,6 @@ export function protectedRoleSelection(
     ...new Set([
       ...ids.filter((id) => known.has(id)),
       ...roles.filter((role) => role.locked).map((role) => role.id),
-    ]),
-  ]
-}
-
-/** Replace only the filtered rows; hidden selections and protected bindings remain unchanged. */
-export function updateVisibleRoleSelection(
-  current: readonly string[],
-  visible: readonly RoleChoice[],
-  nextVisibleIds: readonly string[],
-): string[] {
-  const visibleIds = new Set(visible.map((role) => role.id))
-  return [
-    ...new Set([
-      ...current.filter((id) => !visibleIds.has(id)),
-      ...protectedRoleSelection(nextVisibleIds, visible),
     ]),
   ]
 }

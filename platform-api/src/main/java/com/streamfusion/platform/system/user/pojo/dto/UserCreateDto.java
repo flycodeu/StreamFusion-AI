@@ -49,4 +49,7 @@ public class UserCreateDto {
 
     @Schema(description = "所属部门ID，最多20个；省略或空数组表示不分配部门")
     private List<String> departmentIds;
+
+    @Schema(description = "角色ID；省略或空数组表示不分配角色，沿用现有角色授予校验")
+    private List<String> roleIds;
 }

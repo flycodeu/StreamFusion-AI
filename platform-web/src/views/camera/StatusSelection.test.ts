@@ -88,6 +88,18 @@ vi.mock('element-plus', async () => {
         }),
       ]),
     ),
+    ElDialog: defineComponent({
+      props: ['modelValue'],
+      inheritAttrs: false,
+      setup(props, { attrs, slots }) {
+        return () =>
+          h(
+            'ElDialog',
+            { ...attrs, modelValue: props.modelValue },
+            props.modelValue ? [slots.default?.(), slots.footer?.()] : [],
+          )
+      },
+    }),
     ElDrawer: defineComponent({
       props: ['modelValue'],
       inheritAttrs: false,
@@ -244,7 +256,7 @@ describe('device status manual target selection', () => {
     await open()
     ;(select('检测通道').props['onUpdate:modelValue'] as (value: string) => void)('2')
     await settle()
-    const drawer = nodes(root).find((item) => item.type === 'ElDrawer')!
+    const drawer = nodes(root).find((item) => item.type === 'ElDialog' || item.type === 'ElDrawer')!
     ;(drawer.props['onUpdate:modelValue'] as (value: boolean) => void)(false)
     await settle()
     await open()
@@ -291,7 +303,10 @@ describe('device status manual target selection', () => {
       api.getCameraStatus.mock.calls.length,
       api.getDeviceChannels.mock.calls.length,
     ]).toEqual(counts)
-    expect(nodes(root).find((item) => item.type === 'ElDrawer')!.props.modelValue).toBe(false)
+    expect(
+      nodes(root).find((item) => item.type === 'ElDialog' || item.type === 'ElDrawer')!.props
+        .modelValue,
+    ).toBe(false)
     resolveLater(camera('2'))
     await settle()
     expect(panel()).toBeUndefined()

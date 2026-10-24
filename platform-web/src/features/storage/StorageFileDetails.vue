@@ -78,15 +78,15 @@ onBeforeUnmount(() => controller?.abort())
   <ElDialog
     :model-value="true"
     title="文件详情"
-    width="min(1160px,96vw)"
-    top="5vh"
-    class="file-details-dialog"
+    width="min(1100px, 95vw)"
+    align-center
+    class="management-dialog file-details-dialog"
     :close-on-click-modal="false"
     @update:model-value="emit('close')"
   >
     <template #header="{ titleId }">
       <div class="detail-heading">
-        <ElIcon :size="22"><Document /></ElIcon>
+        <ElIcon :size="20"><Document /></ElIcon>
         <div>
           <h2 :id="titleId" :title="name">{{ name }}</h2>
           <span>文件详情</span>
@@ -183,7 +183,7 @@ onBeforeUnmount(() => controller?.abort())
 
 <style scoped>
 :global(.file-details-dialog .el-dialog__body) {
-  max-height: calc(90vh - 170px);
+  max-height: calc(88vh - 150px);
   overflow-y: auto;
 }
 .detail-heading {
@@ -194,29 +194,36 @@ onBeforeUnmount(() => controller?.abort())
   padding-right: 30px;
 }
 .detail-heading > .el-icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: #eff6ff;
   flex-shrink: 0;
-  color: var(--el-color-primary);
+  color: #2563eb;
 }
 .detail-heading h2 {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  margin: 0 0 5px;
-  font-size: 17px;
-  font-weight: 500;
+  margin: 0 0 2px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
   overflow-wrap: anywhere;
-  line-height: 1.5;
+  line-height: 1.4;
 }
 .detail-heading span {
-  color: var(--el-text-color-secondary);
+  color: #64748b;
   font-size: 12px;
 }
 .detail-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 310px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 7px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
   overflow: hidden;
 }
 .preview-stage {
@@ -224,9 +231,9 @@ onBeforeUnmount(() => controller?.abort())
   align-items: center;
   justify-content: center;
   min-width: 0;
-  height: clamp(320px, 58vh, 650px);
-  padding: 24px;
-  background: var(--el-fill-color-extra-light);
+  height: clamp(320px, 56vh, 620px);
+  padding: 20px;
+  background: #f8fafc;
 }
 .detail-media {
   display: block;
@@ -235,51 +242,56 @@ onBeforeUnmount(() => controller?.abort())
   min-width: 0;
   object-fit: contain;
   object-position: center;
+  border-radius: 6px;
 }
 .file-placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 14px;
+  gap: 12px;
   flex-direction: column;
   text-align: center;
   overflow-wrap: anywhere;
   max-width: 100%;
 }
 .file-placeholder > .el-icon {
-  color: var(--el-text-color-placeholder);
-  margin-bottom: 6px;
+  color: #94a3b8;
+  margin-bottom: 4px;
 }
 .file-placeholder strong {
   font-size: 15px;
-  font-weight: 500;
+  font-weight: 600;
+  color: #0f172a;
 }
 .file-placeholder span {
-  color: var(--el-text-color-secondary);
+  color: #64748b;
   font-size: 13px;
 }
 .file-placeholder :deep(.el-button + .el-button) {
   margin-left: 0;
 }
 .file-information {
-  padding: 20px;
+  padding: 18px 20px;
   min-width: 0;
-  max-height: clamp(320px, 58vh, 650px);
+  max-height: clamp(320px, 56vh, 620px);
   overflow-y: auto;
-  border-left: 1px solid var(--el-border-color-lighter);
+  border-left: 1px solid #e2e8f0;
+  background: #ffffff;
 }
 .file-information h3 {
-  margin: 0 0 18px;
+  margin: 0 0 14px;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
+  color: #0f172a;
 }
 dl {
   margin: 0;
 }
 dt {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin: 12px 0 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #64748b;
+  margin: 12px 0 3px;
 }
 dt:first-child {
   margin-top: 0;
@@ -287,30 +299,42 @@ dt:first-child {
 dd {
   margin: 0;
   font-size: 13px;
-  line-height: 1.65;
+  font-weight: 500;
+  color: #0f172a;
+  line-height: 1.55;
   overflow-wrap: anywhere;
   user-select: text;
+  font-variant-numeric: tabular-nums;
 }
 dd small {
   display: block;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
+  color: #64748b;
+  font-size: 11.5px;
+  font-weight: 400;
 }
 .object-path {
-  font-family: var(--el-font-family);
+  padding: 4px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  font:
+    12px/1.5 ui-monospace,
+    Consolas,
+    monospace;
 }
 .technical-details {
-  border-top: 1px solid var(--el-border-color-lighter);
-  margin-top: 22px;
-  padding-top: 16px;
+  border-top: 1px solid #e2e8f0;
+  margin-top: 18px;
+  padding-top: 14px;
 }
 .technical-details summary {
   cursor: pointer;
-  color: var(--el-text-color-secondary);
+  color: #475569;
   font-size: 12px;
+  font-weight: 500;
 }
 .technical-details dl {
-  margin-top: 16px;
+  margin-top: 12px;
 }
 .detail-loading,
 .detail-error {
@@ -323,7 +347,7 @@ dd small {
 .file-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 .detail-actions {
@@ -342,12 +366,12 @@ dd small {
   }
   .file-information {
     border-left: 0;
-    border-top: 1px solid var(--el-border-color-lighter);
+    border-top: 1px solid #e2e8f0;
     max-height: none;
-    padding: 20px;
+    padding: 18px;
   }
   .file-information h3 {
-    margin-bottom: 20px;
+    margin-bottom: 14px;
   }
   .detail-actions > .el-button {
     display: none;

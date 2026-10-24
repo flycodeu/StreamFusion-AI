@@ -73,6 +73,7 @@ function state(file: StorageObject) {
 <template>
   <ElDialog
     :model-value="true"
+    class="management-dialog"
     :title="`删除 ${selection.length} 个文件`"
     width="min(660px,94vw)"
     align-center

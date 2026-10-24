@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAccessAdapters } from '../camera-access/useDeviceAdapters'
 import { formError as validationError } from './form'
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
@@ -24,11 +25,12 @@ import TableActions from '../../components/table/TableActions.vue'
 import ProfileEditor from './ProfileEditor.vue'
 import SourceEditor from '../camera-sources/SourceEditor.vue'
 import CreateDialog from './CreateDialog.vue'
-import { connectionLabel, lifecycleLabels, usageLabel, effectiveUsage, streamLabel } from './form'
+import { connectionLabel, lifecycleLabel, usageLabel, effectiveUsage, streamLabel } from './form'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
 import { addressLabel, addressText, streamAddress } from './address'
 
+const accessAdapters = useAccessAdapters()
 const props = defineProps<{ cameraId: string; canManage: boolean; deviceName?: string }>()
 const emit = defineEmits<{ close: []; changed: [] }>()
 const captureScope = usePageScope(),
@@ -134,7 +136,7 @@ async function removeProfile(profile: CameraProfile) {
   saving.value = true
   try {
     await ElMessageBox.confirm(
-      `删除码流“${profile.label}”？此操作只删除本地档案。`,
+      `删除码流“${streamLabel(profile, camera.value.profiles, camera.value.name)}”？此操作只删除本地档案。`,
       '确认删除码流',
       {
         type: 'warning',
@@ -186,6 +188,7 @@ onMounted(load)
     "
     width="900px"
     class="management-dialog camera-detail-dialog"
+    align-center
     :before-close="close"
     :close-on-click-modal="!saving && !childOpen"
     :close-on-press-escape="!saving && !childOpen"
@@ -201,7 +204,7 @@ onMounted(load)
           </p>
         </div>
         <ElTag :type="camera.lifecycle === 'ENABLED' ? 'success' : 'info'">
-          {{ lifecycleLabels[camera.lifecycle] }}
+          {{ lifecycleLabel(camera.lifecycle) }}
         </ElTag>
       </header>
       <ElTabs v-model="tab" class="camera-detail-tabs">
@@ -230,7 +233,9 @@ onMounted(load)
             </div>
             <div>
               <dt>接入类型</dt>
-              <dd>{{ connectionLabel(camera.sourceType, camera.connectionCategory) }}</dd>
+              <dd>
+                {{ connectionLabel(camera.sourceType, camera.connectionCategory, accessAdapters) }}
+              </dd>
             </div>
           </dl>
           <details class="camera-record-meta">
@@ -272,7 +277,7 @@ onMounted(load)
                   )"
                   :key="profile.streamProfileId"
                   :value="profile.streamProfileId"
-                  :label="streamLabel(profile)"
+                  :label="streamLabel(profile, camera.profiles, camera.name)"
                 />
               </ElSelect>
             </ElFormItem>
@@ -285,12 +290,9 @@ onMounted(load)
           >
             <ElTableColumn label="码流" min-width="200"
               ><template #default="{ row }"
-                ><div>{{ streamLabel(asProfile(row)) }}</div>
-                <span
-                  v-if="streamLabel(asProfile(row)) !== row.label"
-                  class="table-secondary stream-source-label"
-                  >{{ row.label }}</span
-                >
+                ><div :title="`原始名称：${row.label}`">
+                  {{ streamLabel(asProfile(row), camera.profiles, camera.name) }}
+                </div>
                 <span class="table-secondary stream-address"
                   >码流地址 · {{ streamAddress(asProfile(row), camera.accessAddress) }}</span
                 ></template
@@ -370,7 +372,9 @@ onMounted(load)
             </div>
             <div>
               <dt>接入类型</dt>
-              <dd>{{ connectionLabel(camera.sourceType, camera.connectionCategory) }}</dd>
+              <dd>
+                {{ connectionLabel(camera.sourceType, camera.connectionCategory, accessAdapters) }}
+              </dd>
             </div>
             <div>
               <dt>识别厂商</dt>
@@ -455,7 +459,6 @@ onMounted(load)
   </ElDialog>
 </template>
 <style scoped>
-.stream-source-label,
 .stream-address {
   display: block;
   overflow-wrap: anywhere;

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { accessJobLabel } from './presentation'
 import { onMounted, ref } from 'vue'
 import { ElButton, ElDialog, ElPagination, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import { getImportJobs } from '../../api/camera-access/api'
@@ -20,15 +21,6 @@ const captureScope = usePageScope(),
   retrying = ref<AccessJob | null>(null)
 let sequence = 0
 const asJob = (value: unknown) => value as AccessJob
-const labels: Record<AccessJob['status'], string> = {
-  QUEUED: '等待导入',
-  RUNNING: '正在导入',
-  SUCCEEDED: '已完成',
-  PARTIAL: '部分完成',
-  FAILED: '已中断',
-  CANCELLED: '已取消',
-  EXPIRED: '已到期',
-}
 async function load() {
   const active = captureScope(),
     current = ++sequence
@@ -60,6 +52,7 @@ onMounted(load)
 <template>
   <ElDialog
     class="management-dialog"
+    align-center
     :model-value="true"
     :title="retrying ? '重试平台导入' : selected ? '导入进度' : '导入任务'"
     width="min(960px, calc(100vw - 32px))"
@@ -92,12 +85,18 @@ onMounted(load)
     />
     <template v-else>
       <RequestError :error="error" />
-      <ElTable :data="rows" row-key="jobId" border empty-text="本次登录暂无导入任务">
+      <ElTable
+        :data="rows"
+        row-key="jobId"
+        border
+        :max-height="380"
+        empty-text="本次登录暂无导入任务"
+      >
         <ElTableColumn prop="jobId" label="任务" min-width="200" /><ElTableColumn
           label="状态"
           width="120"
           ><template #default="{ row }"
-            ><ElTag>{{ labels[row.status as AccessJob['status']] }}</ElTag></template
+            ><ElTag>{{ accessJobLabel(asJob(row)) }}</ElTag></template
           ></ElTableColumn
         >
         <ElTableColumn label="处理 / 总数" min-width="140"
@@ -124,6 +123,7 @@ onMounted(load)
       </ElTable>
       <ElPagination
         v-model:current-page="page"
+        class="import-tasks-pagination"
         :page-size="20"
         :total="total"
         layout="total, prev, pager, next"
@@ -136,3 +136,11 @@ onMounted(load)
     >
   </ElDialog>
 </template>
+
+<style scoped>
+.import-tasks-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+</style>

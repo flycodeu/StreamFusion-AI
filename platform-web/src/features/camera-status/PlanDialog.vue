@@ -34,6 +34,7 @@ import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
 import { ApiRequestError } from '../../lib/http/error'
 import { reasonLabel } from './model'
+import { progressItems, planStateLabels, planStateLabel } from './presentation'
 import { inspectPlanTargets } from '../../api/camera-status/planTargets'
 import type { PlanTarget, TargetSelection, TargetScope } from '../../api/camera-status/planTargets'
 import PlanCameraPicker from './PlanCameraPicker.vue'
@@ -53,13 +54,6 @@ const taskState = ref('ALL')
 const taskSearch = ref('')
 const reportPlanId = ref<string | null>(null)
 const steps = ['选择相机', '在线状态检测', '视频检测', '检测周期']
-const progressItems = [
-  { key: 'success', label: '成功' },
-  { key: 'failed', label: '异常' },
-  { key: 'pending', label: '进行中' },
-  { key: 'unknown', label: '未确认' },
-  { key: 'skipped', label: '未执行' },
-] as const
 const selectedGroups = ref<string[]>([])
 const pickerBusy = ref(false)
 const navigationBusy = ref(false)
@@ -537,6 +531,7 @@ onDeactivated(() => {
     title="巡检任务"
     width="1180px"
     class="management-dialog patrol-dialog"
+    align-center
     append-to-body
     :before-close="close"
     :close-on-click-modal="!busy && !pending"
@@ -778,10 +773,10 @@ onDeactivated(() => {
           <div class="task-filters">
             <ElSelect v-model="taskState" aria-label="任务状态"
               ><ElOption value="ALL" label="全部状态" /><ElOption
-                value="ACTIVE"
-                label="运行中" /><ElOption value="STOPPED" label="已停止" /><ElOption
-                value="EXPIRED"
-                label="已到期" /></ElSelect
+                v-for="(label, value) in planStateLabels"
+                :key="value"
+                :value="value"
+                :label="label" /></ElSelect
             ><ElInput
               v-model="taskSearch"
               :prefix-icon="Search"
@@ -809,13 +804,7 @@ onDeactivated(() => {
               <div class="task-main">
                 <div class="patrol-row-title">
                   <h3 :title="planTitle(plan)">{{ planTitle(plan) }}</h3>
-                  <span class="task-state">{{
-                    planActive(plan)
-                      ? '运行中'
-                      : planState(plan) === 'EXPIRED'
-                        ? '已到期'
-                        : '已停止'
-                  }}</span>
+                  <span class="task-state">{{ planStateLabel(planState(plan)) }}</span>
                 </div>
                 <span
                   class="task-summary"

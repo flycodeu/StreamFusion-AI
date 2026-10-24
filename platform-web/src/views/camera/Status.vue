@@ -3,7 +3,7 @@ import { computed, ref, shallowRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   ElButton,
-  ElDrawer,
+  ElDialog,
   ElForm,
   ElFormItem,
   ElInput,
@@ -36,8 +36,12 @@ import type {
 import RequestError from '../../components/feedback/RequestError.vue'
 import { ApiRequestError } from '../../lib/http/error'
 import TablePanel from '../../components/table/TablePanel.vue'
-import { usageLabel } from '../../features/camera/form'
+import { streamLabel } from '../../features/camera/streamLabels'
 import type { ConnectionState } from '../../features/camera-status/health'
+import {
+  summaryLabels as stateLabels,
+  observationLabels,
+} from '../../features/camera-status/presentation'
 import StatusCard from '../../features/camera-status/StatusCard.vue'
 import StatusPanel from '../../features/camera-status/StatusPanel.vue'
 import PlanDialog from '../../features/camera-status/PlanDialog.vue'
@@ -168,14 +172,6 @@ const { rows, result, summary, total, loading, error, paused, refresh } = useSta
   query,
   computed(() => !drawerOpen.value && !plansOpen.value),
 )
-const stateLabels = computed(() => ({
-  accessible: '检查通过',
-  failed: '检查异常',
-  checking: '检测中',
-  stale: '配置已变更',
-  unknown: '尚未检查',
-  disabled: '未启用',
-}))
 const stateIcons = {
   accessible: CircleCheck,
   failed: Warning,
@@ -194,15 +190,9 @@ const stateOrder: ConnectionState[] = [
 ]
 const summaryLabel = computed(() =>
   summary.value
-    ? stateOrder.map((state) => `${stateLabels.value[state]} ${summary.value![state]}`).join('，')
+    ? stateOrder.map((state) => `${stateLabels[state]} ${summary.value![state]}`).join('，')
     : '状态尚未读取',
 )
-const observationLabels = computed<Record<ObservationFilter, string>>(() => ({
-  NEVER: '尚未检查',
-  ACCESSIBLE: '最近检查通过',
-  FAILED: '最近检查异常',
-  UNSUPPORTED: '检测待适配',
-}))
 const capacityHint = computed(() =>
   error.value instanceof ApiRequestError && error.value.code === 'CONFLICT'
     ? '请缩小相机搜索范围；仍失败时提供请求标识给管理员核对码流数量与授权配置。'
@@ -237,6 +227,13 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
   selectedProfileId.value = profile.streamProfileId
   drawerOpen.value = true
 }
+function profileOptionLabel(profile: CameraProfile): string {
+  const title = streamLabel(profile, diagnosticTarget.value?.profiles, diagnosticTarget.value?.name)
+  if (profile.width && profile.height) {
+    return `${title} (${profile.width}×${profile.height})`
+  }
+  return title
+}
 </script>
 
 <template>
@@ -269,25 +266,27 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
     <RequestError :error="error" />
     <p v-if="capacityHint" class="capacity-hint" role="alert">{{ capacityHint }}</p>
     <section class="status-overview" aria-label="当前页相机检查总览">
-      <header class="overview-heading">
-        <div>
-          <h3>{{ layer === 'CONTROL' ? '连接检查' : '视频检查' }}</h3>
-          <span>当前页 {{ summary?.total ?? '—' }} 台相机</span>
-        </div>
-      </header>
-      <div class="status-metrics">
-        <div
-          v-for="state in stateOrder"
-          :key="state"
-          class="status-metric"
-          :class="`state-${state}`"
-        >
-          <ElIcon class="metric-icon" aria-hidden="true"
-            ><component :is="stateIcons[state]"
-          /></ElIcon>
+      <div class="overview-top">
+        <header class="overview-heading">
           <div>
-            <strong>{{ summary?.[state] ?? '—' }}</strong
-            ><span>{{ stateLabels[state] }}</span>
+            <h3>{{ layer === 'CONTROL' ? '连接检查' : '视频检查' }}</h3>
+            <span>当前页 {{ summary?.total ?? '—' }} 台相机</span>
+          </div>
+        </header>
+        <div class="status-metrics">
+          <div
+            v-for="state in stateOrder"
+            :key="state"
+            class="status-metric"
+            :class="[`state-${state}`, { 'is-active': (summary?.[state] ?? 0) > 0 }]"
+          >
+            <span class="metric-label">
+              <ElIcon class="metric-icon" aria-hidden="true"
+                ><component :is="stateIcons[state]"
+              /></ElIcon>
+              <span>{{ stateLabels[state] }}</span>
+            </span>
+            <strong>{{ summary?.[state] ?? '—' }}</strong>
           </div>
         </div>
       </div>
@@ -335,10 +334,13 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
       /></template>
     </TablePanel>
     <PlanDialog v-if="plansOpen" @close="plansOpen = false" @changed="refresh" />
-    <ElDrawer
+    <ElDialog
       v-model="drawerOpen"
       title="状态详情"
-      size="min(760px, 100vw)"
+      width="680px"
+      align-center
+      append-to-body
+      class="management-dialog status-detail-dialog"
       :destroy-on-close="false"
     >
       <template v-if="target">
@@ -354,10 +356,25 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
             <template #summary="{ connection }">
               <section class="status-device-summary" aria-label="设备档案摘要">
                 <div class="device-summary-heading">
-                  <ElIcon class="device-summary-icon" aria-hidden="true"><VideoCamera /></ElIcon>
-                  <h3 :title="target.channel.deviceName || target.channel.name">
-                    {{ target.channel.deviceName || target.channel.name }}
-                  </h3>
+                  <div class="device-summary-icon-wrap" aria-hidden="true">
+                    <ElIcon class="device-summary-icon"><VideoCamera /></ElIcon>
+                  </div>
+                  <div class="device-summary-title">
+                    <h3 :title="target.channel.deviceName || target.channel.name">
+                      {{ target.channel.deviceName || target.channel.name }}
+                    </h3>
+                    <div class="device-summary-meta">
+                      <span
+                        :title="`${addressLabel(target.channel.accessAddress)}：${addressText(target.channel.accessAddress)}`"
+                        >{{ addressLabel(target.channel.accessAddress) }}：{{
+                          addressText(target.channel.accessAddress)
+                        }}</span
+                      >
+                      <span :title="`型号：${deviceModel || '未获取'}`"
+                        >型号：{{ deviceModel || '未获取' }}</span
+                      >
+                    </div>
+                  </div>
                   <span
                     class="device-connection"
                     :class="`state-${target.channel.lifecycle === 'ENABLED' ? connection.state : 'disabled'}`"
@@ -372,256 +389,280 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
                     }}
                   </span>
                 </div>
-                <div class="device-summary-meta">
-                  <span
-                    :title="`${addressLabel(target.channel.accessAddress)}：${addressText(target.channel.accessAddress)}`"
-                    >{{ addressLabel(target.channel.accessAddress) }}：{{
-                      addressText(target.channel.accessAddress)
-                    }}</span
-                  >
-                  <span :title="`型号：${deviceModel || '未获取'}`"
-                    >型号：{{ deviceModel || '未获取' }}</span
-                  >
+                <div
+                  v-if="channelTotal > 1 || (diagnosticTarget?.profiles.length ?? 0) > 1"
+                  class="detection-target-options"
+                >
+                  <span class="detection-target-label">检测目标</span>
+                  <div class="detection-target-controls">
+                    <ElSelect
+                      v-if="channelTotal > 1"
+                      v-model="selectedChannelId"
+                      filterable
+                      aria-label="检测通道"
+                      placeholder="选择检测通道"
+                      :loading="channelLoading"
+                    >
+                      <ElOption
+                        v-for="camera in channelOptions"
+                        :key="camera.cameraId"
+                        :value="camera.cameraId"
+                        :label="camera.name"
+                        :disabled="camera.lifecycle !== 'ENABLED'"
+                      />
+                    </ElSelect>
+                    <ElSelect
+                      v-if="(diagnosticTarget?.profiles.length ?? 0) > 1"
+                      v-model="selectedProfileId"
+                      aria-label="检测码流"
+                      placeholder="选择检测码流"
+                    >
+                      <ElOption
+                        v-for="profile in diagnosticTarget?.profiles"
+                        :key="profile.streamProfileId"
+                        :value="profile.streamProfileId"
+                        :label="profileOptionLabel(profile)"
+                      />
+                    </ElSelect>
+                    <ElButton
+                      v-if="channelOptions.length < channelTotal"
+                      :loading="channelLoading"
+                      @click="loadChannels"
+                      >加载更多</ElButton
+                    >
+                  </div>
                 </div>
               </section>
-              <details
-                v-if="channelTotal > 1 || (diagnosticTarget?.profiles.length ?? 0) > 1"
-                class="detection-target-options"
-              >
-                <summary>检测设置</summary>
-                <div class="detection-target-controls">
-                  <ElSelect
-                    v-if="channelTotal > 1"
-                    v-model="selectedChannelId"
-                    filterable
-                    aria-label="检测通道"
-                    placeholder="选择检测通道"
-                    :loading="channelLoading"
-                  >
-                    <ElOption
-                      v-for="camera in channelOptions"
-                      :key="camera.cameraId"
-                      :value="camera.cameraId"
-                      :label="camera.name"
-                      :disabled="camera.lifecycle !== 'ENABLED'"
-                    />
-                  </ElSelect>
-                  <ElSelect
-                    v-if="(diagnosticTarget?.profiles.length ?? 0) > 1"
-                    v-model="selectedProfileId"
-                    aria-label="检测码流"
-                    placeholder="选择检测码流"
-                  >
-                    <ElOption
-                      v-for="profile in diagnosticTarget?.profiles"
-                      :key="profile.streamProfileId"
-                      :value="profile.streamProfileId"
-                      :label="profile.label || usageLabel(profile.usageHint)"
-                    />
-                  </ElSelect>
-                  <ElButton
-                    v-if="channelOptions.length < channelTotal"
-                    :loading="channelLoading"
-                    @click="loadChannels"
-                    >加载更多通道</ElButton
-                  >
-                </div>
-                <p>默认检测一路低负载码流；结果只代表所选通道最近一次检查。</p>
-              </details>
               <RequestError :error="channelError" advice="可重新打开状态详情以加载通道选项。" />
             </template>
           </StatusPanel>
         </div>
       </template>
-    </ElDrawer>
+    </ElDialog>
   </div>
 </template>
+
+<style>
+.el-dialog.management-dialog.status-detail-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-height: calc(100dvh - 64px);
+  margin: auto;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.14);
+}
+.status-detail-dialog > .el-dialog__header {
+  padding: 16px 48px 16px 22px;
+}
+.status-detail-dialog .el-dialog__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #0f172a;
+}
+.status-detail-dialog > .el-dialog__body {
+  padding: 18px 22px 20px;
+}
+</style>
 
 <style scoped>
 .camera-status-page {
   min-width: 0;
 }
-.overview-heading {
+.status-overview {
+  margin-bottom: 14px;
+  padding: 12px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--el-bg-color);
+}
+.overview-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+}
+.overview-heading {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
 }
 .overview-heading > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
-}
-.overview-heading > div:first-child > span {
-  display: block;
-  margin-top: 6px;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-.capacity-hint {
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-.status-overview {
-  margin-bottom: 12px;
-  padding: 14px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-  background: var(--el-bg-color);
 }
 .overview-heading h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.overview-heading > div:first-child > span {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 500;
 }
 .status-metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 16px;
-  margin: 14px 0;
+  grid-template-columns: repeat(6, minmax(112px, 1fr));
+  gap: 8px;
+  flex: 1 1 700px;
 }
 .status-metric {
+  --state-soft-bg: #f8fafc;
+  --state-soft-border: #e2e8f0;
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: space-between;
+  gap: 8px;
   min-width: 0;
+  padding: 7px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+.status-metric.is-active {
+  background: var(--state-soft-bg);
+  border-color: var(--state-soft-border);
+}
+.metric-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #475569;
+  font-size: 12px;
+  white-space: nowrap;
 }
 .metric-icon {
   flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  padding: 6px;
-  border-radius: 50%;
-  background: var(--el-fill-color-light);
   color: var(--state-color);
-  font-size: 24px;
-}
-.status-metric > div {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 0;
+  font-size: 15px;
 }
 .status-metric strong {
-  font-size: 22px;
+  font-size: 15px;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1;
+  color: #0f172a;
 }
-.status-metric span {
-  font-size: 12px;
-  color: var(--text-secondary);
+.status-metric.is-active strong {
+  color: var(--state-color);
 }
 .state-accessible {
-  --state-color: var(--el-color-success);
+  --state-color: #059669;
+  --state-soft-bg: #ecfdf5;
+  --state-soft-border: #a7f3d0;
 }
 .state-failed {
-  --state-color: var(--el-color-danger);
+  --state-color: #dc2626;
+  --state-soft-bg: #fef2f2;
+  --state-soft-border: #fecaca;
 }
 .state-checking {
-  --state-color: var(--el-color-primary);
+  --state-color: #2563eb;
+  --state-soft-bg: #eff6ff;
+  --state-soft-border: #bfdbfe;
 }
 .state-stale {
-  --state-color: var(--el-color-warning);
+  --state-color: #d97706;
+  --state-soft-bg: #fffbeb;
+  --state-soft-border: #fde68a;
 }
 .state-unknown,
 .state-disabled {
-  --state-color: var(--el-text-color-placeholder);
+  --state-color: #64748b;
+  --state-soft-bg: #f1f5f9;
+  --state-soft-border: #cbd5e1;
 }
 .status-distribution {
   display: flex;
-  height: 8px;
-  border-radius: 4px;
+  height: 5px;
+  margin-top: 10px;
+  border-radius: 999px;
   overflow: hidden;
-  background: var(--el-fill-color-light);
+  background: #f1f5f9;
 }
 .status-distribution > span {
   background: var(--state-color);
 }
-.status-search :deep(.el-input) {
-  width: 100%;
-}
-.status-search :deep(.el-select) {
-  width: 100%;
-}
 .status-search {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 16px;
-  padding: 16px;
+  align-items: center;
+  gap: 14px 20px;
+  padding: 14px 18px;
 }
 .status-search :deep(.el-form-item) {
   min-width: 0;
   margin: 0;
 }
-.status-search :deep(.el-form-item:not(:last-child)) {
-  flex: 1 1 260px;
+.status-search :deep(.el-input) {
+  width: 220px;
 }
-.status-search :deep(.el-form-item__content) {
-  min-width: 0;
+.status-search :deep(.el-select) {
+  width: 180px;
 }
 .capacity-hint {
   margin: 8px 0 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 .camera-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 275px), 1fr));
+  gap: 14px;
   align-items: stretch;
   min-height: 100px;
 }
 .status-device-summary {
-  padding: 14px 16px;
-  margin-bottom: 20px;
+  padding: 16px;
+  margin-bottom: 16px;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border-radius: 10px;
   background: #f8fafc;
-}
-.detection-target-options {
-  margin: 0 0 16px;
-  padding: 10px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #64748b;
-  font-size: 13px;
-}
-.detection-target-options summary {
-  cursor: pointer;
-  color: #334155;
-  font-weight: 500;
-}
-.detection-target-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 12px;
-}
-.detection-target-controls :deep(.el-select) {
-  flex: 1 1 180px;
-  min-width: 0;
-}
-.detection-target-options p {
-  margin: 10px 0 0;
-  color: #94a3b8;
-  font-size: 12px;
 }
 .device-summary-heading {
   display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.device-summary-icon-wrap {
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+  flex-shrink: 0;
 }
 .device-summary-icon {
-  flex-shrink: 0;
-  color: #64748b;
-  font-size: 18px;
+  font-size: 20px;
 }
-.device-summary-heading h3 {
+.device-summary-title {
   flex: 1;
   min-width: 0;
+}
+.device-summary-title h3 {
   margin: 0;
   overflow: hidden;
   color: #0f172a;
   font-size: 16px;
   font-weight: 600;
-  line-height: 1.5;
+  line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -630,13 +671,13 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
   flex-shrink: 0;
   align-items: center;
   gap: 6px;
-  padding: 2px 10px;
+  padding: 3px 10px;
   border: 1px solid #e2e8f0;
   border-radius: 99px;
-  background: #f1f5f9;
+  background: #fff;
   color: #64748b;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
 }
 .device-connection.state-accessible {
   border-color: #a7f3d0;
@@ -657,12 +698,13 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
 .device-summary-meta {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 10px;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 6px;
   color: #64748b;
-  font:
-    13px/1.6 Consolas,
-    monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
 }
 .device-summary-meta > span {
   min-width: 0;
@@ -671,9 +713,35 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
   white-space: nowrap;
 }
 .device-summary-meta > span + span {
-  flex: 1;
   padding-left: 12px;
   border-left: 1px solid #cbd5e1;
+}
+.detection-target-options {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #e2e8f0;
+  color: #334155;
+  font-size: 13px;
+}
+.detection-target-label {
+  color: #475569;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.detection-target-controls {
+  display: flex;
+  flex-wrap: wrap;
+  flex: 1;
+  gap: 10px;
+  min-width: 0;
+}
+.detection-target-controls :deep(.el-select) {
+  flex: 1 1 180px;
+  min-width: 0;
 }
 .empty-list {
   grid-column: 1 / -1;
@@ -688,6 +756,11 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
   color: var(--text-secondary);
   font-size: 13px;
 }
+@media (max-width: 960px) {
+  .status-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
 @media (max-width: 520px) {
   .overview-heading {
     align-items: flex-start;
@@ -696,21 +769,8 @@ function showDiagnostic(channel: StatusChannel, profile: StatusProfile) {
     padding: 12px;
   }
   .status-metrics {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px 6px;
-  }
-  .status-metric {
-    gap: 6px;
-  }
-  .metric-icon {
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    font-size: 18px;
-    background: none;
-  }
-  .status-metric strong {
-    font-size: 20px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
   }
   .status-search {
     padding: 12px;

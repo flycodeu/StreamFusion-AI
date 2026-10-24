@@ -1,5 +1,12 @@
 <script setup lang="ts">
+import {
+  genderOptions,
+  userStatusLabel,
+  userStatusTone,
+  userStatusOptions,
+} from '../../features/user/presentation'
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   ElButton,
   ElDialog,
@@ -34,13 +41,17 @@ import TableActions from '../../components/table/TableActions.vue'
 import { useTableSelection } from '../../composables/table/useTableSelection'
 import { ApiRequestError } from '../../lib/http/error'
 import { accountHint } from '../../utils/loginValidation'
-import RoleAssignmentDialog from '../../features/user/RoleAssignmentDialog.vue'
+import UserRolesField from '../../features/user/UserRolesField.vue'
+import { protectedRoleSelection, roleChoices } from '../../features/user/roleSelection'
+import { refreshIdentity } from '../../session/session'
 import LoginRecordTable from '../../features/login-records/LoginRecordTable.vue'
 import { formatDateTime } from '../../utils/dateTime'
 import { usePageScope } from '../../composables/usePageScope'
 
 defineOptions({ name: 'SystemUser' })
 
+const router = useRouter()
+const route = useRoute()
 const columns = useColumns('users', [
   'username',
   'nickname',
@@ -74,13 +85,9 @@ const form = reactive({
   gender: 0,
   avatarKey: '',
   departmentIds: [] as string[],
+  roleIds: [] as string[],
 })
-const relationDialog = ref(false)
-const relationUser = ref<UserSummary | null>(null)
-const relationVersion = ref('')
-const selectedIds = ref<string[]>([])
 const roleOptions = ref<RoleOption[]>([])
-const assignedRoles = ref<RoleOption[]>([])
 const departmentOptions = ref<DepartmentOption[]>([])
 type DepartmentTreeOption = DepartmentOption & { children: DepartmentTreeOption[] }
 const departmentTree = computed(() => {
@@ -116,7 +123,13 @@ interface PasswordResult {
   error: unknown
 }
 const passwordResults = ref<PasswordResult[]>([])
-const departmentOnlyEdit = computed(() => !!editing.value && isProtectedAccount(editing.value))
+const relationOnlyEdit = computed(() => !!editing.value && isProtectedAccount(editing.value))
+const canEditDepartments = computed(
+  () => !relationOnlyEdit.value || !!sessionState.me?.isSuperAdmin,
+)
+const protectOwnSuperAdmin = computed(
+  () => !!sessionState.me?.isSuperAdmin && editing.value?.id === sessionState.me?.user.id,
+)
 const accountError = computed(() => (editing.value ? '' : accountHint(form.username.trim())))
 const phoneError = computed(() => {
   const phone = form.phone.trim()
@@ -142,7 +155,7 @@ function canManageRelations(row: UserSummary): boolean {
 }
 
 function canEdit(row: UserSummary): boolean {
-  return !isProtectedAccount(row) || !!sessionState.me?.isSuperAdmin
+  return canManageRelations(row)
 }
 
 async function load(): Promise<void> {
@@ -188,9 +201,10 @@ async function openCreate(): Promise<void> {
   const inScope = captureScope()
   error.value = null
   try {
-    const options = await api.getDepartmentOptions()
+    const [options, roles] = await Promise.all([api.getDepartmentOptions(), api.getRoleOptions()])
     if (current !== detailSequence || !inScope()) return
     departmentOptions.value = options
+    roleOptions.value = roles
   } catch (cause) {
     if (current === detailSequence && inScope()) error.value = cause
     return
@@ -205,6 +219,7 @@ async function openCreate(): Promise<void> {
     gender: 0,
     avatarKey: '',
     departmentIds: [],
+    roleIds: [],
   })
   dialog.value = true
 }
@@ -213,9 +228,14 @@ async function openEdit(row: UserSummary): Promise<void> {
   const inScope = captureScope()
   error.value = null
   try {
-    const [user, options] = await Promise.all([api.getUser(row.id), api.getDepartmentOptions()])
+    const [user, options, roles] = await Promise.all([
+      api.getUser(row.id),
+      api.getDepartmentOptions(),
+      api.getRoleOptions(),
+    ])
     if (current !== detailSequence || !inScope()) return
     departmentOptions.value = options
+    roleOptions.value = roles
     editing.value = user
     submitted.value = false
     Object.assign(form, {
@@ -226,6 +246,7 @@ async function openEdit(row: UserSummary): Promise<void> {
       gender: user.gender,
       avatarKey: user.avatarKey || '',
       departmentIds: user.departments.map((department) => department.id),
+      roleIds: user.roles.map((role) => role.id),
     })
     dialog.value = true
   } catch (cause) {
@@ -236,7 +257,7 @@ async function save(): Promise<void> {
   submitted.value = true
   if (
     saving.value ||
-    (!departmentOnlyEdit.value && (accountError.value || phoneError.value || emailError.value))
+    (!relationOnlyEdit.value && (accountError.value || phoneError.value || emailError.value))
   )
     return
   saving.value = true
@@ -249,11 +270,14 @@ async function save(): Promise<void> {
       email: form.email.trim() || null,
       gender: form.gender,
       avatarKey: form.avatarKey.trim() || null,
-      departmentIds: [...form.departmentIds],
+      departmentIds: canEditDepartments.value ? [...form.departmentIds] : undefined,
+      roleIds: protectedRoleSelection(
+        form.roleIds,
+        roleChoices(roleOptions.value, editing.value?.roles ?? [], protectOwnSuperAdmin.value),
+      ),
     }
-    if (editing.value && departmentOnlyEdit.value)
-      await api.setUserDepartments(editing.value.id, editing.value.version, fields.departmentIds)
-    else if (editing.value) await api.updateUser({ ...editing.value, ...fields })
+    const editsOwnRoles = editing.value?.id === sessionState.me?.user.id
+    if (editing.value) await api.updateUser({ ...editing.value, ...fields })
     else {
       const created = await api.createUser({ username: form.username.trim(), ...fields })
       if (!inScope()) return
@@ -263,42 +287,18 @@ async function save(): Promise<void> {
     }
     if (!inScope()) return
     dialog.value = false
-    await load()
-  } catch (cause) {
-    if (inScope()) error.value = cause
-  } finally {
-    saving.value = false
-  }
-}
-async function openRelation(row: UserSummary): Promise<void> {
-  const currentRequest = ++detailSequence
-  const inScope = captureScope()
-  error.value = null
-  try {
-    const [current, options] = await Promise.all([api.getUserRoles(row.id), api.getRoleOptions()])
-    if (currentRequest !== detailSequence || !inScope()) return
-    relationVersion.value = current.version
-    selectedIds.value = current.roles.map((role) => role.id)
-    assignedRoles.value = current.roles
-    roleOptions.value = options
-    relationUser.value = row
-    relationDialog.value = true
-  } catch (cause) {
-    if (currentRequest !== detailSequence || !inScope()) return
-    relationDialog.value = false
-    error.value = cause
-  }
-}
-async function saveRelation(roleIds: string[]): Promise<void> {
-  if (!relationUser.value || !relationDialog.value || saving.value) return
-  saving.value = true
-  const inScope = captureScope()
-  error.value = null
-  try {
-    await api.setUserRoles(relationUser.value.id, relationVersion.value, roleIds)
-    if (!inScope()) return
-    relationDialog.value = false
-    await load()
+    if (editsOwnRoles) {
+      await refreshIdentity()
+      if (inScope()) {
+        await router.replace({
+          path: route.path,
+          query: route.query,
+          hash: route.hash,
+          force: true,
+        })
+      }
+    }
+    if (inScope()) await load()
   } catch (cause) {
     if (inScope()) error.value = cause
   } finally {
@@ -467,9 +467,12 @@ onMounted(load)
       </ElFormItem>
       <ElFormItem label="状态">
         <ElSelect v-model="status" class="status-field" placeholder="全部状态" clearable>
-          <ElOption label="待改密" :value="0" />
-          <ElOption label="正常" :value="1" />
-          <ElOption label="停用" :value="2" />
+          <ElOption
+            v-for="option in userStatusOptions"
+            :key="option.value"
+            :label="option.label"
+            :value="option.value"
+          />
         </ElSelect>
       </ElFormItem>
       <ElFormItem>
@@ -554,11 +557,9 @@ onMounted(load)
         />
         <ElTableColumn v-if="columns.includes('status')" label="状态" width="100"
           ><template #default="{ row }"
-            ><ElTag
-              :type="row.status === 2 ? 'danger' : row.status === 0 ? 'warning' : 'success'"
-              effect="plain"
-              >{{ row.status === 0 ? '待改密' : row.status === 1 ? '正常' : '停用' }}</ElTag
-            ></template
+            ><ElTag :type="userStatusTone(row.status)" effect="plain">{{
+              userStatusLabel(row.status)
+            }}</ElTag></template
           ></ElTableColumn
         >
         <ElTableColumn v-if="columns.includes('loginRestriction')" label="登录限制" min-width="195">
@@ -590,7 +591,7 @@ onMounted(load)
         >
         <ElTableColumn
           label="操作"
-          width="190"
+          width="150"
           fixed="right"
           class-name="table-actions-column"
           :resizable="false"
@@ -602,13 +603,6 @@ onMounted(load)
                 :disabled="!canEdit(asUser(row)) || resetting"
                 @click="openEdit(asUser(row))"
                 >编辑</ElButton
-              >
-              <ElButton
-                link
-                type="primary"
-                :disabled="!canManageRelations(asUser(row)) || resetting"
-                @click="openRelation(asUser(row))"
-                >角色</ElButton
               >
               <ElDropdown trigger="click" class="table-action-end">
                 <ElButton
@@ -667,6 +661,8 @@ onMounted(load)
       v-model="loginRecordsDialog"
       :title="`${loginRecordsUser?.nickname || loginRecordsUser?.username || ''} · 登录记录`"
       width="1120px"
+      class="management-dialog"
+      align-center
       destroy-on-close
     >
       <LoginRecordTable
@@ -677,7 +673,9 @@ onMounted(load)
     <ElDialog
       v-model="dialog"
       :title="editing ? '编辑用户' : '新建用户'"
-      width="800px"
+      width="720px"
+      class="management-dialog"
+      align-center
       destroy-on-close
       :close-on-click-modal="!saving"
       :close-on-press-escape="!saving"
@@ -689,31 +687,34 @@ onMounted(load)
           ><ElInput v-model="form.username" :disabled="!!editing" maxlength="32"
         /></ElFormItem>
         <ElFormItem label="昵称"
-          ><ElInput v-model="form.nickname" maxlength="64" :disabled="departmentOnlyEdit"
+          ><ElInput v-model="form.nickname" maxlength="64" :disabled="relationOnlyEdit"
         /></ElFormItem>
-        <ElFormItem label="电话" :error="submitted && !departmentOnlyEdit ? phoneError : ''"
+        <ElFormItem label="电话" :error="submitted && !relationOnlyEdit ? phoneError : ''"
           ><ElInput
             v-model="form.phone"
-            :disabled="departmentOnlyEdit"
+            :disabled="relationOnlyEdit"
             autocomplete="tel"
             maxlength="21"
         /></ElFormItem>
-        <ElFormItem label="邮箱" :error="submitted && !departmentOnlyEdit ? emailError : ''"
+        <ElFormItem label="邮箱" :error="submitted && !relationOnlyEdit ? emailError : ''"
           ><ElInput
             v-model="form.email"
-            :disabled="departmentOnlyEdit"
+            :disabled="relationOnlyEdit"
             autocomplete="email"
             maxlength="254"
         /></ElFormItem>
         <ElFormItem label="性别"
-          ><ElSelect v-model="form.gender" :disabled="departmentOnlyEdit"
-            ><ElOption label="未设置" :value="0" /><ElOption label="男" :value="1" /><ElOption
-              label="女"
-              :value="2" /></ElSelect
+          ><ElSelect v-model="form.gender" :disabled="relationOnlyEdit"
+            ><ElOption
+              v-for="option in genderOptions"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value" /></ElSelect
         ></ElFormItem>
         <ElFormItem class="user-form-full" label="所属部门">
           <ElTreeSelect
             v-model="form.departmentIds"
+            :disabled="!canEditDepartments"
             :data="departmentTree"
             :props="{ label: 'name', children: 'children' }"
             node-key="id"
@@ -729,33 +730,30 @@ onMounted(load)
             placeholder="请选择部门"
           />
         </ElFormItem>
+        <ElFormItem class="user-form-full" label="角色">
+          <UserRolesField
+            v-model="form.roleIds"
+            :options="roleOptions"
+            :assigned="editing?.roles ?? []"
+            :protect-own-super-admin="protectOwnSuperAdmin"
+          />
+        </ElFormItem>
       </ElForm>
       <template #footer
         ><ElButton :disabled="saving" @click="dialog = false">取消</ElButton
         ><ElButton type="primary" :loading="saving" @click="save">保存</ElButton></template
       >
     </ElDialog>
-    <RoleAssignmentDialog
-      v-model="relationDialog"
-      v-model:selected-ids="selectedIds"
-      :username="relationUser?.username || ''"
-      :options="roleOptions"
-      :assigned="assignedRoles"
-      :protect-own-super-admin="
-        !!sessionState.me?.isSuperAdmin && relationUser?.id === sessionState.me?.user.id
-      "
-      :saving="saving"
-      :error="error"
-      @save="saveRelation"
-    />
     <ElDialog
       v-model="resultDialog"
       :title="resultTitle"
       width="760px"
+      class="management-dialog"
+      align-center
       destroy-on-close
       @closed="passwordResults = []"
     >
-      <ElTable :data="passwordResults" row-key="id" border>
+      <ElTable :data="passwordResults" row-key="id" border :max-height="380">
         <ElTableColumn prop="username" label="账号" min-width="140" />
         <ElTableColumn label="结果" width="90">
           <template #default="{ row }"
@@ -803,6 +801,12 @@ onMounted(load)
 .temporary-password {
   user-select: all;
   overflow-wrap: anywhere;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #f1f5f9;
+  color: #0f172a;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
 }
 .password-cell {
   display: flex;

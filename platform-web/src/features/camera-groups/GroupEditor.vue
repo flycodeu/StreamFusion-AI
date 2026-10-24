@@ -59,6 +59,7 @@ async function save() {
   <ElDialog
     :model-value="true"
     class="management-dialog"
+    align-center
     :title="group ? '编辑分组' : '新建分组'"
     width="600px"
     :close-on-click-modal="!saving"
@@ -77,8 +78,7 @@ async function save() {
           :exclude-id="group?.groupId"
           clearable
           :disabled="saving || !!impact"
-        /><span>留空表示根目录</span></ElFormItem
-      >
+      /></ElFormItem>
       <ElFormItem label="排序"
         ><ElInputNumber v-model="form.sortOrder" :min="0" :max="2147483647"
       /></ElFormItem>

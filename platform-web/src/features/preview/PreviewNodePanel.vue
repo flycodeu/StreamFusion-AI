@@ -35,7 +35,12 @@ import { ApiRequestError } from '../../lib/http/error'
 import { usePageScope } from '../../composables/usePageScope'
 import { sessionState } from '../../session/state'
 import { formatDateTime } from '../../utils/dateTime'
+import { labelOf } from '../../utils/display'
 import { previewReason } from './model'
+import {
+  previewNodeLabels as names,
+  previewMaintenanceLabels as maintenanceNames,
+} from './nodePresentation'
 import ZlmNetworkLoad from './ZlmNetworkLoad.vue'
 import PreviewOpsSync from './PreviewOpsSync.vue'
 
@@ -94,25 +99,6 @@ const configuredConnections = computed(() =>
 const maintaining = ref<PreviewNodeStatus | null>(null)
 const synchronizing = ref<PreviewNodeStatus | null>(null)
 const maintenance = ref<PreviewMaintenance | null>(null)
-const maintenanceNames: Record<string, string> = {
-  OPEN: '未封闭',
-  SEALED: '已签发，等待 Ops 领取',
-  CLAIMED: 'Ops 执行中',
-  COMPLETE: 'Ops 已完成，等待解除',
-}
-const names: Record<string, string> = {
-  LOCAL: '不接新预览',
-  REMOTE: '参与调度',
-  DRAINING: '排空中',
-  READY: '就绪',
-  MAINTENANCE: '维护封闭中',
-  RECONCILING: '资源待核对',
-  UNKNOWN: '观测已过期或未检查',
-  DEGRADED: '媒体环境异常',
-  ZLM_NOT_READY: '本机媒体未配置',
-  NODE_HOST_OVERLOADED: '节点持续高负载，暂停新预览',
-  NODE_BITRATE_EXCEEDED: '实测码率超出预算，暂停新预览',
-}
 const defaultDirectBudget: DirectZlmInput['budget'] = {
   maxSources: 64,
   maxViewers: 64,
@@ -508,13 +494,13 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
               <small>{{ node.nodeId }} · 优先级 {{ node.priority }}</small>
             </div>
             <ElTag round :type="node.mode === 'REMOTE' ? 'primary' : 'info'">{{
-              names[node.mode]
+              labelOf(names, node.mode)
             }}</ElTag>
           </div>
           <div class="node-status-bar" :class="{ ready: node.state === 'READY' }">
             <p class="node-state">
               <span class="state-dot" aria-hidden="true"></span> 实际状态：{{
-                names[node.state] || node.state
+                labelOf(names, node.state)
               }}<span v-if="node.observedAt"> · {{ formatDateTime(node.observedAt) }}</span>
             </p>
             <dl class="node-identity">
@@ -756,7 +742,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             <div class="connection-detail">
               <div class="connection-name">
                 <strong>{{ item.name }}</strong>
-                <ElTag effect="plain">{{ names[item.mode] || item.mode }}</ElTag>
+                <ElTag effect="plain">{{ labelOf(names, item.mode) }}</ElTag>
               </div>
               <div class="connection-meta">
                 <span>服务地址：{{ item.apiHost }}</span>
@@ -764,7 +750,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                 <span>媒体地址：{{ item.mediaAddress }}</span>
                 <span>安装位置：{{ item.installPath || '未登记' }}</span>
                 <span>ZLM 版本：{{ item.zlmVersion || '未检测' }}</span>
-                <span>实际状态 {{ names[item.state] || item.state }}</span>
+                <span>实际状态 {{ labelOf(names, item.state) }}</span>
               </div>
               <div class="connection-meta">
                 <span
@@ -1057,8 +1043,10 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
     />
     <ElDialog
       :model-value="!!directForm"
+      class="management-dialog"
       title="接入 ZLM"
       width="min(620px, calc(100vw - 32px))"
+      align-center
       append-to-body
       destroy-on-close
       @close="directForm = null"
@@ -1119,13 +1107,15 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             </label>
           </div>
         </details>
-        <ElButton native-type="submit" :loading="busy">检查并接入</ElButton>
+        <ElButton native-type="submit" type="primary" :loading="busy">检查并接入</ElButton>
       </form>
     </ElDialog>
     <ElDialog
       :model-value="!!directEditing"
+      class="management-dialog"
       title="ZLM 配置与预算"
       width="min(620px, calc(100vw - 32px))"
+      align-center
       append-to-body
       destroy-on-close
       @close="directEditing = null"
@@ -1167,13 +1157,15 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           />
         </label>
         <p>直连 ZLM 首期不支持转码，转码上限固定为 0。降低预算只影响新申请。</p>
-        <ElButton native-type="submit" :loading="busy">保存</ElButton>
+        <ElButton native-type="submit" type="primary" :loading="busy">保存</ElButton>
       </form>
     </ElDialog>
     <ElDialog
       :model-value="!!directCredential"
+      class="management-dialog"
       title="更新 ZLM secret"
       width="min(520px, calc(100vw - 32px))"
+      align-center
       append-to-body
       destroy-on-close
       @close="directCredential = null"
@@ -1182,33 +1174,42 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
         <p class="connection-form-intro">
           {{ directCredential.instance.name }}：排空并确认资源归零后才能更新。
         </p>
-        <label
+        <label class="field-full"
           >新 secret<input
             v-model="directCredential.secret"
             type="password"
             autocomplete="new-password"
             required
         /></label>
-        <ElButton native-type="submit" :loading="busy">更新密钥</ElButton>
+        <ElButton native-type="submit" type="primary" :loading="busy">更新密钥</ElButton>
       </form>
     </ElDialog>
     <ElDialog
       :model-value="!!directRemoving"
+      class="management-dialog"
       title="移除 ZLM 实例"
-      width="min(520px, calc(100vw - 32px))"
+      width="min(480px, calc(100vw - 32px))"
+      align-center
       append-to-body
       destroy-on-close
       @close="directRemoving = null"
     >
-      <p v-if="directRemoving" class="maintenance-body">
-        确认移除 {{ directRemoving.name }}？仅排空且无资源归属时允许移除。
-      </p>
-      <ElButton :loading="busy" @click="removeDirect()">确认移除</ElButton>
+      <div v-if="directRemoving" class="remove-confirm">
+        <p class="maintenance-body">
+          确认移除 <strong>{{ directRemoving.name }}</strong
+          >？仅排空且无资源归属时允许移除。
+        </p>
+        <div class="node-actions">
+          <ElButton type="danger" :loading="busy" @click="removeDirect()">确认移除</ElButton>
+        </div>
+      </div>
     </ElDialog>
     <ElDialog
       :model-value="!!connection"
+      class="management-dialog"
       :title="connection?.version == null ? '新增远程预览节点' : '修改节点连接'"
       width="min(680px, calc(100vw - 32px))"
+      align-center
       append-to-body
       destroy-on-close
       @close="connection = null"
@@ -1238,7 +1239,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             placeholder="10.0.0.10"
             required
         /></label>
-        <label
+        <label class="field-full"
           >证书 SHA-256 指纹<input
             v-model.trim="connection.certificateSha256"
             minlength="64"
@@ -1246,19 +1247,23 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             required
         /></label>
         <p>凭据文件须预先存放在 Platform 受保护目录，文件名为“节点 ID.token”。</p>
-        <ElButton native-type="submit" :loading="busy">检查并登记</ElButton>
+        <ElButton native-type="submit" type="primary" :loading="busy">检查并登记</ElButton>
       </form>
     </ElDialog>
     <ElDialog
       :model-value="!!maintaining"
+      class="management-dialog"
       title="预览节点维护"
       width="min(680px, calc(100vw - 32px))"
+      align-center
       append-to-body
       destroy-on-close
       @close="maintaining = null"
     >
       <div v-if="maintaining" class="maintenance-body">
-        <p>{{ maintaining.name }} · {{ names[maintaining.mode] }}</p>
+        <p class="maintenance-target">
+          <strong>{{ maintaining.name }}</strong> · {{ labelOf(names, maintaining.mode) }}
+        </p>
         <ol>
           <li>停止接新预览，等待已有观看关闭及资源释放。</li>
           <li>获取维护许可，在 Ops 对应预览实例的升级或回退计划中填写许可编号。</li>
@@ -1268,8 +1273,8 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           :error="error"
           advice="未决 Ops 作业须先核对或恢复。许可过期不会自动解除维护。"
         />
-        <p v-if="maintenance">
-          维护状态：{{ maintenanceNames[maintenance.state] || maintenance.state }}
+        <p v-if="maintenance" class="maintenance-state">
+          维护状态：<strong>{{ labelOf(maintenanceNames, maintenance.state) }}</strong>
         </p>
         <template v-if="maintenance?.permitId">
           <label
@@ -1280,14 +1285,17 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             Ops 作业：<code>{{ maintenance.jobId }}</code>
           </p>
         </template>
-        <div class="node-actions">
+        <div class="node-actions maintenance-actions">
           <ElButton :disabled="busy" @click="maintain()">刷新维护状态</ElButton>
           <ElButton
+            type="primary"
+            plain
             :disabled="busy || maintaining.mode !== 'DRAINING' || maintenance?.state === 'CLAIMED'"
             @click="maintain('PREPARE')"
             >获取维护许可</ElButton
           >
           <ElButton
+            type="primary"
             :disabled="
               busy ||
               maintaining.mode !== 'DRAINING' ||
@@ -1302,8 +1310,10 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
     </ElDialog>
     <ElDialog
       :model-value="!!diagnostic"
+      class="management-dialog"
       title="预览节点诊断"
-      width="min(760px, calc(100vw - 32px))"
+      width="min(740px, calc(100vw - 32px))"
+      align-center
       append-to-body
       destroy-on-close
       @close="diagnostic = null"
@@ -1312,14 +1322,16 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
     </ElDialog>
     <ElDialog
       :model-value="!!editing"
+      class="management-dialog"
       title="节点预算与优先级"
       width="min(620px, calc(100vw - 32px))"
+      align-center
       append-to-body
       destroy-on-close
       @close="editing = null"
     >
       <form v-if="editing" class="budget-form" @submit.prevent="save">
-        <label
+        <label class="field-full"
           >优先级<input
             v-model.number="editing.priority"
             type="number"
@@ -1337,7 +1349,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             required
         /></label>
         <p>降低预算只影响新申请。修改每路码率上界须先排空；远程预算不得超过节点已应用配置。</p>
-        <ElButton native-type="submit" :loading="busy">保存</ElButton>
+        <ElButton native-type="submit" type="primary" :loading="busy">保存</ElButton>
       </form>
     </ElDialog>
   </section>
@@ -1355,11 +1367,12 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 16px;
-  padding: 16px 24px;
-  background: #fff;
+  gap: 14px;
+  padding: 16px 22px;
+  background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .node-title-label {
   display: flex;
@@ -1368,16 +1381,20 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
 }
 .node-title h2 {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 700;
   color: #0f172a;
+  letter-spacing: -0.01em;
 }
 .node-count {
-  border-radius: 20px;
-  background: #f1f5f9;
-  color: #64748b;
-  padding: 5px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  padding: 3px 10px;
   font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .node-content {
   display: grid;
@@ -1386,24 +1403,28 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
 }
 .node-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 440px), 1fr));
   gap: 16px;
 }
 .node-card {
   container-name: node-card;
   container-type: inline-size;
   min-width: 0;
-  padding: 20px;
+  padding: 20px 22px;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
-  background: #fff;
-  transition: box-shadow 0.18s ease;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
 }
 .node-card:only-child {
   grid-column: 1 / -1;
 }
 .node-card:hover {
-  box-shadow: 0 5px 18px #0f172a08;
+  border-color: #cbd5e1;
+  box-shadow: 0 6px 18px -6px rgba(15, 23, 42, 0.08);
 }
 .node-heading,
 .node-heading > div {
@@ -1419,17 +1440,18 @@ h3 {
   margin: 0;
   font-size: 16px;
   color: #0f172a;
-  font-weight: 600;
+  font-weight: 700;
 }
 .node-heading small {
   font:
-    12px ui-monospace,
+    500 12px ui-monospace,
     Consolas,
     monospace;
-  color: #64748b;
+  color: #475569;
   background: #f1f5f9;
-  padding: 4px 8px;
-  border-radius: 5px;
+  border: 1px solid #e2e8f0;
+  padding: 2px 8px;
+  border-radius: 6px;
   overflow-wrap: anywhere;
 }
 .node-status-bar {
@@ -1438,28 +1460,31 @@ h3 {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px 16px;
-  margin: 16px 0;
-  padding: 8px 12px;
+  margin: 14px 0;
+  padding: 10px 14px;
+  border: 1px solid #fed7aa;
   background: #fff7ed;
-  border-radius: 6px;
-  color: #78614d;
-  font-size: 13px;
-  line-height: 1.7;
+  border-radius: 8px;
+  color: #9a3412;
+  font-size: 12.5px;
+  line-height: 1.6;
 }
 .node-status-bar.ready {
+  border-color: #bbf7d0;
   background: #f0fdf4;
-  color: #406b50;
+  color: #166534;
 }
 .node-state {
   margin: 0;
+  font-weight: 600;
 }
 .state-dot {
   display: inline-block;
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  margin: 0 6px 2px 0;
-  background: #d97706;
+  margin: 0 6px 1px 0;
+  background: #ea580c;
 }
 .ready .state-dot {
   background: #16a34a;
@@ -1467,19 +1492,23 @@ h3 {
 .node-identity {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
+  gap: 6px 14px;
   margin: 0;
-  font-size: 13px;
+  font-size: 12.5px;
 }
 .node-identity > div {
   display: flex;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
+}
+.node-identity dt {
+  opacity: 0.8;
 }
 .node-identity dt::after {
   content: ':';
 }
 .node-identity dd {
+  font-weight: 500;
   overflow-wrap: anywhere;
 }
 dt,
@@ -1488,30 +1517,32 @@ dd {
 }
 .node-ports {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 .node-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  margin: 0 0 16px;
+  gap: 10px;
+  margin: 0 0 14px;
 }
 .node-metrics > div {
   min-width: 0;
-  padding: 10px 12px;
-  border-radius: 8px;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
   background: #f8fafc;
 }
 .node-metrics dt {
   color: #64748b;
   font-size: 12px;
-  margin-bottom: 7px;
+  font-weight: 500;
+  margin-bottom: 6px;
 }
 .node-metrics dd {
   color: #0f172a;
   font:
-    600 16px ui-monospace,
+    700 16px ui-monospace,
     Consolas,
     monospace;
 }
@@ -1521,31 +1552,37 @@ dd {
 progress {
   display: block;
   width: 100%;
-  height: 4px;
+  height: 5px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 999px;
   overflow: hidden;
   appearance: none;
   background: #e2e8f0;
-  color: #60a5fa;
+  color: #2563eb;
 }
 progress::-webkit-progress-bar {
   background: #e2e8f0;
-  border-radius: 6px;
+  border-radius: 999px;
 }
 progress::-webkit-progress-value {
-  background: #60a5fa;
-  border-radius: 6px;
+  background: #2563eb;
+  border-radius: 999px;
 }
 progress::-moz-progress-bar {
-  background: #60a5fa;
-  border-radius: 6px;
+  background: #2563eb;
+  border-radius: 999px;
 }
 .node-bandwidth {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.node-bandwidth > div {
+  padding: 10px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
 }
 .bandwidth-label {
   display: flex;
@@ -1555,16 +1592,17 @@ progress::-moz-progress-bar {
   gap: 6px;
   margin-bottom: 8px;
   font-size: 12px;
+  font-weight: 500;
   color: #64748b;
 }
 .bandwidth-label strong {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: #334155;
+  color: #0f172a;
 }
 .node-bandwidth progress {
-  height: 6px;
+  height: 5px;
 }
 .node-actions {
   display: flex;
@@ -1576,76 +1614,85 @@ progress::-moz-progress-bar {
   margin-left: 0;
 }
 .node-actions a {
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 500;
   color: var(--el-color-primary);
+  text-decoration: none;
+}
+.node-actions a:hover {
+  text-decoration: underline;
 }
 .node-footer {
   border-top: 1px solid #f1f5f9;
   padding-top: 12px;
+  margin-top: 4px;
 }
 .node-footer :deep(.el-button.node-mode-action) {
   margin-left: auto;
 }
 .drain-action {
-  color: #a16207;
+  color: #b45309;
 }
 .drain-action:hover {
   color: #dc2626;
   background: #fff1f2;
 }
 .direct-guide {
-  padding: 22px 24px;
+  padding: 20px 22px;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
-  background: #fff;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .connection-heading,
 .connection-name {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 10px;
 }
 .connection-heading {
   justify-content: space-between;
 }
 .connection-heading h4 {
   margin: 0;
+  font-size: 14px;
+  color: #0f172a;
 }
 .connection-hint {
   color: #64748b;
-  font-size: 13px;
-  margin: 7px 0 0;
-  line-height: 1.6;
+  font-size: 12.5px;
+  margin: 4px 0 0;
+  line-height: 1.5;
 }
 .connection-empty {
   color: #64748b;
   font-size: 13px;
-  line-height: 1.7;
+  line-height: 1.6;
 }
 .direct-empty {
-  min-height: 140px;
-  margin-top: 20px;
+  min-height: 132px;
+  margin-top: 16px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  border: 1px dashed #e2e8f0;
-  border-radius: 8px;
-  background: #fafcfe;
-  color: #94a3b8;
-  font-size: 13px;
+  gap: 6px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 12.5px;
 }
 .direct-empty svg {
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   color: #94a3b8;
 }
 .direct-empty strong {
   font-size: 14px;
-  font-weight: 500;
-  color: #475569;
+  font-weight: 600;
+  color: #334155;
 }
 .guide-trigger {
   display: inline-flex;
@@ -1654,13 +1701,18 @@ progress::-moz-progress-bar {
   gap: 6px;
   height: 32px;
   padding: 0 14px;
-  border: 1px solid var(--el-border-color);
-  border-radius: 4px;
-  background: #fff;
-  color: var(--el-text-color-regular);
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334155;
   font-family: inherit;
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease;
 }
 .guide-trigger:hover {
   border-color: #93c5fd;
@@ -1669,60 +1721,64 @@ progress::-moz-progress-bar {
 }
 .guide-trigger:focus-visible {
   outline: 2px solid #60a5fa;
-  outline-offset: 3px;
+  outline-offset: 2px;
 }
 .primary-trigger {
-  color: #fff;
+  color: #ffffff;
   background: var(--el-color-primary);
   border-color: var(--el-color-primary);
 }
 .primary-trigger:hover {
-  color: #fff;
+  color: #ffffff;
   background: var(--el-color-primary-light-3);
+  border-color: var(--el-color-primary-light-3);
 }
 .guide-popover {
   box-sizing: border-box;
-  width: min(880px, calc(100vw - 32px));
+  width: min(860px, calc(100vw - 32px));
   max-height: 82vh;
   overflow: auto;
-  padding: 24px;
+  padding: 22px 24px;
   border: 1px solid #e2e8f0;
   border-radius: 14px;
-  background: #f8fafc;
+  background: #ffffff;
   color: #334155;
-  box-shadow: 0 18px 64px #0f172a26;
+  box-shadow:
+    0 20px 48px -12px rgba(15, 23, 42, 0.22),
+    0 4px 12px -2px rgba(15, 23, 42, 0.08);
 }
 .guide-popover::backdrop {
-  background: #0f172a40;
+  background: rgba(15, 23, 42, 0.35);
+  backdrop-filter: blur(2px);
 }
 .popover-heading {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
-  padding-bottom: 18px;
-  margin-bottom: 20px;
+  padding-bottom: 14px;
+  margin-bottom: 16px;
   border-bottom: 1px solid #e2e8f0;
 }
 .popover-heading p {
-  margin: 7px 0 0;
+  margin: 4px 0 0;
   color: #64748b;
-  font-size: 13px;
+  font-size: 12.5px;
 }
 .connection-list {
   display: grid;
-  gap: 12px;
-  margin-top: 16px;
+  gap: 10px;
+  margin-top: 14px;
 }
 .connection-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 16px;
   align-items: center;
-  padding: 16px;
+  padding: 14px 16px;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #fff;
+  border-radius: 10px;
+  background: #f8fafc;
 }
 .connection-detail {
   min-width: 0;
@@ -1730,19 +1786,33 @@ progress::-moz-progress-bar {
 .connection-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 16px;
+  gap: 6px 8px;
   margin-top: 8px;
   overflow-wrap: anywhere;
   font-size: 12px;
-  line-height: 1.7;
-  color: #64748b;
+  line-height: 1.5;
+  color: #475569;
+}
+.connection-meta > span {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #ffffff;
+  font-variant-numeric: tabular-nums;
 }
 .connection-name code {
   overflow-wrap: anywhere;
   font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #e2e8f0;
+  color: #334155;
 }
 .connection-name strong {
   font-size: 14px;
+  color: #0f172a;
 }
 .direct-actions {
   justify-content: flex-end;
@@ -1750,7 +1820,7 @@ progress::-moz-progress-bar {
 }
 .connection-extra,
 .node-advanced {
-  margin-top: 14px;
+  margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid #e2e8f0;
   font-size: 13px;
@@ -1759,99 +1829,153 @@ progress::-moz-progress-bar {
 .node-advanced summary {
   cursor: pointer;
   width: fit-content;
-  color: #64748b;
+  color: #475569;
+  font-weight: 500;
 }
 .connection-extra > .el-button,
 .node-advanced > .el-button {
   margin-top: 10px;
 }
 .node-reason {
-  font-size: 13px;
-  color: #a16207;
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  background: #fffbeb;
+  font-size: 12.5px;
+  color: #92400e;
   overflow-wrap: anywhere;
 }
 .node-json {
   margin: 0;
-  padding: 18px;
-  max-height: 60vh;
+  padding: 14px 16px;
+  max-height: 58vh;
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #f8fafc;
-  color: #334155;
+  color: #0f172a;
   font:
-    13px/1.8 ui-monospace,
+    12.5px/1.65 ui-monospace,
     Consolas,
     monospace;
 }
 .budget-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 16px;
+}
+.budget-form label.field-full {
+  grid-column: 1 / -1;
+}
+.remove-confirm {
+  display: grid;
   gap: 16px;
 }
+.remove-confirm .node-actions {
+  justify-content: flex-end;
+}
 .maintenance-body {
-  font-size: 14px;
-  line-height: 1.8;
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: #334155;
   overflow-wrap: anywhere;
 }
+.maintenance-target {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.maintenance-state {
+  margin: 10px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1e40af;
+}
+.maintenance-actions {
+  margin-top: 14px;
+  justify-content: flex-end;
+}
 .maintenance-body ol {
-  padding-left: 22px;
+  margin: 0 0 12px;
+  padding-left: 20px;
+  color: #475569;
 }
 .maintenance-body label {
   display: grid;
   gap: 6px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  font-weight: 500;
 }
-.maintenance-body input {
+.maintenance-body input,
+.budget-form input {
+  min-width: 0;
   width: 100%;
+  height: 36px;
   box-sizing: border-box;
-  padding: 8px;
-  color: var(--el-text-color-primary);
-  background: var(--el-bg-color);
-  border: 1px solid var(--border-subtle);
+  padding: 0 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 13px;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+.maintenance-body input:focus,
+.budget-form input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  outline: none;
 }
 .budget-form label {
   display: grid;
   gap: 6px;
-  font-size: 13px;
-}
-.budget-form input {
-  min-width: 0;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  background: var(--el-bg-color);
-  color: var(--el-text-color-primary);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #334155;
 }
 .budget-form p {
   grid-column: 1 / -1;
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--text-secondary);
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #64748b;
 }
 .budget-form > .el-button {
   grid-column: 1 / -1;
-  justify-self: start;
-  min-width: 140px;
+  justify-self: end;
+  min-width: 120px;
 }
 .budget-form .connection-form-intro {
-  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475569;
 }
 .form-advanced {
   grid-column: 1 / -1;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-subtle);
+  padding-top: 10px;
+  border-top: 1px solid #e2e8f0;
 }
 .form-advanced summary {
   width: fit-content;
   cursor: pointer;
   font-size: 13px;
+  font-weight: 500;
+  color: #2563eb;
 }
 .form-advanced-fields {
-  margin-top: 14px;
+  margin-top: 12px;
 }
 
 @media (max-width: 800px) {
@@ -1896,7 +2020,7 @@ progress::-moz-progress-bar {
   }
   .node-bandwidth {
     grid-template-columns: 1fr;
-    gap: 12px;
+    gap: 10px;
   }
   .node-footer :deep(.el-button.node-mode-action) {
     margin-left: 0;

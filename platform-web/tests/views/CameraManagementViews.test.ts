@@ -19,6 +19,7 @@ import PlacementDialog from '../../src/features/camera/PlacementDialog.vue'
 import ManualCreateDialog from '../../src/features/camera/ManualCreateDialog.vue'
 import ScanDialog from '../../src/features/camera-access/ScanDialog.vue'
 import SourceEditor from '../../src/features/camera-sources/SourceEditor.vue'
+import CandidateSelection from '../../src/features/camera-access/CandidateSelection.vue'
 import BulkImportPanel from '../../src/features/camera-access/BulkImportPanel.vue'
 import ImportTasksDialog from '../../src/features/camera-access/ImportTasksDialog.vue'
 import PlatformDirectory from '../../src/features/camera-access/PlatformDirectory.vue'
@@ -609,6 +610,53 @@ afterEach(() => {
 })
 
 describe('camera management interaction boundaries', () => {
+  it('uses Chinese stream names in details and selectors without modifying asset labels', async () => {
+    const rawProfiles = [
+      { ...profile, streamProfileId: '21', label: 'mainStream', usageHint: 'MAIN' },
+      { ...profile, label: 'subStream' },
+      { ...profile, streamProfileId: '22', label: '夜间细节', usageHint: 'CUSTOM' },
+    ]
+    api.getCamera.mockResolvedValue({ ...camera, profiles: rawProfiles })
+    const root = await mount(DetailDialog, { cameraId: '10', canManage: true })
+    expect(text(root)).toContain('主码流')
+    expect(text(root)).toContain('子码流')
+    expect(text(root)).toContain('夜间细节')
+    expect(text(root)).not.toContain('mainStream')
+    expect(text(root)).not.toContain('subStream')
+    const options = nodes(root).filter((item) => item.type === 'ElOption')
+    expect(options.find((item) => item.props.value === '21')?.props.label).toBe('主码流')
+    expect(options.find((item) => item.props.value === '20')?.props.label).toBe('子码流')
+    expect(rawProfiles.map((item) => item.label)).toEqual(['mainStream', 'subStream', '夜间细节'])
+    expect(api.updateProfile).not.toHaveBeenCalled()
+  })
+  it('uses the same names for import candidates while retaining their original selection IDs', async () => {
+    const candidate = {
+      ...accessJob.candidates[0]!,
+      profiles: accessJob.candidates[0]!.profiles.map((item, index) => ({
+        ...item,
+        name: index === 0 ? 'mainStream' : 'subStream',
+      })),
+    }
+    const selection = {
+      candidateId: candidate.candidateId,
+      profileIds: ['stream-a', 'stream-b'],
+      defaultProfileId: 'stream-b',
+    }
+    const root = await mount(CandidateSelection, {
+      candidates: [candidate],
+      disabled: false,
+      modelValue: [selection],
+    })
+    expect(text(root)).toContain('主码流')
+    expect(text(root)).toContain('子码流')
+    expect(text(root)).not.toContain('mainStream')
+    expect(text(root)).not.toContain('subStream')
+    const options = nodes(root).filter((item) => item.type === 'ElOption')
+    expect(options.find((item) => item.props.value === 'stream-b')?.props.label).toBe('子码流')
+    expect(selection.profileIds).toEqual(['stream-a', 'stream-b'])
+    expect(selection.defaultProfileId).toBe('stream-b')
+    expect(candidate.profiles.map((item) => item.name)).toEqual(['mainStream', 'subStream'])
+  })
   it('loads only expanded platform region pages and keeps every level initially collapsed', async () => {
     const connection = { method: 'HIK_PLATFORM', sourceId: '70', sourceVersion: '9' }
     const root = await mount(PlatformDirectory, { connection, disabled: false })

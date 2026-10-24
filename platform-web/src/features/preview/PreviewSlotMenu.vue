@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { ElOption, ElSelect } from 'element-plus'
 import type { PreviewChannel, PreviewProfile } from '../../api/preview/types'
-import { usageLabels } from './model'
+import { streamLabel } from '../camera/streamLabels'
 import type { PreviewMenuAction } from './model'
 
 const props = defineProps<{
@@ -22,6 +22,10 @@ const emit = defineEmits<{
 }>()
 const root = ref<globalThis.HTMLElement | null>(null)
 const position = ref(props.position)
+const profileOptions = computed(() => {
+  const profiles = props.profiles.map((profile) => ({ ...profile, usageHint: profile.usage }))
+  return profiles.map((profile) => ({ ...profile, displayLabel: streamLabel(profile, profiles) }))
+})
 function focusable(): globalThis.HTMLElement[] {
   return Array.from(
     root.value?.querySelectorAll<globalThis.HTMLElement>(
@@ -110,10 +114,10 @@ function keydown(event: globalThis.KeyboardEvent) {
         @change="emit('profile', $event)"
       >
         <ElOption
-          v-for="profile in profiles"
+          v-for="profile in profileOptions"
           :key="profile.streamProfileId"
           :value="profile.streamProfileId"
-          :label="`${usageLabels[profile.usage]} · ${profile.label}`"
+          :label="profile.displayLabel"
         />
       </ElSelect>
     </div>
@@ -137,31 +141,35 @@ function keydown(event: globalThis.KeyboardEvent) {
 .preview-context {
   position: fixed;
   z-index: 30;
-  width: 224px;
+  width: 232px;
   max-width: calc(100vw - 16px);
   max-height: calc(100dvh - 16px);
   overflow: auto;
-  padding: 6px;
-  border: 1px solid var(--preview-line);
-  border-radius: 6px;
-  background: #fff;
-  box-shadow: 0 10px 28px #273b5224;
+  padding: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow:
+    0 12px 28px -6px rgba(15, 23, 42, 0.16),
+    0 4px 10px -2px rgba(15, 23, 42, 0.08);
 }
 .preview-context > button {
   display: block;
   width: 100%;
-  padding: 9px 11px;
+  padding: 8px 10px;
   border: 0;
-  border-radius: 3px;
+  border-radius: 6px;
   background: transparent;
-  color: var(--preview-ink);
+  color: #0f172a;
   text-align: left;
   font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
+  transition: background-color 120ms ease;
 }
 .preview-context > button:hover,
 .preview-context > button:focus-visible {
-  background: var(--preview-hover);
+  background: #f1f5f9;
 }
 .preview-context > button:focus-visible {
   outline: 2px solid var(--preview-accent);
@@ -173,11 +181,14 @@ function keydown(event: globalThis.KeyboardEvent) {
 }
 .context-section {
   display: grid;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 5px;
+  padding: 6px 8px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid #f1f5f9;
 }
 .context-section > span {
-  color: var(--preview-muted);
-  font-size: 12px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
 }
 </style>

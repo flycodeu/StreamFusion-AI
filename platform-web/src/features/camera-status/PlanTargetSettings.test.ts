@@ -58,10 +58,10 @@ async function settle() {
     await nextTick()
   }
 }
-async function mount() {
+async function mount(targets = [target]) {
   root = node('root')
   app = renderer.createApp(PlanTargetSettings, {
-    targets: [target],
+    targets,
     disabled: false,
     onChange: changed,
   })
@@ -94,6 +94,23 @@ beforeEach(() => {
 afterEach(() => app?.unmount())
 
 describe('per-device scheduled stream selection', () => {
+  it('translates summary and option labels while submitting the original profile ID', async () => {
+    const rawCamera = camera('60')
+    rawCamera.profiles[0]!.label = 'mainStream'
+    rawCamera.profiles[1]!.label = 'subStream'
+    api.getCamera.mockResolvedValue(rawCamera)
+    await mount([{ ...target, profileName: 'mainStream' }])
+    expect(text(root)).toContain('主码流')
+    expect(text(root)).not.toContain('mainStream')
+    await click('调整')
+    const options = nodes(root).filter((item) => item.type === 'ElOption')
+    expect(options.find((item) => item.props.value === '600')?.props.label).toBe('主码流')
+    expect(options.find((item) => item.props.value === '601')?.props.label).toBe('子码流')
+    ;(select('巡检检测码流').props['onUpdate:modelValue'] as (id: string) => void)('601')
+    await click('应用')
+    expect(changed).toHaveBeenCalledWith({ groupKey: 'd7', cameraId: '60', streamProfileId: '601' })
+    expect(rawCamera.profiles.map((profile) => profile.label)).toEqual(['mainStream', 'subStream'])
+  })
   it('retains the current channel outside the first page and discards cancelled drafts', async () => {
     await mount()
     await click('调整')

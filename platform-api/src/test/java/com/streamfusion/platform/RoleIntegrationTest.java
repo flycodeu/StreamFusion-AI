@@ -513,6 +513,325 @@ class RoleIntegrationTest extends SecureLoginSupport {
                 .andExpect(jsonPath("$.code").value("PROTECTED_ACCOUNT"));
     }
 
+    @Test
+    void userFormSavesProfileDepartmentsAndRolesTogetherAndPreservesOmittedRoles()
+            throws Exception {
+        Csrf actor = admin();
+        String role = createRole(actor, "FORM_OPS", List.of("1002"));
+        JsonNode created =
+                write(
+                        post("/user"),
+                        actor,
+                        json.writeValueAsString(
+                                Map.of(
+                                        "username",
+                                        "FormUser",
+                                        "nickname",
+                                        "初始",
+                                        "departmentIds",
+                                        List.of("2002"),
+                                        "roleIds",
+                                        List.of(role))),
+                        201);
+        String id = created.path("id").asText();
+        assertThat(created.path("roles").get(0).path("id").asText()).isEqualTo(role);
+        assertThat(created.path("departments").get(0).path("id").asText()).isEqualTo("2002");
+        JsonNode updated =
+                write(
+                        put("/user/" + id),
+                        actor,
+                        json.writeValueAsString(
+                                Map.of(
+                                        "version",
+                                        created.path("version").asText(),
+                                        "nickname",
+                                        "更新",
+                                        "departmentIds",
+                                        List.of("2003"))),
+                        200);
+        assertThat(updated.path("roles").get(0).path("id").asText()).isEqualTo(role);
+        assertThat(updated.path("departments").get(0).path("id").asText()).isEqualTo("2003");
+        JsonNode cleared =
+                write(
+                        put("/user/" + id),
+                        actor,
+                        json.writeValueAsString(
+                                Map.of(
+                                        "version",
+                                        updated.path("version").asText(),
+                                        "nickname",
+                                        "更新",
+                                        "departmentIds",
+                                        List.of(),
+                                        "roleIds",
+                                        List.of())),
+                        200);
+        assertThat(cleared.path("roles").size()).isZero();
+        assertThat(cleared.path("departments").size()).isZero();
+        assertThat(cleared.path("version").asLong())
+                .isGreaterThan(updated.path("version").asLong());
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT version FROM sys_user WHERE id=?",
+                                Long.class,
+                                Long.parseLong(id)))
+                .isEqualTo(cleared.path("version").asLong());
+    }
+
+    @Test
+    void invalidRolesRollBackCreationAndAllPartsOfAnEditIncludingAudit() throws Exception {
+        Csrf actor = admin();
+        String role = createRole(actor, "FORM_OPS", List.of("1002"));
+        int auditCount =
+                jdbc.queryForObject("SELECT COUNT(*) FROM sys_operation_log", Integer.class);
+        mvc.perform(
+                        post("/user")
+                                .session(actor.session())
+                                .header(actor.header(), actor.token())
+                                .contentType("application/json")
+                                .content(
+                                        "{\"username\":\"FailedForm\",\"departmentIds\":[\"2002\"],\"roleIds\":[\"999999\"]}"))
+                .andExpect(status().isBadRequest());
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM sys_user WHERE username='FailedForm'",
+                                Integer.class))
+                .isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_operation_log", Integer.class))
+                .isEqualTo(auditCount);
+        JsonNode created =
+                write(
+                        post("/user"),
+                        actor,
+                        json.writeValueAsString(
+                                Map.of(
+                                        "username",
+                                        "FormUser",
+                                        "nickname",
+                                        "原名",
+                                        "departmentIds",
+                                        List.of("2002"),
+                                        "roleIds",
+                                        List.of(role))),
+                        201);
+        String id = created.path("id").asText();
+        auditCount = jdbc.queryForObject("SELECT COUNT(*) FROM sys_operation_log", Integer.class);
+        mvc.perform(
+                        put("/user/" + id)
+                                .session(actor.session())
+                                .header(actor.header(), actor.token())
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "version",
+                                                        created.path("version").asText(),
+                                                        "nickname",
+                                                        "不应保存",
+                                                        "departmentIds",
+                                                        List.of("2003"),
+                                                        "roleIds",
+                                                        List.of("999999")))))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/user/" + id).session(actor.session()))
+                .andExpect(jsonPath("$.data.nickname").value("原名"))
+                .andExpect(jsonPath("$.data.version").value(created.path("version").asText()))
+                .andExpect(jsonPath("$.data.departments[0].id").value("2002"))
+                .andExpect(jsonPath("$.data.roles[0].id").value(role));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_operation_log", Integer.class))
+                .isEqualTo(auditCount);
+        mvc.perform(
+                        put("/user/" + id)
+                                .session(actor.session())
+                                .header(actor.header(), actor.token())
+                                .contentType("application/json")
+                                .content(
+                                        "{\"version\":\"0\",\"nickname\":\"过期编辑\",\"roleIds\":[]}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("VERSION_CONFLICT"));
+    }
+
+    @Test
+    void integratedEditKeepsExistingDisabledRolesButRejectsNewDisabledAssignments()
+            throws Exception {
+        Csrf actor = admin();
+        String role = createRole(actor, "FORM_OPS", List.of("1002"));
+        String id = createUser(actor, "FormUser");
+        assignRoles(actor, id, "0", List.of(role));
+        jdbc.update("UPDATE sys_role SET status='DISABLED' WHERE id=?", Long.parseLong(role));
+        JsonNode updated =
+                write(
+                        put("/user/" + id),
+                        actor,
+                        json.writeValueAsString(
+                                Map.of(
+                                        "version",
+                                        "1",
+                                        "nickname",
+                                        "保留角色",
+                                        "roleIds",
+                                        List.of(role))),
+                        200);
+        assertThat(updated.path("roles").get(0).path("id").asText()).isEqualTo(role);
+        mvc.perform(
+                        post("/user")
+                                .session(actor.session())
+                                .header(actor.header(), actor.token())
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "username",
+                                                        "DisabledRole",
+                                                        "roleIds",
+                                                        List.of(role)))))
+                .andExpect(status().isBadRequest());
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM sys_user WHERE username='DisabledRole'",
+                                Integer.class))
+                .isZero();
+    }
+
+    @Test
+    void protectedAccountsOnlyAllowExistingRelationActionsAndCannotLoseOwnSuperRole()
+            throws Exception {
+        Csrf actor = admin();
+        String adminId =
+                jdbc.queryForObject("SELECT id FROM sys_user WHERE username='Admin01'", Long.class)
+                        .toString();
+        mvc.perform(
+                        put("/user/" + adminId)
+                                .session(actor.session())
+                                .header(actor.header(), actor.token())
+                                .contentType("application/json")
+                                .content(
+                                        "{\"version\":\"0\",\"nickname\":\"不得改名\",\"roleIds\":[\"1\"]}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("PROTECTED_ACCOUNT"));
+        JsonNode detail =
+                json.readTree(
+                                mvc.perform(get("/user/" + adminId).session(actor.session()))
+                                        .andReturn()
+                                        .getResponse()
+                                        .getContentAsString())
+                        .path("data");
+        String payload =
+                json.writeValueAsString(
+                        Map.of(
+                                "version",
+                                "0",
+                                "nickname",
+                                detail.path("nickname").asText(""),
+                                "departmentIds",
+                                List.of("2003"),
+                                "roleIds",
+                                List.of()));
+        mvc.perform(
+                        put("/user/" + adminId)
+                                .session(actor.session())
+                                .header(actor.header(), actor.token())
+                                .contentType("application/json")
+                                .content(payload))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("PROTECTED_ACCOUNT"));
+        mvc.perform(get("/user/" + adminId).session(actor.session()))
+                .andExpect(jsonPath("$.data.version").value("0"))
+                .andExpect(jsonPath("$.data.departments.length()").value(0));
+        JsonNode changed =
+                write(
+                        put("/user/" + adminId),
+                        actor,
+                        json.writeValueAsString(
+                                Map.of(
+                                        "version",
+                                        "0",
+                                        "nickname",
+                                        detail.path("nickname").asText(""),
+                                        "departmentIds",
+                                        List.of("2003"),
+                                        "roleIds",
+                                        List.of("1"))),
+                        200);
+        assertThat(changed.path("departments").get(0).path("id").asText()).isEqualTo("2003");
+        assertThat(changed.path("roles").get(0).path("code").asText()).isEqualTo("SUPER_ADMIN");
+    }
+
+    @Test
+    void ordinaryUserManagerCanAssignOtherOrdinaryRolesButCannotGrantSuperAdmin() throws Exception {
+        Csrf root = admin();
+        String managerRole = createRole(root, "FORM_MANAGER", List.of("1002"));
+        String otherRole = createRole(root, "FORM_OTHER", List.of("1003"));
+        String managerId = createUser(root, "FormManager");
+        assignRoles(root, managerId, "0", List.of(managerRole));
+        Csrf actor = login("FormManager", "Initial1!");
+        JsonNode created =
+                write(
+                        post("/user"),
+                        actor,
+                        json.writeValueAsString(
+                                Map.of("username", "FormWorker", "roleIds", List.of(otherRole))),
+                        201);
+        assertThat(created.path("roles").get(0).path("id").asText()).isEqualTo(otherRole);
+        mvc.perform(
+                        post("/user")
+                                .session(actor.session())
+                                .header(actor.header(), actor.token())
+                                .contentType("application/json")
+                                .content("{\"username\":\"IllegalSuper\",\"roleIds\":[\"1\"]}"))
+                .andExpect(status().isForbidden());
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT COUNT(*) FROM sys_user WHERE username='IllegalSuper'",
+                                Integer.class))
+                .isZero();
+        mvc.perform(
+                        put("/user/" + created.path("id").asText())
+                                .session(actor.session())
+                                .header(actor.header(), actor.token())
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "version",
+                                                        created.path("version").asText(),
+                                                        "nickname",
+                                                        "不得部分保存",
+                                                        "roleIds",
+                                                        List.of("1")))))
+                .andExpect(status().isForbidden());
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT nickname FROM sys_user WHERE id=?",
+                                String.class,
+                                created.path("id").asLong()))
+                .isNull();
+        JsonNode own =
+                write(
+                        put("/user/" + managerId),
+                        actor,
+                        json.writeValueAsString(
+                                Map.of("version", "1", "roleIds", List.of(managerRole, otherRole))),
+                        200);
+        assertThat(own.path("roles").size()).isEqualTo(2);
+        mvc.perform(
+                        put("/user/" + managerId)
+                                .session(actor.session())
+                                .header(actor.header(), actor.token())
+                                .contentType("application/json")
+                                .content(
+                                        json.writeValueAsString(
+                                                Map.of(
+                                                        "version",
+                                                        own.path("version").asText(),
+                                                        "departmentIds",
+                                                        List.of("2002"),
+                                                        "roleIds",
+                                                        List.of(managerRole, otherRole)))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("PROTECTED_ACCOUNT"));
+    }
+
     private String createRole(Csrf actor, String code, List<String> menuIds) throws Exception {
         String id =
                 write(

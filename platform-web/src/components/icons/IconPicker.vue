@@ -53,23 +53,30 @@ function choose(key: string | null) {
 .icon-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 4px;
-  max-height: 280px;
+  gap: 6px;
+  max-height: 260px;
   overflow-y: auto;
   margin: 10px 0;
+  padding: 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
 }
 .icon-grid button {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 7px;
-  padding: 10px 2px;
-  background: transparent;
+  gap: 6px;
+  padding: 8px 4px;
+  background: #fff;
   color: var(--el-text-color-regular);
-  border: 1px solid transparent;
-  border-radius: 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
 }
 .icon-grid button:hover,
 .icon-grid button[aria-pressed='true'] {

@@ -171,21 +171,23 @@ function contextMenu(event: InstanceType<typeof globalThis.Event>, item: FolderN
 .folder-tree {
   min-width: 0;
   overflow: auto;
-  padding: 20px 12px;
-  border-right: 1px solid var(--el-border-color-lighter);
+  padding: 16px 12px;
+  border-right: 1px solid #e2e8f0;
+  background: #fafbfc;
 }
 .tree-heading {
   display: block;
-  color: var(--el-text-color-secondary);
+  color: #475569;
   font-size: 12px;
-  padding: 0 8px 14px;
+  font-weight: 600;
+  padding: 0 8px 10px;
 }
 .tree-unavailable {
   display: flex;
   align-items: center;
   gap: 7px;
   margin: 14px 8px 0;
-  color: var(--el-text-color-secondary);
+  color: #64748b;
   font-size: 12px;
 }
 .tree-unavailable i {
@@ -215,18 +217,27 @@ function contextMenu(event: InstanceType<typeof globalThis.Event>, item: FolderN
 }
 .tree-node .el-icon {
   flex-shrink: 0;
-  color: var(--el-color-warning);
+  color: #f59e0b;
+}
+.folder-tree :deep(.el-tree) {
+  background: transparent;
 }
 :deep(.el-tree-node__content) {
   height: 36px;
   width: max-content;
   min-width: 100%;
-  border-radius: 5px;
+  border-radius: 6px;
+  margin-bottom: 1px;
+}
+:deep(.is-current > .el-tree-node__content) {
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 500;
 }
 @media (max-width: 700px) {
   .folder-tree {
     border-right: 0;
-    border-bottom: 1px solid var(--el-border-color-lighter);
+    border-bottom: 1px solid #e2e8f0;
     padding: 12px;
     max-height: 220px;
     overflow: auto;

@@ -1,3 +1,7 @@
+import { formatDateTime } from '../../utils/dateTime'
+import { formatBytes } from '../../utils/formatBytes'
+import { labelOf } from '../../utils/display'
+
 export const statusLabels: Record<string, string> = {
   UNCHECKED: '未检查',
   ACCESSIBLE: '访问正常',
@@ -31,20 +35,30 @@ export const statusLabels: Record<string, string> = {
   EXPIRED: '已过期',
 }
 export function label(value: string) {
-  return statusLabels[value] ?? value
+  return labelOf(statusLabels, value)
 }
 export function bytes(value: unknown): string {
   if (value == null || value === '') return '暂无统计'
-  const n = Number(value)
-  if (!Number.isFinite(n) || n < 0) return '不可获取'
-  if (n < 1024) return `${n} B`
-  const index = Math.min(Math.floor(Math.log(n) / Math.log(1024)), 4)
-  return `${(n / 1024 ** index).toFixed(2)} ${['B', 'KiB', 'MiB', 'GiB', 'TiB'][index]}`
+  return formatBytes(
+    typeof value === 'number' || typeof value === 'bigint' || typeof value === 'string'
+      ? value
+      : null,
+    {
+      precision: Number(value) < 1024 ? 0 : 2,
+      empty: '不可获取',
+    },
+  )
 }
 export function time(value: unknown): string {
   if (typeof value !== 'string' || !value) return '尚无结果'
-  const date = new Date(value)
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })
+  return formatDateTime(value)
 }
+
+const checkStages = {
+  AUTH_LIST: '认证与目录访问',
+  HEAD: '文件元数据读取',
+  AUTH_LIST_HEAD: '认证与文件访问',
+}
+const checkResults = { PASSED: '通过', FAILED: '失败', NOT_TESTED: '未检测' }
+export const checkStageLabel = (value: string) => labelOf(checkStages, value)
+export const checkResultLabel = (value: string) => labelOf(checkResults, value)

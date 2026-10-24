@@ -241,7 +241,7 @@ describe('diagnostic query page', () => {
     await flush()
     const json = nodes(root).find((n) => n.props['aria-label'] === '完整诊断 JSON')!
     expect(JSON.parse(text(json))).toEqual(event)
-    expect(text(root)).toContain('旧记录不会补录')
+    expect(text(root)).toContain('未采集请求参数或返回内容')
     expect(mock.getDiagnostics).toHaveBeenCalledTimes(1)
   })
 

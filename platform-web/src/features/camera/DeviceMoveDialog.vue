@@ -98,6 +98,7 @@ onMounted(load)
     :model-value="true"
     title="移动分组"
     class="management-dialog"
+    align-center
     width="640px"
     :close-on-click-modal="!saving"
     :close-on-press-escape="!saving"

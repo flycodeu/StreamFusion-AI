@@ -7,7 +7,7 @@ import RequestError from '../../components/feedback/RequestError.vue'
 import JsonInspector from '../../components/feedback/JsonInspector.vue'
 import StorageRecords from './StorageRecords.vue'
 import { useStorageJob } from './useStorageJob'
-import { label, time } from './display'
+import { label, time, checkStageLabel, checkResultLabel } from './display'
 const props = defineProps<{ instance: StorageInstance }>()
 const emit = defineEmits<{ updated: [] }>()
 const detailsOpen = ref(false)
@@ -15,12 +15,6 @@ const { task, error, busy, run } = useStorageJob(
   () => props.instance.instanceId,
   () => emit('updated'),
 )
-const stages: Record<string, string> = {
-  AUTH_LIST: '认证与目录访问',
-  HEAD: '文件元数据读取',
-  AUTH_LIST_HEAD: '认证与文件访问',
-}
-const states: Record<string, string> = { PASSED: '通过', FAILED: '失败', NOT_TESTED: '未检测' }
 const observations = computed(() =>
   props.instance.scopes.flatMap((scope) => {
     const steps = scope.observation.steps
@@ -29,8 +23,8 @@ const observations = computed(() =>
           .filter((s) => s && typeof s === 'object')
           .map((step) => ({
             storage: scope.displayName || scope.bucket,
-            stage: stages[String(step.stage)] || String(step.stage),
-            status: states[String(step.status)] || String(step.status),
+            stage: checkStageLabel(String(step.stage)),
+            status: String(step.status),
           }))
       : []
   }),
@@ -68,19 +62,20 @@ const observations = computed(() =>
         ><template #default="{ row }"
           ><span
             class="check-state"
-            :class="{ passed: row.status === '通过', failed: row.status === '失败' }"
+            :class="{ passed: row.status === 'PASSED', failed: row.status === 'FAILED' }"
             ><span aria-hidden="true">{{
-              row.status === '通过' ? '✓' : row.status === '失败' ? '!' : '○'
+              row.status === 'PASSED' ? '✓' : row.status === 'FAILED' ? '!' : '○'
             }}</span
-            >{{ row.status }}</span
+            >{{ checkResultLabel(row.status) }}</span
           ></template
         ></ElTableColumn
       ></ElTable
     >
     <ElDialog
       v-model="detailsOpen"
+      class="management-dialog"
       title="连接检测详情"
-      width="min(860px, 94vw)"
+      width="min(820px, 94vw)"
       align-center
       destroy-on-close
     >
@@ -104,37 +99,44 @@ const observations = computed(() =>
   align-items: center;
   gap: 18px;
   flex-wrap: wrap;
-  margin-bottom: 24px;
+  margin-bottom: 18px;
 }
 h2 {
-  margin: 0 0 8px;
-  font-size: 18px;
-  font-weight: 500;
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: 700;
+  color: #0f172a;
 }
 .section-heading span {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
+  color: #64748b;
+  font-size: 12.5px;
 }
 .job-state {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
   max-width: 100%;
 }
 .check-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
 }
 .check-actions :deep(.el-button + .el-button) {
   margin-left: 0;
 }
+.checks-page :deep(.el-table__header .el-table__cell) {
+  background: #f8fafc;
+  color: #475569;
+  font-weight: 600;
+}
 .checks-page :deep(.el-table__cell) {
-  padding: 14px 0;
+  padding: 12px 0;
 }
 .check-state {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: #94a3b8;
+  color: #64748b;
+  font-weight: 500;
 }
 .check-state > span {
   display: grid;
