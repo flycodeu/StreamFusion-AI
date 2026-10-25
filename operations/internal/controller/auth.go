@@ -87,8 +87,8 @@ func (h *HTTP) login(w http.ResponseWriter, r *http.Request, anonymous *session)
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := decode(w, r, &input); err != nil {
-		h.fail(w, r, 400, "INVALID_INPUT", err.Error())
+	if err := h.decodeSensitive(w, r, anonymous, &input); err != nil {
+		h.rejectSecureRequest(w, r)
 		return
 	}
 	if len(input.Username) > 32 || len(input.Password) > 64 {
@@ -211,8 +211,8 @@ func (h *HTTP) password(w http.ResponseWriter, r *http.Request, s *session) {
 		Current string `json:"currentPassword"`
 		Next    string `json:"newPassword"`
 	}
-	if err := decode(w, r, &input); err != nil {
-		h.fail(w, r, 400, "INVALID_INPUT", err.Error())
+	if err := h.decodeSensitive(w, r, s, &input); err != nil {
+		h.rejectSecureRequest(w, r)
 		return
 	}
 	if err := ValidatePassword(input.Next); err != nil {

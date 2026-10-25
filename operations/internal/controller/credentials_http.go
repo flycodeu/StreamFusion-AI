@@ -41,8 +41,8 @@ func (h *HTTP) createCredential(w http.ResponseWriter, r *http.Request, s *sessi
 		Secret           string `json:"secret"`
 		ExpectedRevision string `json:"expectedRevision"`
 	}
-	if err := decode(w, r, &input); err != nil {
-		h.fail(w, r, 400, "INVALID_INPUT", err.Error())
+	if err := h.decodeSensitive(w, r, s, &input); err != nil {
+		h.rejectSecureRequest(w, r)
 		return
 	}
 	input.Name = strings.TrimSpace(input.Name)

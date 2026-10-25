@@ -12,6 +12,7 @@ import socket
 import subprocess
 import time
 import urllib.request
+from secure_request import protect_request
 
 from playwright.sync_api import sync_playwright
 
@@ -65,6 +66,7 @@ def main():
                 page.get_by_role("heading", name="运行总览", exact=True).wait_for()
 
                 def api(path, method="GET", data=None, expected=200):
+                    data = protect_request(path, method, data, lambda target: api("/auth/secure-challenge", "POST", {"path": target}))
                     csrf = page.request.get(base + "/ops/api/v1/auth/csrf").json()["data"]["csrfToken"]
                     response = page.request.fetch(base + "/ops/api/v1" + path, method=method, data=data,
                         headers={"Origin": base, "X-CSRF-Token": csrf, "Content-Type": "application/json"})

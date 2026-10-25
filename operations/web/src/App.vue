@@ -318,7 +318,7 @@ async function saveCredential() {
         name: credentialName.value,
         kind: credentialKind.value,
         secret: secret.value,
-        expectedRevision: item?.revision || "",
+        ...(item ? { expectedRevision: item.revision } : {}),
       },
     );
     secret.value = "";

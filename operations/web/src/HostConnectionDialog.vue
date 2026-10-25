@@ -223,7 +223,6 @@ async function saveCredential() {
         name,
         kind,
         secret: credentialSecret.value,
-        expectedRevision: "",
       },
     );
     credentialSecret.value = "";

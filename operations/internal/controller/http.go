@@ -42,6 +42,7 @@ type HTTP struct {
 	attempts         int
 	hashSlots        chan struct{}
 	dummyHash        []byte
+	requestCipher    requestCipher
 	platformToken    []byte
 	hostCheckSlots   chan struct{}
 	observationMu    sync.Mutex
@@ -221,6 +222,10 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == "POST" && path == "/auth/login" {
 		h.login(w, r, auth)
+		return
+	}
+	if r.Method == "POST" && path == "/auth/secure-challenge" {
+		h.secureChallenge(w, r, auth)
 		return
 	}
 	if auth.AdminID == "" {

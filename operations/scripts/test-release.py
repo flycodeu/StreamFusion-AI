@@ -20,6 +20,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from secure_request import protect_request
 
 
 def main():
@@ -63,6 +64,7 @@ def main():
     instance_id = ""
 
     def api(path, method="GET", data=None, want=200):
+        data = protect_request(path, method, data, lambda target: api("/auth/secure-challenge", "POST", {"path": target}))
         body = None if data is None else json.dumps(data).encode()
         req = urllib.request.Request(base + "/ops/api/v1" + path, body, method=method,
             headers={"Content-Type": "application/json", "Origin": base, "X-CSRF-Token": csrf})

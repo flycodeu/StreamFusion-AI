@@ -1,3 +1,10 @@
+import {
+  encryptSensitiveRequest,
+  isSensitiveRequest,
+  requireRequestCrypto,
+  type RequestChallenge,
+} from "./requestCipher";
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -27,12 +34,13 @@ export async function request<T>(
     );
   return body.data as T;
 }
-export function send(
+export async function send(
   path: string,
   method: string,
   data?: unknown,
   signal?: AbortSignal,
 ) {
+  method = method.toUpperCase();
   const timeout = AbortSignal.timeout(
     /^\/installation-materials\/[^/]+\/confirm$/.test(path) ||
       path === "/installation-materials/official"
@@ -41,13 +49,25 @@ export function send(
         ? 300000
         : 60000,
   );
+  const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  if (isSensitiveRequest(path, method)) {
+    requireRequestCrypto();
+    const challenge = await request<RequestChallenge>(
+      "/auth/secure-challenge",
+      "POST",
+      { path },
+      requestSignal,
+    );
+    data = await encryptSensitiveRequest(challenge, path, data);
+  }
+  requestSignal.throwIfAborted();
   return fetch("/ops/api/v1" + path, {
     method,
     cache: "no-store",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
     body: data === undefined ? undefined : JSON.stringify(data),
-    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    signal: requestSignal,
   });
 }
 export async function upload(path: string, file: File, signal?: AbortSignal) {

@@ -6,6 +6,7 @@ import pathlib
 import subprocess
 import urllib.error
 import urllib.request
+from secure_request import protect_request
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--url", required=True)
@@ -23,6 +24,7 @@ opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), ur
 csrf = ""
 checks = []
 def request(path, method="GET", data=None, expected=200, binary=False):
+    data = protect_request(path, method, data, lambda target: request("/auth/secure-challenge", "POST", {"path": target}))
     body = None if data is None else json.dumps(data).encode()
     req = urllib.request.Request(args.url + "/ops/api/v1" + path, data=body, method=method,
         headers={"Content-Type": "application/json", "Origin": args.url, "X-CSRF-Token": csrf})

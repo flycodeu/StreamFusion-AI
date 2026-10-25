@@ -68,6 +68,13 @@ func setup(t *testing.T) (*Store, *browser) {
 }
 func (b *browser) call(method, path string, data any, want int) *httptest.ResponseRecorder {
 	b.t.Helper()
+	if method == "POST" && sensitiveRequestPath(path) && want != http.StatusForbidden {
+		data = b.encrypt(path, data)
+	}
+	return b.rawCall(method, path, data, want)
+}
+func (b *browser) rawCall(method, path string, data any, want int) *httptest.ResponseRecorder {
+	b.t.Helper()
 	var body []byte
 	if data != nil {
 		body, _ = json.Marshal(data)
