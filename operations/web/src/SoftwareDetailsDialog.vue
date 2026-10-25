@@ -418,7 +418,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
 }
 .software-job {
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 16px;
   background: #f7f9fc;
 }
@@ -460,6 +460,10 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
 .software-logs header small {
   color: var(--muted);
 }
+.software-logs:not(:first-child),
+.software-detail :deep(.el-tab-pane) > .empty:not(:first-child) {
+  margin-top: 14px;
+}
 .software-logs pre {
   background: #edf3fa;
   padding: 14px;
@@ -485,8 +489,6 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
   gap: 10px;
   flex-wrap: wrap;
   align-items: center;
-  border-top: 1px solid var(--border);
-  padding-top: 18px;
 }
 .software-detail-actions .primary {
   width: auto;

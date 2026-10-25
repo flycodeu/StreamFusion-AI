@@ -391,8 +391,7 @@ const stateTone = (candidate: SoftwareDiscoveryCandidate) =>
         </p>
       </template>
       <div v-else class="discovery-empty">
-        <strong>选择主机，识别已有软件</strong
-        ><span>确认候选后再登记；服务继续保持当前状态</span>
+        <strong>选择主机，识别已有软件</strong>
       </div>
     </div>
   </ElDialog>

@@ -264,9 +264,6 @@ const {
               selectedMaterial?.available ? "材料已就绪" : officialProgress
             }}</span>
           </div>
-          <p class="install-note">
-            Ops 所在机器需能访问官方材料地址；材料按固定摘要校验后分发到目标。
-          </p>
         </div>
         <div v-if="sourceType === 'ARCHIVE'" class="archive-picker">
           <label
@@ -560,7 +557,6 @@ const {
               加密保存并选用
             </button>
           </div>
-          <small>保存前请妥善记录。保存后只保留凭据引用，不回显内容。</small>
         </div>
         <p v-if="recipe.key === 'nginx'" class="install-note">
           Nginx 无初始登录账号；站点配置放在独立配置目录。
@@ -743,7 +739,6 @@ const {
           </button>
         </div>
         <pre v-if="logs" class="install-logs">{{ logs }}</pre>
-        <p class="install-note">实例与后续启停、日志可在“软件中心”查看。</p>
       </section>
     </div>
     <template #footer

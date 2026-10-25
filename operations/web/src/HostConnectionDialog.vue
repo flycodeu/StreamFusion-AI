@@ -10,7 +10,12 @@ import {
 } from "./hosts";
 
 const props = defineProps<{ open: boolean; host?: Host }>();
-const emit = defineEmits<{ close: []; saved: [Host]; error: [unknown] }>();
+const emit = defineEmits<{
+  close: [];
+  saved: [Host];
+  credentialSaved: [];
+  error: [unknown];
+}>();
 const busy = ref(false);
 const credentials = ref<SSHCredential[]>([]);
 const fingerprint = ref<HostFingerprint>();
@@ -106,6 +111,7 @@ watch(
       emit("error", error);
     }
   },
+  { immediate: true },
 );
 
 watch(
@@ -208,20 +214,40 @@ async function save() {
 
 async function saveCredential() {
   await act(async () => {
+    const name = credentialName.value.trim();
+    const kind = credentialKind.value;
     const created = await request<{ id: string; revision: string }>(
       "/credentials",
       "POST",
       {
-        name: credentialName.value.trim(),
-        kind: credentialKind.value,
+        name,
+        kind,
         secret: credentialSecret.value,
         expectedRevision: "",
       },
     );
     credentialSecret.value = "";
     credentialDialog.value = false;
-    credentials.value = await request<SSHCredential[]>("/credentials");
+    credentials.value = [
+      {
+        id: created.id,
+        revision: created.revision,
+        name,
+        kind,
+        revokedAt: "",
+      },
+      ...credentials.value.filter(
+        (item) =>
+          !(item.id === created.id && item.revision === created.revision),
+      ),
+    ];
+    try {
+      credentials.value = await request<SSHCredential[]>("/credentials");
+    } catch {
+      // Keep optimistic entry when refresh fails
+    }
     draft.value.credentialId = created.id;
+    emit("credentialSaved");
     ElMessage.success("SSH 凭据已保存");
   });
 }
@@ -356,7 +382,6 @@ function close() {
                   <code>{{ host?.hostFingerprint }}</code>
                   <small>已确认</small>
                 </template>
-                <span v-else class="muted">连接前获取并核对服务器指纹</span>
               </div>
             </template>
             <details class="advanced-fields">
@@ -386,11 +411,7 @@ function close() {
                 autocomplete="off"
                 placeholder="/opt/streamfusion-ops-target"
                 aria-label="项目目录"
-                aria-describedby="project-root-help"
               />
-              <small id="project-root-help" class="root-help">
-                新部署软件与作业材料的存放目录。
-              </small>
             </label>
           </fieldset>
         </ElTabPane>
@@ -415,6 +436,7 @@ function close() {
     v-model="credentialDialog"
     title="新增 SSH 凭据"
     width="min(520px, 94vw)"
+    align-center
     destroy-on-close
     append-to-body
     :close-on-click-modal="false"

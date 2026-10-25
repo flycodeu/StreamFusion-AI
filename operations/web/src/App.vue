@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, prepare, request, send, setCSRF } from "./api";
 import OpsWorkspace from "./OpsWorkspace.vue";
@@ -135,6 +135,11 @@ const uptime = computed(() => {
     Math.floor(seconds / 3600) + "h " + Math.floor((seconds % 3600) / 60) + "m"
   );
 });
+const credentialKindLabels: Record<string, string> = {
+  TOKEN: "Token 密钥",
+  PASSWORD: "密码凭据",
+  SSH_KEY: "SSH 私钥",
+};
 const actionLabels: Record<string, string> = {
   ADMIN_INITIALIZED: "初始化管理员",
   LOGIN: "登录",
@@ -155,8 +160,15 @@ const actionLabels: Record<string, string> = {
   HOST_SOFTWARE_DISCOVERED: "识别主机软件",
   HOST_MAINTENANCE_CHANGED: "修改主机维护状态",
   HOST_DELETED: "移除主机登记",
+  HOST_PREPARED: "准备主机运行依赖",
+  HOST_PREPARATION_ACCEPTED: "提交主机依赖准备",
+  HOST_PREPARATION_RESULT: "主机依赖准备结果",
   SOFTWARE_REGISTERED: "登记已有软件",
   SOFTWARE_OBSERVED: "检查软件状态",
+  SOFTWARE_OBSERVE_BATCH_ACCEPTED: "提交批量状态检测",
+  SOFTWARE_OBSERVE_BATCH_RESULT: "批量状态检测结果",
+  SOFTWARE_INSTALL_ACCEPTED: "提交服务安装",
+  SOFTWARE_INSTALL_RESULT: "服务安装结果",
   SOFTWARE_ADOPT_ACCEPTED: "提交软件接管",
   SOFTWARE_START_ACCEPTED: "提交软件启动",
   SOFTWARE_STOP_ACCEPTED: "提交软件停止",
@@ -166,6 +178,12 @@ const actionLabels: Record<string, string> = {
   SOFTWARE_STOP_RESULT: "软件停止结果",
   SOFTWARE_UNMANAGE_RESULT: "解除软件管理结果",
   SOFTWARE_UNMANAGED: "解除软件管理",
+  ARTIFACT_UPLOADED: "上传版本制品",
+  INSTANCE_SAVED: "保存应用实例",
+  BINDING_SAVED: "保存外部依赖",
+  DEPENDENCY_CHECKED: "检测依赖连通",
+  DEPLOYMENT_CREATED: "创建发布作业",
+  JOB_CANCELLED: "取消发布作业",
 };
 function report(e: unknown) {
   if (e instanceof ApiError) {
@@ -344,7 +362,11 @@ function poll() {
   timer = setTimeout(async () => {
     if (loggedIn.value && !document.hidden) {
       try {
-        await refreshStatus();
+        if (["credentials", "audit", "settings"].includes(active.value)) {
+          await load();
+        } else {
+          await refreshStatus();
+        }
       } catch (e) {
         report(e);
       }
@@ -352,6 +374,21 @@ function poll() {
     poll();
   }, 15000);
 }
+watch(
+  [title, loggedIn, () => settings.value?.name],
+  () => {
+    const siteName = settings.value?.name || "StreamFusion Ops";
+    document.title = loggedIn.value
+      ? `${title.value} · ${siteName}`
+      : `控制器登录 · ${siteName}`;
+  },
+  { immediate: true },
+);
+watch(active, (page) => {
+  if (loggedIn.value && ["credentials", "audit", "settings"].includes(page)) {
+    void load().catch(report);
+  }
+});
 onMounted(async () => {
   busy.value = true;
   try {
@@ -387,8 +424,13 @@ onUnmounted(() => {
       :class="{ 'is-open': navigationOpen }"
     >
       <div class="brand">
-        <span class="mark">S</span
-        ><span>StreamFusion<small>运维控制台</small></span>
+        <img
+          class="brand-logo"
+          src="/streamfusion.svg"
+          alt=""
+          width="34"
+          height="34"
+        /><span>StreamFusion<small>运维控制台</small></span>
       </div>
       <nav aria-label="导航">
         <div
@@ -446,7 +488,13 @@ onUnmounted(() => {
       <section v-if="!loggedIn" class="login-card">
         <div class="login-intro">
           <div class="brand">
-            <span class="mark">S</span><span>StreamFusion Ops</span>
+            <img
+              class="brand-logo"
+              src="/streamfusion.svg"
+              alt=""
+              width="34"
+              height="34"
+            /><span>StreamFusion Ops</span>
           </div>
           <h1>控制器登录</h1>
         </div>
@@ -474,7 +522,17 @@ onUnmounted(() => {
       </section>
       <template v-else>
         <details v-if="diagnostic" class="error diagnostic">
-          <summary>{{ diagnostic.message }}</summary>
+          <summary>
+            <span>{{ diagnostic.message }}</span>
+            <button
+              type="button"
+              class="diagnostic-close"
+              aria-label="关闭错误提示"
+              @click.stop="diagnostic = null"
+            >
+              ×
+            </button>
+          </summary>
           <div>
             {{ diagnostic.code }} · {{ displayTime(diagnostic.timestamp) }}
           </div>
@@ -485,6 +543,7 @@ onUnmounted(() => {
           :preparation-host-id="preparationHostId"
           @error="report"
           @preparation-opened="preparationHostId = ''"
+          @credential-saved="load"
         />
         <PortManagement
           v-else-if="active === 'ports'"
@@ -508,16 +567,28 @@ onUnmounted(() => {
           :uptime="uptime"
           @error="report"
         />
-        <section v-else-if="active === 'credentials'" class="content">
+        <section
+          v-else-if="active === 'credentials'"
+          class="content panel-card"
+        >
           <div class="section-head">
             <h2>凭据修订</h2>
-            <button
-              class="secondary"
-              :disabled="busy"
-              @click="openCredential()"
-            >
-              新增凭据
-            </button>
+            <div class="section-actions">
+              <button
+                class="secondary"
+                :disabled="busy"
+                @click="execute(() => load())"
+              >
+                刷新
+              </button>
+              <button
+                class="primary"
+                :disabled="busy"
+                @click="openCredential()"
+              >
+                新增凭据
+              </button>
+            </div>
           </div>
           <div v-if="credentials.length" class="table-scroll">
             <table>
@@ -526,6 +597,7 @@ onUnmounted(() => {
                   <th>名称</th>
                   <th>类型</th>
                   <th>修订</th>
+                  <th>创建时间</th>
                   <th>状态</th>
                   <th>操作</th>
                 </tr>
@@ -533,8 +605,9 @@ onUnmounted(() => {
               <tbody>
                 <tr v-for="item in credentials" :key="item.id + item.revision">
                   <td>{{ item.name }}</td>
-                  <td>{{ item.kind }}</td>
+                  <td>{{ credentialKindLabels[item.kind] || item.kind }}</td>
                   <td>r{{ item.revision }}</td>
+                  <td>{{ displayTime(item.createdAt) }}</td>
                   <td>
                     <span
                       class="state-tag"
@@ -566,7 +639,7 @@ onUnmounted(() => {
           </div>
           <div v-else class="empty">尚未保存凭据</div>
         </section>
-        <section v-else-if="active === 'audit'" class="content">
+        <section v-else-if="active === 'audit'" class="content panel-card">
           <div class="section-head">
             <h2>操作记录</h2>
             <button
@@ -577,7 +650,7 @@ onUnmounted(() => {
               最新记录
             </button>
           </div>
-          <div class="table-scroll">
+          <div v-if="audits.length" class="table-scroll">
             <table>
               <thead>
                 <tr>
@@ -614,6 +687,7 @@ onUnmounted(() => {
               </tbody>
             </table>
           </div>
+          <div v-else class="empty">暂无操作记录</div>
           <button
             v-if="nextCursor"
             class="secondary pagination"
@@ -624,6 +698,20 @@ onUnmounted(() => {
           </button>
         </section>
         <section v-else class="content settings">
+          <div class="settings-meta">
+            <div>
+              <span>控制器 ID</span>
+              <code>{{ settings?.controllerId || "—" }}</code>
+            </div>
+            <div>
+              <span>监听地址</span>
+              <code>{{ status?.listen || "—" }}</code>
+            </div>
+            <div>
+              <span>服务版本</span>
+              <code>v{{ status?.release || "—" }}</code>
+            </div>
+          </div>
           <form class="settings-form" @submit.prevent="saveName">
             <label
               >控制器名称<input
@@ -636,14 +724,15 @@ onUnmounted(() => {
           <div class="setting-action">
             <div>
               <strong>状态备份</strong>
-              <p>下载数据库与加密凭据；恢复密钥需在本机单独导出。</p>
             </div>
             <button class="secondary" :disabled="busy" @click="backup">
               下载备份
             </button>
           </div>
           <div class="setting-action">
-            <div><strong>管理员密码</strong></div>
+            <div>
+              <strong>管理员密码</strong>
+            </div>
             <button
               class="secondary"
               :disabled="busy"
@@ -659,6 +748,7 @@ onUnmounted(() => {
       v-model="credentialDialog"
       :title="selected ? '创建新修订' : '新增凭据'"
       width="min(480px, 94vw)"
+      align-center
       @closed="secret = ''"
     >
       <form class="dialog-form" @submit.prevent="saveCredential">
@@ -678,13 +768,25 @@ onUnmounted(() => {
             spellcheck="false"
             autocomplete="off"
           ></textarea></label
-        ><button class="primary" :disabled="busy">保存</button>
+        >
+        <div class="dialog-footer">
+          <button
+            type="button"
+            class="secondary"
+            :disabled="busy"
+            @click="credentialDialog = false"
+          >
+            取消
+          </button>
+          <button class="primary" :disabled="busy">保存</button>
+        </div>
       </form>
     </ElDialog>
     <ElDialog
       v-model="passwordDialog"
       title="修改密码"
       width="min(440px, 94vw)"
+      align-center
       @closed="
         oldPassword = '';
         newPassword = '';
@@ -710,14 +812,26 @@ onUnmounted(() => {
             v-model="confirmPassword"
             type="password"
             autocomplete="new-password"
-            required /></label
-        ><button class="primary" :disabled="busy">修改并重新登录</button>
+            required
+        /></label>
+        <div class="dialog-footer">
+          <button
+            type="button"
+            class="secondary"
+            :disabled="busy"
+            @click="passwordDialog = false"
+          >
+            取消
+          </button>
+          <button class="primary" :disabled="busy">修改并重新登录</button>
+        </div>
       </form>
     </ElDialog>
     <ElDialog
       :model-value="!!auditDetail"
       title="记录详情"
       width="min(540px, 94vw)"
+      align-center
       @close="auditDetail = null"
       ><dl v-if="auditDetail" class="audit-detail">
         <dt>时间</dt>

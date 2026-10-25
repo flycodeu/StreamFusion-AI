@@ -207,17 +207,8 @@ function portInputValue(key: string) {
           >已登记存储根目录<code class="path-value">{{
             config.storageRoot || projectRoot || "使用主机项目目录"
           }}</code></label
-        >
-        <p class="install-note">
-          已有数据改位置需要停机迁移；此处修改端口和资源配置，不搬移数据。
-        </p></template
+        ></template
       >
-      <p v-if="storageEditable" class="install-note">
-        程序、数据、配置和日志按实例分开保存。留空使用
-        {{
-          projectRoot || "主机项目目录"
-        }}/software/；填写后使用该目录下的独立实例子目录。
-      </p>
     </div>
     <details v-if="!isTool(recipe)">
       <summary>资源设置</summary>

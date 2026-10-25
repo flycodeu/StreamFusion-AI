@@ -226,9 +226,6 @@ async function submit() {
       >
         调整配置
       </button>
-      <p v-if="isTool(recipe)" class="install-note">
-        程序工具按需执行，不监听服务端口。已部署程序路径和安装时版本可在软件概览查看。
-      </p>
       <template v-if="editing">
         <ServiceNetworkFields
           :recipe="recipe"
@@ -236,13 +233,6 @@ async function submit() {
           :disabled="busy || attempted || disabled"
           :project-root="host?.installRoot"
         />
-        <p class="install-note">
-          {{
-            draft.runtimeMode === "DOCKER"
-              ? "修改端口或资源需要重建容器。"
-              : "修改配置需要重启服务。"
-          }}预检会检查冲突，执行期间服务会短暂中断；数据目录保留。
-        </p>
         <div v-if="error" class="install-error" role="alert">
           <strong>{{ error.message }}</strong
           ><small>{{ error.code }} · {{ hostTime(error.at) }}</small

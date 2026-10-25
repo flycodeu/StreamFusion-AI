@@ -81,10 +81,6 @@ const fields: {
         placeholder="192.168.10.20:554&#10;192.168.10.21:554"
       />
     </label>
-    <small
-      >每行一个 IP:RTSP 端口。控制端口固定 9443/TCP，媒体端口固定
-      18000/TCP+UDP。</small
-    >
     <details>
       <summary>容量预算 · 默认每节点 64 路</summary>
       <div class="form-grid">
@@ -104,7 +100,6 @@ const fields: {
             "
         /></label>
       </div>
-      <small>预算修改随下一次排空发布生效；实际容量需在目标机器验证。</small>
     </details>
   </div>
 </template>

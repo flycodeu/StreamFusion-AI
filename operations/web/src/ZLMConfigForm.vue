@@ -42,6 +42,21 @@ const credential = computed({
       <label>源上限<input v-model.number="model.maxSources" type="number" min="1" max="64" required /></label>
       <label>观看上限<input v-model.number="model.maxViewers" type="number" min="1" max="64" required /></label>
     </div>
-    <small>平台须从实际出口地址访问。部署后通过平台连通检查核对来源；此配方不执行转码。</small>
   </details>
 </template>
+
+<style scoped>
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+details .form-grid {
+  margin-top: 12px;
+}
+@media (max-width: 600px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

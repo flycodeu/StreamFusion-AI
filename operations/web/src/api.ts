@@ -43,6 +43,7 @@ export function send(
   );
   return fetch("/ops/api/v1" + path, {
     method,
+    cache: "no-store",
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
     body: data === undefined ? undefined : JSON.stringify(data),

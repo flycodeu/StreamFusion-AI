@@ -235,12 +235,11 @@ onUnmounted(() => {
 });
 </script>
 <template>
-  <section class="host-overview" aria-label="主机概览">
+  <section class="content host-overview" aria-label="主机概览">
     <div class="overview-summary">
       <article>
         <span>接入主机</span>
         <strong>{{ hosts.length }}</strong>
-        <small>已登记服务器</small>
       </article>
       <article>
         <span>资源采集</span>
@@ -248,14 +247,13 @@ onUnmounted(() => {
           {{ observedCount }}
           <i>/ {{ hosts.length }}</i>
         </strong>
-        <small>{{ loading ? "正在检查…" : "后台自动更新" }}</small>
+        <small v-if="loading">正在检查…</small>
       </article>
       <article>
         <span>软件实例</span>
         <strong>
           {{ software.filter((s) => s.managementMode !== "RELEASED").length }}
         </strong>
-        <small>包含只读与已接管软件</small>
       </article>
       <article>
         <span>Ops 控制器</span>
@@ -269,7 +267,6 @@ onUnmounted(() => {
       <header class="overview-panel-head">
         <h2>服务器状态</h2>
         <span class="spacer"></span>
-        <span class="muted">后台持续检测</span>
         <button
           class="secondary"
           :disabled="detecting || !selectedId"
@@ -344,6 +341,14 @@ onUnmounted(() => {
             <article v-for="gauge in gauges" :key="gauge.label">
               <div
                 class="resource-gauge"
+                :class="{
+                  'usage-critical':
+                    available(current) && (gauge.value ?? 0) >= 90,
+                  'usage-high':
+                    available(current) &&
+                    (gauge.value ?? 0) >= 80 &&
+                    (gauge.value ?? 0) < 90,
+                }"
                 :style="{
                   '--usage': `${available(current) ? (gauge.value ?? 0) : 0}%`,
                 }"
@@ -467,26 +472,27 @@ onUnmounted(() => {
           <div v-if="!softwareOnHost.length" class="empty">
             此主机尚未登记软件
           </div>
-          <div
-            v-for="item in softwareOnHost"
-            :key="item.id"
-            class="overview-software"
-          >
-            <SoftwareIcon :type="item.softwareType" />
-            <div>
-              <strong>{{ item.name }}</strong>
-              <small>
-                {{
-                  item.observation?.listeningPorts?.join("、") ||
-                  "未获取监听端口"
-                }}
-              </small>
+          <div v-else class="overview-software-list">
+            <div
+              v-for="item in softwareOnHost"
+              :key="item.id"
+              class="overview-software"
+            >
+              <SoftwareIcon :type="item.softwareType" />
+              <div>
+                <strong>{{ item.name }}</strong>
+                <small>
+                  {{
+                    item.observation?.listeningPorts?.join("、") ||
+                    "未获取监听端口"
+                  }}
+                </small>
+              </div>
+              <span class="state-tag" :class="softwareState(item).tone">
+                {{ softwareState(item).label }}
+              </span>
             </div>
-            <span class="state-tag" :class="softwareState(item).tone">
-              {{ softwareState(item).label }}
-            </span>
           </div>
-          <p class="panel-footnote">软件状态与端口取自各实例最近检查。</p>
         </section>
       </div>
     </template>
@@ -530,9 +536,11 @@ onUnmounted(() => {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
+  box-shadow: var(--card-shadow);
 }
 .overview-summary article {
   display: grid;
+  align-content: start;
   gap: 13px;
   padding: 22px;
 }
@@ -596,6 +604,13 @@ onUnmounted(() => {
   padding: 14px;
   text-align: left;
   color: var(--text);
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+.host-switcher button:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
 }
 .host-switcher button.selected {
   border-color: var(--accent);
@@ -631,7 +646,11 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
+}
+.resource-panel {
+  display: flex;
+  flex-direction: column;
 }
 .resource-gauges {
   display: grid;
@@ -653,6 +672,12 @@ onUnmounted(() => {
   border-radius: 50%;
   background: conic-gradient(var(--accent) var(--usage), #edf2f8 0);
   padding: 5px;
+}
+.resource-gauge.usage-high {
+  background: conic-gradient(var(--warning) var(--usage), #edf2f8 0);
+}
+.resource-gauge.usage-critical {
+  background: conic-gradient(var(--danger) var(--usage), #edf2f8 0);
 }
 .resource-gauge > div {
   height: 100%;
@@ -682,6 +707,7 @@ onUnmounted(() => {
   line-height: 1.7;
 }
 .load-summary {
+  margin-top: auto;
   border-top: 1px solid var(--border);
   padding-top: 17px;
   display: flex;
@@ -749,12 +775,21 @@ onUnmounted(() => {
   color: var(--muted);
   flex-basis: 100%;
 }
+.overview-software-list {
+  max-height: 280px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
 .overview-software {
   display: flex;
   align-items: center;
   gap: 13px;
   padding: 14px 0;
   border-top: 1px solid var(--border);
+}
+.overview-software:first-child {
+  border-top: 0;
+  padding-top: 4px;
 }
 .overview-software :deep(.software-icon) {
   width: 34px;
@@ -782,21 +817,24 @@ onUnmounted(() => {
   color: var(--muted);
   overflow-wrap: anywhere;
 }
-.panel-footnote {
-  font-size: 11px;
-  color: var(--muted);
-  margin: 12px 0 0;
-}
 .overview-controller {
   font-size: 12px;
   color: var(--muted);
-  padding: 0 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 18px;
+  box-shadow: var(--card-shadow);
 }
 .overview-controller summary {
   cursor: pointer;
+  font-weight: 500;
+  color: var(--text-secondary);
 }
 .overview-controller dl {
-  margin: 20px 0;
+  margin: 16px 0 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
 }
 .observation-notice {
   background: #fff9ed;

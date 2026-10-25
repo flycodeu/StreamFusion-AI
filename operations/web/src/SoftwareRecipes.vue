@@ -385,9 +385,6 @@ onUnmounted(() => {
             : "安装前请检查主机能力。"
       }}
     </p>
-    <div class="catalog-count" aria-live="polite">
-      {{ catalogEntries.length }} 项软件<span>服务与工具</span>
-    </div>
     <div v-if="!catalogEntries.length && !loading" class="empty">
       没有匹配的软件
     </div>
@@ -458,7 +455,6 @@ onUnmounted(() => {
     </div>
     <details v-if="legacyInstallations.length" class="legacy-installations">
       <summary>已有工具镜像（{{ legacyInstallations.length }}）</summary>
-      <p class="muted">原发布流程使用的环境记录，保持现有引用与维护。</p>
       <div
         v-for="item in legacyInstallations"
         :key="item.id"
@@ -495,7 +491,12 @@ onUnmounted(() => {
     @error="emit('error', $event)"
     @preparation="emit('preparation', $event)"
   />
-  <ElDialog v-model="dialog" title="环境详情" width="min(660px,94vw)">
+  <ElDialog
+    v-model="dialog"
+    title="环境详情"
+    width="min(660px,94vw)"
+    align-center
+  >
     <div class="dialog-form">
       <dl class="plugin-detail">
         <dt>环境状态</dt>
@@ -674,7 +675,8 @@ onUnmounted(() => {
 }
 .catalog-categories button {
   border: 0;
-  padding: 8px 13px;
+  min-height: 36px;
+  padding: 7px 13px;
   border-radius: 5px;
   background: transparent;
   color: var(--muted);
@@ -693,10 +695,12 @@ onUnmounted(() => {
 .catalog-search input {
   margin: 0;
   width: 220px;
+  min-height: 36px;
   height: 36px;
   font-size: 13px;
 }
 .catalog-search button {
+  min-height: 36px;
   height: 36px;
 }
 .catalog-count {
@@ -722,8 +726,12 @@ onUnmounted(() => {
 }
 .plugin-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 310px), 1fr));
   gap: 18px;
+  margin-top: 18px;
+}
+.software-recipes > .empty {
+  margin-top: 18px;
 }
 .plugin-card {
   display: flex;
@@ -894,11 +902,6 @@ h4 {
   font-size: 13px;
   font-weight: 500;
   margin-bottom: 10px;
-}
-@media (max-width: 1250px) {
-  .plugin-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 @media (max-width: 650px) {
   .catalog-target {

@@ -303,7 +303,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="port-page">
+  <section class="content port-page">
     <header class="port-toolbar">
       <label
         >管理主机<select
@@ -375,208 +375,213 @@ onUnmounted(() => {
           }}<code v-if="view.traceId"> · {{ view.traceId }}</code></small
         >
       </div>
-      <ElTabs v-model="tab">
-        <ElTabPane label="监听端口" name="ports">
-          <div class="port-filter">
-            <input
-              v-model="search"
-              type="search"
-              aria-label="搜索端口"
-              placeholder="端口、协议、地址或程序"
-            /><span>监听状态与防火墙放行分别显示</span>
-          </div>
-          <div class="port-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>端口</th>
-                  <th>协议</th>
-                  <th>监听地址</th>
-                  <th>程序</th>
-                  <th>管理保护</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(p, i) in filtered" :key="i">
-                  <td>
-                    <strong>{{ p.port }}</strong>
-                  </td>
-                  <td>{{ p.protocol.toUpperCase() }}</td>
-                  <td>
-                    <code>{{ p.address }}</code>
-                  </td>
-                  <td>{{ p.process || "不可读" }}</td>
-                  <td>
-                    {{
-                      snapshot?.protectedPorts?.includes(p.port) &&
-                      p.protocol === "tcp"
-                        ? "管理端口"
-                        : "—"
-                    }}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-if="!filtered.length" class="empty">暂无已确认监听端口</div>
-          </div>
-          <details v-if="snapshot?.dockerPorts" class="port-docker">
-            <summary>Docker 发布端口</summary>
-            <p>发布端口可能绕过 UFW；映射调整请使用软件配置。</p>
-            <pre>{{ snapshot.dockerPorts }}</pre>
-          </details>
-        </ElTabPane>
-        <ElTabPane label="访问规则" name="rules">
-          <p v-if="snapshot?.status === 'INACTIVE'" class="port-notice">
-            防火墙已停用，保存的访问规则在启用后生效。
-          </p>
-          <div class="port-rule-tools">
-            <span>仅可撤销 Ops 创建的规则</span>
-            <div class="port-actions">
-              <button
-                v-if="snapshot?.managementSource"
-                class="secondary"
-                :disabled="busy || !ready"
-                @click="guardSSH"
-              >
-                保护 SSH</button
-              ><button
-                class="secondary"
-                :disabled="busy || !ready || snapshot?.status === 'ACTIVE'"
-                @click="open('ENABLE')"
-              >
-                启用防火墙</button
-              ><button
-                class="secondary danger"
-                :disabled="busy || !ready || snapshot?.status !== 'ACTIVE'"
-                @click="open('DISABLE')"
-              >
-                停用防火墙
-              </button>
+      <div class="port-panel">
+        <ElTabs v-model="tab">
+          <ElTabPane label="监听端口" name="ports">
+            <div class="port-filter">
+              <input
+                v-model="search"
+                type="search"
+                aria-label="搜索端口"
+                placeholder="端口、协议、地址或程序"
+              />
             </div>
-          </div>
-          <div class="port-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>策略</th>
-                  <th>端口</th>
-                  <th>协议</th>
-                  <th>来源</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="r in snapshot?.managedRules || []" :key="r.id">
-                  <td>
-                    <span :class="r.action === 'deny' ? 'deny' : 'enabled'">{{
-                      r.action === "allow" ? "允许" : "禁止"
-                    }}</span>
-                  </td>
-                  <td>
-                    {{ r.start }}{{ r.end !== r.start ? "–" + r.end : "" }}
-                  </td>
-                  <td>{{ r.protocol.toUpperCase() }}</td>
-                  <td>
-                    <code>{{ r.source }}</code>
-                  </td>
-                  <td>
-                    <button
-                      class="quiet danger"
-                      :disabled="busy || !ready"
-                      @click="open('DELETE', r)"
-                    >
-                      撤销
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-if="!snapshot?.managedRules?.length" class="empty">
-              暂无 Ops 访问规则
-            </div>
-          </div>
-          <details class="port-docker">
-            <summary>系统规则与默认策略</summary>
-            <p>
-              默认入站：{{ snapshot?.incomingPolicy || "尚未确认" }} ·
-              默认出站：{{ snapshot?.outgoingPolicy || "尚未确认" }}
-            </p>
-            <pre>{{ snapshot?.rawRules || "尚未确认" }}</pre>
-            <pre>{{ snapshot?.addedRules }}</pre>
-          </details>
-        </ElTabPane>
-        <ElTabPane label="操作记录" name="jobs">
-          <div class="port-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>状态</th>
-                  <th>时间</th>
-                  <th>作业</th>
-                  <th>结果</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="j in currentJobs" :key="j.id">
-                  <td>{{ states[j.status] || j.status }}</td>
-                  <td>{{ hostTime(j.updatedAt) }}</td>
-                  <td>
-                    <code>{{ j.id.slice(0, 8) }}</code>
-                  </td>
-                  <td>
-                    <code>{{ j.errorCode || j.phase }}</code>
-                  </td>
-                  <td>
-                    <div class="port-actions">
-                      <button
-                        v-if="
-                          j.status === 'UNKNOWN' &&
-                          j.phase === 'FIREWALL_AWAITING_CONFIRM'
-                        "
-                        class="primary"
-                        :disabled="busy || confirmationExpired(j)"
-                        @click="act(() => jobAction(j, 'firewall-confirm'))"
-                      >
-                        确认保持</button
-                      ><button
-                        v-if="j.status === 'UNKNOWN' || j.targetAckPending"
-                        class="secondary"
-                        :disabled="busy"
-                        @click="act(() => jobAction(j, 'reconcile'))"
-                      >
-                        核对原作业</button
-                      ><button
-                        v-if="j.status === 'QUEUED'"
-                        class="quiet"
-                        :disabled="busy"
-                        @click="act(() => jobAction(j, 'cancel'))"
-                      >
-                        取消</button
-                      ><button class="quiet" @click="act(() => logs(j))">
-                        记录
-                      </button>
-                    </div>
-                    <small v-if="j.result?.firewallConfirmBy"
-                      >确认期限
+            <div class="port-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>端口</th>
+                    <th>协议</th>
+                    <th>监听地址</th>
+                    <th>程序</th>
+                    <th>管理保护</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(p, i) in filtered" :key="i">
+                    <td>
+                      <strong>{{ p.port }}</strong>
+                    </td>
+                    <td>{{ p.protocol.toUpperCase() }}</td>
+                    <td>
+                      <code>{{ p.address }}</code>
+                    </td>
+                    <td>{{ p.process || "不可读" }}</td>
+                    <td>
                       {{
-                        hostTime(j.result.firewallConfirmBy)
-                      }}；逾期由目标尝试恢复</small
-                    >
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-if="!currentJobs.length" class="empty">暂无防火墙操作</div>
-          </div>
-          <pre v-if="jobLogs" class="port-log">{{ jobLogs }}</pre>
-        </ElTabPane>
-      </ElTabs>
+                        snapshot?.protectedPorts?.includes(p.port) &&
+                        p.protocol === "tcp"
+                          ? "管理端口"
+                          : "—"
+                      }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-if="!filtered.length" class="empty">
+                暂无已确认监听端口
+              </div>
+            </div>
+            <details v-if="snapshot?.dockerPorts" class="port-docker">
+              <summary>Docker 发布端口</summary>
+              <pre>{{ snapshot.dockerPorts }}</pre>
+            </details>
+          </ElTabPane>
+          <ElTabPane label="访问规则" name="rules">
+            <p v-if="snapshot?.status === 'INACTIVE'" class="port-notice">
+              防火墙已停用，保存的访问规则在启用后生效。
+            </p>
+            <div class="port-rule-tools">
+              <div class="port-actions">
+                <button
+                  v-if="snapshot?.managementSource"
+                  class="secondary"
+                  :disabled="busy || !ready"
+                  @click="guardSSH"
+                >
+                  保护 SSH</button
+                ><button
+                  class="secondary"
+                  :disabled="busy || !ready || snapshot?.status === 'ACTIVE'"
+                  @click="open('ENABLE')"
+                >
+                  启用防火墙</button
+                ><button
+                  class="secondary danger"
+                  :disabled="busy || !ready || snapshot?.status !== 'ACTIVE'"
+                  @click="open('DISABLE')"
+                >
+                  停用防火墙
+                </button>
+              </div>
+            </div>
+            <div class="port-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>策略</th>
+                    <th>端口</th>
+                    <th>协议</th>
+                    <th>来源</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="r in snapshot?.managedRules || []" :key="r.id">
+                    <td>
+                      <span :class="r.action === 'deny' ? 'deny' : 'enabled'">{{
+                        r.action === "allow" ? "允许" : "禁止"
+                      }}</span>
+                    </td>
+                    <td>
+                      {{ r.start }}{{ r.end !== r.start ? "–" + r.end : "" }}
+                    </td>
+                    <td>{{ r.protocol.toUpperCase() }}</td>
+                    <td>
+                      <code>{{ r.source }}</code>
+                    </td>
+                    <td>
+                      <button
+                        class="quiet danger"
+                        :disabled="busy || !ready"
+                        @click="open('DELETE', r)"
+                      >
+                        撤销
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-if="!snapshot?.managedRules?.length" class="empty">
+                暂无 Ops 访问规则
+              </div>
+            </div>
+            <details class="port-docker">
+              <summary>系统规则与默认策略</summary>
+              <p>
+                默认入站：{{ snapshot?.incomingPolicy || "尚未确认" }} ·
+                默认出站：{{ snapshot?.outgoingPolicy || "尚未确认" }}
+              </p>
+              <pre>{{ snapshot?.rawRules || "尚未确认" }}</pre>
+              <pre>{{ snapshot?.addedRules }}</pre>
+            </details>
+          </ElTabPane>
+          <ElTabPane label="操作记录" name="jobs">
+            <div class="port-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>状态</th>
+                    <th>时间</th>
+                    <th>作业</th>
+                    <th>结果</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="j in currentJobs" :key="j.id">
+                    <td>{{ states[j.status] || j.status }}</td>
+                    <td>{{ hostTime(j.updatedAt) }}</td>
+                    <td>
+                      <code>{{ j.id.slice(0, 8) }}</code>
+                    </td>
+                    <td>
+                      <code>{{ j.errorCode || j.phase }}</code>
+                    </td>
+                    <td>
+                      <div class="port-actions">
+                        <button
+                          v-if="
+                            j.status === 'UNKNOWN' &&
+                            j.phase === 'FIREWALL_AWAITING_CONFIRM'
+                          "
+                          class="primary"
+                          :disabled="busy || confirmationExpired(j)"
+                          @click="act(() => jobAction(j, 'firewall-confirm'))"
+                        >
+                          确认保持</button
+                        ><button
+                          v-if="j.status === 'UNKNOWN' || j.targetAckPending"
+                          class="secondary"
+                          :disabled="busy"
+                          @click="act(() => jobAction(j, 'reconcile'))"
+                        >
+                          核对原作业</button
+                        ><button
+                          v-if="j.status === 'QUEUED'"
+                          class="quiet"
+                          :disabled="busy"
+                          @click="act(() => jobAction(j, 'cancel'))"
+                        >
+                          取消</button
+                        ><button class="quiet" @click="act(() => logs(j))">
+                          记录
+                        </button>
+                      </div>
+                      <small v-if="j.result?.firewallConfirmBy"
+                        >确认期限
+                        {{
+                          hostTime(j.result.firewallConfirmBy)
+                        }}；逾期由目标尝试恢复</small
+                      >
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <div v-if="!currentJobs.length" class="empty">
+                暂无防火墙操作
+              </div>
+            </div>
+            <pre v-if="jobLogs" class="port-log">{{ jobLogs }}</pre>
+          </ElTabPane>
+        </ElTabs>
+      </div>
     </template>
     <ElDialog
       v-model="dialog"
       :title="actions[operation]"
       width="min(560px,94vw)"
+      align-center
       :close-on-click-modal="!busy"
       :show-close="!busy"
     >
@@ -663,10 +668,6 @@ onUnmounted(() => {
             <dt>计划有效期</dt>
             <dd>{{ hostTime(plan.expiresAt) }}</dd>
           </dl>
-          <p class="port-warning">
-            仅修改访问规则，不启动或停止软件，也不结束现有连接。Docker
-            发布端口不由此控制。
-          </p>
           <p v-if="submissionAttempted" class="port-warning">
             已尝试提交；响应未确认时，使用原标识重试并找回作业。
           </p></template
@@ -727,7 +728,10 @@ onUnmounted(() => {
   gap: 12px;
   flex-wrap: wrap;
 }
-.port-toolbar,
+.port-toolbar {
+  justify-content: space-between;
+  align-items: flex-end;
+}
 .port-rule-tools {
   justify-content: space-between;
 }
@@ -740,6 +744,11 @@ onUnmounted(() => {
 }
 .port-toolbar select {
   min-width: 240px;
+  margin-top: 0;
+  height: 38px;
+}
+.port-toolbar .port-actions button {
+  min-height: 38px;
 }
 .port-summary {
   display: grid;
@@ -747,9 +756,19 @@ onUnmounted(() => {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: white;
+  box-shadow: var(--card-shadow);
+}
+.port-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 24px 24px;
+  box-shadow: var(--card-shadow);
+  min-width: 0;
 }
 .port-summary > div {
   display: grid;
+  align-content: start;
   gap: 14px;
   padding: 22px;
   border-right: 1px solid var(--border);
@@ -763,18 +782,20 @@ onUnmounted(() => {
 .port-summary strong {
   font-size: 24px;
   font-weight: 600;
+  line-height: 1.25;
 }
 .port-summary span {
-  align-self: center;
-  font-size: 12px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 30px;
 }
 .enabled {
-  color: #278668;
+  color: var(--success);
 }
 .deny,
 .danger,
 .port-error {
-  color: #b24942;
+  color: var(--danger);
 }
 .port-notice {
   display: flex;
@@ -784,6 +805,7 @@ onUnmounted(() => {
   padding: 12px 16px;
   background: #f6f8fb;
   border-left: 3px solid #b3c6dc;
+  border-radius: 4px;
   font-size: 13px;
 }
 .port-notice small {
@@ -794,18 +816,16 @@ onUnmounted(() => {
 }
 .port-filter {
   justify-content: space-between;
-  margin: 12px 0 20px;
+  margin: 4px 0 16px;
 }
 .port-filter input {
   max-width: 320px;
-}
-.port-filter span,
-.port-rule-tools > span {
-  color: var(--muted);
-  font-size: 12px;
+  margin: 0;
 }
 .port-table {
   overflow-x: auto;
+  overflow-y: auto;
+  max-height: 480px;
   border: 1px solid var(--border);
   border-radius: 6px;
 }
@@ -815,6 +835,9 @@ onUnmounted(() => {
   background: white;
 }
 .port-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   font-weight: 500;
   color: var(--muted);
   background: #f8fafc;
@@ -824,7 +847,7 @@ onUnmounted(() => {
   text-align: left;
   padding: 13px 16px;
   white-space: nowrap;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-subtle);
 }
 .port-table td small {
   display: block;
@@ -836,7 +859,8 @@ onUnmounted(() => {
   border-bottom: 0;
 }
 .port-rule-tools {
-  margin: 12px 0 20px;
+  justify-content: flex-end;
+  margin: 4px 0 16px;
 }
 .port-docker {
   margin-top: 20px;
@@ -909,6 +933,9 @@ onUnmounted(() => {
   min-width: 0;
 }
 @media (max-width: 760px) {
+  .port-panel {
+    padding: 16px 14px;
+  }
   .port-summary {
     grid-template-columns: 1fr 1fr;
   }

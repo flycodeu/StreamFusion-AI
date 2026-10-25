@@ -161,7 +161,6 @@ async function check() {
     <header>
       <div>
         <h3>准备安装环境</h3>
-        <p>按当前主机生成固定执行器与受限授权指引。</p>
       </div>
       <button class="secondary" :disabled="busy" @click="load">刷新</button>
     </header>
@@ -238,9 +237,6 @@ async function check() {
       </section>
       <section class="preparation-commands">
         <h3>在目标服务器执行</h3>
-        <p>
-          上传并解压准备包后，先预览，再由服务器管理员执行准备。完成后重新检查主机能力。
-        </p>
         <div
           v-for="{ key, label } in commandEntries"
           :key="key"

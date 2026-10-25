@@ -257,6 +257,15 @@ const fresh = (v: string) => v && Date.now() - new Date(v).getTime() < 30000;
 const credentialOptions = computed(() =>
   credentials.value.filter((c) => !c.revokedAt),
 );
+const jobStatusFilter = ref("");
+const jobKindFilter = ref("");
+const filteredJobs = computed(() =>
+  jobs.value.filter(
+    (j) =>
+      (!jobStatusFilter.value || j.status === jobStatusFilter.value) &&
+      (!jobKindFilter.value || j.kind === jobKindFilter.value),
+  ),
+);
 const statusLabels: Record<string, string> = {
   QUEUED: "排队中",
   RUNNING: "执行中",
@@ -371,8 +380,14 @@ watch(
   () => {
     dialog.value = "";
     detail.value = undefined;
+    void refresh().catch((e) => emit("error", e));
   },
 );
+watch(dialog, (value) => {
+  if (value === "instance" || value === "binding") {
+    void refresh().catch((e) => emit("error", e));
+  }
+});
 function openInstance(i?: Instance) {
   selected.value = i;
   recipe.value = i?.config.preview
@@ -577,7 +592,7 @@ function credentialSelected(
 </script>
 
 <template>
-  <section class="content ops-content">
+  <section class="content ops-content panel-card">
     <template v-if="page === 'artifacts'">
       <div class="section-head">
         <h2>不可变镜像制品</h2>
@@ -776,39 +791,41 @@ function credentialSelected(
                 <td>{{ b.host }}:{{ b.port }}</td>
                 <td>{{ b.database || "—" }}</td>
                 <td>
-                  <select
-                    v-model="bindingProbeTargets[b.id]"
-                    :aria-label="`检查来源：${b.host}`"
-                    @change="
-                      bindingProbeInstances[b.id] = '';
-                      delete bindingProbeResults[b.id];
-                    "
-                  >
-                    <option value="">选择主机</option>
-                    <option v-for="t in targets" :key="t.id" :value="t.id">
-                      {{ t.name }} · {{ t.address }}
-                    </option>
-                  </select>
-                  <select
-                    v-model="bindingProbeInstances[b.id]"
-                    :aria-label="`实例网络：${b.host}`"
-                    @change="delete bindingProbeResults[b.id]"
-                  >
-                    <option value="">仅检查主机 TCP</option>
-                    <option
-                      v-for="i in instances.filter(
-                        (item) =>
-                          item.targetId === bindingProbeTargets[b.id] &&
-                          item.currentReleaseId &&
-                          !item.config.preview &&
-                          !item.config.zlm,
-                      )"
-                      :key="i.id"
-                      :value="i.id"
+                  <div class="probe-controls">
+                    <select
+                      v-model="bindingProbeTargets[b.id]"
+                      :aria-label="`检查来源：${b.host}`"
+                      @change="
+                        bindingProbeInstances[b.id] = '';
+                        delete bindingProbeResults[b.id];
+                      "
                     >
-                      {{ i.name }} · 当前已发布版本
-                    </option>
-                  </select>
+                      <option value="">选择主机</option>
+                      <option v-for="t in targets" :key="t.id" :value="t.id">
+                        {{ t.name }} · {{ t.address }}
+                      </option>
+                    </select>
+                    <select
+                      v-model="bindingProbeInstances[b.id]"
+                      :aria-label="`实例网络：${b.host}`"
+                      @change="delete bindingProbeResults[b.id]"
+                    >
+                      <option value="">仅检查主机 TCP</option>
+                      <option
+                        v-for="i in instances.filter(
+                          (item) =>
+                            item.targetId === bindingProbeTargets[b.id] &&
+                            item.currentReleaseId &&
+                            !item.config.preview &&
+                            !item.config.zlm,
+                        )"
+                        :key="i.id"
+                        :value="i.id"
+                      >
+                        {{ i.name }} · 当前已发布版本
+                      </option>
+                    </select>
+                  </div>
                 </td>
                 <td>
                   <button
@@ -912,11 +929,33 @@ function credentialSelected(
     <template v-else>
       <div class="section-head">
         <h2>作业记录</h2>
-        <button class="secondary" :disabled="busy" @click="act(refresh)">
-          刷新
-        </button>
+        <div class="job-filters">
+          <select v-model="jobStatusFilter" aria-label="筛选作业状态">
+            <option value="">全部状态</option>
+            <option
+              v-for="(label, code) in statusLabels"
+              :key="code"
+              :value="code"
+            >
+              {{ label }}
+            </option>
+          </select>
+          <select v-model="jobKindFilter" aria-label="筛选作业类型">
+            <option value="">全部类型</option>
+            <option
+              v-for="(label, code) in jobKindLabels"
+              :key="code"
+              :value="code"
+            >
+              {{ label }}
+            </option>
+          </select>
+          <button class="secondary" :disabled="busy" @click="act(refresh)">
+            刷新
+          </button>
+        </div>
       </div>
-      <div v-if="!jobs.length" class="empty">暂无作业</div>
+      <div v-if="!filteredJobs.length" class="empty">暂无作业</div>
       <div v-else class="table-scroll">
         <table>
           <thead>
@@ -929,7 +968,7 @@ function credentialSelected(
             </tr>
           </thead>
           <tbody>
-            <tr v-for="j in jobs" :key="j.id">
+            <tr v-for="j in filteredJobs" :key="j.id">
               <td>
                 {{ time(j.createdAt) }}<small>{{ short(j.id) }}</small>
               </td>
@@ -1016,6 +1055,7 @@ function credentialSelected(
       )[dialog]
     "
     width="min(640px,94vw)"
+    align-center
     @close="dialog = ''"
   >
     <form
@@ -1055,7 +1095,18 @@ function credentialSelected(
             {{ c.name }} r{{ c.revision }}
           </option>
         </select></label
-      ><button class="primary" :disabled="busy">登记绑定</button>
+      >
+      <div class="dialog-footer">
+        <button
+          type="button"
+          class="secondary"
+          :disabled="busy"
+          @click="dialog = ''"
+        >
+          取消
+        </button>
+        <button class="primary" :disabled="busy">登记绑定</button>
+      </div>
     </form>
     <form
       v-else-if="dialog === 'instance'"
@@ -1174,48 +1225,60 @@ function credentialSelected(
         >
         <details>
           <summary>健康与恢复</summary>
-          <label
-            >应用初始密码修订<select
-              :value="
-                instanceDraft.config.initialPasswordCredentialId
-                  ? instanceDraft.config.initialPasswordCredentialId +
-                    ':' +
-                    instanceDraft.config.initialPasswordRevision
-                  : ''
-              "
-              @change="initialPasswordSelected"
-            >
-              <option value="">不注入</option>
-              <option
-                v-for="c in credentialOptions.filter(
-                  (c) => c.kind === 'PASSWORD',
-                )"
-                :key="c.id + c.revision"
-                :value="c.id + ':' + c.revision"
+          <div class="form-grid">
+            <label
+              >应用初始密码修订<select
+                :value="
+                  instanceDraft.config.initialPasswordCredentialId
+                    ? instanceDraft.config.initialPasswordCredentialId +
+                      ':' +
+                      instanceDraft.config.initialPasswordRevision
+                    : ''
+                "
+                @change="initialPasswordSelected"
               >
-                {{ c.name }} r{{ c.revision }}
-              </option>
-            </select></label
-          >
-          <label
-            >健康路径<input
-              v-model="instanceDraft.config.healthPath"
-              required /></label
-          ><label
-            >健康超时 秒<input
-              v-model.number="instanceDraft.config.healthSeconds"
-              type="number"
-              min="5"
-              max="120"
-              required /></label
-          ><label
-            >数据兼容标识<input
-              v-model="instanceDraft.config.dataCompatibility"
-              required
-          /></label>
+                <option value="">不注入</option>
+                <option
+                  v-for="c in credentialOptions.filter(
+                    (c) => c.kind === 'PASSWORD',
+                  )"
+                  :key="c.id + c.revision"
+                  :value="c.id + ':' + c.revision"
+                >
+                  {{ c.name }} r{{ c.revision }}
+                </option>
+              </select></label
+            >
+            <label
+              >健康路径<input
+                v-model="instanceDraft.config.healthPath"
+                required /></label
+            ><label
+              >健康超时 秒<input
+                v-model.number="instanceDraft.config.healthSeconds"
+                type="number"
+                min="5"
+                max="120"
+                required /></label
+            ><label
+              >数据兼容标识<input
+                v-model="instanceDraft.config.dataCompatibility"
+                required
+            /></label>
+          </div>
         </details>
       </template>
-      <button class="primary" :disabled="busy">保存草稿</button>
+      <div class="dialog-footer">
+        <button
+          type="button"
+          class="secondary"
+          :disabled="busy"
+          @click="dialog = ''"
+        >
+          取消
+        </button>
+        <button class="primary" :disabled="busy">保存草稿</button>
+      </div>
     </form>
     <form
       v-else-if="dialog === 'import'"
@@ -1295,10 +1358,20 @@ function credentialSelected(
             : importRecipe === "preview-node-v1"
               ? "选择 S4 节点包内 preview-node-image.tar，使用该文件的可信 SHA-256；最大 2GiB，须支持维护封闭。"
               : "单镜像 linux/amd64，标签以 sfops/ 开头，最大512MiB。"
-      }}</small
-      ><button class="primary" :disabled="busy">
-        {{ uploadPhase || "上传并校验" }}
-      </button>
+      }}</small>
+      <div class="dialog-footer">
+        <button
+          type="button"
+          class="secondary"
+          :disabled="busy"
+          @click="dialog = ''"
+        >
+          取消
+        </button>
+        <button class="primary" :disabled="busy">
+          {{ uploadPhase || "上传并校验" }}
+        </button>
+      </div>
     </form>
     <form
       v-else-if="dialog === 'candidate'"
@@ -1328,7 +1401,17 @@ function credentialSelected(
             autocomplete="off"
         /></label>
       </template>
-      <button class="primary" :disabled="busy">生成预检计划</button>
+      <div class="dialog-footer">
+        <button
+          type="button"
+          class="secondary"
+          :disabled="busy"
+          @click="dialog = ''"
+        >
+          取消
+        </button>
+        <button class="primary" :disabled="busy">生成预检计划</button>
+      </div>
     </form>
     <div v-else-if="dialog === 'plan' && plan" class="dialog-form">
       <dl class="plan-detail">
@@ -1381,7 +1464,19 @@ function credentialSelected(
         <dt>有效期</dt>
         <dd>{{ time(plan.expiresAt) }}</dd>
       </dl>
-      <button class="primary" :disabled="busy" @click="submit">确认执行</button>
+      <div class="dialog-footer">
+        <button
+          type="button"
+          class="secondary"
+          :disabled="busy"
+          @click="dialog = ''"
+        >
+          取消
+        </button>
+        <button class="primary" :disabled="busy" @click="submit">
+          确认执行
+        </button>
+      </div>
     </div>
     <div v-else-if="dialog === 'history'" class="version-list">
       <article v-for="r in releases" :key="r.id">
@@ -1462,6 +1557,31 @@ function credentialSelected(
 .actions button {
   padding: 5px;
 }
+.probe-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.probe-controls select {
+  margin: 0;
+  width: auto;
+  min-width: 140px;
+  height: 34px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.job-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.job-filters select {
+  margin: 0;
+  width: 132px;
+  height: 36px;
+  font-size: 13px;
+}
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1493,6 +1613,7 @@ function credentialSelected(
   background: #edf3f8;
   color: #28445e;
   padding: 16px;
+  border-radius: 6px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 60vh;
@@ -1533,6 +1654,9 @@ function credentialSelected(
 details {
   margin-top: 8px;
 }
+details > .form-grid {
+  margin-top: 12px;
+}
 summary {
   cursor: pointer;
   color: #507596;
@@ -1547,6 +1671,13 @@ select[multiple] {
   }
   .plan-detail {
     grid-template-columns: 75px minmax(0, 1fr);
+  }
+  .job-filters {
+    width: 100%;
+  }
+  .job-filters select {
+    flex: 1;
+    min-width: 0;
   }
 }
 </style>

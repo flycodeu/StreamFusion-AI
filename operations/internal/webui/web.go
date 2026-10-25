@@ -18,6 +18,13 @@ func Handler() http.Handler {
 		if path == "" {
 			path = "index.html"
 		}
+		if path == "favicon.ico" {
+			if data, err := fs.ReadFile(sub, "streamfusion.svg"); err == nil {
+				w.Header().Set("Content-Type", "image/svg+xml")
+				_, _ = w.Write(data)
+				return
+			}
+		}
 		if _, err := fs.Stat(sub, path); err != nil {
 			if strings.HasPrefix(path, "assets/") {
 				http.NotFound(w, r)

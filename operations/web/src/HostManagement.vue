@@ -20,7 +20,11 @@ import {
 } from "./hosts";
 
 const props = defineProps<{ preparationHostId?: string }>();
-const emit = defineEmits<{ error: [unknown]; preparationOpened: [] }>();
+const emit = defineEmits<{
+  error: [unknown];
+  preparationOpened: [];
+  credentialSaved: [];
+}>();
 const hosts = ref<Host[]>([]);
 const credentials = ref<SSHCredential[]>([]);
 const loading = ref(false);
@@ -183,6 +187,16 @@ async function connectionSaved(host: Host) {
   await load();
 }
 
+async function refreshCredentials() {
+  try {
+    const keys = await request<SSHCredential[]>("/credentials");
+    if (!disposed) credentials.value = keys;
+    emit("credentialSaved");
+  } catch (error) {
+    emit("error", error);
+  }
+}
+
 async function checkHost(host: Host) {
   await act(host, async () => {
     const updated = await request<Host>(`/hosts/${host.id}/checks`, "POST");
@@ -301,16 +315,12 @@ onUnmounted(() => {
         </button>
       </div>
     </div>
-    <div class="host-count" aria-live="polite">
-      {{ hosts.length }} 台主机
-      <span v-if="query || stateFilter">
-        · 找到 {{ visibleHosts.length }} 台
-      </span>
+    <div v-if="query || stateFilter" class="host-count" aria-live="polite">
+      找到 {{ visibleHosts.length }} / {{ hosts.length }} 台主机
       <span v-if="loading">· 加载中…</span>
     </div>
     <div v-if="!hosts.length" class="empty host-empty">
       <strong>{{ loading ? "正在加载主机" : "尚未添加主机" }}</strong>
-      <span v-if="!loading">添加服务器连接后检查可用能力</span>
     </div>
     <div v-else-if="!visibleHosts.length" class="empty">没有匹配的主机</div>
     <div v-else class="table-scroll host-table">
@@ -406,6 +416,7 @@ onUnmounted(() => {
     :host="editingHost"
     @close="dialog = false"
     @saved="connectionSaved"
+    @credential-saved="refreshCredentials"
     @error="emit('error', $event)"
   />
   <ElDrawer
@@ -524,10 +535,6 @@ onUnmounted(() => {
                 <code>{{ detail.installRoot }}/jobs/</code>
               </dd>
             </dl>
-            <p class="muted">
-              登记目录不会创建文件。首次部署使用此目录初始化执行器；Docker
-              镜像由 Docker 保存。
-            </p>
           </div>
         </ElTabPane>
         <ElTabPane label="登记信息" name="registration">
@@ -581,6 +588,7 @@ onUnmounted(() => {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
+  box-shadow: var(--card-shadow);
 }
 .host-toolbar {
   display: flex;
@@ -619,9 +627,14 @@ onUnmounted(() => {
   min-height: 38px;
 }
 .host-count {
-  margin: 18px 0 12px;
+  margin: 14px 0 0;
   color: var(--muted);
   font-size: 12px;
+}
+.host-empty,
+.host-management > .empty,
+.host-table {
+  margin-top: 16px;
 }
 .host-empty {
   display: grid;
@@ -641,7 +654,7 @@ onUnmounted(() => {
   min-width: 960px;
 }
 .host-table th:first-child {
-  width: 112px;
+  width: 140px;
 }
 .host-status {
   display: flex;
@@ -654,6 +667,7 @@ onUnmounted(() => {
   align-items: center;
   font-size: 12px;
   color: #946619;
+  white-space: nowrap;
 }
 .maintenance-tag::before {
   content: "";
@@ -669,7 +683,6 @@ onUnmounted(() => {
   margin-bottom: 7px;
   font-size: 14px;
   font-weight: 600;
-  max-width: 230px;
   overflow-wrap: anywhere;
 }
 .host-address {
@@ -694,6 +707,7 @@ onUnmounted(() => {
   align-items: center;
   font-size: 12px;
   gap: 6px;
+  white-space: nowrap;
 }
 .capability-grid b {
   font-size: 11px;
@@ -721,9 +735,9 @@ onUnmounted(() => {
 }
 .host-actions {
   display: flex;
-  flex-wrap: wrap;
-  max-width: 205px;
-  gap: 4px 0;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
   margin-left: -8px;
 }
 .host-actions .quiet {
@@ -762,7 +776,7 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   overflow: hidden;
 }
 .capability-details article {
@@ -825,8 +839,6 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  border-top: 1px solid var(--border);
-  padding-top: 18px;
 }
 @media (max-width: 1100px) {
   .host-table {

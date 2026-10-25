@@ -75,6 +75,11 @@
 .install-steps .complete {
   color: var(--success);
 }
+.install-steps .complete > span {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: var(--success);
+}
 .install-steps small {
   font-size: 11px;
 }

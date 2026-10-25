@@ -466,7 +466,7 @@ onUnmounted(() => {
             <option value="ALL">全部软件</option>
           </select>
           <button
-            class="primary"
+            class="secondary"
             :disabled="busy || !detectionCount"
             @click="detectAll"
           >
@@ -495,7 +495,11 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
-      <div class="software-count" aria-live="polite">
+      <div
+        v-if="query || hostId || mode !== 'ACTIVE'"
+        class="software-count"
+        aria-live="polite"
+      >
         {{ visible.length }} 项软件
         <span v-if="loading">· 加载中…</span>
       </div>
@@ -673,6 +677,7 @@ onUnmounted(() => {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0 24px 24px;
+  box-shadow: var(--card-shadow);
 }
 .tab-count {
   display: inline-block;
@@ -725,9 +730,9 @@ onUnmounted(() => {
 }
 .software-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px;
-  align-items: start;
+  align-items: center;
 }
 .software-filters {
   display: grid;
@@ -764,7 +769,12 @@ onUnmounted(() => {
 .software-count {
   color: var(--muted);
   font-size: 12px;
-  margin: 18px 0 12px;
+  margin: 14px 0 0;
+}
+.software-empty,
+.software-cards,
+.software-management [role="tabpanel"] > .empty {
+  margin-top: 18px;
 }
 .software-empty {
   display: grid;
@@ -798,6 +808,13 @@ onUnmounted(() => {
   border-radius: 8px;
   overflow: hidden;
   background: var(--surface);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.software-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
 }
 .software-card-head {
   display: flex;

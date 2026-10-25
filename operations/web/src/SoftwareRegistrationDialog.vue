@@ -226,7 +226,6 @@ async function save() {
             :disabled="busy"
         /></label>
       </details>
-      <p class="registration-hint">先登记为只读；检查身份后可单独接管服务。</p>
     </form>
     <template #footer>
       <footer>
