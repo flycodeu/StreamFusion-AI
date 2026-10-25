@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElAlert, ElButton, ElCheckbox, ElForm, ElFormItem, ElInput, ElMessage } from 'element-plus'
 import { Hide, View } from '@element-plus/icons-vue'
@@ -20,6 +20,7 @@ import { captchaErrorMessage, loginErrorMessage } from '../../features/auth/logi
 const router = useRouter()
 const route = useRoute()
 const brandIcon = systemConfig.logo
+const visualHighlights = ['多源流媒体接入', '实时视觉智能分析', '边缘节点协同管理'] as const
 const form = reactive({ username: '', password: '' })
 const touched = reactive({ username: false, password: false, captcha: false })
 const {
@@ -37,6 +38,7 @@ const {
 } = useLoginCaptcha()
 const remember = ref(false)
 const showPassword = ref(false)
+const capsLockOn = ref(false)
 const busy = ref(false)
 const loginEstablished = ref(false)
 const error = ref(route.query.reason === 'ip-blocked' ? '登录暂时受限，请联系管理员' : '')
@@ -51,6 +53,30 @@ let edited = false
 let rememberRevision = 0
 let hadSaved = false
 let active = true
+let pendingCaptchaFocus = false
+
+function focusInput(id: 'account' | 'captcha') {
+  void nextTick(() => {
+    if (!active) return
+    const el = globalThis.document?.getElementById(id) as globalThis.HTMLInputElement | null
+    if (el && !el.disabled) el.focus()
+  })
+}
+
+function checkCapsLock(event: globalThis.Event) {
+  if (
+    typeof globalThis.KeyboardEvent !== 'undefined' &&
+    event instanceof globalThis.KeyboardEvent &&
+    typeof event.getModifierState === 'function'
+  ) {
+    capsLockOn.value = event.getModifierState('CapsLock')
+  }
+}
+
+function passwordBlur() {
+  touched.password = true
+  capsLockOn.value = false
+}
 
 onMounted(async () => {
   void refreshCaptcha()
@@ -61,22 +87,40 @@ onMounted(async () => {
     if (saved && !edited) {
       Object.assign(form, saved)
       remember.value = true
+      if (captchaReady.value) {
+        focusInput('captcha')
+      } else {
+        pendingCaptchaFocus = true
+      }
+      return
     }
   } catch {
     /* Remembering is optional; a disabled browser store never blocks login. */
   }
+  if (!edited) focusInput('account')
 })
 onUnmounted(() => {
   active = false
 })
 function captchaImageEvent(event: globalThis.Event, loaded: boolean) {
   const id = (event.target as globalThis.HTMLImageElement).dataset.captchaId
-  if (id) (loaded ? imageLoaded : imageFailed)(id)
+  if (!id) return
+  if (loaded) {
+    imageLoaded(id)
+    if (pendingCaptchaFocus && captchaReady.value) {
+      pendingCaptchaFocus = false
+      focusInput('captcha')
+    }
+  } else {
+    pendingCaptchaFocus = false
+    imageFailed(id)
+  }
 }
 async function replaceCaptcha(): Promise<void> {
   if (busy.value || loginEstablished.value) return
   touched.captcha = false
   error.value = ''
+  pendingCaptchaFocus = true
   await refreshCaptcha()
 }
 function reloadPage() {
@@ -147,6 +191,7 @@ async function submit(): Promise<void> {
     error.value = loginErrorMessage(cause)
     // Every attempted login consumes its code, including an incorrect account or password.
     touched.captcha = false
+    pendingCaptchaFocus = Boolean(form.username.trim() && form.password)
     await refreshCaptcha()
   } finally {
     busy.value = false
@@ -167,47 +212,48 @@ async function submit(): Promise<void> {
           <svg viewBox="0 0 560 330" fill="none">
             <path
               d="M124 94H230Q260 94 260 130V164M424 94H330Q300 94 300 130V164M130 258H230Q260 258 260 220V180M424 258H330Q300 258 300 220V180"
-              stroke="#B2CFF5"
+              stroke="#9EC2F2"
               stroke-width="3"
+              stroke-dasharray="6 5"
             />
             <rect
               x="32"
               y="38"
               width="146"
               height="104"
-              rx="10"
+              rx="12"
               fill="white"
-              stroke="#CADCF4"
+              stroke="#C5DBF5"
               stroke-width="2"
             />
-            <rect x="46" y="52" width="118" height="69" rx="5" fill="#E5EFFB" />
-            <path d="m96 71 22 14-22 14V71Z" fill="#87B5F1" />
-            <path d="M57 131h51" stroke="#CADCF4" stroke-width="3" stroke-linecap="round" />
+            <rect x="46" y="52" width="118" height="69" rx="6" fill="#E6F0FC" />
+            <path d="m96 71 22 14-22 14V71Z" fill="#2878E8" opacity="0.82" />
+            <path d="M57 131h51" stroke="#B8D2F2" stroke-width="3.5" stroke-linecap="round" />
             <rect
               x="378"
               y="38"
               width="146"
               height="104"
-              rx="10"
+              rx="12"
               fill="white"
-              stroke="#CADCF4"
+              stroke="#C5DBF5"
               stroke-width="2"
             />
-            <path d="M397 67h29v29h-29zM441 67h29v29h-29zM485 67h18v29h-18z" fill="#DEEAFA" />
-            <path d="M397 114h102" stroke="#CADCF4" stroke-width="3" stroke-linecap="round" />
+            <path d="M397 67h29v29h-29zM441 67h29v29h-29zM485 67h18v29h-18z" fill="#DCEBFC" />
+            <path d="M397 114h102" stroke="#B8D2F2" stroke-width="3.5" stroke-linecap="round" />
             <rect
               x="55"
               y="215"
               width="146"
               height="89"
-              rx="10"
+              rx="12"
               fill="white"
-              stroke="#CADCF4"
+              stroke="#C5DBF5"
               stroke-width="2"
             />
             <path
               d="M77 278v-25m29 25v-40m29 40v-17m29 17v-34"
-              stroke="#8BB8F2"
+              stroke="#5A9CF0"
               stroke-width="12"
               stroke-linecap="round"
             />
@@ -216,32 +262,37 @@ async function submit(): Promise<void> {
               y="215"
               width="146"
               height="89"
-              rx="10"
+              rx="12"
               fill="white"
-              stroke="#CADCF4"
+              stroke="#C5DBF5"
               stroke-width="2"
             />
             <path
               d="M390 239h18m12 0h71M390 259h18m12 0h55M390 279h18m12 0h71"
-              stroke="#B9D2F3"
+              stroke="#A9C8F0"
               stroke-width="5"
               stroke-linecap="round"
             />
             <rect
-              x="227"
-              y="121"
-              width="106"
-              height="106"
-              rx="24"
+              x="225"
+              y="119"
+              width="110"
+              height="110"
+              rx="26"
               fill="white"
-              stroke="#D4E3F8"
-              stroke-width="2"
+              stroke="#BBD5F6"
+              stroke-width="2.5"
             />
             <image :href="brandIcon" x="246" y="140" width="68" height="68" />
           </svg>
         </div>
         <h2>{{ systemConfig.loginTagline }}</h2>
-        <p>{{ systemConfig.name }} {{ systemConfig.description }}</p>
+        <p class="visual-subtitle">{{ systemConfig.name }} {{ systemConfig.description }}</p>
+        <div class="visual-highlights" aria-label="平台核心能力">
+          <span v-for="item in visualHighlights" :key="item" class="highlight-pill">{{
+            item
+          }}</span>
+        </div>
       </div>
     </section>
     <section class="login-form-region">
@@ -252,8 +303,7 @@ async function submit(): Promise<void> {
         <h1>账号登录</h1>
         <ElForm
           :model="form"
-          label-width="54px"
-          label-position="left"
+          label-position="top"
           size="large"
           @submit.prevent="submit"
         >
@@ -281,7 +331,9 @@ async function submit(): Promise<void> {
               :disabled="busy"
               :validate-event="false"
               @input="changed('password')"
-              @blur="touched.password = true"
+              @keydown="checkCapsLock"
+              @keyup="checkCapsLock"
+              @blur="passwordBlur"
             >
               <template #suffix
                 ><button
@@ -294,9 +346,27 @@ async function submit(): Promise<void> {
                   <component :is="showPassword ? Hide : View" /></button
               ></template>
             </ElInput>
+            <div v-if="capsLockOn && !passwordError" class="caps-lock-hint" role="status">
+              已开启大写锁定 (Caps Lock)
+            </div>
           </ElFormItem>
           <ElFormItem label="验证码" :error="captchaInputError" class="captcha-field">
             <div class="captcha-row">
+              <ElInput
+                id="captcha"
+                v-model="captchaAnswer"
+                name="captcha"
+                aria-label="验证码"
+                placeholder="请输入验证码"
+                autocomplete="off"
+                autocapitalize="off"
+                :spellcheck="false"
+                :maxlength="loginValidation.captcha.length"
+                :disabled="busy || !captchaReady"
+                :validate-event="false"
+                @input="changed('captcha')"
+                @blur="touched.captcha = true"
+              />
               <button
                 class="captcha-image"
                 type="button"
@@ -322,21 +392,6 @@ async function submit(): Promise<void> {
                   captchaRequesting || captcha ? '加载中…' : '点击获取'
                 }}</span>
               </button>
-              <ElInput
-                id="captcha"
-                v-model="captchaAnswer"
-                name="captcha"
-                aria-label="验证码"
-                placeholder="验证码"
-                autocomplete="off"
-                autocapitalize="off"
-                :spellcheck="false"
-                :maxlength="loginValidation.captcha.length"
-                :disabled="busy || !captchaReady"
-                :validate-event="false"
-                @input="changed('captcha')"
-                @blur="touched.captcha = true"
-              />
             </div>
           </ElFormItem>
           <div class="login-options">
@@ -374,48 +429,76 @@ async function submit(): Promise<void> {
 .login-page {
   min-height: 100dvh;
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(420px, 1fr);
-  background: #fff;
+  grid-template-columns: minmax(0, 1.18fr) minmax(420px, 1fr);
+  background: #f8fafc;
 }
 .login-visual {
   position: relative;
   display: flex;
   flex-direction: column;
-  padding: 36px 48px;
-  background: #f0f5fc;
-  border-right: 1px solid #e8eef6;
+  padding: 36px 56px;
+  background:
+    radial-gradient(circle at 18% 22%, rgba(40, 120, 232, 0.11), transparent 46%),
+    radial-gradient(circle at 82% 78%, rgba(59, 130, 246, 0.09), transparent 48%),
+    linear-gradient(145deg, #eef4fc 0%, #e5effc 52%, #dce9fa 100%);
+  border-right: 1px solid #e2eaf4;
+  overflow: hidden;
 }
 .login-brand {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 12px;
+  width: fit-content;
   font-size: 21px;
   font-weight: 600;
-  color: #26374e;
+  color: #1e293b;
 }
 .visual-content {
-  margin: auto 0;
-  padding: 28px 0 70px;
+  margin: auto;
+  width: 100%;
+  max-width: 620px;
+  padding: 24px 0 48px;
   text-align: center;
 }
 .stream-illustration {
-  max-width: 610px;
-  margin: 0 auto 30px;
+  max-width: 580px;
+  margin: 0 auto 28px;
+  filter: drop-shadow(0 12px 24px rgba(30, 64, 115, 0.06));
 }
 .stream-illustration svg {
   width: 100%;
+  display: block;
 }
 .visual-content h2 {
-  margin: 0 0 16px;
-  color: #294f80;
+  margin: 0 0 12px;
+  color: #1e3a68;
   font-size: 28px;
   font-weight: 600;
-  letter-spacing: 2px;
+  letter-spacing: 1.5px;
 }
-.visual-content p {
+.visual-subtitle {
   margin: 0;
   font-size: 16px;
-  color: #6f839f;
+  color: #5b7290;
+}
+.visual-highlights {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 24px;
+}
+.highlight-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(186, 210, 242, 0.85);
+  color: #2c5282;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 2px 6px rgba(30, 58, 104, 0.04);
 }
 .login-form-region {
   display: flex;
@@ -423,35 +506,54 @@ async function submit(): Promise<void> {
   justify-content: center;
   padding: 40px;
   min-width: 0;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
 }
 .login-card {
   width: 100%;
-  max-width: 460px;
+  max-width: 440px;
   min-width: 0;
-  padding: 34px 32px;
-  border: 1px solid #e1e7ef;
-  border-radius: 12px;
+  padding: 36px 36px 32px;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
   background: #fff;
+  box-shadow:
+    0 12px 36px -8px rgba(15, 23, 42, 0.07),
+    0 4px 12px -2px rgba(15, 23, 42, 0.04);
 }
 h1 {
-  margin: 0 0 34px;
-  font-size: 25px;
+  margin: 0 0 28px;
+  font-size: 24px;
   font-weight: 600;
-  color: #303133;
+  color: #0f172a;
   text-align: center;
 }
 .login-card :deep(.el-form-item) {
-  margin-bottom: 28px;
+  margin-bottom: 20px;
+}
+.login-card :deep(.el-form-item__label) {
+  padding-bottom: 6px;
+  line-height: 1.4;
+  font-size: 13px;
+  font-weight: 500;
+  color: #334155;
 }
 .login-card :deep(.el-input__wrapper) {
   transition: box-shadow 160ms ease;
 }
 .login-card :deep(.el-form-item__error) {
-  line-height: 1.5;
-  padding-top: 5px;
+  line-height: 1.45;
+  padding-top: 4px;
+}
+.caps-lock-hint {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #d97706;
 }
 .login-options {
-  margin: -8px 0 20px 54px;
+  display: flex;
+  align-items: center;
+  margin: -2px 0 20px;
 }
 .captcha-row {
   display: flex;
@@ -468,22 +570,25 @@ h1 {
   position: relative;
   display: grid;
   place-items: center;
-  flex: 0 0 120px;
+  flex: 0 0 124px;
   height: 40px;
   padding: 0;
-  border: 1px solid #dce4ee;
-  border-radius: 4px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
   overflow: hidden;
-  background: #f5f8fc;
-  color: #6b7d94;
+  background: #f8fafc;
+  color: #64748b;
   cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
 }
 .captcha-image:hover:not(:disabled) {
   border-color: var(--el-color-primary);
 }
 .captcha-image:focus-visible {
   outline: 2px solid var(--el-color-primary);
-  outline-offset: 3px;
+  outline-offset: 2px;
 }
 .captcha-image:disabled {
   cursor: default;
@@ -520,15 +625,17 @@ h1 {
 .login-submit {
   width: 100%;
   height: 44px;
-  font-size: 16px;
+  font-size: 15px;
+  font-weight: 500;
+  border-radius: 8px;
 }
 .login-error {
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
 .mobile-brand {
   display: none;
 }
-@media (max-width: 900px) {
+@media (max-width: 960px) {
   .login-visual {
     padding: 30px;
   }
@@ -542,13 +649,13 @@ h1 {
     padding: 28px;
   }
   .login-card {
-    padding: 30px 24px;
+    padding: 30px 26px;
   }
   .captcha-image {
-    flex-basis: 100px;
+    flex-basis: 112px;
   }
 }
-@media (max-width: 720px) {
+@media (max-width: 768px) {
   .login-page {
     display: flex;
   }
@@ -564,9 +671,10 @@ h1 {
     align-items: center;
     gap: 10px;
     justify-content: center;
-    margin-bottom: 28px;
+    margin-bottom: 20px;
     font-size: 20px;
     font-weight: 600;
+    color: #0f172a;
   }
 }
 @media (max-width: 380px) {
@@ -574,17 +682,19 @@ h1 {
     padding: 12px;
   }
   .login-card {
-    padding: 28px 18px;
+    padding: 24px 18px;
   }
   .captcha-row {
     gap: 8px;
   }
   .captcha-image {
-    flex-basis: 92px;
+    flex-basis: 96px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .login-card :deep(.el-input__wrapper) {
+  .login-card :deep(.el-input__wrapper),
+  .captcha-image,
+  .captcha-refresh-link {
     transition: none;
   }
 }
