@@ -65,6 +65,7 @@
                     WHERE search_endpoint.source_id=s.id
                         AND ((s.connection_category='PLATFORM' AND search_endpoint.purpose='PLATFORM_HTTP')
                             OR (s.connection_category='RTSP' AND search_endpoint.purpose='RTSP')
+                            OR (s.connection_category='STREAM' AND search_endpoint.purpose='STREAM')
                             OR (s.connection_category='DEVICE' AND search_endpoint.purpose IN ('DEVICE_HTTP','VENDOR_HTTP','ONVIF','RTSP')))
                         AND LOWER(search_endpoint.host) LIKE CONCAT('%',LOWER(#{filter.name}),'%') ESCAPE '!'
                 ))

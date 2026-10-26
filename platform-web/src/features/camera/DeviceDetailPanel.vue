@@ -195,7 +195,6 @@ onMounted(load)
         <div class="device-title-wrap">
           <div class="device-title-row">
             <h2>{{ deviceName }}</h2>
-            <ElTag v-if="!device.identified" type="info" size="small">待关联设备</ElTag>
           </div>
           <p>
             {{ [resolvedBrand, device.model].filter(Boolean).join(' · ') || '设备资料未获取' }}

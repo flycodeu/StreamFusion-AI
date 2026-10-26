@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseCamera, parseProfile, parseCameraAddress } from './types'
+import { parseCamera, parseProfile, parseCameraAddress, parseDeviceGroup } from './types'
 import { parseCameraScope } from '../camera-scopes/types'
 import { parseImpact } from '../camera-groups/types'
 
@@ -14,6 +14,31 @@ const camera = {
   updatedAt: '2026-10-06T00:00:00Z',
 }
 describe('camera API response boundaries', () => {
+  it.each(['RTMP', 'FLV', 'HLS', 'CRTSP', 'GB28181'])(
+    'reads imported %s stream addresses in both the device list and details',
+    (sourceType) => {
+      const accessAddress = { kind: 'STREAM', host: '192.168.142.1', port: 28555 }
+      expect(
+        parseCamera({ ...camera, sourceType, connectionCategory: 'STREAM', accessAddress })
+          .accessAddress,
+      ).toEqual(accessAddress)
+      expect(
+        parseDeviceGroup({
+          groupKey: 'c9007199254740993',
+          name: '模拟视频',
+          identified: false,
+          sourceDisplayName: '模拟源',
+          sourceType,
+          connectionCategory: 'STREAM',
+          accessAddress,
+          channelCount: 1,
+          enabledCount: 1,
+          disabledCount: 0,
+          pendingCount: 0,
+        }).accessAddress,
+      ).toEqual(accessAddress)
+    },
+  )
   it('reads address summaries separately from connection configuration and accepts old responses', () => {
     const accessAddress = { kind: 'DEVICE', host: '10.0.1.5', port: 80 }
     expect(parseCamera({ ...camera, accessAddress }).accessAddress).toEqual(accessAddress)

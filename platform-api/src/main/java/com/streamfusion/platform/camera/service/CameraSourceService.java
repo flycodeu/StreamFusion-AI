@@ -3,6 +3,7 @@ package com.streamfusion.platform.camera.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessAdapterRegistry;
+import com.streamfusion.platform.camera.access.adapter.CameraStreamProtocol;
 import com.streamfusion.platform.camera.access.pojo.CameraConnection;
 import com.streamfusion.platform.camera.config.CameraProperties;
 import com.streamfusion.platform.camera.mapper.*;
@@ -49,7 +50,7 @@ public class CameraSourceService {
                 "adapterTypes",
                 adapters.descriptors().stream().map(d -> d.type()).toList(),
                 "credentialPurposes",
-                List.of("RTSP", "DEVICE_HTTP", "ONVIF", "VENDOR_HTTP", "PLATFORM_HTTP"),
+                List.of("RTSP", "STREAM", "DEVICE_HTTP", "ONVIF", "VENDOR_HTTP", "PLATFORM_HTTP"),
                 "networkPolicies",
                 properties.networkPolicyOptions(),
                 "ready",
@@ -77,7 +78,8 @@ public class CameraSourceService {
         return type != null
                 && (adapters.supportsCategory(type, "DEVICE")
                         || adapters.supportsCategory(type, "PLATFORM")
-                        || adapters.supportsCategory(type, "RTSP"));
+                        || adapters.supportsCategory(type, "RTSP")
+                        || adapters.supportsCategory(type, "STREAM"));
     }
 
     @Transactional(readOnly = true)
@@ -172,7 +174,7 @@ public class CameraSourceService {
         source.setConnectionCategory(category);
         source.setAdapterType(input.adapterType());
         source.setVendorHint(CameraSourceRules.text(input.vendorHint(), 128, false));
-        source.setRtspPort("RTSP".equals(input.adapterType()) ? null : mediaPort);
+        source.setRtspPort(CameraStreamProtocol.supports(input.adapterType()) ? null : mediaPort);
         if (input.networkPolicyKey() != null) rules.policy(input.networkPolicyKey());
         source.setNetworkPolicyKey(input.networkPolicyKey());
         source.setEnabled(input.enabled() == null || input.enabled());
@@ -230,7 +232,8 @@ public class CameraSourceService {
             source.setVendorHint(CameraSourceRules.text(input.getVendorHint(), 128, false));
         var credential = credential(sourceId);
         if (input.getRtspPort() != null) {
-            if ("RTSP".equals(source.getAdapterType())) throw CameraSourceRules.invalid();
+            if (CameraStreamProtocol.supports(source.getAdapterType()))
+                throw CameraSourceRules.invalid();
             CameraSourceRules.port(input.getRtspPort());
             source.setRtspPort(input.getRtspPort());
         }
@@ -394,9 +397,10 @@ public class CameraSourceService {
             if (adapters.supportsCategory(type, "DEVICE")) supplied = "DEVICE";
             else if (adapters.supportsCategory(type, "PLATFORM")) supplied = "PLATFORM";
             else if (adapters.supportsCategory(type, "RTSP")) supplied = "RTSP";
+            else if (adapters.supportsCategory(type, "STREAM")) supplied = "STREAM";
         }
         if (supplied == null
-                || !Set.of("DEVICE", "PLATFORM", "RTSP").contains(supplied)
+                || !Set.of("DEVICE", "PLATFORM", "RTSP", "STREAM").contains(supplied)
                 || (type == null
                         ? !"DEVICE".equals(supplied)
                         : !adapters.supportsCategory(type, supplied)))
@@ -441,8 +445,8 @@ public class CameraSourceService {
 
     public CameraSourceEntity requireManualSource(long id, Long expectedVersion) {
         var source = requireArchiveSource(id, expectedVersion);
-        if (!"RTSP".equals(source.getAdapterType()))
-            throw BusinessException.error(ErrorCode.CONFLICT);
+        if (!com.streamfusion.platform.camera.access.adapter.CameraStreamProtocol.supports(
+                source.getAdapterType())) throw BusinessException.error(ErrorCode.CONFLICT);
         rules.policy(source.getNetworkPolicyKey());
         return source;
     }
@@ -512,15 +516,19 @@ public class CameraSourceService {
         else sameOptional(input.networkPolicyKey(), policy);
         policy = properties.defaultNetworkPolicyKey(policy);
         int mediaPort =
-                "RTSP".equals(source.getAdapterType())
+                CameraStreamProtocol.supports(source.getAdapterType())
                         ? endpoint.getPort()
                         : source.getRtspPort() == null ? 554 : source.getRtspPort();
         sameOptional(input.rtspPort(), mediaPort);
-        boolean rtsp = "RTSP".equals(source.getAdapterType());
+        boolean rtsp = CameraStreamProtocol.supports(source.getAdapterType());
+        if (CameraStreamProtocol.stream(method) && input.rtspUrls() != null
+                || "RTSP".equals(method) && input.streamUrls() != null)
+            throw CameraSourceRules.invalid();
         if (!rtsp) {
             sameOptional(input.name(), source.getName());
             if (input.rtspUrls() != null && !input.rtspUrls().isEmpty())
                 throw CameraSourceRules.invalid();
+            if (input.streamUrls() != null) throw CameraSourceRules.invalid();
         }
         rules.host(endpoint.getHost(), policy);
         return new CameraConnection(
@@ -535,11 +543,12 @@ public class CameraSourceService {
                 policy,
                 input.sourceId(),
                 input.sourceVersion(),
-                rtsp ? input.rtspUrls() : null,
+                "RTSP".equals(method) ? input.rtspUrls() : null,
                 input.pageNumber(),
                 input.pageSize(),
                 input.regionIndexCode(),
-                input.includeSubRegions());
+                input.includeSubRegions(),
+                CameraStreamProtocol.stream(method) ? input.streamUrls() : null);
     }
 
     private static void sameOptional(Object input, Object saved) {
@@ -585,7 +594,7 @@ public class CameraSourceService {
         var endpoint =
                 new CameraSourceWriteDto.Endpoint(
                         purpose,
-                        "RTSP".equals(adapterType) ? "rtsp" : connection.scheme(),
+                        connection.scheme(),
                         connection.host(),
                         connection.port(),
                         basePath(adapterType),
@@ -751,16 +760,19 @@ public class CameraSourceService {
             CameraSourceWriteDto.Endpoint command,
             CameraCredentialEntity credential) {
         String purpose = current == null ? endpointPurpose(source, command) : current.getPurpose();
-        boolean rtsp = "RTSP".equals(source.getAdapterType());
+        boolean rtsp = CameraStreamProtocol.supports(source.getAdapterType());
         if (command == null
                 || !purpose.equals(command.purpose())
                 || !(rtsp
-                        ? "rtsp".equals(command.scheme())
+                        ? CameraStreamProtocol.valueOf(source.getAdapterType())
+                                .accepts(command.scheme())
                         : "http".equals(command.scheme()) || "https".equals(command.scheme()))
                 || !("DEVICE_HTTP".equals(purpose) ? "" : basePath(source.getAdapterType()))
                         .equals(command.basePath())
                 || !"SYSTEM_CA".equals(command.tlsPolicy())) throw CameraSourceRules.invalid();
         boolean anonymous = "NONE".equals(command.authMode());
+        if (("CRTSP".equals(source.getAdapterType()) || "GB28181".equals(source.getAdapterType()))
+                && !anonymous) throw CameraSourceRules.invalid();
         if (anonymous
                 ? "PLATFORM".equals(source.getConnectionCategory())
                         || command.credentialPurpose() != null
@@ -878,6 +890,7 @@ public class CameraSourceService {
             CameraEndpointEntity endpoint,
             boolean hasChannels,
             boolean hasBoundChannels) {
+        if ("STREAM".equals(source.getConnectionCategory())) return false;
         return "RTSP".equals(source.getConnectionCategory())
                 || (endpoint != null && "DEVICE_HTTP".equals(endpoint.getPurpose())
                         ? !hasBoundChannels

@@ -285,6 +285,7 @@ public class CameraStatusQueryService {
         }
         var layers = new HashMap<LayerKey, CameraStatusLayerVo>();
         var platformProfiles = targets.platformProfiles(profileIds);
+        var streamProfiles = targets.streamProfiles(profileIds);
         for (var layer : CameraStatusLayer.values()) {
             var observedKeys = new HashMap<Long, String>();
             for (var fact : facts)
@@ -309,11 +310,13 @@ public class CameraStatusQueryService {
                                 latestByProfile.get(key),
                                 inspections.current().get(profile.getId()),
                                 inspections.observed().get(profile.getId()),
-                                platformProfiles.contains(profile.getId())
-                                        ? CameraStatusLayer.UPSTREAM
-                                        : layer == CameraStatusLayer.UPSTREAM
-                                                ? CameraStatusLayer.CONTROL
-                                                : layer));
+                                streamProfiles.contains(profile.getId())
+                                        ? CameraStatusLayer.MEDIA
+                                        : platformProfiles.contains(profile.getId())
+                                                ? CameraStatusLayer.UPSTREAM
+                                                : layer == CameraStatusLayer.UPSTREAM
+                                                        ? CameraStatusLayer.CONTROL
+                                                        : layer));
             }
         }
         var profilesByCamera = new HashMap<Long, List<CameraStatusPageVo.Profile>>();

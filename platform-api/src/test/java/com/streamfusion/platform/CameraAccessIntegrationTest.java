@@ -23,6 +23,97 @@ class CameraAccessIntegrationTest extends CameraTestSupport {
     @Autowired CameraAccessJobsService jobs;
     @Autowired CameraConnectionRules connections;
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(
+            strings = {"RTMP", "FLV", "HLS", "CRTSP", "GB28181"})
+    void streamProtocolsImportEncryptedLocatorsAndKeepWriteOnlyMaintenance(String kind)
+            throws Exception {
+        var auth = admin();
+        String url =
+                switch (kind) {
+                    case "RTMP" -> "rtmp://10.0.1.5:1935/live/main?token=private-stream-token";
+                    case "FLV" -> "http://10.0.1.5:80/live/main.flv?token=private-stream-token";
+                    case "HLS" -> "http://10.0.1.5:80/live/main.m3u8?token=private-stream-token";
+                    case "CRTSP" ->
+                            "rtsp://10.0.1.5:554/sf_ingress/0123456789abcdef0123456789abcdef";
+                    default -> "gb28181://10.0.1.5:554/34020000001320000001/34020000001320000002";
+                };
+        var created =
+                write(
+                        post("/camera-access/jobs"),
+                        auth,
+                        Map.of(
+                                "clientRequestId",
+                                requestId(),
+                                "connection",
+                                Map.of(
+                                        "method",
+                                        kind,
+                                        "name",
+                                        "模拟相机",
+                                        "streamUrls",
+                                        List.of(url),
+                                        "networkPolicyKey",
+                                        "test")),
+                        202);
+        var work = jobs.claim(created.path("jobId").asLong());
+        assertThat(work.payload().connection().rtspUrls()).isNull();
+        jobs.complete(work, connections.rtspCatalog(work.payload().connection()));
+        var found = read("/camera-access/jobs/" + created.path("jobId").asText(), auth);
+        var selection = selected(found, "c0", List.of("p0"));
+        var impact =
+                write(
+                        post(
+                                "/camera-access/jobs/"
+                                        + created.path("jobId").asText()
+                                        + "/import-preview"),
+                        auth,
+                        selection,
+                        200);
+        selection.put("confirmation", impact.path("confirmation").asText());
+        selection.put("clientRequestId", requestId());
+        var imported =
+                write(
+                        post("/camera-access/jobs/" + created.path("jobId").asText() + "/import"),
+                        auth,
+                        selection,
+                        200);
+        String cameraId = imported.path("cameras").get(0).path("cameraId").asText();
+        var camera = read("/cameras/" + cameraId, auth);
+        var byAddress = read("/cameras/devices/page?name=10.0.1.5", auth);
+        assertThat(byAddress.path("total").asInt()).isEqualTo(1);
+        assertThat(byAddress.path("items").get(0).path("accessAddress").path("kind").asText())
+                .isEqualTo("STREAM");
+        assertThat(read("/cameras/devices/page?name=10.0.1.99", auth).path("total").asInt())
+                .isZero();
+        var profile = camera.path("profiles").get(0);
+        assertThat(profile.path("locatorSummary").path("locatorKind").asText()).isEqualTo(kind);
+        assertThat(profile.path("locatorSummary").path("editable").asBoolean()).isTrue();
+        assertThat(camera.toString()).doesNotContain("private-stream-token", url);
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT connection_category FROM camera_source", String.class))
+                .isEqualTo("STREAM");
+        assertThat(
+                        jdbc.queryForObject(
+                                "SELECT protocol_secret_ciphertext FROM camera_profile_locator",
+                                byte[].class))
+                .isNotEmpty();
+        write(
+                put(
+                        "/cameras/"
+                                + cameraId
+                                + "/profiles/"
+                                + profile.path("streamProfileId").asText()),
+                auth,
+                Map.of(
+                        "version",
+                        profile.path("version").asText(),
+                        "locator",
+                        Map.of("fullUrl", url, "transport", "TCP")),
+                200);
+    }
+
     @Test
     void missingConnectionMethodIsRejectedBeforeCreatingAJobOrReadingTheDirectory()
             throws Exception {

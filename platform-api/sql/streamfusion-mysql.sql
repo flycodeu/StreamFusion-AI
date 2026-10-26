@@ -395,7 +395,7 @@ CREATE TABLE camera_source (
  created_at DATETIME(6) NOT NULL, updated_at DATETIME(6) NOT NULL,
  created_by BIGINT NULL, updated_by BIGINT NULL,
  PRIMARY KEY(id),
- CONSTRAINT ck_camera_source_type CHECK(connection_category IN ('DEVICE','PLATFORM','RTSP') AND (adapter_type IS NULL OR (CHAR_LENGTH(adapter_type) BETWEEN 1 AND 64 AND adapter_type NOT IN ('AUTO','SCAN'))) AND vendor_model_family IS NULL),
+ CONSTRAINT ck_camera_source_type CHECK(connection_category IN ('DEVICE','PLATFORM','RTSP','STREAM') AND (adapter_type IS NULL OR (CHAR_LENGTH(adapter_type) BETWEEN 1 AND 64 AND adapter_type NOT IN ('AUTO','SCAN'))) AND vendor_model_family IS NULL),
  CONSTRAINT ck_camera_source_media_port CHECK(rtsp_port IS NULL OR rtsp_port BETWEEN 1 AND 65535),
  CONSTRAINT ck_camera_source_enabled CHECK(enabled IN (0,1)),
  CONSTRAINT ck_camera_source_version CHECK(version >= 0)
@@ -410,7 +410,7 @@ CREATE TABLE camera_source_credential (
  created_at DATETIME(6) NOT NULL, updated_at DATETIME(6) NOT NULL,
  PRIMARY KEY(id), UNIQUE(source_id,purpose), UNIQUE(source_id,id),
  CONSTRAINT fk_camera_credential_source FOREIGN KEY(source_id) REFERENCES camera_source(id),
- CONSTRAINT ck_camera_credential_purpose CHECK(purpose IN ('RTSP','ONVIF','VENDOR_HTTP','PLATFORM_HTTP','DEVICE_HTTP'))
+ CONSTRAINT ck_camera_credential_purpose CHECK(purpose IN ('RTSP','STREAM','ONVIF','VENDOR_HTTP','PLATFORM_HTTP','DEVICE_HTTP'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='来源固定用途加密凭据';
 
 -- 相机端点表.sql
@@ -424,7 +424,7 @@ CREATE TABLE camera_source_endpoint (
  PRIMARY KEY(id), UNIQUE(source_id,purpose), UNIQUE(source_id,id),
  CONSTRAINT fk_camera_endpoint_source FOREIGN KEY(source_id) REFERENCES camera_source(id),
  CONSTRAINT fk_camera_endpoint_credential FOREIGN KEY(source_id,credential_id) REFERENCES camera_source_credential(source_id,id),
- CONSTRAINT ck_camera_endpoint_protocol CHECK((purpose='RTSP' AND scheme='rtsp' AND base_path='') OR (purpose='ONVIF' AND scheme IN ('http','https') AND base_path='/onvif/device_service') OR (purpose IN ('VENDOR_HTTP','DEVICE_HTTP') AND scheme IN ('http','https') AND base_path='') OR (purpose='PLATFORM_HTTP' AND scheme IN ('http','https') AND base_path LIKE '/%')),
+ CONSTRAINT ck_camera_endpoint_protocol CHECK((purpose='STREAM' AND scheme IN ('rtsp','rtmp','http','https','gb28181') AND base_path='') OR (purpose='RTSP' AND scheme='rtsp' AND base_path='') OR (purpose='ONVIF' AND scheme IN ('http','https') AND base_path='/onvif/device_service') OR (purpose IN ('VENDOR_HTTP','DEVICE_HTTP') AND scheme IN ('http','https') AND base_path='') OR (purpose='PLATFORM_HTTP' AND scheme IN ('http','https') AND base_path LIKE '/%')),
  CONSTRAINT ck_camera_endpoint_port CHECK(port BETWEEN 1 AND 65535),
  CONSTRAINT ck_camera_endpoint_auth CHECK((auth_mode='NONE' AND credential_id IS NULL AND purpose<>'PLATFORM_HTTP') OR (auth_mode='DRIVER_NEGOTIATED' AND credential_id IS NOT NULL)),
  CONSTRAINT ck_camera_endpoint_tls CHECK(tls_policy='SYSTEM_CA' AND ca_bundle_key IS NULL AND cert_sha256 IS NULL)
@@ -569,7 +569,7 @@ CREATE TABLE camera_profile_locator (
  CONSTRAINT fk_camera_locator_source FOREIGN KEY(source_id) REFERENCES camera_source(id),
  CONSTRAINT fk_camera_locator_profile FOREIGN KEY(source_id,profile_id) REFERENCES camera_stream_profile(source_id,id),
  CONSTRAINT fk_camera_locator_endpoint FOREIGN KEY(source_id,endpoint_purpose) REFERENCES camera_source_endpoint(source_id,purpose),
- CONSTRAINT ck_camera_locator_kind CHECK((locator_kind='RTSP' AND endpoint_purpose='RTSP' AND rtsp_transport IS NOT NULL AND rtsp_transport='TCP' AND rtsp_host_mode IS NOT NULL AND rtsp_secret_ciphertext IS NOT NULL AND rtsp_secret_nonce IS NOT NULL AND rtsp_secret_tag IS NOT NULL AND rtsp_encryption_key_id IS NOT NULL AND protocol_secret_ciphertext IS NULL AND protocol_secret_nonce IS NULL AND protocol_secret_tag IS NULL AND protocol_encryption_key_id IS NULL) OR (locator_kind IN ('ONVIF','HIKVISION','DAHUA','HIK_PLATFORM') AND ((locator_kind='ONVIF' AND endpoint_purpose IN ('ONVIF','DEVICE_HTTP')) OR (locator_kind IN ('HIKVISION','DAHUA') AND endpoint_purpose IN ('VENDOR_HTTP','DEVICE_HTTP')) OR (locator_kind='HIK_PLATFORM' AND endpoint_purpose='PLATFORM_HTTP')) AND rtsp_host_mode IS NULL AND rtsp_host IS NULL AND rtsp_port IS NULL AND rtsp_secret_ciphertext IS NULL AND rtsp_secret_nonce IS NULL AND rtsp_secret_tag IS NULL AND rtsp_encryption_key_id IS NULL AND rtsp_transport IS NULL AND protocol_secret_ciphertext IS NOT NULL AND protocol_secret_nonce IS NOT NULL AND protocol_secret_tag IS NOT NULL AND protocol_encryption_key_id IS NOT NULL)),
+ CONSTRAINT ck_camera_locator_kind CHECK((locator_kind='RTSP' AND endpoint_purpose='RTSP' AND rtsp_transport IS NOT NULL AND rtsp_transport='TCP' AND rtsp_host_mode IS NOT NULL AND rtsp_secret_ciphertext IS NOT NULL AND rtsp_secret_nonce IS NOT NULL AND rtsp_secret_tag IS NOT NULL AND rtsp_encryption_key_id IS NOT NULL AND protocol_secret_ciphertext IS NULL AND protocol_secret_nonce IS NULL AND protocol_secret_tag IS NULL AND protocol_encryption_key_id IS NULL) OR (((locator_kind='ONVIF' AND endpoint_purpose IN ('ONVIF','DEVICE_HTTP')) OR (locator_kind IN ('HIKVISION','DAHUA') AND endpoint_purpose IN ('VENDOR_HTTP','DEVICE_HTTP')) OR (locator_kind='HIK_PLATFORM' AND endpoint_purpose='PLATFORM_HTTP') OR (locator_kind IN ('RTMP','FLV','HLS','CRTSP','GB28181') AND endpoint_purpose='STREAM')) AND rtsp_host_mode IS NULL AND rtsp_host IS NULL AND rtsp_port IS NULL AND rtsp_secret_ciphertext IS NULL AND rtsp_secret_nonce IS NULL AND rtsp_secret_tag IS NULL AND rtsp_encryption_key_id IS NULL AND rtsp_transport IS NULL AND protocol_secret_ciphertext IS NOT NULL AND protocol_secret_nonce IS NOT NULL AND protocol_secret_tag IS NOT NULL AND protocol_encryption_key_id IS NOT NULL)),
  CONSTRAINT ck_camera_locator_host CHECK(locator_kind<>'RTSP' OR ((rtsp_host_mode='SOURCE' AND rtsp_host IS NULL AND rtsp_port IS NULL) OR (rtsp_host_mode='EXPLICIT' AND rtsp_host IS NOT NULL AND rtsp_port IS NOT NULL AND rtsp_port BETWEEN 1 AND 65535)))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Profile持久定位：RTSP秘密或协议身份，不保存平台临时播放地址';
 

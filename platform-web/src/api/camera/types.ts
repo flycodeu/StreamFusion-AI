@@ -18,7 +18,7 @@ export interface FullRtspLocatorInput {
 
 export type Lifecycle = 'PENDING_ASSIGNMENT' | 'ENABLED' | 'DISABLED'
 export interface CameraAddress {
-  kind: 'DEVICE' | 'PLATFORM' | 'RTSP'
+  kind: 'DEVICE' | 'PLATFORM' | 'RTSP' | 'STREAM'
   host: string
   port: number | null
 }
@@ -26,7 +26,7 @@ export function parseCameraAddress(value: unknown): CameraAddress | null {
   if (value == null) return null
   const row = object(value)
   const kind = string(row.kind)
-  if (!['DEVICE', 'PLATFORM', 'RTSP'].includes(kind)) throw new Error('address kind')
+  if (!['DEVICE', 'PLATFORM', 'RTSP', 'STREAM'].includes(kind)) throw new Error('address kind')
   const host = string(row.host)
   const port = row.port == null ? null : integer(row.port)
   if (!host.trim() || /[\s/@?#]/.test(host) || (port !== null && (port < 1 || port > 65535)))

@@ -23,6 +23,7 @@ const props = defineProps<{
   disabled: boolean
   single?: boolean
   compact?: boolean
+  addressOnly?: boolean
 }>()
 const model = defineModel<CandidateSelection[]>({ required: true })
 const page = ref(1)
@@ -48,6 +49,16 @@ const visible = computed(() =>
 function selected(candidateId: string) {
   return model.value.find((item) => item.candidateId === candidateId)
 }
+function knownParameters(profile: CandidateProfile): string {
+  return [
+    profile.videoCodec,
+    profile.width && profile.height ? `${profile.width} × ${profile.height}` : null,
+    profile.frameRate == null ? null : `${profile.frameRate} fps`,
+    profile.bitrateKbps == null ? null : `${profile.bitrateKbps} kbps`,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
 function toggleCandidate(candidate: AccessCandidate, checked: boolean) {
   model.value = model.value.filter((item) => item.candidateId !== candidate.candidateId)
   if (checked)
@@ -68,7 +79,10 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
 <template>
   <div class="candidate-selection">
     <div class="selection-toolbar">
-      <strong>读取到 {{ candidates.length }} 个通道 · 已选 {{ model.length }} 个</strong>
+      <strong
+        >{{ addressOnly ? '已整理' : '读取到' }} {{ candidates.length }} 个通道 · 已选
+        {{ model.length }} 个</strong
+      >
       <div>
         <ElButton v-if="!single" :disabled="disabled" @click="model = initialSelections(candidates)"
           >选择可导入通道</ElButton
@@ -100,7 +114,7 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
             @update:model-value="toggleProfile(candidate, profile, !!$event)"
             >{{ profile.displayLabel }}</ElCheckbox
           >
-          <span class="profile-parameters"
+          <span v-if="!addressOnly" class="profile-parameters"
             >{{ usageLabel(effectiveUsage(profile)) }} · {{ profile.videoCodec || '编码未获取' }} ·
             {{
               profile.width && profile.height
@@ -110,6 +124,9 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
             · {{ profile.frameRate == null ? '帧率未获取' : `${profile.frameRate} fps` }} ·
             {{ profile.bitrateKbps == null ? '码率未获取' : `${profile.bitrateKbps} kbps` }}</span
           >
+          <span v-else-if="knownParameters(profile)" class="profile-parameters">{{
+            knownParameters(profile)
+          }}</span>
         </div>
         <ElFormItem
           v-if="selected(candidate.candidateId)!.profileIds.length"

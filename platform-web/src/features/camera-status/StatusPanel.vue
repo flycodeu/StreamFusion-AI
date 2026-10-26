@@ -87,7 +87,9 @@ const availableLayers = computed<StatusLayer[]>(() => {
   const upstream = selectedProfile.value?.upstream
   return upstream && upstream.blockingReasonCode !== 'STATUS_LAYER_NOT_APPLICABLE'
     ? ['UPSTREAM']
-    : ['CONTROL', 'MEDIA']
+    : selectedProfile.value?.control.blockingReasonCode === 'STATUS_LAYER_NOT_APPLICABLE'
+      ? ['MEDIA']
+      : ['CONTROL', 'MEDIA']
 })
 watch(availableLayers, (values) => {
   if (!values.includes(layer.value)) layer.value = values[0]!

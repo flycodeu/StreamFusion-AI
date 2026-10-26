@@ -135,6 +135,7 @@ public final class PreviewNodeApplication {
                                     journal.close();
                                     pulls.close();
                                     transcodes.close();
+                                    media.closeRelay();
                                 },
                                 "preview-node-shutdown"));
         server.start();

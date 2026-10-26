@@ -21,6 +21,7 @@ public interface CameraEndpointMapper extends BaseMapper<CameraEndpointEntity> {
               <foreach collection='ids' item='id' open='(' separator=',' close=')'>#{id}</foreach>
               AND ((s.connection_category='PLATFORM' AND e.purpose='PLATFORM_HTTP')
                 OR (s.connection_category='RTSP' AND e.purpose='RTSP')
+                OR (s.connection_category='STREAM' AND e.purpose='STREAM')
                 OR (s.connection_category='DEVICE' AND e.purpose IN ('DEVICE_HTTP','VENDOR_HTTP','ONVIF','RTSP')))
             ORDER BY s.id,CASE
               WHEN s.connection_category='PLATFORM' AND e.purpose='PLATFORM_HTTP' THEN 0

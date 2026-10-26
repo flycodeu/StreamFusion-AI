@@ -559,11 +559,14 @@ onMounted(refresh)
             align="center"
             :selectable="() => !deviceDeleting"
           />
-          <ElTableColumn v-if="columns.includes('name')" label="相机名称" min-width="180"
+          <ElTableColumn
+            v-if="columns.includes('name')"
+            label="相机名称"
+            min-width="280"
+            show-overflow-tooltip
             ><template #default="{ row }">
               <div class="device-name" :title="row.name">
-                {{ row.name
-                }}<ElTag v-if="!row.identified" size="small" type="info">待关联设备</ElTag>
+                {{ row.name }}
               </div>
             </template></ElTableColumn
           >

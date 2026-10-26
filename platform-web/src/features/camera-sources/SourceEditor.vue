@@ -305,7 +305,7 @@ onBeforeUnmount(() => {
             :disabled="editing?.endpointEditable === false"
         /></ElFormItem>
       </div>
-      <ElFormItem label="需要认证"
+      <ElFormItem v-if="!['CRTSP', 'GB28181'].includes(editing?.adapterType ?? '')" label="需要认证"
         ><ElSwitch v-model="form.authenticated" :disabled="!!platform"
       /></ElFormItem>
       <div v-if="form.authenticated" class="connection-fields credential-fields">
@@ -369,6 +369,11 @@ onBeforeUnmount(() => {
         <div class="connection-fields">
           <ElFormItem v-if="editing && editing.adapterType !== 'RTSP'" label="连接协议">
             <ElSelect v-model="form.scheme" :disabled="editing?.endpointEditable === false">
+              <ElOption
+                v-if="!['http', 'https'].includes(form.scheme)"
+                :label="form.scheme.toUpperCase()"
+                :value="form.scheme"
+              />
               <ElOption label="HTTP" value="http" /><ElOption
                 label="HTTPS（验证证书）"
                 value="https"

@@ -112,7 +112,7 @@ onBeforeUnmount(() => {
           /></ElFormItem>
         </ElForm>
         <ElButton link type="primary" :disabled="saving || frozen" @click="emit('rtsp')"
-          >已有完整 RTSP 地址？按地址登记</ElButton
+          >已有完整视频流地址？按地址登记</ElButton
         >
       </template>
     </template>

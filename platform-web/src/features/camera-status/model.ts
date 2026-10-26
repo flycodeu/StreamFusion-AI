@@ -1,4 +1,5 @@
 import { labelOf } from '../../utils/display'
+import { previewReason } from '../preview/model'
 import type { LayerStatus, StatusCheck } from '../../api/camera-status/types'
 
 import { factLabels } from './presentation'
@@ -89,6 +90,8 @@ const reasons: Record<string, string> = {
   MEDIA_RUNTIME_UNAVAILABLE: '媒体服务暂不可用',
 }
 export function reasonLabel(reasonCode: string | null): string {
+  if (reasonCode && /^(GB_|INGRESS_|PUSH_STREAM_|HTTP_MEDIA_|HLS_)/.test(reasonCode))
+    return previewReason(reasonCode)
   return labelOf(reasons, reasonCode, '')
 }
 export function factPresentation(profile: LayerStatus | null) {

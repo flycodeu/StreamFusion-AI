@@ -44,6 +44,7 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
     private final com.streamfusion.platform.media.preview.execution.PreviewRuntimeProvider runtimes;
     private final PreviewTranscodeRegistry registry;
     private final PreviewProcessInspector processes;
+    private final HttpMediaRelay relay;
     private final java.util.concurrent.ConcurrentMap<String, Long> uncertainOpens =
             new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -52,10 +53,21 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
             com.streamfusion.platform.media.preview.execution.PreviewRuntimeProvider runtimes,
             PreviewTranscodeRegistry registry,
             PreviewProcessInspector processes) {
+        this(json, runtimes, registry, processes, new HttpMediaRelay());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ZlmPreviewGateway(
+            ObjectMapper json,
+            com.streamfusion.platform.media.preview.execution.PreviewRuntimeProvider runtimes,
+            PreviewTranscodeRegistry registry,
+            PreviewProcessInspector processes,
+            HttpMediaRelay relay) {
         this.json = json;
         this.runtimes = runtimes;
         this.registry = registry;
         this.processes = processes;
+        this.relay = relay;
     }
 
     @Override
@@ -187,6 +199,14 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
             PreviewDeadline deadline,
             boolean observation,
             boolean audio) {
+        String identity = runtime.apiBase() + "/" + app + "/" + id;
+        if (uncertainOpens.size() >= 256) throw new PreviewFailure("PREVIEW_BUSY");
+        if (java.util.Set.of("http", "https").contains(source.getScheme())) {
+            if (!java.util.Set.of("127.0.0.1", "localhost", "::1", "[::1]")
+                    .contains(runtime.apiBase().getHost()))
+                throw new PreviewFailure("HTTP_MEDIA_REQUIRES_LOCAL_NODE");
+            source = relay.open(identity, source);
+        }
         var params = tuple(app, id);
         params.put("url", source.toASCIIString());
         params.put("retry_count", "0");
@@ -204,8 +224,6 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
         // The lease manager closes explicitly; this is also a crash-safety fallback.
         // Its verified grace period exceeds the whole 18s create budget, including local attach.
         params.put("auto_close", "1");
-        String identity = runtime.apiBase() + "/" + app + "/" + id;
-        if (uncertainOpens.size() >= 256) throw new PreviewFailure("PREVIEW_BUSY");
         uncertainOpens.put(identity, System.nanoTime() + TimeUnit.SECONDS.toNanos(30));
         JsonNode result;
         try {
@@ -214,6 +232,9 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
             // A definite ZLM rejection cannot publish a late proxy. Keep the fence only for
             // timeout/transport ambiguity, where a request may still complete after our call.
             if ("ZLM_REQUEST_FAILED".equals(rejected.reason())) uncertainOpens.remove(identity);
+            String reason = relay.failure(identity);
+            relay.close(identity);
+            if (reason != null) throw new PreviewFailure(reason);
             throw rejected;
         }
         String key = result.path("data").path("key").asText();
@@ -440,6 +461,9 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
 
     @Override
     public PreviewModels.Stats stats(Stream source, String outputId, PreviewDeadline deadline) {
+        String httpFailure =
+                relay.failure(source.runtime().apiBase() + "/" + source.app() + "/" + source.id());
+        if (httpFailure != null) throw new PreviewFailure(httpFailure);
         var params = tuple(source.app(), outputId);
         params.put("schema", "rtsp");
         var values = call(source.runtime(), "getMediaList", params, deadline).path("data");
@@ -526,6 +550,7 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
                         && (!output.id().equals(source.id() + "h264")
                                 || !output.key().matches("[a-fA-F0-9]{32}")))
             throw new PreviewFailure("CLEANUP_DESTINATION_REJECTED");
+        relay.close(source.runtime().apiBase() + "/" + source.app() + "/" + source.id());
         if (output != null) {
             registry.releasing(output.key());
             verifyTranscodeTarget(source, output, deadline);
@@ -598,6 +623,11 @@ public class ZlmPreviewGateway implements PreviewMediaGateway {
                 failure instanceof PreviewFailure known
                         ? known.reason()
                         : "DEPENDENCY_UNAVAILABLE");
+    }
+
+    @jakarta.annotation.PreDestroy
+    public void closeRelay() {
+        relay.close();
     }
 
     private boolean hasMedia(Stream source, String id, PreviewDeadline deadline) {

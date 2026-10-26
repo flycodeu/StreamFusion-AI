@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessContext;
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
+import com.streamfusion.platform.camera.access.adapter.CameraStreamProtocol;
+import com.streamfusion.platform.camera.ingress.CameraIngressService;
 import com.streamfusion.platform.camera.mapper.CameraCredentialMapper;
 import com.streamfusion.platform.camera.mapper.CameraEndpointMapper;
 import com.streamfusion.platform.camera.mapper.CameraLocatorMapper;
@@ -34,6 +36,7 @@ public class PreviewLocatorService {
     private final CameraCryptoService crypto;
     private final CameraSourceRules rules;
     private final StreamLocatorAdapterRegistry adapters;
+    private final CameraIngressService ingress;
     private final ThreadPoolExecutor dns =
             new ThreadPoolExecutor(
                     2,
@@ -56,6 +59,19 @@ public class PreviewLocatorService {
             CameraCryptoService crypto,
             CameraSourceRules rules,
             StreamLocatorAdapterRegistry adapters) {
+        this(locators, sources, endpoints, credentials, crypto, rules, adapters, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public PreviewLocatorService(
+            CameraLocatorMapper locators,
+            CameraSourceMapper sources,
+            CameraEndpointMapper endpoints,
+            CameraCredentialMapper credentials,
+            CameraCryptoService crypto,
+            CameraSourceRules rules,
+            StreamLocatorAdapterRegistry adapters,
+            CameraIngressService ingress) {
         this.locators = locators;
         this.sources = sources;
         this.endpoints = endpoints;
@@ -63,6 +79,7 @@ public class PreviewLocatorService {
         this.crypto = crypto;
         this.rules = rules;
         this.adapters = adapters;
+        this.ingress = ingress;
     }
 
     @PreDestroy
@@ -205,17 +222,33 @@ public class PreviewLocatorService {
             URI uri = adapter.resolve(locator, config, context);
             deadline.check();
             if (uri == null
-                    || !"rtsp".equalsIgnoreCase(uri.getScheme())
+                    || !(CameraStreamProtocol.supports(locator.getLocatorKind())
+                            ? CameraStreamProtocol.valueOf(locator.getLocatorKind())
+                                    .accepts(uri.getScheme())
+                            : "rtsp".equalsIgnoreCase(uri.getScheme()))
                     || uri.getRawUserInfo() != null
                     || uri.getFragment() != null
                     || uri.getHost() == null
                     || uri.toString().length() > 8192) throw new PreviewFailure("LOCATOR_INVALID");
+            if (java.util.Set.of("GB28181", "CRTSP").contains(locator.getLocatorKind())) {
+                if (ingress == null) throw new PreviewFailure("INGRESS_NOT_CONFIGURED");
+                uri = ingress.resolve(locator.getLocatorKind(), uri, authorization, deadline);
+                username = null;
+                password = null;
+            }
             String pinned =
                     pin(
                             uri.getHost().replace("[", "").replace("]", ""),
                             source.getNetworkPolicyKey(),
                             deadline);
-            int port = uri.getPort() < 0 ? 554 : uri.getPort();
+            int port =
+                    uri.getPort() < 0
+                            ? ("https".equals(uri.getScheme())
+                                    ? 443
+                                    : "http".equals(uri.getScheme())
+                                            ? 80
+                                            : "rtmp".equals(uri.getScheme()) ? 1935 : 554)
+                            : uri.getPort();
             CameraSourceRules.port(port);
             String authority =
                     ("HIK_PLATFORM".equals(locator.getLocatorKind())
@@ -229,10 +262,12 @@ public class PreviewLocatorService {
             authority += (pinned.contains(":") ? "[" + pinned + "]" : pinned) + ":" + port;
             URI authenticated =
                     URI.create(
-                            "rtsp://"
+                            uri.getScheme()
+                                    + "://"
                                     + authority
                                     + uri.getRawPath()
-                                    + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery()));
+                                    + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery())
+                                    + PinnedMediaUri.fragment(uri));
             authorization.run();
             deadline.check();
             return new Resolved(authenticated);

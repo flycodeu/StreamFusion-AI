@@ -60,6 +60,7 @@ class CameraRtspTargetServiceTest {
         credentials = mock(CameraCredentialMapper.class);
         onvif = mock(OnvifStreamLocatorAdapter.class);
         when(onvif.type()).thenReturn("ONVIF");
+        when(onvif.types()).thenReturn(List.of("ONVIF"));
         service =
                 new CameraRtspTargetService(
                         locators,

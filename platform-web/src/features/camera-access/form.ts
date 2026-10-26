@@ -9,7 +9,8 @@ import { getPlatformConnection } from './platformConnection'
 
 export { methodLabels } from './presentation'
 const warningLabels: Record<string, string> = {
-  RTSP_CONFIGURATION_ONLY: '本次只整理视频地址，尚未连接相机验证；编码、分辨率和码率暂未获取。',
+  STREAM_CONFIGURATION_ONLY: '保存后可预览视频。',
+  RTSP_CONFIGURATION_ONLY: '保存后可预览视频。',
   DEVICE_IDENTITY_UNVERIFIED: '未确认设备唯一标识，请核对设备信息后再导入。',
   FIRMWARE_UNAVAILABLE: '未获取到固件版本，其他已读取的信息仍可查看。',
   PROFILE_ENABLE_UNKNOWN: '部分码流未返回启用状态，请在设备端核对。',
@@ -68,16 +69,48 @@ export function newConnection(): ConnectionDraft {
 export function connectionError(draft: ConnectionDraft, adapter?: AccessAdapter): string {
   const platform = getPlatformConnection(draft.method)
   if (draft.reuse && (!draft.sourceId || !draft.sourceVersion)) return '请选择已保存的连接。'
-  if (adapter?.inputKind === 'RTSP_URL' || draft.method === 'RTSP') {
+  if (
+    isStreamMethod(draft.method) ||
+    adapter?.inputKind === 'RTSP_URL' ||
+    adapter?.inputKind === 'STREAM_URL'
+  ) {
     if (!draft.name.trim()) return '请填写相机名称。'
-    if (!draft.rtspUrls.length || draft.rtspUrls.length > 8) return '请提供 1～8 个 RTSP 地址。'
+    if (!draft.rtspUrls.length || draft.rtspUrls.length > 8) return '请提供 1～8 个码流地址。'
     for (const raw of draft.rtspUrls) {
       try {
         const url = new URL(raw.trim())
-        if (url.protocol !== 'rtsp:' || !url.hostname || url.hash || /[\r\n\t]/.test(raw))
-          return '请填写完整的 rtsp:// 地址，不含锚点或控制字符。'
+        const schemes =
+          draft.method === 'RTMP'
+            ? ['rtmp:']
+            : ['FLV', 'HLS'].includes(draft.method)
+              ? ['http:', 'https:']
+              : draft.method === 'GB28181'
+                ? ['gb28181:']
+                : ['rtsp:']
+        if (
+          !schemes.includes(url.protocol) ||
+          !url.hostname ||
+          url.hash ||
+          [...raw].some(
+            (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+          )
+        )
+          return '请填写与所选协议一致的完整地址，不含锚点或控制字符。'
+        if (draft.method === 'FLV' && !url.pathname.toLowerCase().endsWith('.flv'))
+          return 'HTTP-FLV 地址路径应以 .flv 结尾。'
+        if (draft.method === 'HLS' && !url.pathname.toLowerCase().endsWith('.m3u8'))
+          return 'HLS 地址路径应以 .m3u8 结尾。'
+        if (
+          ['CRTSP', 'GB28181'].includes(draft.method) &&
+          (url.username || url.password || url.search)
+        )
+          return '主动接入地址不填写账号、密码或推流令牌。'
+        if (draft.method === 'CRTSP' && !/^\/sf_ingress\/[a-f0-9]{32}$/.test(url.pathname))
+          return 'cRTSP 路径格式为 /sf_ingress/32位小写十六进制流ID。'
+        if (draft.method === 'GB28181' && !/^\/[0-9]{20}\/[0-9]{20}$/.test(url.pathname))
+          return 'GB28181 路径格式为 /20位设备ID/20位通道ID。'
       } catch {
-        return '请填写完整的 rtsp:// 地址。'
+        return draft.method === 'RTSP' ? '请填写完整的 rtsp:// 地址。' : '请填写完整的视频流地址。'
       }
     }
   } else if (
@@ -96,22 +129,27 @@ export function connectionError(draft: ConnectionDraft, adapter?: AccessAdapter)
   return ''
 }
 export function connectionInput(draft: ConnectionDraft, adapter?: AccessAdapter): AccessConnection {
-  const rtsp = adapter?.inputKind === 'RTSP_URL' || draft.method === 'RTSP'
+  const rtsp =
+    isStreamMethod(draft.method) ||
+    adapter?.inputKind === 'RTSP_URL' ||
+    adapter?.inputKind === 'STREAM_URL'
+  const urls =
+    draft.method === 'RTSP'
+      ? { rtspUrls: draft.rtspUrls.map((url) => url.trim()) }
+      : { streamUrls: draft.rtspUrls.map((url) => url.trim()) }
   if (draft.reuse)
     return {
       method: draft.method,
       sourceId: draft.sourceId!,
       sourceVersion: draft.sourceVersion!,
       ...(draft.networkPolicyKey ? { networkPolicyKey: draft.networkPolicyKey } : {}),
-      ...(rtsp
-        ? { name: draft.name.trim(), rtspUrls: draft.rtspUrls.map((url) => url.trim()) }
-        : {}),
+      ...(rtsp ? { name: draft.name.trim(), ...urls } : {}),
     }
   return {
     method: draft.method,
     name: draft.name.trim(),
     ...(rtsp
-      ? { rtspUrls: draft.rtspUrls.map((value) => value.trim()) }
+      ? urls
       : {
           host: draft.host.trim(),
           port: draft.port,
@@ -121,6 +159,9 @@ export function connectionInput(draft: ConnectionDraft, adapter?: AccessAdapter)
     ...(draft.username ? { username: draft.username, password: draft.password } : {}),
     ...(draft.networkPolicyKey ? { networkPolicyKey: draft.networkPolicyKey } : {}),
   }
+}
+export function isStreamMethod(method: string): boolean {
+  return ['RTSP', 'RTMP', 'FLV', 'HLS', 'CRTSP', 'GB28181'].includes(method)
 }
 export function initialSelections(candidates: AccessCandidate[]): CandidateSelection[] {
   return candidates

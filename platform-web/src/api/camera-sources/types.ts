@@ -1,9 +1,10 @@
 import { boolean, id, integer, list, object, optionalString, string } from '../parse'
 import type { SecretWrite } from '../camera/types'
-export type SourcePurpose = 'RTSP' | 'ONVIF' | 'VENDOR_HTTP' | 'PLATFORM_HTTP' | 'DEVICE_HTTP'
+export type SourcePurpose =
+  'RTSP' | 'STREAM' | 'ONVIF' | 'VENDOR_HTTP' | 'PLATFORM_HTTP' | 'DEVICE_HTTP'
 export interface SourceEndpoint {
   purpose: SourcePurpose
-  scheme: 'rtsp' | 'http' | 'https'
+  scheme: 'rtsp' | 'rtmp' | 'gb28181' | 'http' | 'https'
   host: string
   port: number
   basePath: string
@@ -81,10 +82,10 @@ export function parseSource(value: unknown): Source {
     endpoints: list(row.endpoints, (value) => {
       const endpoint = object(value)
       if (
-        !['RTSP', 'ONVIF', 'VENDOR_HTTP', 'PLATFORM_HTTP', 'DEVICE_HTTP'].includes(
+        !['RTSP', 'STREAM', 'ONVIF', 'VENDOR_HTTP', 'PLATFORM_HTTP', 'DEVICE_HTTP'].includes(
           string(endpoint.purpose),
         ) ||
-        !['rtsp', 'http', 'https'].includes(string(endpoint.scheme)) ||
+        !['rtsp', 'rtmp', 'gb28181', 'http', 'https'].includes(string(endpoint.scheme)) ||
         !['NONE', 'DRIVER_NEGOTIATED'].includes(string(endpoint.authMode))
       )
         throw new Error('source endpoint')

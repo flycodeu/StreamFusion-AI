@@ -1,5 +1,5 @@
 import { request } from '../client'
-import { id, object, page, list, string, integer, optionalString } from '../parse'
+import { id, object, page, list, string, integer, optionalString, boolean } from '../parse'
 import {
   parseAccessJob,
   parseAccessOptions,
@@ -14,6 +14,26 @@ export interface PlatformRegion {
   indexCode: string
   parentIndexCode: string | null
   name: string
+}
+export async function getIngressStatus() {
+  return (
+    await request({
+      path: '/camera-access/ingress',
+      method: 'GET',
+      successStatus: 200,
+      decode: (value) => {
+        const row = object(value)
+        return {
+          enabled: boolean(row.enabled),
+          gbEnabled: boolean(row.gbEnabled),
+          mediaHost: string(row.mediaHost),
+          rtspPort: integer(row.rtspPort),
+          sipPort: integer(row.sipPort),
+          registeredDevices: integer(row.registeredDevices),
+        }
+      },
+    })
+  ).data
 }
 export async function getPlatformRegions(input: {
   connection: AccessConnection

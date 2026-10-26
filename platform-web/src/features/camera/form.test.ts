@@ -48,7 +48,7 @@ describe('camera configuration commands', () => {
     ).toBe('大华')
     expect(
       sourceBrandLabel({ sourceType: 'RTSP', sourceDisplayName: '现场地址', manufacturer: null }),
-    ).toBe('未识别品牌')
+    ).toBe('未识别')
     expect(
       sourceBrandLabel({
         sourceType: 'ONVIF',

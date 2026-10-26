@@ -76,9 +76,11 @@ public final class ZlmDirectExecutor implements PreviewExecutor {
                 if (!nodes.canReuseSource(id)) {
                     URI uri = resolver.get();
                     checkpoint.run();
+                    if (uri != null && List.of("http", "https").contains(uri.getScheme()))
+                        throw new PreviewFailure("HTTP_MEDIA_REQUIRES_LOCAL_NODE");
                     if (uri == null
                             || uri.getScheme() == null
-                            || !List.of("rtsp", "rtsps")
+                            || !List.of("rtsp", "rtsps", "rtmp")
                                     .contains(uri.getScheme().toLowerCase(java.util.Locale.ROOT)))
                         throw new PreviewFailure("SOURCE_UNSUPPORTED");
                     String operation = opening(node, id, stream, deadline);

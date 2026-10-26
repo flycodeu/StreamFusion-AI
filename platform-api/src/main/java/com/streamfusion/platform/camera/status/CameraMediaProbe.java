@@ -273,6 +273,9 @@ public final class CameraMediaProbe implements AutoCloseable {
     }
 
     private static String reason(String value) {
+        if (value != null
+                && value.matches("(?:GB_|INGRESS_|PUSH_STREAM_|HTTP_MEDIA_|HLS_)[A-Z0-9_]{1,64}"))
+            return value;
         return switch (value) {
             case "MEDIA_BUSY",
                     "MEDIA_RECOVERY_REQUIRED",

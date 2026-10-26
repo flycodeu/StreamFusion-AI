@@ -27,7 +27,49 @@ public record CameraConnection(
                         com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
                 Integer pageSize,
         String regionIndexCode,
-        Boolean includeSubRegions) {
+        Boolean includeSubRegions,
+        @Schema(description = "RTMP/FLV/HLS/cRTSP/GB28181地址，完整地址只写不回显") List<String> streamUrls) {
+    public CameraConnection(
+            String method,
+            String name,
+            String host,
+            Integer port,
+            String scheme,
+            String username,
+            String password,
+            Integer rtspPort,
+            String networkPolicyKey,
+            String sourceId,
+            String sourceVersion,
+            List<String> rtspUrls,
+            Integer pageNumber,
+            Integer pageSize,
+            String regionIndexCode,
+            Boolean includeSubRegions) {
+        this(
+                method,
+                name,
+                host,
+                port,
+                scheme,
+                username,
+                password,
+                rtspPort,
+                networkPolicyKey,
+                sourceId,
+                sourceVersion,
+                rtspUrls,
+                pageNumber,
+                pageSize,
+                regionIndexCode,
+                includeSubRegions,
+                null);
+    }
+
+    public List<String> urls() {
+        return "RTSP".equals(method) ? rtspUrls : streamUrls;
+    }
+
     public CameraConnection(
             String method,
             String name,

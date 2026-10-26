@@ -14,11 +14,15 @@ public class StreamLocatorAdapterRegistry {
     public StreamLocatorAdapterRegistry(List<StreamLocatorAdapter> implementations) {
         var registered = new LinkedHashMap<String, StreamLocatorAdapter>();
         for (var adapter : implementations) {
-            String type = adapter.type();
-            if (type == null || !type.matches("[A-Z][A-Z0-9_]{0,63}"))
-                throw new IllegalStateException("Invalid stream locator adapter");
-            if (registered.put(type, adapter) != null)
-                throw new IllegalStateException("Duplicate stream locator adapter");
+            var types = new java.util.LinkedHashSet<String>();
+            types.add(adapter.type());
+            types.addAll(adapter.types());
+            for (String type : types) {
+                if (type == null || !type.matches("[A-Z][A-Z0-9_]{0,63}"))
+                    throw new IllegalStateException("Invalid stream locator adapter");
+                if (registered.put(type, adapter) != null)
+                    throw new IllegalStateException("Duplicate stream locator adapter");
+            }
         }
         adapters = Map.copyOf(registered);
     }

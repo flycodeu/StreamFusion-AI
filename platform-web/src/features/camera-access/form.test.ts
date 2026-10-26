@@ -3,6 +3,17 @@ import { connectionError, connectionInput, initialSelections, newConnection } fr
 import type { AccessCandidate } from '../../api/camera-access/types'
 
 describe('camera access connection and catalog selection', () => {
+  it.each([
+    ['RTMP', 'rtmp://camera/live/main'],
+    ['FLV', 'https://camera/live/main.flv'],
+    ['HLS', 'https://camera/live/index.m3u8?sig=secret'],
+    ['CRTSP', 'rtsp://camera/sf_ingress/0123456789abcdef0123456789abcdef'],
+    ['GB28181', 'gb28181://camera/34020000001320000001/34020000001320000002'],
+  ])('registers %s with additive streamUrls rather than rtspUrls', (method, url) => {
+    const draft = { ...newConnection(), method: method!, name: '模拟相机', rtspUrls: [url!] }
+    expect(connectionError(draft)).toBe('')
+    expect(connectionInput(draft)).toEqual({ method, name: '模拟相机', streamUrls: [url] })
+  })
   it('preserves complete RTSP encoding and uses no manual profile metadata', () => {
     const draft = {
       ...newConnection(),

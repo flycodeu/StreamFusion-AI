@@ -45,10 +45,27 @@ public final class PreviewNodeSourcePolicy {
         try {
             if (value == null || value.length() > 8192) throw new IllegalArgumentException();
             URI uri = URI.create(value);
-            if (!"rtsp".equals(uri.getScheme())
+            if (!Set.of("rtsp", "rtmp", "http", "https").contains(uri.getScheme())
                     || uri.getFragment() != null
+                            && !(Set.of("http", "https").contains(uri.getScheme())
+                                    && uri.getRawFragment()
+                                            .matches("sf-origin=[A-Za-z0-9][A-Za-z0-9.-]{0,252}"))
                     || uri.getHost() == null) throw new IllegalArgumentException();
-            int port = uri.getPort() < 0 ? 554 : uri.getPort();
+            int port =
+                    uri.getPort() < 0
+                            ? switch (uri.getScheme()) {
+                                case "http" -> 80;
+                                case "https" -> 443;
+                                case "rtmp" -> 1935;
+                                default -> 554;
+                            }
+                            : uri.getPort();
+            if (Set.of("http", "https").contains(uri.getScheme())
+                    && (uri.getPath() == null
+                            || !uri.getPath()
+                                    .toLowerCase(java.util.Locale.ROOT)
+                                    .matches(".*\\.(?:flv|m3u8)$")))
+                throw new IllegalArgumentException();
             if (!targets.contains(target(uri.getHost() + ":" + port)))
                 throw new IllegalArgumentException();
             return uri;

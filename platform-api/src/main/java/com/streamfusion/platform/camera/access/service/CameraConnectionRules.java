@@ -47,24 +47,36 @@ public class CameraConnectionRules {
         String name = CameraSourceRules.text(input.name(), 100, false);
         int rtspPort = input.rtspPort() == null ? 554 : input.rtspPort();
         CameraSourceRules.port(rtspPort);
-        if ("RTSP".equals(input.method())) {
+        if (com.streamfusion.platform.camera.access.adapter.CameraStreamProtocol.supports(
+                input.method())) {
+            var protocol =
+                    com.streamfusion.platform.camera.access.adapter.CameraStreamProtocol.valueOf(
+                            input.method());
+            if ("RTSP".equals(input.method())
+                    ? input.streamUrls() != null
+                    : input.rtspUrls() != null) throw CameraSourceRules.invalid();
             if (name == null
                     || name.isBlank()
-                    || input.rtspUrls() == null
-                    || input.rtspUrls().isEmpty()
-                    || input.rtspUrls().size() > 8) throw CameraSourceRules.invalid();
+                    || input.urls() == null
+                    || input.urls().isEmpty()
+                    || input.urls().size() > 8) throw CameraSourceRules.invalid();
             var urls = new ArrayList<String>();
             String host = null;
             int port = 554;
-            for (String text : input.rtspUrls()) {
-                URI uri = parseRtsp(text);
+            String scheme = null;
+            for (String text : input.urls()) {
+                URI uri = protocol.parse(text);
                 String nextHost = rules.host(unbracket(uri.getHost()), policy);
-                int nextPort = uri.getPort() == -1 ? 554 : uri.getPort();
+                int nextPort = protocol.port(uri);
                 CameraSourceRules.port(nextPort);
-                if (host != null && (!host.equals(nextHost) || port != nextPort))
+                if (host != null
+                        && (!host.equals(nextHost)
+                                || port != nextPort
+                                || !scheme.equalsIgnoreCase(uri.getScheme())))
                     throw CameraSourceRules.invalid();
                 host = nextHost;
                 port = nextPort;
+                scheme = uri.getScheme().toLowerCase(java.util.Locale.ROOT);
                 if (uri.getRawUserInfo() != null) {
                     String[] pair = uri.getRawUserInfo().split(":", 2);
                     if (pair.length != 2) throw CameraSourceRules.invalid();
@@ -77,7 +89,8 @@ public class CameraConnectionRules {
                 }
                 // Do not decode/re-encode a signed path or query.
                 String clean =
-                        "rtsp://"
+                        scheme
+                                + "://"
                                 + authority(host, port)
                                 + uri.getRawPath()
                                 + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery());
@@ -85,25 +98,44 @@ public class CameraConnectionRules {
                 urls.add(clean);
             }
             credentials(username, password);
+            if ((protocol
+                                    == com.streamfusion.platform.camera.access.adapter
+                                            .CameraStreamProtocol.GB28181
+                            || protocol
+                                    == com.streamfusion.platform.camera.access.adapter
+                                            .CameraStreamProtocol.CRTSP)
+                    && username != null) throw CameraSourceRules.invalid();
             if (input.sourceId() != null
                     && (!Objects.equals(host, input.host()) || !Objects.equals(port, input.port())))
                 throw CameraSourceRules.invalid();
             return new CameraConnection(
-                    "RTSP",
+                    input.method(),
                     name,
                     host,
                     port,
-                    "rtsp",
+                    scheme,
                     username,
                     password,
                     rtspPort,
                     policy,
                     input.sourceId(),
                     input.sourceVersion(),
-                    List.copyOf(urls),
+                    protocol
+                                    == com.streamfusion.platform.camera.access.adapter
+                                            .CameraStreamProtocol.RTSP
+                            ? List.copyOf(urls)
+                            : null,
                     page,
-                    size);
+                    size,
+                    null,
+                    null,
+                    protocol
+                                    == com.streamfusion.platform.camera.access.adapter
+                                            .CameraStreamProtocol.RTSP
+                            ? null
+                            : List.copyOf(urls));
         }
+        if (input.streamUrls() != null) throw CameraSourceRules.invalid();
         if (input.rtspUrls() != null && !input.rtspUrls().isEmpty())
             throw CameraSourceRules.invalid();
         String scheme = input.scheme() == null ? (platform ? "https" : "http") : input.scheme();
@@ -144,10 +176,10 @@ public class CameraConnectionRules {
 
     public CameraAccessCatalog rtspCatalog(CameraConnection connection) {
         var profiles = new ArrayList<CameraAccessCatalog.Profile>();
-        for (int i = 0; i < connection.rtspUrls().size(); i++) {
+        for (int i = 0; i < connection.urls().size(); i++) {
             profiles.add(
                     new CameraAccessCatalog.Profile(
-                            "rtsp-profile:" + stableKey(connection.rtspUrls().get(i)),
+                            "rtsp-profile:" + stableKey(connection.urls().get(i)),
                             "码流 " + (i + 1),
                             "UNKNOWN",
                             null,
@@ -156,10 +188,13 @@ public class CameraConnectionRules {
                             null,
                             null,
                             new CameraAccessCatalog.Locator(
-                                    "RTSP", URI.create(connection.rtspUrls().get(i)), null, null)));
+                                    connection.method(),
+                                    URI.create(connection.urls().get(i)),
+                                    null,
+                                    null)));
         }
         return new CameraAccessCatalog(
-                "RTSP",
+                connection.method(),
                 null,
                 List.of(
                         new CameraAccessCatalog.Channel(
@@ -167,14 +202,17 @@ public class CameraConnectionRules {
                                         + stableKey(
                                                 String.join(
                                                         "\n",
-                                                        connection.rtspUrls().stream()
+                                                        connection.urls().stream()
                                                                 .sorted()
                                                                 .toList())),
                                 connection.name(),
                                 profiles,
                                 false)),
                 true,
-                List.of("RTSP_CONFIGURATION_ONLY"));
+                List.of(
+                        "RTSP".equals(connection.method())
+                                ? "RTSP_CONFIGURATION_ONLY"
+                                : "STREAM_CONFIGURATION_ONLY"));
     }
 
     private static String stableKey(String value) {

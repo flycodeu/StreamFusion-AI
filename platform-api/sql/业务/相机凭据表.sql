@@ -10,5 +10,5 @@ CREATE TABLE camera_source_credential (
  created_at DATETIME(6) NOT NULL, updated_at DATETIME(6) NOT NULL,
  PRIMARY KEY(id), UNIQUE(source_id,purpose), UNIQUE(source_id,id),
  CONSTRAINT fk_camera_credential_source FOREIGN KEY(source_id) REFERENCES camera_source(id),
- CONSTRAINT ck_camera_credential_purpose CHECK(purpose IN ('RTSP','ONVIF','VENDOR_HTTP','PLATFORM_HTTP','DEVICE_HTTP'))
+ CONSTRAINT ck_camera_credential_purpose CHECK(purpose IN ('RTSP','STREAM','ONVIF','VENDOR_HTTP','PLATFORM_HTTP','DEVICE_HTTP'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='来源固定用途加密凭据';

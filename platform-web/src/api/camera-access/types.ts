@@ -6,8 +6,8 @@ export type AccessMethod = string
 export interface AccessAdapter {
   type: string
   label: string
-  category: 'DEVICE' | 'PLATFORM' | 'RTSP'
-  inputKind: 'DEVICE_LOGIN' | 'PLATFORM_APPKEY' | 'RTSP_URL'
+  category: 'DEVICE' | 'PLATFORM' | 'RTSP' | 'STREAM'
+  inputKind: 'DEVICE_LOGIN' | 'PLATFORM_APPKEY' | 'RTSP_URL' | 'STREAM_URL'
   autoDetect: boolean
   paged: boolean
 }
@@ -41,6 +41,7 @@ export interface AccessConnection {
   sourceId?: string
   sourceVersion?: string
   rtspUrls?: string[]
+  streamUrls?: string[]
   pageNumber?: number
   pageSize?: number
   regionIndexCode?: string
@@ -203,8 +204,10 @@ export function parseAccessOptions(value: unknown): AccessOptions {
     adapters: list(row.adapters, (value) => {
       const adapter = object(value)
       if (
-        !['DEVICE', 'PLATFORM', 'RTSP'].includes(string(adapter.category)) ||
-        !['DEVICE_LOGIN', 'PLATFORM_APPKEY', 'RTSP_URL'].includes(string(adapter.inputKind))
+        !['DEVICE', 'PLATFORM', 'RTSP', 'STREAM'].includes(string(adapter.category)) ||
+        !['DEVICE_LOGIN', 'PLATFORM_APPKEY', 'RTSP_URL', 'STREAM_URL'].includes(
+          string(adapter.inputKind),
+        )
       )
         throw new Error('adapter descriptor')
       return {

@@ -13,7 +13,7 @@ CREATE TABLE camera_source_endpoint (
  PRIMARY KEY(id), UNIQUE(source_id,purpose), UNIQUE(source_id,id),
  CONSTRAINT fk_camera_endpoint_source FOREIGN KEY(source_id) REFERENCES camera_source(id),
  CONSTRAINT fk_camera_endpoint_credential FOREIGN KEY(source_id,credential_id) REFERENCES camera_source_credential(source_id,id),
- CONSTRAINT ck_camera_endpoint_protocol CHECK((purpose='RTSP' AND scheme='rtsp' AND base_path='') OR (purpose='ONVIF' AND scheme IN ('http','https') AND base_path='/onvif/device_service') OR (purpose IN ('VENDOR_HTTP','DEVICE_HTTP') AND scheme IN ('http','https') AND base_path='') OR (purpose='PLATFORM_HTTP' AND scheme IN ('http','https') AND base_path LIKE '/%')),
+ CONSTRAINT ck_camera_endpoint_protocol CHECK((purpose='STREAM' AND scheme IN ('rtsp','rtmp','http','https','gb28181') AND base_path='') OR (purpose='RTSP' AND scheme='rtsp' AND base_path='') OR (purpose='ONVIF' AND scheme IN ('http','https') AND base_path='/onvif/device_service') OR (purpose IN ('VENDOR_HTTP','DEVICE_HTTP') AND scheme IN ('http','https') AND base_path='') OR (purpose='PLATFORM_HTTP' AND scheme IN ('http','https') AND base_path LIKE '/%')),
  CONSTRAINT ck_camera_endpoint_port CHECK(port BETWEEN 1 AND 65535),
  CONSTRAINT ck_camera_endpoint_auth CHECK((auth_mode='NONE' AND credential_id IS NULL AND purpose<>'PLATFORM_HTTP') OR (auth_mode='DRIVER_NEGOTIATED' AND credential_id IS NOT NULL)),
  CONSTRAINT ck_camera_endpoint_tls CHECK(tls_policy='SYSTEM_CA' AND ca_bundle_key IS NULL AND cert_sha256 IS NULL)

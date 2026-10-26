@@ -12,12 +12,13 @@ import {
 } from 'element-plus'
 import type { AccessMethod, AccessOptions } from '../../api/camera-access/types'
 import * as sourceApi from '../../api/camera-sources/api'
+import { getIngressStatus } from '../../api/camera-access/api'
 import SourceEditor from '../camera-sources/SourceEditor.vue'
 import type { Source } from '../../api/camera-sources/types'
 import { usePageScope } from '../../composables/usePageScope'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { accessMethodLabel } from './presentation'
-import type { ConnectionDraft } from './form'
+import { isStreamMethod, type ConnectionDraft } from './form'
 import { getPlatformConnection } from './platformConnection'
 
 const props = defineProps<{ options: AccessOptions; disabled: boolean }>()
@@ -52,8 +53,34 @@ const selectedPreset = computed(() =>
   platformPresets.value.find((item) => item.type === model.value.method),
 )
 const unavailable = computed(() => platformMode.value && selectedPreset.value?.available === false)
-const isRtsp = computed(
-  () => descriptor.value?.inputKind === 'RTSP_URL' || model.value.method === 'RTSP',
+const isRtsp = computed(() => isStreamMethod(model.value.method))
+const passive = computed(() => ['CRTSP', 'GB28181'].includes(model.value.method))
+const ingressSummary = ref(''),
+  ingressLoading = ref(false)
+async function inspectIngress() {
+  const active = captureScope()
+  ingressLoading.value = true
+  try {
+    const status = await getIngressStatus()
+    if (active())
+      ingressSummary.value = !status.enabled
+        ? '主动接入尚未启用，请管理员配置。'
+        : `ZLM ${status.mediaHost}:${status.rtspPort}；GB28181 ${status.gbEnabled ? `已启用，SIP 端口 ${status.sipPort}，已注册 ${status.registeredDevices} 台` : '未启用'}。`
+  } catch (cause) {
+    if (active()) error.value = cause
+  } finally {
+    if (active()) ingressLoading.value = false
+  }
+}
+const urlPlaceholder = computed(
+  () =>
+    ({
+      RTMP: 'rtmp://192.168.1.10:1935/live/camera',
+      FLV: 'http://192.168.1.10/live/camera.flv',
+      HLS: 'http://192.168.1.10/live/camera.m3u8',
+      CRTSP: 'rtsp://ZLM地址:554/sf_ingress/32位流ID',
+      GB28181: 'gb28181://ZLM地址:554/20位设备ID/20位通道ID',
+    })[model.value.method] ?? 'rtsp://192.168.1.10:554/实际视频路径',
 )
 const platform = computed(() => getPlatformConnection(model.value.method))
 const isPlatform = computed(() => descriptor.value?.category === 'PLATFORM' || !!platform.value)
@@ -83,6 +110,11 @@ function changeMethod(method: AccessMethod) {
       ? selectedSource.value
       : null
   model.value.method = method
+  ingressSummary.value = ''
+  if (['CRTSP', 'GB28181'].includes(method)) {
+    model.value.username = ''
+    model.value.password = ''
+  }
   if (!retained) {
     model.value.sourceId = null
     model.value.sourceVersion = null
@@ -269,7 +301,9 @@ watch(
           <ElFormItem
             v-for="(_, index) in model.rtspUrls"
             :key="index"
-            :label="index ? `其他码流 ${index}` : 'RTSP 地址'"
+            :label="
+              index ? `其他码流 ${index}` : model.method === 'RTSP' ? 'RTSP 地址' : '视频流地址'
+            "
             required
           >
             <div class="url-row">
@@ -279,7 +313,7 @@ watch(
                 show-password
                 autocomplete="off"
                 maxlength="8192"
-                placeholder="rtsp://192.168.1.10:554/实际视频路径"
+                :placeholder="urlPlaceholder"
               /><ElButton
                 v-if="index > 0"
                 :disabled="disabled"
@@ -307,7 +341,15 @@ watch(
             ><ElInputNumber v-model="model.port" :min="1" :max="65535"
           /></ElFormItem>
         </template>
-        <template v-if="!model.reuse">
+        <p v-if="passive" class="field-note">使用已启用的主动接入地址，登记地址无需推流令牌。</p>
+        <p v-if="passive" class="field-note">
+          <ElButton link :loading="ingressLoading" @click="inspectIngress"
+            >读取主动接入配置</ElButton
+          >
+          {{ ingressSummary }}
+        </p>
+        <p v-if="model.method === 'HLS'" class="field-note">支持未加密的 MPEG-TS HLS。</p>
+        <div v-if="!model.reuse && !passive" class="credential-fields">
           <ElFormItem :label="platform?.usernameLabel ?? '用户名'" :required="isPlatform"
             ><ElInput
               v-model="model.username"
@@ -328,6 +370,8 @@ watch(
               maxlength="512"
               :placeholder="platform?.passwordPlaceholder ?? '不会回显已保存密码'"
           /></ElFormItem>
+        </div>
+        <template v-if="!model.reuse">
           <details class="advanced-settings">
             <summary>高级设置</summary>
             <ElFormItem v-if="!isRtsp" label="连接协议"
@@ -385,12 +429,12 @@ watch(
 .method-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 24px;
+  gap: 8px;
+  margin-bottom: 20px;
 }
 .method-choice {
-  min-height: 46px;
-  padding: 10px;
+  min-height: 40px;
+  padding: 8px;
   color: var(--el-text-color-regular);
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color);
@@ -416,6 +460,16 @@ watch(
   display: flex;
   gap: 8px;
   width: 100%;
+}
+.credential-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+@media (max-width: 640px) {
+  .credential-fields {
+    grid-template-columns: 1fr;
+  }
 }
 .field-note {
   color: var(--el-text-color-secondary);

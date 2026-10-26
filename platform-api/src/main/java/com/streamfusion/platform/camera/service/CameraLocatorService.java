@@ -3,6 +3,7 @@ package com.streamfusion.platform.camera.service;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessAdapterRegistry;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessCatalog;
+import com.streamfusion.platform.camera.access.adapter.CameraStreamProtocol;
 import com.streamfusion.platform.camera.mapper.CameraLocatorMapper;
 import com.streamfusion.platform.camera.pojo.dto.CameraLocatorDto;
 import com.streamfusion.platform.camera.pojo.dto.SecretWrite;
@@ -43,6 +44,10 @@ public class CameraLocatorService {
         var current = locators.selectById(profileId);
         if (current == null || current.getSourceId() != sourceId)
             throw BusinessException.error(ErrorCode.NOT_FOUND);
+        if (CameraStreamProtocol.stream(current.getLocatorKind())) {
+            updateStream(sourceId, input, current);
+            return;
+        }
         if (!"RTSP".equals(current.getLocatorKind()))
             throw BusinessException.error(ErrorCode.CONFLICT);
         save(sourceId, profileId, externalKey, input, current);
@@ -68,7 +73,7 @@ public class CameraLocatorService {
         var summary = new LinkedHashMap<String, Object>();
         summary.put("locatorKind", locator.getLocatorKind());
         summary.put("configured", true);
-        summary.put("editable", "RTSP".equals(locator.getLocatorKind()));
+        summary.put("editable", CameraStreamProtocol.supports(locator.getLocatorKind()));
         if (!"RTSP".equals(locator.getLocatorKind())) return summary;
         summary.put("hostMode", locator.getRtspHostMode());
         summary.put("transport", locator.getRtspTransport());
@@ -134,7 +139,13 @@ public class CameraLocatorService {
         Map<String, Object> config = new LinkedHashMap<>();
         config.put("channelKey", channelKey);
         config.put("profileKey", profileKey);
-        config.putAll(adapters.locatorConfiguration(locator));
+        if (CameraStreamProtocol.stream(locator.kind())) {
+            var uri =
+                    CameraStreamProtocol.valueOf(locator.kind())
+                            .parse(locator.uri().toASCIIString());
+            if (uri.getRawUserInfo() != null) throw CameraSourceRules.invalid();
+            config.put("uri", uri.toASCIIString());
+        } else config.putAll(adapters.locatorConfiguration(locator));
         var row = new CameraLocatorEntity();
         row.setProfileId(profileId);
         row.setSourceId(sourceId);
@@ -176,6 +187,60 @@ public class CameraLocatorService {
         }
     }
 
+    /** URL remains write-only. A source groups URLs on one immutable origin. */
+    private void updateStream(long sourceId, CameraLocatorDto input, CameraLocatorEntity current) {
+        if (input == null
+                || input.fullUrl() == null
+                || !"TCP".equals(input.transport())
+                || input.hostMode() != null
+                || input.host() != null
+                || input.port() != null
+                || input.pathSecret() != null
+                || input.querySecret() != null) throw CameraSourceRules.invalid();
+        var source = sources.requireSource(sourceId);
+        var protocol = CameraStreamProtocol.valueOf(current.getLocatorKind());
+        var uri = protocol.parse(input.fullUrl());
+        if (!current.getLocatorKind().equals(source.getAdapterType())
+                || uri.getRawUserInfo() != null) throw CameraSourceRules.invalid();
+        var old =
+                crypto.decrypt(
+                        "camera_profile_locator/"
+                                + sourceId
+                                + "/"
+                                + current.getProfileId()
+                                + "/"
+                                + current.getLocatorKind(),
+                        new CameraCryptoService.Envelope(
+                                current.getProtocolEncryptionKeyId(),
+                                current.getProtocolSecretNonce(),
+                                current.getProtocolSecretCiphertext(),
+                                current.getProtocolSecretTag()));
+        var previous = protocol.parse(old.path("uri").asText());
+        if (!uri.getHost().equalsIgnoreCase(previous.getHost())
+                || protocol.port(uri) != protocol.port(previous)
+                || !uri.getScheme().equalsIgnoreCase(previous.getScheme()))
+            throw BusinessException.error(ErrorCode.CONFLICT);
+        var config = new LinkedHashMap<String, Object>();
+        old.fields().forEachRemaining(e -> config.put(e.getKey(), e.getValue()));
+        config.put("uri", uri.toASCIIString());
+        var encrypted =
+                crypto.encrypt(
+                        "camera_profile_locator/"
+                                + sourceId
+                                + "/"
+                                + current.getProfileId()
+                                + "/"
+                                + current.getLocatorKind(),
+                        config,
+                        16000);
+        current.setProtocolSecretCiphertext(encrypted.ciphertext());
+        current.setProtocolSecretNonce(encrypted.nonce());
+        current.setProtocolSecretTag(encrypted.tag());
+        current.setProtocolEncryptionKeyId(encrypted.keyId());
+        current.setUpdatedAt(now());
+        locators.updateById(current);
+    }
+
     private void save(
             long sourceId,
             long profileId,
@@ -204,6 +269,7 @@ public class CameraLocatorService {
                             "TCP");
         }
         var source = sources.requireManualSource(sourceId, null);
+        if (!"RTSP".equals(source.getAdapterType())) throw CameraSourceRules.invalid();
         String host = null;
         Integer port = null;
         if ("SOURCE".equals(input.hostMode())) {

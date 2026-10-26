@@ -3,6 +3,7 @@ package com.streamfusion.platform.camera.service;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessContext;
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
+import com.streamfusion.platform.camera.access.adapter.CameraStreamProtocol;
 import com.streamfusion.platform.camera.config.CameraProperties;
 import com.streamfusion.platform.camera.mapper.CameraCredentialMapper;
 import com.streamfusion.platform.camera.mapper.CameraEndpointMapper;
@@ -44,6 +45,8 @@ public class CameraRtspTargetService {
     public com.streamfusion.platform.camera.status.CameraStatusLayer effectiveLayer(
             long profileId, com.streamfusion.platform.camera.status.CameraStatusLayer requested) {
         var locator = locators.selectById(profileId);
+        if (locator != null && CameraStreamProtocol.stream(locator.getLocatorKind()))
+            return com.streamfusion.platform.camera.status.CameraStatusLayer.MEDIA;
         return locator != null && "HIK_PLATFORM".equals(locator.getLocatorKind())
                 ? com.streamfusion.platform.camera.status.CameraStatusLayer.UPSTREAM
                 : requested == com.streamfusion.platform.camera.status.CameraStatusLayer.UPSTREAM
@@ -56,6 +59,14 @@ public class CameraRtspTargetService {
         return locators.selectByIds(profileIds).stream()
                 .filter(l -> "HIK_PLATFORM".equals(l.getLocatorKind()))
                 .map(com.streamfusion.platform.camera.pojo.entity.CameraLocatorEntity::getProfileId)
+                .collect(java.util.stream.Collectors.toSet());
+    }
+
+    public java.util.Set<Long> streamProfiles(List<Long> profileIds) {
+        if (profileIds.isEmpty()) return java.util.Set.of();
+        return locators.selectByIds(profileIds).stream()
+                .filter(l -> CameraStreamProtocol.stream(l.getLocatorKind()))
+                .map(CameraLocatorEntity::getProfileId)
                 .collect(java.util.stream.Collectors.toSet());
     }
 
@@ -220,10 +231,13 @@ public class CameraRtspTargetService {
             return blocked(direct ? "RTSP_ENDPOINT_NOT_CONFIGURED" : "LOCATOR_NOT_CONFIGURED");
         if (!source.getId().equals(endpoint.getSourceId())
                 || !Objects.equals(locator.getEndpointPurpose(), endpoint.getPurpose())
-                || !(direct
-                        ? "rtsp".equals(endpoint.getScheme())
-                        : "http".equals(endpoint.getScheme())
-                                || "https".equals(endpoint.getScheme())))
+                || !(CameraStreamProtocol.stream(locator.getLocatorKind())
+                        ? CameraStreamProtocol.valueOf(locator.getLocatorKind())
+                                .accepts(endpoint.getScheme())
+                        : direct
+                                ? "rtsp".equals(endpoint.getScheme())
+                                : "http".equals(endpoint.getScheme())
+                                        || "https".equals(endpoint.getScheme())))
             return blocked("LOCATOR_INVALID");
         try {
             var config =
@@ -338,7 +352,8 @@ public class CameraRtspTargetService {
                                                     + path
                                                     + (query.isEmpty() ? "" : "?" + query))
                                     : streams.configuredUri(locator, config, context);
-            if (!platform) CameraStatusStreamResolver.validateRtsp(uri);
+            boolean stream = CameraStreamProtocol.stream(locator.getLocatorKind());
+            if (!platform && !stream) CameraStatusStreamResolver.validateRtsp(uri);
             if (direct
                     && (!path.equals(uri.getRawPath())
                             || !Objects.equals(query.isEmpty() ? null : query, uri.getRawQuery())
@@ -384,7 +399,7 @@ public class CameraRtspTargetService {
                                             ? "PROFILE_DISABLED"
                                             : null;
             return new Inspection(
-                    platform
+                    platform || stream
                             ? null
                             : new RtspDescribeProbe.Target(
                                     uri,

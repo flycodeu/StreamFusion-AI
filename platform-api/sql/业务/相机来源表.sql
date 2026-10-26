@@ -18,7 +18,7 @@ CREATE TABLE camera_source (
  created_at DATETIME(6) NOT NULL, updated_at DATETIME(6) NOT NULL,
  created_by BIGINT NULL, updated_by BIGINT NULL,
  PRIMARY KEY(id),
- CONSTRAINT ck_camera_source_type CHECK(connection_category IN ('DEVICE','PLATFORM','RTSP') AND (adapter_type IS NULL OR (CHAR_LENGTH(adapter_type) BETWEEN 1 AND 64 AND adapter_type NOT IN ('AUTO','SCAN'))) AND vendor_model_family IS NULL),
+ CONSTRAINT ck_camera_source_type CHECK(connection_category IN ('DEVICE','PLATFORM','RTSP','STREAM') AND (adapter_type IS NULL OR (CHAR_LENGTH(adapter_type) BETWEEN 1 AND 64 AND adapter_type NOT IN ('AUTO','SCAN'))) AND vendor_model_family IS NULL),
  CONSTRAINT ck_camera_source_media_port CHECK(rtsp_port IS NULL OR rtsp_port BETWEEN 1 AND 65535),
  CONSTRAINT ck_camera_source_enabled CHECK(enabled IN (0,1)),
  CONSTRAINT ck_camera_source_version CHECK(version >= 0)

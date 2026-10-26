@@ -92,10 +92,10 @@ function retryBulk(value: AccessJob) {
     :embedded="embedded"
     :model-value="true"
     :title="
-      mode === 'platform' ? '平台目录导入' : mode === 'rtsp' ? '按 RTSP 地址登记' : '读取设备资料'
+      mode === 'platform' ? '平台目录导入' : mode === 'rtsp' ? '按视频流地址登记' : '读取设备资料'
     "
     :width="
-      mode === 'platform' ? 'min(1200px, calc(100vw - 32px))' : 'min(960px, calc(100vw - 32px))'
+      mode === 'platform' ? 'min(1200px, calc(100vw - 32px))' : 'min(820px, calc(100vw - 32px))'
     "
     top="6vh"
     destroy-on-close
@@ -131,7 +131,9 @@ function retryBulk(value: AccessJob) {
             <li :class="{ current: step === 0, complete: step > 0 }">
               1 {{ mode === 'platform' ? '连接平台' : mode === 'rtsp' ? '填写地址' : '连接设备' }}
             </li>
-            <li :class="{ current: step === 1, complete: step > 1 }">2 选择通道</li>
+            <li :class="{ current: step === 1, complete: step > 1 }">
+              2 {{ mode === 'rtsp' ? '确认码流' : '选择通道' }}
+            </li>
             <li :class="{ current: step >= 2 }">3 确认导入</li>
           </ol>
           <RequestError :error="error" />
@@ -233,7 +235,12 @@ function retryBulk(value: AccessJob) {
             </p>
             <ElAlert
               v-for="warning in job.warnings.filter(
-                (code) => !['RTSP_CONFIGURATION_ONLY', 'PLATFORM_DIRECTORY_ONLY'].includes(code),
+                (code) =>
+                  ![
+                    'RTSP_CONFIGURATION_ONLY',
+                    'STREAM_CONFIGURATION_ONLY',
+                    'PLATFORM_DIRECTORY_ONLY',
+                  ].includes(code),
               )"
               :key="warning"
               type="warning"
@@ -271,6 +278,7 @@ function retryBulk(value: AccessJob) {
                 :candidates="job.candidates"
                 :disabled="busy"
                 :single="!!targetCamera"
+                :address-only="mode === 'rtsp'"
                 :compact="mode === 'platform'" /><ElForm
                 v-if="!targetCamera"
                 label-width="110px"
@@ -278,6 +286,7 @@ function retryBulk(value: AccessJob) {
                 ><ElFormItem label="保存到分组"
                   ><GroupSelect v-model="groupId" clearable :disabled="busy" /></ElFormItem></ElForm
             ></template>
+            <p v-if="selectable && mode === 'rtsp'" class="field-note">保存后可预览视频。</p>
           </template>
           <div
             v-if="mode === 'platform' && job?.page && !running && !impact"
@@ -340,7 +349,7 @@ function retryBulk(value: AccessJob) {
           >{{
             createFrozen
               ? '重试原读取请求'
-              : connection.method === 'RTSP'
+              : mode === 'rtsp'
                 ? '解析视频地址'
                 : mode === 'platform'
                   ? connection.reuse
@@ -391,6 +400,7 @@ function retryBulk(value: AccessJob) {
 }
 .access-content {
   min-width: 0;
+  min-height: min(320px, 50dvh);
 }
 .region-heading {
   display: flex;
@@ -415,9 +425,10 @@ function retryBulk(value: AccessJob) {
 }
 .wizard-steps {
   display: flex;
-  gap: 24px;
-  padding: 0 0 18px;
-  margin: 0 0 24px;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 0 0 16px;
+  margin: 0 0 20px;
   list-style: none;
   border-bottom: 1px solid var(--el-border-color-lighter);
 }

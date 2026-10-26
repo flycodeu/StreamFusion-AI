@@ -10,6 +10,11 @@ export const methodLabels: Readonly<Record<string, string>> = {
   DAHUA: '大华设备',
   HIK_PLATFORM: hikPlatformConnection.defaultName,
   RTSP: '已知 RTSP 地址',
+  RTMP: 'RTMP',
+  FLV: 'HTTP-FLV',
+  HLS: 'HLS',
+  CRTSP: 'cRTSP（相机主动推流）',
+  GB28181: 'GB28181',
 }
 export function accessMethodLabel(method: string, adapters: readonly AccessAdapter[] = []): string {
   return adapters.find((adapter) => adapter.type === method)?.label || labelOf(methodLabels, method)

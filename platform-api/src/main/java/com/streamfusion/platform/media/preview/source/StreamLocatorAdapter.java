@@ -9,5 +9,9 @@ import java.net.URI;
 public interface StreamLocatorAdapter {
     String type();
 
+    default java.util.List<String> types() {
+        return java.util.List.of(type());
+    }
+
     URI resolve(CameraLocatorEntity locator, JsonNode config, CameraAccessContext context);
 }

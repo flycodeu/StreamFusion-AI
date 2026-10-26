@@ -86,7 +86,7 @@ async function save() {
     props.profileId && !form.label.trim()
       ? '请填写码流标签。'
       : manual.value && replaceUrl.value && !fullUrl.value.trim()
-        ? '请填写完整的 RTSP 地址。'
+        ? '请填写与当前协议一致的完整视频流地址。同一来源不支持变更主机、端口或协议，请另建来源。'
         : ''
   if (validation && !frozen.value) {
     error.value = validationError(validation)
@@ -204,7 +204,12 @@ onBeforeUnmount(() => {
               :value="true"
               label="替换视频地址" /></ElSelect
         ></ElFormItem>
-        <ElFormItem v-if="replaceUrl" label="RTSP 地址" required
+        <ElFormItem
+          v-if="replaceUrl"
+          :label="
+            !profile || profile.locatorSummary.locatorKind === 'RTSP' ? 'RTSP 地址' : '视频流地址'
+          "
+          required
           ><ElInput
             v-model="fullUrl"
             type="password"

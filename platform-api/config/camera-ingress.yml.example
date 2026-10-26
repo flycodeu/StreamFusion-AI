@@ -1,0 +1,28 @@
+# Optional Spring configuration. Copy outside the repository, restrict file permissions,
+# supply real values via environment variables, and review dedicated ZLM/firewall settings.
+# Nothing listens unless enabled is explicitly changed to true.
+platform:
+  camera:
+    ingress:
+      enabled: false
+      media-host: 192.168.1.20
+      rtsp-port: 8554
+      hook-port: 18091 # loopback only, never publish on a public reverse proxy
+      hook-token: ${SF_CAMERA_INGRESS_HOOK_TOKEN:}
+      publish-tokens:
+        # Exact per-camera ID; publisher uses ?sf_token=<token>, registration never does.
+        0123456789abcdef0123456789abcdef: ${SF_CAMERA_PUSH_TOKEN:}
+      gb-enabled: false
+      sip-bind-host: 0.0.0.0
+      sip-advertised-host: 192.168.1.20
+      sip-port: 15060
+      server-id: '34020000002000000001'
+      domain: '3402000000'
+      rtp-port-start: 30000
+      max-sessions: 32
+      rtp-tcp-mode: 0 # 0=UDP RTP, 1=TCP passive RTP; SIP itself remains UDP
+      devices:
+        '34020000001320000001':
+          password: ${SF_CAMERA_GB_DEVICE_PASSWORD:}
+          remote-ips: [192.168.1.10]
+          channels: ['34020000001320000002']

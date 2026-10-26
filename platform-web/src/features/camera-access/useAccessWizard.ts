@@ -102,7 +102,10 @@ export function useAccessWizard(
       if (!active()) return
       const category = mode === 'platform' ? 'PLATFORM' : mode === 'rtsp' ? 'RTSP' : 'DEVICE'
       const allowed = value.adapters
-        .filter((adapter) => adapter.category === category)
+        .filter(
+          (adapter) =>
+            adapter.category === category || (mode === 'rtsp' && adapter.category === 'STREAM'),
+        )
         .map((adapter) => adapter.type)
       if (mode === 'device' && value.methods.includes('AUTO')) allowed.unshift('AUTO')
       options.value = { ...value, methods: [...new Set(allowed)] }

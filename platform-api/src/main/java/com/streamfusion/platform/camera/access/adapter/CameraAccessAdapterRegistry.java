@@ -100,6 +100,20 @@ public class CameraAccessAdapterRegistry {
         registered.add(
                 new CameraAdapterDescriptor(
                         "RTSP", "已知 RTSP 地址", "RTSP", "RTSP_URL", false, 100, false));
+        for (var protocol : CameraStreamProtocol.values()) {
+            if (protocol != CameraStreamProtocol.RTSP)
+                registered.add(
+                        new CameraAdapterDescriptor(
+                                protocol.name(),
+                                protocol.label(),
+                                "STREAM",
+                                "STREAM_URL",
+                                false,
+                                100,
+                                false,
+                                "",
+                                "STREAM"));
+        }
         descriptors = List.copyOf(registered);
         var available = new ArrayList<String>();
         available.add("AUTO");

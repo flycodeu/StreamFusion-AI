@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessAdapterRegistry;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessCatalog;
+import com.streamfusion.platform.camera.access.adapter.CameraStreamProtocol;
 import com.streamfusion.platform.camera.access.pojo.CameraConnection;
 import com.streamfusion.platform.camera.access.pojo.CameraImportResult;
 import com.streamfusion.platform.camera.access.pojo.ImportSelection;
@@ -193,7 +194,7 @@ public class CameraAccessImportService {
                 camera.setDeviceId(deviceId);
                 camera.setExternalChannelKey(selected.channel().externalKey());
                 camera.setExternalChannelRef(
-                        "RTSP".equals(catalog.adapterType())
+                        CameraStreamProtocol.supports(catalog.adapterType())
                                 ? null
                                 : selected.channel().externalKey());
                 camera.setName(
@@ -202,9 +203,11 @@ public class CameraAccessImportService {
                 camera.setGroupId(prepared.groupId());
                 camera.setLifecycle(prepared.groupId() == null ? "PENDING_ASSIGNMENT" : "ENABLED");
                 camera.setMappingOrigin(
-                        "RTSP".equals(catalog.adapterType()) ? "MANUAL" : "ADAPTER");
+                        CameraStreamProtocol.supports(catalog.adapterType())
+                                ? "MANUAL"
+                                : "ADAPTER");
                 camera.setCatalogObservedAt(
-                        "RTSP".equals(catalog.adapterType()) ? null : observedAt);
+                        CameraStreamProtocol.supports(catalog.adapterType()) ? null : observedAt);
                 camera.setVersion(0L);
                 camera.setCreatedAt(now());
                 camera.setUpdatedAt(camera.getCreatedAt());
@@ -246,7 +249,7 @@ public class CameraAccessImportService {
                                 "afterVersion",
                                 camera.getVersion().toString()));
             } else if (!fresh
-                    && !"RTSP".equals(catalog.adapterType())
+                    && !CameraStreamProtocol.supports(catalog.adapterType())
                     && newer(observedAt, camera.getCatalogObservedAt())) {
                 var update =
                         new LambdaUpdateWrapper<CameraChannelEntity>()
@@ -306,7 +309,7 @@ public class CameraAccessImportService {
                             null,
                             context,
                             Map.of("label", profile.getLabel()));
-                } else if (!"RTSP".equals(catalog.adapterType())) {
+                } else if (!CameraStreamProtocol.supports(catalog.adapterType())) {
                     refreshProfile(profile, item, observedAt);
                 }
                 if (Objects.equals(selected.defaultIndex(), index)) defaultId = profile.getId();
@@ -627,7 +630,7 @@ public class CameraAccessImportService {
         row.setHeight(positive(item.height()));
         row.setBitrateKbps(item.bitrateKbps() == null ? null : (long) positive(item.bitrateKbps()));
         row.setFrameRate(frameRate(item.frameRate()));
-        if (!"RTSP".equals(adapterType) && !"HIK_PLATFORM".equals(adapterType)) {
+        if (!CameraStreamProtocol.supports(adapterType) && !"HIK_PLATFORM".equals(adapterType)) {
             row.setParametersOrigin("CATALOG");
             row.setParametersObservedAt(observedAt);
         }

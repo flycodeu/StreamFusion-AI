@@ -46,6 +46,6 @@ export function sourceBrandLabel(camera: {
       ? brandAliases[camera.sourceType.toUpperCase()]
       : '') ||
     brandLabel(camera.manufacturer) ||
-    '未识别品牌'
+    '未识别'
   )
 }

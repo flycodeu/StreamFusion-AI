@@ -102,14 +102,22 @@ public final class PreviewRoutingExecutor implements PreviewExecutor {
         try {
             direct.attachSource(id, key, resolver, checkpoint, deadline);
         } catch (PreviewFailure failure) {
-            if (!ZlmDirectExecutor.CODEC_FALLBACK.equals(failure.reason())) throw failure;
+            boolean http = "HTTP_MEDIA_REQUIRES_LOCAL_NODE".equals(failure.reason());
+            if (!http && !ZlmDirectExecutor.CODEC_FALLBACK.equals(failure.reason())) throw failure;
             // The direct pull has an exact persisted tuple. Only confirmed cleanup permits
             // assigning the same source to another node.
             direct.close(id, deadline);
             scheduler.closed(id);
             var codecs = requestedCodecs.get(id);
             if (codecs == null) throw new PreviewFailure("SOURCE_REQUIRED");
-            var next = scheduler.reserve(id, key, codecs, deadline, Set.of(node.nodeId()));
+            var excluded =
+                    http
+                            ? repository.nodes().stream()
+                                    .filter(n -> n.zlm() != null)
+                                    .map(n -> n.nodeId())
+                                    .collect(java.util.stream.Collectors.toSet())
+                            : Set.of(node.nodeId());
+            var next = scheduler.reserve(id, key, codecs, deadline, excluded);
             if (next.local()) {
                 local.prepare(id);
                 local.allowTranscoding(id, repository.transcodeAllowed(id));
