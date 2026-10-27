@@ -20,6 +20,8 @@ import ManualCreateDialog from '../../src/features/camera/ManualCreateDialog.vue
 import ScanDialog from '../../src/features/camera-access/ScanDialog.vue'
 import SourceEditor from '../../src/features/camera-sources/SourceEditor.vue'
 import CandidateSelection from '../../src/features/camera-access/CandidateSelection.vue'
+import ConnectionForm from '../../src/features/camera-access/ConnectionForm.vue'
+import { newConnection } from '../../src/features/camera-access/form'
 import BulkImportPanel from '../../src/features/camera-access/BulkImportPanel.vue'
 import ImportTasksDialog from '../../src/features/camera-access/ImportTasksDialog.vue'
 import PlatformDirectory from '../../src/features/camera-access/PlatformDirectory.vue'
@@ -29,6 +31,7 @@ const api = vi.hoisted(() => ({
   getCameraStatus: vi.fn(),
   getCameraOptions: vi.fn(),
   getAccessOptions: vi.fn(),
+  getIngressStatus: vi.fn(),
   createAccessJob: vi.fn(),
   createScanJob: vi.fn(),
   getAccessJob: vi.fn(),
@@ -3205,6 +3208,55 @@ describe('camera management interaction boundaries', () => {
     await settle()
     expect(nodes(root).some((item) => item.type === 'ElDialog')).toBe(false)
     expect(api.updateCameraScope).not.toHaveBeenCalled()
+  })
+  it('discards an old ingress inspection when the protocol changes twice', async () => {
+    let reject!: (cause: unknown) => void
+    api.getIngressStatus.mockReturnValueOnce(
+      new Promise((_, fail) => {
+        reject = fail
+      }),
+    )
+    const draft = reactive({ ...newConnection(), method: 'CRTSP' })
+    const root = await mount(ConnectionForm, {
+      modelValue: draft,
+      disabled: false,
+      options: {
+        methods: ['CRTSP', 'RTSP'],
+        adapters: [],
+        networkPolicies: [],
+        diagnostics: [],
+        ready: true,
+      },
+    })
+    const reading = click(root, '读取主动接入配置')
+    await settle()
+    for (const label of ['已知 RTSP 地址', 'cRTSP（相机主动推流）']) {
+      const method = nodes(root).find((item) => item.type === 'button' && text(item) === label)!
+      ;(method.props.onClick as () => void)()
+      await settle()
+    }
+    reject(new ApiRequestError('DEPENDENCY_UNAVAILABLE', '旧主动接入请求失败'))
+    await reading
+    await settle()
+    expect(text(root)).not.toContain('旧主动接入请求失败')
+  })
+  it('shows ingress inspection errors for a new connection instead of failing silently', async () => {
+    api.getIngressStatus.mockRejectedValueOnce(
+      new ApiRequestError('DEPENDENCY_UNAVAILABLE', '无法读取主动接入配置'),
+    )
+    const root = await mount(ConnectionForm, {
+      modelValue: reactive({ ...newConnection(), method: 'CRTSP' }),
+      disabled: false,
+      options: {
+        methods: ['CRTSP'],
+        adapters: [],
+        networkPolicies: [],
+        diagnostics: [],
+        ready: true,
+      },
+    })
+    await click(root, '读取主动接入配置')
+    expect(text(root)).toContain('无法读取主动接入配置')
   })
   it('requires impact preview and explicit confirmation before assigning a camera', async () => {
     api.getCamera.mockResolvedValue({

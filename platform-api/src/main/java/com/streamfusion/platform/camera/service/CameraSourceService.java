@@ -445,8 +445,8 @@ public class CameraSourceService {
 
     public CameraSourceEntity requireManualSource(long id, Long expectedVersion) {
         var source = requireArchiveSource(id, expectedVersion);
-        if (!com.streamfusion.platform.camera.access.adapter.CameraStreamProtocol.supports(
-                source.getAdapterType())) throw BusinessException.error(ErrorCode.CONFLICT);
+        if (!CameraStreamProtocol.supports(source.getAdapterType()))
+            throw BusinessException.error(ErrorCode.CONFLICT);
         rules.policy(source.getNetworkPolicyKey());
         return source;
     }
@@ -771,8 +771,8 @@ public class CameraSourceService {
                         .equals(command.basePath())
                 || !"SYSTEM_CA".equals(command.tlsPolicy())) throw CameraSourceRules.invalid();
         boolean anonymous = "NONE".equals(command.authMode());
-        if (("CRTSP".equals(source.getAdapterType()) || "GB28181".equals(source.getAdapterType()))
-                && !anonymous) throw CameraSourceRules.invalid();
+        if (CameraStreamProtocol.ingress(source.getAdapterType()) && !anonymous)
+            throw CameraSourceRules.invalid();
         if (anonymous
                 ? "PLATFORM".equals(source.getConnectionCategory())
                         || command.credentialPurpose() != null

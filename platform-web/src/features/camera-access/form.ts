@@ -66,30 +66,39 @@ export function newConnection(): ConnectionDraft {
     sourceVersion: null,
   }
 }
+
+const streamSchemes: Record<string, readonly string[]> = {
+  RTSP: ['rtsp:'],
+  RTMP: ['rtmp:'],
+  FLV: ['http:', 'https:'],
+  HLS: ['http:', 'https:'],
+  CRTSP: ['rtsp:'],
+  GB28181: ['gb28181:'],
+}
+
+function usesStreamUrls(method: string, adapter?: AccessAdapter): boolean {
+  return (
+    isStreamMethod(method) ||
+    adapter?.inputKind === 'RTSP_URL' ||
+    adapter?.inputKind === 'STREAM_URL'
+  )
+}
+
 export function connectionError(draft: ConnectionDraft, adapter?: AccessAdapter): string {
   const platform = getPlatformConnection(draft.method)
   if (draft.reuse && (!draft.sourceId || !draft.sourceVersion)) return '请选择已保存的连接。'
-  if (
-    isStreamMethod(draft.method) ||
-    adapter?.inputKind === 'RTSP_URL' ||
-    adapter?.inputKind === 'STREAM_URL'
-  ) {
+  if (usesStreamUrls(draft.method, adapter)) {
     if (!draft.name.trim()) return '请填写相机名称。'
     if (!draft.rtspUrls.length || draft.rtspUrls.length > 8) return '请提供 1～8 个码流地址。'
     for (const raw of draft.rtspUrls) {
       try {
         const url = new URL(raw.trim())
-        const schemes =
-          draft.method === 'RTMP'
-            ? ['rtmp:']
-            : ['FLV', 'HLS'].includes(draft.method)
-              ? ['http:', 'https:']
-              : draft.method === 'GB28181'
-                ? ['gb28181:']
-                : ['rtsp:']
+        const schemes = streamSchemes[draft.method] ?? streamSchemes.RTSP!
         if (
           !schemes.includes(url.protocol) ||
           !url.hostname ||
+          !url.pathname.startsWith('/') ||
+          (url.port !== '' && (Number(url.port) < 1 || Number(url.port) > 65535)) ||
           url.hash ||
           [...raw].some(
             (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
@@ -129,10 +138,7 @@ export function connectionError(draft: ConnectionDraft, adapter?: AccessAdapter)
   return ''
 }
 export function connectionInput(draft: ConnectionDraft, adapter?: AccessAdapter): AccessConnection {
-  const rtsp =
-    isStreamMethod(draft.method) ||
-    adapter?.inputKind === 'RTSP_URL' ||
-    adapter?.inputKind === 'STREAM_URL'
+  const stream = usesStreamUrls(draft.method, adapter)
   const urls =
     draft.method === 'RTSP'
       ? { rtspUrls: draft.rtspUrls.map((url) => url.trim()) }
@@ -143,12 +149,12 @@ export function connectionInput(draft: ConnectionDraft, adapter?: AccessAdapter)
       sourceId: draft.sourceId!,
       sourceVersion: draft.sourceVersion!,
       ...(draft.networkPolicyKey ? { networkPolicyKey: draft.networkPolicyKey } : {}),
-      ...(rtsp ? { name: draft.name.trim(), ...urls } : {}),
+      ...(stream ? { name: draft.name.trim(), ...urls } : {}),
     }
   return {
     method: draft.method,
     name: draft.name.trim(),
-    ...(rtsp
+    ...(stream
       ? urls
       : {
           host: draft.host.trim(),
@@ -161,7 +167,7 @@ export function connectionInput(draft: ConnectionDraft, adapter?: AccessAdapter)
   }
 }
 export function isStreamMethod(method: string): boolean {
-  return ['RTSP', 'RTMP', 'FLV', 'HLS', 'CRTSP', 'GB28181'].includes(method)
+  return Object.hasOwn(streamSchemes, method)
 }
 export function initialSelections(candidates: AccessCandidate[]): CandidateSelection[] {
   return candidates

@@ -301,12 +301,7 @@ async function submit(): Promise<void> {
           <img :src="brandIcon" alt="" width="34" height="34" />{{ systemConfig.name }}
         </div>
         <h1>账号登录</h1>
-        <ElForm
-          :model="form"
-          label-position="top"
-          size="large"
-          @submit.prevent="submit"
-        >
+        <ElForm :model="form" label-position="top" size="large" @submit.prevent="submit">
           <ElFormItem label="账号" :error="accountError">
             <ElInput
               id="account"

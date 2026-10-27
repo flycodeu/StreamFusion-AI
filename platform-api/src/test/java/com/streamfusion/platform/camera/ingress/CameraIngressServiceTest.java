@@ -48,6 +48,8 @@ class CameraIngressServiceTest {
             assertThat(service.authorizedPublish(request)).isTrue();
             request.put("params", "sf_token=" + token + "&sf_token=" + token);
             assertThat(service.authorizedPublish(request)).isFalse();
+            request.put("params", "sf_token=&sf_token=" + token);
+            assertThat(service.authorizedPublish(request)).isFalse();
             request.put("params", "sf_token=" + token).put("schema", "rtmp");
             assertThat(service.authorizedPublish(request)).isFalse();
             request.put("schema", "rtsp").put("app", "unowned");
@@ -79,8 +81,14 @@ class CameraIngressServiceTest {
                         Gb28181ServerTest.DEVICE,
                         Gb28181ServerTest.CHANNEL,
                         new InetSocketAddress("127.0.0.1", 12345));
-        when(sip.invite(anyString(), anyString(), anyInt(), anyLong(), any())).thenReturn(dialog);
+        when(sip.invite(anyString(), anyString(), anyInt(), anyLong(), any()))
+                .thenThrow(new PreviewFailure("GB_INVITE_TIMEOUT"))
+                .thenReturn(dialog);
         var zlm = mock(IngressZlmClient.class);
+        doThrow(new PreviewFailure("GB_RECOVERY_REQUIRED"))
+                .doNothing()
+                .when(zlm)
+                .close(any(), any(), any());
         var settings =
                 json.createObjectNode()
                         .put("rtsp.port", config.getRtspPort())
@@ -135,6 +143,16 @@ class CameraIngressServiceTest {
                                     + Gb28181ServerTest.DEVICE
                                     + "/"
                                     + Gb28181ServerTest.CHANNEL);
+            assertThatThrownBy(
+                            () ->
+                                    service.resolve(
+                                            "GB28181",
+                                            source,
+                                            () -> {},
+                                            PreviewDeadline.after(Duration.ofSeconds(10))))
+                    .hasMessage("GB_INVITE_TIMEOUT");
+            assertThat(journal.entries()).hasSize(1);
+            // Retry must retire the exact failed receiver before allocating its replacement.
             URI first =
                     service.resolve(
                             "GB28181",
@@ -150,10 +168,10 @@ class CameraIngressServiceTest {
                                     () -> {},
                                     PreviewDeadline.after(Duration.ofSeconds(10))))
                     .isEqualTo(first);
-            verify(sip, times(1)).invite(anyString(), anyString(), anyInt(), anyLong(), any());
+            verify(sip, times(2)).invite(anyString(), anyString(), anyInt(), anyLong(), any());
             service.close();
             verify(sip).bye(dialog);
-            verify(zlm).close(eq(runtime), any(), any());
+            verify(zlm, times(3)).close(eq(runtime), any(), any());
             assertThat(journal.entries()).isEmpty();
         }
     }

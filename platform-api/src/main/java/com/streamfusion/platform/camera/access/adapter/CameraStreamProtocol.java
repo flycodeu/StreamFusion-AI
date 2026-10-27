@@ -37,6 +37,10 @@ public enum CameraStreamProtocol {
         return supports(kind) && !"RTSP".equals(kind);
     }
 
+    public static boolean ingress(String kind) {
+        return "CRTSP".equals(kind) || "GB28181".equals(kind);
+    }
+
     public boolean accepts(String scheme) {
         return scheme != null && schemes.contains(scheme.toLowerCase(Locale.ROOT));
     }

@@ -216,6 +216,22 @@ afterEach(() => {
 })
 
 describe('preview actions and diagnostics', () => {
+  it('preserves the catalog and preview when the same account identity is refreshed', async () => {
+    const root = await mount()
+    await add(root)
+    const closeCount = api.close.mock.calls.length
+
+    sessionState.me = {
+      ...sessionState.me!,
+      user: { ...sessionState.me!.user, nickname: '新昵称' },
+    }
+    await nextTick()
+    await nextTick()
+
+    expect(text(root)).toContain('添加通道1')
+    expect(text(root)).toContain('媒体连接被拒绝')
+    expect(api.close).toHaveBeenCalledTimes(closeCount)
+  })
   it('labels loaded device count separately from total channel count', async () => {
     const root = await mount()
     expect(text(root)).toContain('已加载 1 台')

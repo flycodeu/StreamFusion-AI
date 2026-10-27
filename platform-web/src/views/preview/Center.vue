@@ -512,7 +512,7 @@ watch(
   },
 )
 watch(
-  () => [sessionState.me?.user.id, sessionState.epoch],
+  [() => sessionState.me?.user.id, () => sessionState.epoch],
   () => {
     viewAbort?.abort()
     cancelSavedRetries()

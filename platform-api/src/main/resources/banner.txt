@@ -1,0 +1,8 @@
+
+   ____  _____
+  / ___||  ___|   STREAMFUSION AI
+  \___ \| |_      Video Intelligence Platform
+   ___) |  _|
+  |____/|_|       ${spring.application.name:streamfusion-platform-api}
+
+  :: Spring Boot ${spring-boot.version} :: Java ${java.version} ::

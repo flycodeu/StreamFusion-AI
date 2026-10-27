@@ -2,6 +2,20 @@
 
 复制 `application-local.yml.example` 为同目录的 `application-local.yml`，填写 MySQL、Redis及需要启用的相机配置，再使用 local profile 启动。实际文件被 Git 忽略，公开示例不包含可用凭据。完整安装步骤见[快速开始](../../README.md#快速开始)；完整初始化 SQL 仅用于空库，已有库须定向升级。
 
+## 启动标识
+
+后端启动时显示项目自带的 SF / StreamFusion AI 文本标识，维护位置为 `src/main/resources/banner.txt`，不需要额外启动参数；Spring Boot 与 Java 版本由框架填入。它只影响启动输出，不影响登录页、服务名称、日志格式或健康检查。
+
+如需使用部署环境自己的文本图案，在既有外部配置中指定文件即可；文件须由服务账号可读，不要包含密钥：
+
+```yaml
+spring:
+  banner:
+    location: file:./config/banner.txt
+```
+
+去掉该覆盖即恢复项目标识。使用框架原生 `SPRING_MAIN_BANNER_MODE=off` 可关闭输出；独立 preview-node 不启动 Spring，不显示此标识。
+
 ## 必需部署配置
 
 通过既有外部 `application-local.yml` 或环境配置提供，真实密钥不入 Git：

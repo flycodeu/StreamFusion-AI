@@ -7,6 +7,15 @@ import org.junit.jupiter.api.Test;
 class CameraStreamProtocolTest {
     @Test
     void protocolsHaveExplicitSchemesAndPorts() {
+        assertThat(CameraStreamProtocol.ingress(null)).isFalse();
+        assertThat(CameraStreamProtocol.ingress("RTSP")).isFalse();
+        assertThat(CameraStreamProtocol.ingress("CRTSP")).isTrue();
+        assertThat(CameraStreamProtocol.ingress("GB28181")).isTrue();
+        assertThat(
+                        CameraStreamProtocol.RTSP
+                                .parse("rtsp://camera:554/channel%2F1?sig=a%2Bb")
+                                .getRawPath())
+                .isEqualTo("/channel%2F1");
         assertThat(
                         CameraStreamProtocol.RTMP.port(
                                 CameraStreamProtocol.RTMP.parse("rtmp://camera/live/main")))

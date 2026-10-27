@@ -90,6 +90,7 @@ const review = (): OpsSyncReview => ({
 })
 let app: App | null = null
 let applied: ReturnType<typeof vi.fn>
+let closed: ReturnType<typeof vi.fn>
 const settle = async () => {
   for (let i = 0; i < 10; i++) await nextTick()
 }
@@ -97,7 +98,7 @@ const buttons = (root: Host) => nodes(root).filter((n) => n.type === 'ElButton')
 const button = (root: Host, label: string) => buttons(root).find((n) => text(n) === label)!
 async function mount(subject = value()) {
   const root = node('root')
-  app = renderer.createApp(Sync, { node: subject, onApplied: applied })
+  app = renderer.createApp(Sync, { node: subject, onApplied: applied, onClose: closed })
   app.mount(root)
   await settle()
   return root
@@ -105,6 +106,7 @@ async function mount(subject = value()) {
 beforeEach(() => {
   vi.clearAllMocks()
   applied = vi.fn()
+  closed = vi.fn()
   api.getOpsPreviewInstances.mockResolvedValue({
     available: true,
     reasonCode: null,
@@ -122,6 +124,7 @@ beforeEach(() => {
 afterEach(() => {
   app?.unmount()
   app = null
+  sessionState.me = null
   sessionState.epoch++
 })
 
@@ -230,5 +233,40 @@ it('does not emit success into another signed-in page scope', async () => {
   resolve(review())
   await pending
   await settle()
+  expect(applied).not.toHaveBeenCalled()
+})
+
+it('keeps the current review open after a same-account identity refresh', async () => {
+  const identity = { user: { id: '1' } } as NonNullable<typeof sessionState.me>
+  sessionState.me = identity
+  const root = await mount()
+  await (button(root, '预检').props.onClick as () => Promise<void>)()
+  sessionState.me = { ...identity }
+  await settle()
+  expect(closed).not.toHaveBeenCalled()
+  expect(text(root)).toContain('预检通过')
+  expect(button(root, '应用同步').props.disabled).toBe(false)
+  expect(api.getOpsPreviewInstances).toHaveBeenCalledOnce()
+})
+
+it('closes and releases busy state when the account epoch changes during sync', async () => {
+  let resolve: (value: OpsSyncReview) => void = () => {}
+  const root = await mount()
+  api.synchronizeOpsNode.mockImplementationOnce(
+    () =>
+      new Promise<OpsSyncReview>((done) => {
+        resolve = done
+      }),
+  )
+  const pending = (button(root, '预检').props.onClick as () => Promise<void>)()
+  await settle()
+  expect(button(root, '预检').props.disabled).toBe(true)
+  sessionState.epoch++
+  await settle()
+  expect(closed).toHaveBeenCalledOnce()
+  resolve(review())
+  await pending
+  await settle()
+  expect(button(root, '预检').props.disabled).toBe(false)
   expect(applied).not.toHaveBeenCalled()
 })

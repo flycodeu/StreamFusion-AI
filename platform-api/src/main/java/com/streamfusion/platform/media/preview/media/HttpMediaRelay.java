@@ -117,8 +117,15 @@ public final class HttpMediaRelay implements AutoCloseable {
             if (entry.getValue().equals(uri) && entry.getKey().endsWith(suffix))
                 return entry.getKey();
         String id = UUID.randomUUID().toString().replace("-", "") + suffix;
-        if (session.resources.size() >= 1024)
-            session.resources.remove(session.resources.keySet().iterator().next());
+        if (session.resources.size() >= 1024) {
+            // ZLM retains playlist URLs across refreshes; only rolling segments may be evicted.
+            String oldestSegment =
+                    session.resources.keySet().stream()
+                            .filter(key -> !key.endsWith(".m3u8"))
+                            .findFirst()
+                            .orElseThrow(() -> new PreviewFailure("HLS_PLAYLIST_INVALID"));
+            session.resources.remove(oldestSegment);
+        }
         session.resources.put(id, uri);
         return id;
     }

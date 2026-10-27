@@ -230,7 +230,7 @@ public class PreviewLocatorService {
                     || uri.getFragment() != null
                     || uri.getHost() == null
                     || uri.toString().length() > 8192) throw new PreviewFailure("LOCATOR_INVALID");
-            if (java.util.Set.of("GB28181", "CRTSP").contains(locator.getLocatorKind())) {
+            if (CameraStreamProtocol.ingress(locator.getLocatorKind())) {
                 if (ingress == null) throw new PreviewFailure("INGRESS_NOT_CONFIGURED");
                 uri = ingress.resolve(locator.getLocatorKind(), uri, authorization, deadline);
                 username = null;

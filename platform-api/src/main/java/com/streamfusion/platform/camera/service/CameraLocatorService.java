@@ -254,9 +254,7 @@ public class CameraLocatorService {
                     || input.port() != null
                     || input.pathSecret() != null
                     || input.querySecret() != null) throw CameraSourceRules.invalid();
-            var uri =
-                    com.streamfusion.platform.camera.access.service.CameraConnectionRules.parseRtsp(
-                            input.fullUrl());
+            var uri = CameraStreamProtocol.RTSP.parse(input.fullUrl());
             if (uri.getRawUserInfo() != null) throw CameraSourceRules.invalid();
             input =
                     new CameraLocatorDto(

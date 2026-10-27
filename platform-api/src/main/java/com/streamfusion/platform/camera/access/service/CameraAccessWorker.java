@@ -93,9 +93,8 @@ public class CameraAccessWorker {
                 return;
             }
             var catalog =
-                    com.streamfusion.platform.camera.access.adapter.CameraStreamProtocol.supports(
-                                    connection.method())
-                            ? connections.rtspCatalog(connection)
+                    CameraStreamProtocol.supports(connection.method())
+                            ? connections.streamCatalog(connection)
                             : adapters.discover(
                                     connection.method(),
                                     new CameraAccessContext(

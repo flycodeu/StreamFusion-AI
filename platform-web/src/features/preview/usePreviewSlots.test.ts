@@ -266,6 +266,38 @@ describe('preview slot lifetime and first frame', () => {
     expect(preview.slots[0]!.channel?.cameraId).toBe('2')
     expect(players).toHaveLength(2)
   })
+  it('does not download a snapshot completed after the slot was cleared', async () => {
+    let finishBlob!: (blob: Blob) => void
+    const click = vi.fn()
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn().mockReturnValue({ drawImage: vi.fn() }),
+      toBlob: vi.fn((done: (blob: Blob) => void) => {
+        finishBlob = done
+      }),
+    }
+    const link = { click }
+    vi.stubGlobal('document', {
+      createElement: vi.fn().mockReturnValueOnce(canvas).mockReturnValueOnce(link),
+    })
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn().mockReturnValue('blob:snapshot'),
+      revokeObjectURL: vi.fn(),
+    })
+    const preview = usePreviewSlots(),
+      video = new HTMLVideoElement()
+    Object.defineProperty(video, 'srcObject', { writable: true, value: null })
+    preview.setVideoRef(0, video)
+    await preview.assign(0, channel('1'), 'MAIN')
+    const stream = media()
+    callbacks[0]?.stream(stream)
+    const pending = preview.snapshot(0)
+    await preview.clearIdentity()
+    finishBlob(new Blob(['stale']))
+    expect(await pending).toBe(false)
+    expect(click).not.toHaveBeenCalled()
+  })
   it('does not let a queued playing event overwrite a failed connection', async () => {
     const preview = usePreviewSlots()
     await preview.assign(0, channel('1'), 'MAIN')

@@ -456,14 +456,23 @@ export function usePreviewSlots() {
     )
   }
   async function snapshot(index: number): Promise<boolean> {
-    const video = videoRefs.get(index)
-    if (!video || video.readyState < 2 || !video.videoWidth) return false
+    const video = videoRefs.get(index),
+      stream = streams.get(index),
+      revision = revisions.get(index) || 0
+    if (!video || !stream || video.readyState < 2 || !video.videoWidth || !current(index, revision))
+      return false
     const canvas = document.createElement('canvas')
     canvas.width = video.videoWidth
     canvas.height = video.videoHeight
     canvas.getContext('2d')?.drawImage(video, 0, 0)
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
-    if (!blob) return false
+    if (
+      !blob ||
+      !current(index, revision) ||
+      videoRefs.get(index) !== video ||
+      streams.get(index) !== stream
+    )
+      return false
     const url = URL.createObjectURL(blob),
       link = document.createElement('a')
     link.download = `${slots[index].channel?.name || 'camera'}-${Date.now()}.png`

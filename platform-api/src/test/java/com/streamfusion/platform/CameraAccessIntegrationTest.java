@@ -58,7 +58,7 @@ class CameraAccessIntegrationTest extends CameraTestSupport {
                         202);
         var work = jobs.claim(created.path("jobId").asLong());
         assertThat(work.payload().connection().rtspUrls()).isNull();
-        jobs.complete(work, connections.rtspCatalog(work.payload().connection()));
+        jobs.complete(work, connections.streamCatalog(work.payload().connection()));
         var found = read("/camera-access/jobs/" + created.path("jobId").asText(), auth);
         var selection = selected(found, "c0", List.of("p0"));
         var impact =
@@ -144,7 +144,7 @@ class CameraAccessIntegrationTest extends CameraTestSupport {
         assertThat(work.payload().connection().password()).isEqualTo("p+ass");
         assertThat(work.payload().connection().rtspUrls().getFirst())
                 .isEqualTo("rtsp://10.0.1.5:554/main?token=private-token");
-        jobs.complete(work, connections.rtspCatalog(work.payload().connection()));
+        jobs.complete(work, connections.streamCatalog(work.payload().connection()));
         JsonNode found = read("/camera-access/jobs/" + id, auth);
         assertThat(found.toString()).doesNotContain("private-token", "p+ass", "rtsp://", "user:");
         assertThat(found.path("candidates").get(0).path("profiles")).hasSize(2);

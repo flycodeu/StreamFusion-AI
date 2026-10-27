@@ -2,6 +2,7 @@ package com.streamfusion.platform.camera.ingress;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.streamfusion.platform.camera.access.adapter.CameraStreamProtocol;
 import com.streamfusion.platform.media.preview.PreviewDeadline;
 import com.streamfusion.platform.media.preview.PreviewFailure;
 import com.streamfusion.platform.media.preview.execution.PreviewRuntimeProvider;
@@ -114,7 +115,7 @@ public final class CameraIngressService implements AutoCloseable {
     }
 
     public URI resolve(String kind, URI source, Runnable authorization, PreviewDeadline deadline) {
-        if (!Set.of("GB28181", "CRTSP").contains(kind)) return source;
+        if (!CameraStreamProtocol.ingress(kind)) return source;
         if (!config.isEnabled() || closed) throw new PreviewFailure("INGRESS_NOT_CONFIGURED");
         if (!config.getMediaHost().equals(source.getHost())
                 || (source.getPort() < 0 ? 554 : source.getPort()) != config.getRtspPort())
@@ -171,13 +172,12 @@ public final class CameraIngressService implements AutoCloseable {
         recover(deadline);
         String key = source.getPath();
         var existing = sessions.get(key);
+        if (existing != null && existing.closing) {
+            cleanup(key, existing);
+            existing = null;
+        }
         if (existing != null) {
-            if (existing.closing) {
-                cleanup(key, existing);
-                return gb(runtime, source, authorization, deadline);
-            }
             if (!existing.entry.matches(runtime)
-                    || existing.closing
                     || existing.dialog != null && existing.dialog.abandoned)
                 throw new PreviewFailure("GB_RECOVERY_REQUIRED");
             existing.touched = System.nanoTime();
@@ -372,10 +372,10 @@ public final class CameraIngressService implements AutoCloseable {
                 ip = value.path("ip").asText();
         if ("sf_ingress".equals(appName) && "rtsp".equals(value.path("schema").asText())) {
             String expected = config.getPublishTokens().get(id);
-            String supplied = "";
+            String supplied = null;
             for (String pair : value.path("params").asText().split("&")) {
                 if (pair.startsWith("sf_token=")) {
-                    if (!supplied.isEmpty()) return false;
+                    if (supplied != null) return false;
                     supplied = pair.substring(9);
                 }
             }

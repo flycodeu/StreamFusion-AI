@@ -2,6 +2,7 @@ package com.streamfusion.platform.camera.access.service;
 
 import com.streamfusion.platform.camera.access.adapter.CameraAccessAdapterRegistry;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessCatalog;
+import com.streamfusion.platform.camera.access.adapter.CameraStreamProtocol;
 import com.streamfusion.platform.camera.access.pojo.CameraConnection;
 import com.streamfusion.platform.camera.config.CameraProperties;
 import com.streamfusion.platform.camera.service.CameraSourceRules;
@@ -47,14 +48,11 @@ public class CameraConnectionRules {
         String name = CameraSourceRules.text(input.name(), 100, false);
         int rtspPort = input.rtspPort() == null ? 554 : input.rtspPort();
         CameraSourceRules.port(rtspPort);
-        if (com.streamfusion.platform.camera.access.adapter.CameraStreamProtocol.supports(
-                input.method())) {
-            var protocol =
-                    com.streamfusion.platform.camera.access.adapter.CameraStreamProtocol.valueOf(
-                            input.method());
-            if ("RTSP".equals(input.method())
-                    ? input.streamUrls() != null
-                    : input.rtspUrls() != null) throw CameraSourceRules.invalid();
+        if (CameraStreamProtocol.supports(input.method())) {
+            boolean rtsp = "RTSP".equals(input.method());
+            var protocol = CameraStreamProtocol.valueOf(input.method());
+            if (rtsp ? input.streamUrls() != null : input.rtspUrls() != null)
+                throw CameraSourceRules.invalid();
             if (name == null
                     || name.isBlank()
                     || input.urls() == null
@@ -98,13 +96,8 @@ public class CameraConnectionRules {
                 urls.add(clean);
             }
             credentials(username, password);
-            if ((protocol
-                                    == com.streamfusion.platform.camera.access.adapter
-                                            .CameraStreamProtocol.GB28181
-                            || protocol
-                                    == com.streamfusion.platform.camera.access.adapter
-                                            .CameraStreamProtocol.CRTSP)
-                    && username != null) throw CameraSourceRules.invalid();
+            if (CameraStreamProtocol.ingress(input.method()) && username != null)
+                throw CameraSourceRules.invalid();
             if (input.sourceId() != null
                     && (!Objects.equals(host, input.host()) || !Objects.equals(port, input.port())))
                 throw CameraSourceRules.invalid();
@@ -120,20 +113,12 @@ public class CameraConnectionRules {
                     policy,
                     input.sourceId(),
                     input.sourceVersion(),
-                    protocol
-                                    == com.streamfusion.platform.camera.access.adapter
-                                            .CameraStreamProtocol.RTSP
-                            ? List.copyOf(urls)
-                            : null,
+                    rtsp ? List.copyOf(urls) : null,
                     page,
                     size,
                     null,
                     null,
-                    protocol
-                                    == com.streamfusion.platform.camera.access.adapter
-                                            .CameraStreamProtocol.RTSP
-                            ? null
-                            : List.copyOf(urls));
+                    rtsp ? null : List.copyOf(urls));
         }
         if (input.streamUrls() != null) throw CameraSourceRules.invalid();
         if (input.rtspUrls() != null && !input.rtspUrls().isEmpty())
@@ -174,11 +159,12 @@ public class CameraConnectionRules {
                                 : adapters.descriptor(connection.method()).endpointPath()));
     }
 
-    public CameraAccessCatalog rtspCatalog(CameraConnection connection) {
+    public CameraAccessCatalog streamCatalog(CameraConnection connection) {
         var profiles = new ArrayList<CameraAccessCatalog.Profile>();
         for (int i = 0; i < connection.urls().size(); i++) {
             profiles.add(
                     new CameraAccessCatalog.Profile(
+                            // Keep persisted identity keys compatible with existing imports.
                             "rtsp-profile:" + stableKey(connection.urls().get(i)),
                             "码流 " + (i + 1),
                             "UNKNOWN",
@@ -223,24 +209,6 @@ public class CameraConnectionRules {
                                     .digest(value.getBytes(StandardCharsets.UTF_8)));
         } catch (java.security.NoSuchAlgorithmException ex) {
             throw new IllegalStateException("Required digest unavailable");
-        }
-    }
-
-    public static URI parseRtsp(String value) {
-        if (value == null
-                || value.length() > 8192
-                || value.codePoints().anyMatch(Character::isISOControl))
-            throw CameraSourceRules.invalid();
-        try {
-            URI uri = URI.create(value.strip());
-            if (!"rtsp".equalsIgnoreCase(uri.getScheme())
-                    || uri.getHost() == null
-                    || uri.getRawFragment() != null
-                    || uri.getRawPath() == null
-                    || !uri.getRawPath().startsWith("/")) throw CameraSourceRules.invalid();
-            return uri;
-        } catch (IllegalArgumentException ex) {
-            throw CameraSourceRules.invalid();
         }
     }
 

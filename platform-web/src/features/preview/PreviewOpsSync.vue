@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElButton, ElDialog } from 'element-plus'
 import {
   getOpsPreviewInstances,
@@ -13,6 +13,7 @@ import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
 import { previewReason } from './model'
+import { sessionState } from '../../session/state'
 
 const props = defineProps<{ node: PreviewNodeStatus }>()
 const emit = defineEmits<{ close: []; applied: [] }>()
@@ -55,6 +56,9 @@ const canCheck = computed(
     !busy.value &&
     !loading.value,
 )
+watch([() => sessionState.me?.user.id, () => sessionState.epoch], () => emit('close'), {
+  flush: 'sync',
+})
 
 onMounted(async () => {
   const active = captureScope()
@@ -69,7 +73,7 @@ onMounted(async () => {
   } catch (cause) {
     if (active()) error.value = cause
   } finally {
-    if (active()) loading.value = false
+    loading.value = false
   }
 })
 
@@ -106,7 +110,7 @@ async function check(apply = false) {
       review.value = null
     }
   } finally {
-    if (active()) busy.value = false
+    busy.value = false
   }
 }
 </script>

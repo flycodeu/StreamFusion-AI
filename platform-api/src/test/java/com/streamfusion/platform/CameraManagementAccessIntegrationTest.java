@@ -257,7 +257,7 @@ class CameraManagementAccessIntegrationTest extends CameraTestSupport {
                             Map.of("clientRequestId", requestId(), "connection", connection),
                             202);
             var work = jobs.claim(job.path("jobId").asLong());
-            jobs.complete(work, connections.rtspCatalog(work.payload().connection()));
+            jobs.complete(work, connections.streamCatalog(work.payload().connection()));
             var complete = read("/camera-access/jobs/" + job.path("jobId").asText(), auth);
             imported =
                     importOne(
@@ -300,8 +300,8 @@ class CameraManagementAccessIntegrationTest extends CameraTestSupport {
                         null,
                         null,
                         List.of("rtsp://10.0.1.5/main"));
-        var first = connections.rtspCatalog(input);
-        var next = connections.rtspCatalog(input);
+        var first = connections.streamCatalog(input);
+        var next = connections.streamCatalog(input);
         assertThat(first.channels().getFirst().externalKey())
                 .isEqualTo(next.channels().getFirst().externalKey());
         assertThat(first.channels().getFirst().profiles().getFirst().externalKey())

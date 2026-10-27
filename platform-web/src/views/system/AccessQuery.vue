@@ -239,7 +239,7 @@ watch(mode, () => {
   void load()
 })
 watch(
-  () => [sessionState.me?.user.id, sessionState.epoch],
+  [() => sessionState.me?.user.id, () => sessionState.epoch],
   () => {
     exportAbort?.abort()
     ++exportSequence

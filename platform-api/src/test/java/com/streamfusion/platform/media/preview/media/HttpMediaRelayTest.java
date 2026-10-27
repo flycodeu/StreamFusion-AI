@@ -133,6 +133,26 @@ class HttpMediaRelayTest {
     }
 
     @Test
+    void rollingHlsSegmentsNeverEvictThePlaylistUrlsHeldByZlm() {
+        try (var relay = new HttpMediaRelay()) {
+            var origin = URI.create("http://127.0.0.1:80/live/master.m3u8");
+            relay.open("rolling", origin);
+            var session = new HttpMediaRelay.Session("token", origin, origin);
+            session.resources.put("root.m3u8", origin);
+            relay.rewrite(
+                    session, origin, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100\nchild.m3u8\n");
+            var child = origin.resolve("child.m3u8");
+            for (int i = 0; i < 1100; i++)
+                relay.rewrite(session, child, "#EXTM3U\n#EXTINF:2,\nsegment-" + i + ".ts\n");
+            assertThat(session.resources).containsEntry("root.m3u8", origin).containsValue(child);
+            assertThat(session.resources).hasSizeLessThanOrEqualTo(1024);
+            assertThat(session.resources)
+                    .doesNotContainValue(child.resolve("segment-0.ts"))
+                    .containsValue(child.resolve("segment-1099.ts"));
+        }
+    }
+
+    @Test
     void unsupportedPlaylistsFailWithActionableReasons() throws Exception {
         try (var relay = new HttpMediaRelay()) {
             var origin = URI.create("http://127.0.0.1:80/live/index.m3u8");

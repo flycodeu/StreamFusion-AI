@@ -79,7 +79,7 @@ class CameraAccessWorkerTest {
         when(jobs.claim(123)).thenReturn(first, second);
         when(jobs.queued(123)).thenAnswer(i -> queued.get());
         var firstCatalog = new CameraAccessCatalog("RTSP", null, List.of(), true, List.of());
-        when(rules.rtspCatalog(firstConnection)).thenReturn(firstCatalog);
+        when(rules.streamCatalog(firstConnection)).thenReturn(firstCatalog);
         doAnswer(
                         i -> {
                             queued.set(true);
@@ -271,7 +271,7 @@ class CameraAccessWorkerTest {
                             return work;
                         });
         var catalog = new CameraAccessCatalog("RTSP", null, List.of(), true, List.of());
-        when(rules.rtspCatalog(connection)).thenReturn(catalog);
+        when(rules.streamCatalog(connection)).thenReturn(catalog);
         try {
             worker.submit(123L);
             assertThat(entered.await(5, TimeUnit.SECONDS)).isTrue();

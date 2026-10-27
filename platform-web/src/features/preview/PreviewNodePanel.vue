@@ -125,6 +125,12 @@ const fields: {
   { key: 'outputUpperKbps', label: '每观看码率上界（kbps）', min: 1, max: 1000000 },
 ]
 const directFields = fields.filter((field) => field.key !== 'maxTranscodes')
+const usageMetrics = [
+  { usage: 'sources', budget: 'maxSources', label: '源流' },
+  { usage: 'viewers', budget: 'maxViewers', label: '观看' },
+  { usage: 'transcodes', budget: 'maxTranscodes', label: '转码' },
+  { usage: 'starting', budget: 'maxStarting', label: '启动中' },
+] as const
 let controller: globalThis.AbortController | undefined
 let runtimeController: globalThis.AbortController | undefined
 let opsController: globalThis.AbortController | undefined
@@ -132,6 +138,32 @@ let opsZlmController: globalThis.AbortController | undefined
 let directController: globalThis.AbortController | undefined
 let observationController: globalThis.AbortController | undefined
 let observationTimer: ReturnType<typeof globalThis.setInterval> | undefined
+function clearManagementState() {
+  opsController?.abort()
+  opsZlmController?.abort()
+  opsController = undefined
+  opsZlmController = undefined
+  opsBusy.value = false
+  opsError.value = null
+  opsInstances.value = null
+  opsZlmInstances.value = null
+  opsZlmBusy.value = false
+  opsZlmError.value = null
+  directController?.abort()
+  directController = undefined
+  directBusy.value = false
+  directError.value = null
+  directInstances.value = null
+  directForm.value = null
+  directEditing.value = null
+  directCredential.value = null
+  directRemoving.value = null
+  editing.value = null
+  connection.value = null
+  maintaining.value = null
+  maintenance.value = null
+  synchronizing.value = null
+}
 onBeforeUnmount(() => {
   controller?.abort()
   runtimeController?.abort()
@@ -159,36 +191,50 @@ onMounted(() => {
 watch(
   canManage,
   (enabled) => {
-    if (enabled) {
-      void loadOpsInstances()
-      void loadOpsZlmInstances()
-      void loadDirectInstances()
-    } else {
-      opsController?.abort()
-      opsZlmController?.abort()
-      opsController = undefined
-      opsBusy.value = false
-      opsError.value = null
-      opsInstances.value = null
-      opsZlmInstances.value = null
-      opsZlmBusy.value = false
-      opsZlmError.value = null
-      directController?.abort()
-      directController = undefined
-      directBusy.value = false
-      directError.value = null
-      directInstances.value = null
-      directForm.value = null
-      directCredential.value = null
-      synchronizing.value = null
-    }
+    if (enabled) loadManagementCatalogs()
+    else clearManagementState()
   },
   { immediate: true },
 )
+watch(
+  [() => sessionState.me?.user.id, () => sessionState.epoch],
+  ([userId], [previousUserId]) => {
+    controller?.abort()
+    runtimeController?.abort()
+    observationController?.abort()
+    controller = undefined
+    runtimeController = undefined
+    observationController = undefined
+    busy.value = false
+    error.value = null
+    snapshot.value = null
+    snapshotRefreshedAt.value = 0
+    localZlm.value = null
+    diagnostic.value = null
+    clearManagementState()
+    if (!userId || userId === previousUserId) return
+    // clearIdentity updates epoch before clearing me; wait for the final identity.
+    const active = captureScope()
+    globalThis.queueMicrotask(() => {
+      if (!active()) return
+      void run()
+      void loadLocalZlm()
+      if (canManage.value) loadManagementCatalogs()
+    })
+  },
+  { flush: 'sync' },
+)
 
-async function loadDirectInstances() {
+function loadManagementCatalogs() {
+  void loadOpsInstances()
+  void loadOpsZlmInstances()
+  void loadDirectInstances()
+}
+
+async function loadDirectInstances(replacePending = false) {
   if (!canManage.value) return
-  if (directBusy.value) return
+  // A confirmed write must supersede any directory read started before it.
+  if (directBusy.value && !replacePending) return
   const active = captureScope()
   directController?.abort()
   const nextController = new globalThis.AbortController()
@@ -198,9 +244,9 @@ async function loadDirectInstances() {
   directInstances.value = null
   try {
     const value = await getDirectZlmInstances(nextController.signal)
-    if (active() && canManage.value) directInstances.value = value
+    if (active() && !nextController.signal.aborted && canManage.value) directInstances.value = value
   } catch (cause) {
-    if (active() && canManage.value) directError.value = cause
+    if (active() && !nextController.signal.aborted && canManage.value) directError.value = cause
   } finally {
     if (directController === nextController) directBusy.value = false
   }
@@ -219,44 +265,59 @@ function openDirectForm() {
   }
 }
 function saveDirectForm() {
-  if (!directForm.value) return
+  if (busy.value || !directForm.value) return
+  const draft = directForm.value
   const input = {
-    ...directForm.value,
-    mediaAddress: directForm.value.mediaAddress || directForm.value.apiHost,
-    installPath: directForm.value.installPath?.trim() || null,
-    budget: { ...directForm.value.budget },
+    ...draft,
+    mediaAddress: draft.mediaAddress || draft.apiHost,
+    installPath: draft.installPath?.trim() || null,
+    budget: { ...draft.budget },
   }
-  directForm.value.secret = ''
-  void run(async () => {
-    await createDirectZlmInstance(input)
-    directForm.value = null
-  }).then(() => void loadDirectInstances())
+  draft.secret = ''
+  void run(
+    () => createDirectZlmInstance(input),
+    () => {
+      if (directForm.value === draft) directForm.value = null
+      void loadDirectInstances(true)
+    },
+  )
 }
 function updateDirect(
   instance: DirectZlmInstance,
   changes: Partial<Pick<DirectZlmInstance, 'mode' | 'priority' | 'budget' | 'installPath'>>,
 ) {
-  void run(async () => {
-    await saveDirectZlmInstance(instance, changes)
-    directEditing.value = null
-  }).then(() => void loadDirectInstances())
+  const draft = directEditing.value
+  void run(
+    () => saveDirectZlmInstance(instance, changes),
+    () => {
+      if (draft?.instance === instance && directEditing.value === draft) directEditing.value = null
+      void loadDirectInstances(true)
+    },
+  )
 }
 function saveDirectCredential() {
-  if (!directCredential.value?.secret) return
-  const { instance, secret } = directCredential.value
-  directCredential.value.secret = ''
-  void run(async () => {
-    await rotateDirectZlmSecret(instance, secret)
-    directCredential.value = null
-  }).then(() => void loadDirectInstances())
+  if (busy.value || !directCredential.value?.secret) return
+  const draft = directCredential.value
+  const { instance, secret } = draft
+  draft.secret = ''
+  void run(
+    () => rotateDirectZlmSecret(instance, secret),
+    () => {
+      if (directCredential.value === draft) directCredential.value = null
+      void loadDirectInstances(true)
+    },
+  )
 }
 function removeDirect() {
   if (!directRemoving.value) return
   const instance = directRemoving.value
-  void run(async () => {
-    await deleteDirectZlmInstance(instance)
-    directRemoving.value = null
-  }).then(() => void loadDirectInstances())
+  void run(
+    () => deleteDirectZlmInstance(instance),
+    () => {
+      if (directRemoving.value === instance) directRemoving.value = null
+      void loadDirectInstances(true)
+    },
+  )
 }
 function directIdle(instance: DirectZlmInstance) {
   return (
@@ -307,7 +368,7 @@ function opsZlmStatus(item: OpsZlmInstances['items'][number]): 'linked' | 'occup
 }
 
 async function loadOpsInstances() {
-  if (opsBusy.value) return
+  if (!canManage.value || opsBusy.value) return
   const active = captureScope()
   opsController?.abort()
   const nextController = new globalThis.AbortController()
@@ -317,37 +378,41 @@ async function loadOpsInstances() {
   opsInstances.value = null
   try {
     const value = await getOpsPreviewInstances(nextController.signal)
-    if (active() && canManage.value) opsInstances.value = value
+    if (active() && !nextController.signal.aborted && canManage.value) opsInstances.value = value
   } catch (cause) {
-    if (active() && canManage.value) opsError.value = cause
+    if (active() && !nextController.signal.aborted && canManage.value) opsError.value = cause
   } finally {
     if (opsController === nextController) opsBusy.value = false
   }
 }
 
-async function loadOpsZlmInstances() {
-  if (!canManage.value || opsZlmBusy.value) return
+async function loadOpsZlmInstances(replacePending = false) {
+  if (!canManage.value || (opsZlmBusy.value && !replacePending)) return
   const active = captureScope()
   opsZlmController?.abort()
   const nextController = new globalThis.AbortController()
   opsZlmController = nextController
   opsZlmBusy.value = true
   opsZlmError.value = null
+  opsZlmInstances.value = null
   try {
     const value = await getOpsZlmInstances(nextController.signal)
-    if (active() && canManage.value) opsZlmInstances.value = value
+    if (active() && !nextController.signal.aborted && canManage.value) opsZlmInstances.value = value
   } catch (cause) {
-    if (active() && canManage.value) opsZlmError.value = cause
+    if (active() && !nextController.signal.aborted && canManage.value) opsZlmError.value = cause
   } finally {
     if (opsZlmController === nextController) opsZlmBusy.value = false
   }
 }
 
 function importZlmFromOps(instanceId: string, releaseId: string) {
-  void run(() => importOpsZlmInstance(instanceId, releaseId)).then(() => {
-    void loadDirectInstances()
-    void loadOpsZlmInstances()
-  })
+  void run(
+    () => importOpsZlmInstance(instanceId, releaseId),
+    () => {
+      void loadDirectInstances(true)
+      void loadOpsZlmInstances(true)
+    },
+  )
 }
 
 function importFromOps(instanceId: string, releaseId: string) {
@@ -356,39 +421,47 @@ function importFromOps(instanceId: string, releaseId: string) {
 
 async function loadLocalZlm() {
   const active = captureScope()
-  runtimeController = new globalThis.AbortController()
+  const nextController = new globalThis.AbortController()
+  runtimeController = nextController
   try {
-    const runtime = await getMediaRuntime(runtimeController.signal)
-    if (active())
+    const runtime = await getMediaRuntime(nextController.signal)
+    if (active() && !nextController.signal.aborted)
       localZlm.value =
         runtime.candidates.find((candidate) => candidate.id === runtime.selected.zlmId) ?? null
   } catch {
     // Node status remains available when local software inspection fails.
   }
 }
-async function run(operation?: () => Promise<unknown>) {
+async function run(operation?: () => Promise<unknown>, afterApplied?: () => void) {
   if (busy.value) return
   observationController?.abort()
   observationController = undefined
   const active = captureScope()
-  controller = new globalThis.AbortController()
+  const nextController = new globalThis.AbortController()
+  controller = nextController
   busy.value = true
   error.value = null
   try {
     if (operation) await operation()
-    const value = await getPreviewNodes(controller.signal)
+    if (!active()) return
+    // Read-back failure does not undo a write: close its draft and refresh its directories first.
+    afterApplied?.()
+    const value = await getPreviewNodes(nextController.signal)
     if (active()) {
       snapshot.value = value
       snapshotRefreshedAt.value = Date.now()
       lastObservationAttemptAt = snapshotRefreshedAt.value
       if (maintaining.value)
         maintaining.value = value.nodes.find((n) => n.nodeId === maintaining.value?.nodeId) ?? null
-      editing.value = null
     }
   } catch (cause) {
     if (active()) error.value = cause
   } finally {
-    if (active()) busy.value = false
+    // An old account request must not unlock an operation started by the new account.
+    if (controller === nextController) {
+      controller = undefined
+      busy.value = false
+    }
   }
 }
 function edit(node: PreviewNodeStatus) {
@@ -406,11 +479,14 @@ function openConnection(node?: PreviewNodeStatus) {
 }
 function saveConnection() {
   if (!connection.value) return
+  const draft = connection.value
   const value = { ...connection.value }
-  void run(async () => {
-    await configurePreviewNode(value)
-    connection.value = null
-  })
+  void run(
+    () => configurePreviewNode(value),
+    () => {
+      if (connection.value === draft) connection.value = null
+    },
+  )
 }
 function mode(node: PreviewNodeStatus, value: string) {
   void run(() => savePreviewNode({ ...node, mode: value }))
@@ -418,7 +494,12 @@ function mode(node: PreviewNodeStatus, value: string) {
 function save() {
   if (editing.value) {
     const value = editing.value
-    void run(() => savePreviewNode(value))
+    void run(
+      () => savePreviewNode(value),
+      () => {
+        if (editing.value === value) editing.value = null
+      },
+    )
   }
 }
 function openMaintenance(node: PreviewNodeStatus) {
@@ -455,23 +536,26 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
         <h2>预览节点</h2>
         <span class="node-count">{{ snapshot?.nodes.length ?? '—' }} 台已登记</span>
       </div>
-      <div v-if="snapshot" class="node-actions">
-        <ElButton :loading="busy" @click="run(() => previewNodeAction('check'))">检查节点</ElButton>
+      <div class="node-actions">
+        <ElButton v-if="!snapshot" :loading="busy" @click="run()">重新加载</ElButton>
+        <ElButton v-else :loading="busy" @click="run(() => previewNodeAction('check'))"
+          >检查节点</ElButton
+        >
         <ElButton
-          v-if="canManage"
+          v-if="snapshot && canManage"
           :disabled="busy"
           @click="run(() => previewNodeAction('reconcile'))"
           >重新核对资源</ElButton
         >
         <button
-          v-if="canManage"
+          v-if="snapshot && canManage"
           type="button"
           class="guide-trigger primary-trigger"
           popovertarget="preview-package-panel"
         >
           + 接入节点包
         </button>
-        <RouterLink v-if="!management" to="/preview/center">前往预览</RouterLink>
+        <RouterLink v-if="snapshot && !management" to="/preview/center">前往预览</RouterLink>
       </div>
     </header>
     <RequestError
@@ -561,47 +645,14 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           </div>
           <div class="node-operational">
             <dl class="node-metrics">
-              <div>
-                <dt>源流</dt>
-                <dd>{{ node.usage.sources }} / {{ node.budget.maxSources }}</dd>
+              <div v-for="metric in usageMetrics" :key="metric.usage">
+                <dt>{{ metric.label }}</dt>
+                <dd>{{ node.usage[metric.usage] }} / {{ node.budget[metric.budget] }}</dd>
                 <dd class="metric-track">
                   <progress
-                    :value="node.usage.sources"
-                    :max="Math.max(1, node.budget.maxSources)"
-                    aria-label="源流预算使用率"
-                  ></progress>
-                </dd>
-              </div>
-              <div>
-                <dt>观看</dt>
-                <dd>{{ node.usage.viewers }} / {{ node.budget.maxViewers }}</dd>
-                <dd class="metric-track">
-                  <progress
-                    :value="node.usage.viewers"
-                    :max="Math.max(1, node.budget.maxViewers)"
-                    aria-label="观看预算使用率"
-                  ></progress>
-                </dd>
-              </div>
-              <div>
-                <dt>转码</dt>
-                <dd>{{ node.usage.transcodes }} / {{ node.budget.maxTranscodes }}</dd>
-                <dd class="metric-track">
-                  <progress
-                    :value="node.usage.transcodes"
-                    :max="Math.max(1, node.budget.maxTranscodes)"
-                    aria-label="转码预算使用率"
-                  ></progress>
-                </dd>
-              </div>
-              <div>
-                <dt>启动中</dt>
-                <dd>{{ node.usage.starting }} / {{ node.budget.maxStarting }}</dd>
-                <dd class="metric-track">
-                  <progress
-                    :value="node.usage.starting"
-                    :max="Math.max(1, node.budget.maxStarting)"
-                    aria-label="启动中预算使用率"
+                    :value="node.usage[metric.usage]"
+                    :max="Math.max(1, node.budget[metric.budget])"
+                    :aria-label="`${metric.label}预算使用率`"
                   ></progress>
                 </dd>
               </div>

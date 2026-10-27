@@ -53,23 +53,28 @@ const selectedPreset = computed(() =>
   platformPresets.value.find((item) => item.type === model.value.method),
 )
 const unavailable = computed(() => platformMode.value && selectedPreset.value?.available === false)
-const isRtsp = computed(() => isStreamMethod(model.value.method))
+const streamMode = computed(() => isStreamMethod(model.value.method))
 const passive = computed(() => ['CRTSP', 'GB28181'].includes(model.value.method))
 const ingressSummary = ref(''),
   ingressLoading = ref(false)
+let ingressSequence = 0
 async function inspectIngress() {
+  if (ingressLoading.value) return
   const active = captureScope()
+  const current = ++ingressSequence
   ingressLoading.value = true
+  ingressSummary.value = ''
+  error.value = null
   try {
     const status = await getIngressStatus()
-    if (active())
+    if (active() && current === ingressSequence)
       ingressSummary.value = !status.enabled
         ? '主动接入尚未启用，请管理员配置。'
         : `ZLM ${status.mediaHost}:${status.rtspPort}；GB28181 ${status.gbEnabled ? `已启用，SIP 端口 ${status.sipPort}，已注册 ${status.registeredDevices} 台` : '未启用'}。`
   } catch (cause) {
-    if (active()) error.value = cause
+    if (active() && current === ingressSequence) error.value = cause
   } finally {
-    if (active()) ingressLoading.value = false
+    if (active() && current === ingressSequence) ingressLoading.value = false
   }
 }
 const urlPlaceholder = computed(
@@ -110,11 +115,10 @@ function changeMethod(method: AccessMethod) {
       ? selectedSource.value
       : null
   model.value.method = method
+  ingressSequence++
+  ingressLoading.value = false
   ingressSummary.value = ''
-  if (['CRTSP', 'GB28181'].includes(method)) {
-    model.value.username = ''
-    model.value.password = ''
-  }
+  error.value = null
   if (!retained) {
     model.value.sourceId = null
     model.value.sourceVersion = null
@@ -251,6 +255,7 @@ watch(
         </p>
       </div>
       <ElForm v-if="!unavailable" label-width="110px" :disabled="disabled" @submit.prevent>
+        <RequestError :error="error" />
         <ElFormItem label="连接配置"
           ><ElCheckbox v-model="model.reuse">使用已保存连接</ElCheckbox></ElFormItem
         >
@@ -284,7 +289,6 @@ watch(
             @click="editingSource = true"
             >连接设置</ElButton
           >
-          <RequestError :error="error" />
           <ElFormItem v-if="options.networkPolicies.length > 1" label="接入网络"
             ><ElSelect v-model="model.networkPolicyKey"
               ><ElOption
@@ -294,7 +298,7 @@ watch(
                 :label="policy.name" /></ElSelect
           ></ElFormItem>
         </template>
-        <template v-if="isRtsp">
+        <template v-if="streamMode">
           <ElFormItem label="相机名称" required
             ><ElInput v-model="model.name" maxlength="100" placeholder="例如：高炉东侧"
           /></ElFormItem>
@@ -356,7 +360,7 @@ watch(
               autocomplete="off"
               maxlength="128"
               :placeholder="
-                isRtsp
+                streamMode
                   ? '地址未包含账号时，可单独填写'
                   : (platform?.usernamePlaceholder ?? '设备或平台提供的账号')
               "
@@ -374,16 +378,16 @@ watch(
         <template v-if="!model.reuse">
           <details class="advanced-settings">
             <summary>高级设置</summary>
-            <ElFormItem v-if="!isRtsp" label="连接协议"
+            <ElFormItem v-if="!streamMode" label="连接协议"
               ><ElSelect v-model="model.scheme"
                 ><ElOption label="HTTP" value="http" /><ElOption
                   label="HTTPS（验证证书）"
                   value="https" /></ElSelect
             ></ElFormItem>
-            <ElFormItem v-if="!isRtsp && !isPlatform" label="RTSP 端口"
+            <ElFormItem v-if="!streamMode && !isPlatform" label="RTSP 端口"
               ><ElInputNumber v-model="model.rtspPort" :min="1" :max="65535"
             /></ElFormItem>
-            <ElFormItem v-if="!isRtsp" label="连接名称"
+            <ElFormItem v-if="!streamMode" label="连接名称"
               ><ElInput v-model="model.name" maxlength="100" placeholder="留空则使用设备地址"
             /></ElFormItem>
             <ElFormItem v-if="options.networkPolicies.length > 1" label="接入网络"
