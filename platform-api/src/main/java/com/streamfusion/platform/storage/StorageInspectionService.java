@@ -51,23 +51,46 @@ public class StorageInspectionService {
             result.put("status", "ACCESSIBLE");
             if (!"READ_ONLY_DRAFT".equals(mode))
                 result.put("protection", s3.protection(instance, scope.getBucket()));
-            if ("READ_WRITE".equals(mode))
+            if ("READ_WRITE".equals(mode)) {
+                if (scope.getProbePrefix() == null || scope.getProbePrefix().isEmpty())
+                    throw new StorageRemoteException("STORAGE_PROBE_PREFIX_REQUIRED", 0);
+                StorageRules.contains(scope.getPrefix(), scope.getProbePrefix() + "probe.bin");
+                String probe =
+                        scope.getProbePrefix()
+                                + ".inspection-write-probe-"
+                                + java.util.UUID.randomUUID().toString().replace("-", "")
+                                + ".bin";
+                result.put("writeProbeObjectKey", probe);
+                byte[] body =
+                        ("streamfusion-inspection-probe\n" + Instant.now())
+                                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                s3.putIfAbsent(
+                        instance, scope.getBucket(), probe, body, "application/octet-stream");
+                var observed = s3.head(instance, scope.getBucket(), probe);
+                if (observed.size() != body.length
+                        || !"application/octet-stream".equalsIgnoreCase(observed.contentType()))
+                    throw new StorageRemoteException("STORAGE_WRITE_PROBE_MISMATCH", 200);
+                try (var response = s3.content(instance, scope.getBucket(), observed, null)) {
+                    var downloaded = response.bytes(body.length + 1);
+                    if (!java.util.Arrays.equals(body, downloaded))
+                        throw new StorageRemoteException("STORAGE_WRITE_PROBE_MISMATCH", 200);
+                }
+                s3.deleteSelected(instance, scope.getBucket(), observed);
+                result.remove("writeProbeObjectKey");
                 steps.add(
                         Map.of(
-                                "stage",
-                                "PUT_GET_DELETE_PROBE",
-                                "status",
-                                "NOT_EXECUTED",
-                                "errorCode",
-                                "STORAGE_DELETE_IDENTITY_UNVERIFIED",
-                                "message",
-                                "覆盖保护未经验证，未写入探针，未执行删除"));
+                                "stage", "PUT_GET_DELETE_PROBE",
+                                "status", "PASSED",
+                                "message", "受管前缀内单对象写入、读取和条件删除已验证"));
+                result.put("writeCheckStatus", "PASSED");
+            }
         } catch (StorageRemoteException ex) {
             result.put(
                     "status",
                     ex.reason().equals("STORAGE_AUTH_FAILED") ? "AUTH_FAILED" : "UNREACHABLE");
             result.put("reasonCode", ex.reason());
             result.put("confirmedEmpty", false);
+            if ("READ_WRITE".equals(mode)) result.put("writeCheckStatus", "FAILED");
             steps.add(
                     Map.of(
                             "stage",
@@ -80,7 +103,7 @@ public class StorageInspectionService {
                             "核对网络策略、S3地址、Bucket及密钥权限"));
         }
         result.put("steps", steps);
-        result.put("writeCheckStatus", "NOT_TESTED");
+        result.putIfAbsent("writeCheckStatus", "NOT_TESTED");
         return result;
     }
 

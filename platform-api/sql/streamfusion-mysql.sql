@@ -11,6 +11,13 @@ PREPARE camera_drop_statement FROM @camera_drop_sql;
 EXECUTE camera_drop_statement;
 DEALLOCATE PREPARE camera_drop_statement;
 -- END MYSQL DEFERRED DROP
+DROP TABLE IF EXISTS `inspection_evidence`;
+DROP TABLE IF EXISTS `inspection_claim_receipt`;
+DROP TABLE IF EXISTS `inspection_result`;
+DROP TABLE IF EXISTS `inspection_run`;
+DROP TABLE IF EXISTS `inspection_job`;
+DROP TABLE IF EXISTS `inspection_budget`;
+DROP TABLE IF EXISTS `inspection_control`;
 DROP TABLE IF EXISTS `storage_history_policy`;
 DROP TABLE IF EXISTS `storage_cleanup_rule`;
 DROP TABLE IF EXISTS `storage_cleanup_item`;
@@ -1113,5 +1120,174 @@ CREATE TABLE storage_history_policy (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='图床记录保留策略';
 INSERT INTO storage_history_policy(id,inherit_global,enabled,retention_days,version,updated_at)
 VALUES(0,0,0,NULL,0,CURRENT_TIMESTAMP(3));
+
+-- 巡检P0/01-control.sql
+CREATE TABLE inspection_control (
+    control_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    plan_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    node_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    target_boot_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    control_seq INT NOT NULL,
+    desired_state VARCHAR(16) NOT NULL,
+    expires_at DATETIME(6) NOT NULL,
+    accepted_seq INT NULL,
+    accepted_boot_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    accepted_expires_at DATETIME(6) NULL,
+    command_digest CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    observed_state VARCHAR(24) NOT NULL DEFAULT 'DISARMED',
+    available_slots INT NOT NULL DEFAULT 0,
+    reason_code VARCHAR(64) NULL,
+    trace_id VARCHAR(64) NULL,
+    claim_after_deadline DATETIME(6) NULL,
+    claim_after_due DATETIME(6) NULL,
+    claim_after_job_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    PRIMARY KEY (control_id),
+    UNIQUE KEY uk_inspection_control_scope (plan_id, node_id),
+    CONSTRAINT ck_inspection_control_seq CHECK (control_seq > 0),
+    CONSTRAINT ck_inspection_control_desired CHECK (desired_state IN ('RUNNING','STOPPED')),
+    CONSTRAINT ck_inspection_control_observed CHECK (observed_state IN (
+        'DISARMED','PREPARING','READY','WAITING_RESOURCE','STOPPING','STOPPED')),
+    CONSTRAINT ck_inspection_control_slots CHECK (available_slots BETWEEN 0 AND 4096),
+    CONSTRAINT ck_inspection_control_cursor CHECK (
+        (claim_after_deadline IS NULL AND claim_after_due IS NULL AND claim_after_job_id IS NULL)
+        OR (claim_after_deadline IS NOT NULL AND claim_after_due IS NOT NULL
+            AND claim_after_job_id IS NOT NULL))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 巡检P0/02-budget.sql
+CREATE TABLE inspection_budget (
+    budget_key VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    capacity INT NOT NULL,
+    used_slots INT NOT NULL DEFAULT 0,
+    PRIMARY KEY (budget_key),
+    CONSTRAINT ck_inspection_budget_bounds CHECK (
+        capacity BETWEEN 0 AND 4096 AND used_slots BETWEEN 0 AND capacity)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 巡检P0/03-job.sql
+CREATE TABLE inspection_job (
+    job_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    plan_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    due_at DATETIME(6) NOT NULL,
+    latest_start_at DATETIME(6) NOT NULL,
+    deadline_at DATETIME(6) NOT NULL,
+    spec_json JSON NOT NULL,
+    spec_digest CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    state VARCHAR(24) NOT NULL DEFAULT 'QUEUED',
+    assignment_epoch INT NOT NULL DEFAULT 0,
+    PRIMARY KEY (job_id),
+    KEY ix_inspection_job_due (plan_id, state, deadline_at, due_at, job_id),
+    CONSTRAINT ck_inspection_job_dates CHECK (
+        due_at <= latest_start_at AND latest_start_at < deadline_at),
+    CONSTRAINT ck_inspection_job_epoch CHECK (assignment_epoch >= 0),
+    CONSTRAINT ck_inspection_job_state CHECK (state IN (
+        'QUEUED','CLAIMED','RUNNING','FINISHED','CANCELLED','CLEANUP_PENDING'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 巡检P0/04-run.sql
+CREATE TABLE inspection_run (
+    run_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    job_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    assignment_epoch INT NOT NULL,
+    claim_request_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    control_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    control_seq INT NOT NULL,
+    node_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    boot_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    spec_json JSON NOT NULL,
+    budget_keys_json JSON NOT NULL,
+    state VARCHAR(24) NOT NULL DEFAULT 'CLAIMED',
+    claimed_at DATETIME(6) NOT NULL,
+    started_at DATETIME(6) NULL,
+    lease_expires_at DATETIME(6) NOT NULL,
+    resources_released TINYINT NOT NULL DEFAULT 0,
+    released_at DATETIME(6) NULL,
+    trace_id VARCHAR(64) NULL,
+    PRIMARY KEY (run_id),
+    UNIQUE KEY uk_inspection_run_attempt (job_id, assignment_epoch),
+    UNIQUE KEY uk_inspection_run_claim (node_id, boot_id, claim_request_id),
+    KEY ix_inspection_run_active (node_id, resources_released, control_id),
+    CONSTRAINT fk_inspection_run_job FOREIGN KEY (job_id) REFERENCES inspection_job(job_id),
+    CONSTRAINT fk_inspection_run_control FOREIGN KEY (control_id)
+        REFERENCES inspection_control(control_id),
+    CONSTRAINT ck_inspection_run_epoch CHECK (assignment_epoch > 0 AND control_seq > 0),
+    CONSTRAINT ck_inspection_run_released CHECK (resources_released IN (0,1)),
+    CONSTRAINT ck_inspection_run_state CHECK (state IN (
+        'CLAIMED','RUNNING','FINISHED','CANCELLED','CLEANUP_PENDING')),
+    CONSTRAINT ck_inspection_run_dates CHECK (claimed_at < lease_expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 巡检P0/05-result.sql
+CREATE TABLE inspection_result (
+    run_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    detector_key VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    result_digest CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    payload_json JSON NOT NULL,
+    submitted_at DATETIME(6) NOT NULL,
+    PRIMARY KEY (run_id, detector_key),
+    CONSTRAINT fk_inspection_result_run FOREIGN KEY (run_id) REFERENCES inspection_run(run_id),
+    CONSTRAINT ck_inspection_result_detector CHECK (detector_key IN (
+        'STREAM_STABILITY','BLACK_SCREEN','BLUE_SCREEN','FREEZE','BLUR','OCCLUSION'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 巡检P0/06-claim-receipt.sql
+CREATE TABLE inspection_claim_receipt (
+    node_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    boot_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    request_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    control_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    control_seq INT NOT NULL,
+    run_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    created_at DATETIME(6) NOT NULL,
+    PRIMARY KEY (node_id, boot_id, request_id),
+    CONSTRAINT fk_inspection_receipt_run FOREIGN KEY (run_id) REFERENCES inspection_run(run_id),
+    CONSTRAINT fk_inspection_receipt_control FOREIGN KEY (control_id)
+        REFERENCES inspection_control(control_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 巡检P0/07-evidence.sql
+CREATE TABLE inspection_evidence (
+    id BIGINT NOT NULL,
+    evidence_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    run_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    assignment_epoch INT NOT NULL,
+    camera_id BIGINT NOT NULL,
+    profile_id BIGINT NOT NULL,
+    kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    placement_revision INT NOT NULL,
+    instance_id BIGINT NOT NULL,
+    scope_id BIGINT NOT NULL,
+    bucket VARCHAR(63) NOT NULL,
+    object_key VARCHAR(1024) NOT NULL,
+    endpoint_revision BIGINT NOT NULL,
+    size_bytes BIGINT NOT NULL,
+    content_type VARCHAR(128) NOT NULL,
+    sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    state VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'RESERVED',
+    reason_code VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    request_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    expires_at DATETIME(6) NOT NULL,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6) NOT NULL,
+    committed_at DATETIME(6) NULL,
+    etag VARCHAR(255) NULL,
+    object_version_id VARCHAR(512) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_inspection_evidence_placement (evidence_id, placement_revision),
+    KEY ix_inspection_evidence_run (run_id, assignment_epoch),
+    KEY ix_inspection_evidence_scope (scope_id, state, expires_at),
+    KEY ix_inspection_evidence_camera (camera_id, state, committed_at),
+    CONSTRAINT fk_inspection_evidence_run FOREIGN KEY (run_id) REFERENCES inspection_run(run_id),
+    CONSTRAINT fk_inspection_evidence_instance FOREIGN KEY (instance_id) REFERENCES storage_instance(id),
+    CONSTRAINT fk_inspection_evidence_scope FOREIGN KEY (scope_id) REFERENCES storage_scope(id),
+    CONSTRAINT ck_inspection_evidence_epoch CHECK (assignment_epoch > 0),
+    CONSTRAINT ck_inspection_evidence_revision CHECK (placement_revision > 0 AND endpoint_revision > 0),
+    CONSTRAINT ck_inspection_evidence_size CHECK (size_bytes BETWEEN 1 AND 67108864),
+    CONSTRAINT ck_inspection_evidence_kind CHECK (kind IN ('IMAGE','VIDEO')),
+    CONSTRAINT ck_inspection_evidence_state CHECK (state IN ('RESERVED','UNKNOWN','COMMITTED')),
+    CONSTRAINT ck_inspection_evidence_committed CHECK (
+        (state = 'COMMITTED' AND committed_at IS NOT NULL)
+        OR (state <> 'COMMITTED' AND committed_at IS NULL))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 ALTER TABLE camera_channel ADD CONSTRAINT fk_camera_default_profile FOREIGN KEY (id,default_preview_profile_id) REFERENCES camera_stream_profile(channel_id,id);

@@ -2,7 +2,7 @@
 
 $ErrorActionPreference = 'Stop'
 $sqlDirectory = Join-Path $PSScriptRoot '../platform-api/sql'
-$businessDirectory = Join-Path $sqlDirectory '业务'
+$businessDirectory = (Resolve-Path (Join-Path $sqlDirectory '业务')).Path
 # Dependency order only; table definitions and seed data live in these files.
 $names = @('部门表.sql', '用户表.sql', '角色表.sql', '菜单表.sql',
     '用户角色关联表.sql', '用户部门关联表.sql', '角色菜单关联表.sql', '操作审计表.sql', '审计保留策略表.sql', '审计导出任务表.sql', 'IP封禁表.sql', '登录记录表.sql',
@@ -11,9 +11,10 @@ $names = @('部门表.sql', '用户表.sql', '角色表.sql', '菜单表.sql',
     '相机状态检查表.sql', '相机状态快照表.sql',
     '相机巡检计划表.sql', '相机巡检目标表.sql',
     '账户相机范围表.sql', '账户视频组授权表.sql', '账户相机授权表.sql', '账户设备授权表.sql', '相机接入任务表.sql', '相机导入明细表.sql',
-    '预览节点表.sql', '预览源归属表.sql', '预览输出预占表.sql', '预览远程观看表.sql', '预览远程操作表.sql', '图床实例表.sql', '图床范围表.sql', '图床默认位置表.sql', '图床任务表.sql', '图床清理计划表.sql', '图床清理候选表.sql', '图床清理规则表.sql', '图床记录保留策略表.sql')
-$actual = @(Get-ChildItem -LiteralPath $businessDirectory -Filter '*.sql' |
-    Select-Object -ExpandProperty Name)
+    '预览节点表.sql', '预览源归属表.sql', '预览输出预占表.sql', '预览远程观看表.sql', '预览远程操作表.sql', '图床实例表.sql', '图床范围表.sql', '图床默认位置表.sql', '图床任务表.sql', '图床清理计划表.sql', '图床清理候选表.sql', '图床清理规则表.sql', '图床记录保留策略表.sql',
+    '巡检P0/01-control.sql', '巡检P0/02-budget.sql', '巡检P0/03-job.sql', '巡检P0/04-run.sql', '巡检P0/05-result.sql', '巡检P0/06-claim-receipt.sql', '巡检P0/07-evidence.sql')
+$actual = @(Get-ChildItem -LiteralPath $businessDirectory -Filter '*.sql' -Recurse |
+    ForEach-Object { $_.FullName.Substring($businessDirectory.Length + 1).Replace('\', '/') })
 if (Compare-Object $names $actual) { throw 'Register every table file in dependency order before exporting.' }
 
 $sections = @(
@@ -33,12 +34,14 @@ foreach ($name in $names) {
     $parts = $sql -split '(?m)^-- DEFERRED CONSTRAINT\s*$', 2
     $sql = $parts[0]
     if ($parts.Count -gt 1) { $deferred += $parts[1].Trim() }
-    # Each source has one DROP and one CREATE; preserve indexes, comments and seeds.
+    # Existing root sources include DROP for dedicated empty databases; upgrade-only
+    # sources under subdirectories are CREATE-only and receive a generated DROP here.
     $drop = [regex]::Matches($sql, '(?m)^DROP TABLE IF EXISTS \x60?(\w+)\x60?;\r?$')
     $create = [regex]::Matches($sql, '(?m)^CREATE TABLE (\w+)')
-    if ($drop.Count -ne 1 -or $create.Count -ne 1 -or
-        $drop[0].Groups[1].Value -cne $create[0].Groups[1].Value -or
-        $drop[0].Index -gt $create[0].Index) { throw "Expected one matching DROP/CREATE: $name" }
+    $expectedDropCount = if ($name.Contains('/')) { 0 } else { 1 }
+    if ($create.Count -ne 1 -or $drop.Count -ne $expectedDropCount -or
+        ($drop.Count -eq 1 -and ($drop[0].Groups[1].Value -cne $create[0].Groups[1].Value -or
+            $drop[0].Index -gt $create[0].Index))) { throw "Unexpected DROP/CREATE source: $name" }
     $table = $create[0].Groups[1].Value
     if ($created.ContainsKey($table)) { throw "Duplicate table: $table" }
     foreach ($reference in [regex]::Matches($sql, 'REFERENCES (\w+)')) {
@@ -48,7 +51,8 @@ foreach ($name in $names) {
         }
     }
     $created[$table] = $true
-    $drops = @($drop[0].Value.Trim()) + $drops
+    $dropSql = if ($drop.Count -eq 1) { $drop[0].Value.Trim() } else { "DROP TABLE IF EXISTS ``$table``;" }
+    $drops = @($dropSql) + $drops
     $bodies += "-- $name"
     $bodies += $sql.Substring($create[0].Index).TrimEnd()
     $bodies += ''

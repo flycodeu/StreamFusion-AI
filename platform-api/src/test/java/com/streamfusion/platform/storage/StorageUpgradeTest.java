@@ -62,6 +62,7 @@ class StorageUpgradeTest {
         var sql = new JdbcTemplate(dataSource);
         for (String table :
                 List.of(
+                        "inspection_evidence",
                         "storage_cleanup_item",
                         "storage_cleanup_plan",
                         "storage_cleanup_rule",

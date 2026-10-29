@@ -1,0 +1,46 @@
+-- P0 single-store evidence placement. UTC DATETIME values; new table only.
+-- Physical writable capacity is not known from this accounting table.
+-- The service verifies run epoch, channel/profile ownership, and scope/instance pairing.
+CREATE TABLE inspection_evidence (
+    id BIGINT NOT NULL,
+    evidence_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    run_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    assignment_epoch INT NOT NULL,
+    camera_id BIGINT NOT NULL,
+    profile_id BIGINT NOT NULL,
+    kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    placement_revision INT NOT NULL,
+    instance_id BIGINT NOT NULL,
+    scope_id BIGINT NOT NULL,
+    bucket VARCHAR(63) NOT NULL,
+    object_key VARCHAR(1024) NOT NULL,
+    endpoint_revision BIGINT NOT NULL,
+    size_bytes BIGINT NOT NULL,
+    content_type VARCHAR(128) NOT NULL,
+    sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    state VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT 'RESERVED',
+    reason_code VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+    request_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    expires_at DATETIME(6) NOT NULL,
+    created_at DATETIME(6) NOT NULL,
+    updated_at DATETIME(6) NOT NULL,
+    committed_at DATETIME(6) NULL,
+    etag VARCHAR(255) NULL,
+    object_version_id VARCHAR(512) NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_inspection_evidence_placement (evidence_id, placement_revision),
+    KEY ix_inspection_evidence_run (run_id, assignment_epoch),
+    KEY ix_inspection_evidence_scope (scope_id, state, expires_at),
+    KEY ix_inspection_evidence_camera (camera_id, state, committed_at),
+    CONSTRAINT fk_inspection_evidence_run FOREIGN KEY (run_id) REFERENCES inspection_run(run_id),
+    CONSTRAINT fk_inspection_evidence_instance FOREIGN KEY (instance_id) REFERENCES storage_instance(id),
+    CONSTRAINT fk_inspection_evidence_scope FOREIGN KEY (scope_id) REFERENCES storage_scope(id),
+    CONSTRAINT ck_inspection_evidence_epoch CHECK (assignment_epoch > 0),
+    CONSTRAINT ck_inspection_evidence_revision CHECK (placement_revision > 0 AND endpoint_revision > 0),
+    CONSTRAINT ck_inspection_evidence_size CHECK (size_bytes BETWEEN 1 AND 67108864),
+    CONSTRAINT ck_inspection_evidence_kind CHECK (kind IN ('IMAGE','VIDEO')),
+    CONSTRAINT ck_inspection_evidence_state CHECK (state IN ('RESERVED','UNKNOWN','COMMITTED')),
+    CONSTRAINT ck_inspection_evidence_committed CHECK (
+        (state = 'COMMITTED' AND committed_at IS NOT NULL)
+        OR (state <> 'COMMITTED' AND committed_at IS NULL))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

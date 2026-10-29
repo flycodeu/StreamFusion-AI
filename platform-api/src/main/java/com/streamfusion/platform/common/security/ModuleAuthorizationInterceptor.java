@@ -3,6 +3,7 @@ package com.streamfusion.platform.common.security;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.web.ApiErrorWriter;
+import com.streamfusion.platform.inspection.evidence.InspectionNodeAuthentication;
 import com.streamfusion.platform.system.auth.controller.AuthController;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -30,6 +31,7 @@ public final class ModuleAuthorizationInterceptor implements HandlerInterceptor 
         if (!(handler instanceof HandlerMethod method)) {
             return true;
         }
+        if (request.getAttribute(InspectionNodeAuthentication.NODE_ID) != null) return true;
         String module = ModuleRegistry.moduleOf(method);
         if (module == null) {
             // 认证/个人中心由认证控制器负责；其他业务控制器必须显式声明模块。

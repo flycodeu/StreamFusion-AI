@@ -42,6 +42,40 @@ public class StorageS3Client {
             boolean verified,
             String reason) {}
 
+    public record PutGrant(String url, Map<String, String> headers) {}
+
+    public PutGrant presignedPut(
+            StorageInstance instance,
+            String bucket,
+            String key,
+            long size,
+            String contentType,
+            String checksumBase64,
+            int expiresSeconds,
+            Instant signedAt) {
+        URI endpoint = URI.create(instance.getEndpoint());
+        if (!"https".equalsIgnoreCase(endpoint.getScheme()))
+            throw new StorageRemoteException("STORAGE_HTTPS_REQUIRED", 503);
+        var headers = new LinkedHashMap<String, String>();
+        headers.put("if-none-match", "*");
+        headers.put("content-length", Long.toString(size));
+        headers.put("content-type", contentType);
+        headers.put("x-amz-checksum-sha256", checksumBase64);
+        var credentials = secrets.read(instance);
+        String url =
+                S3Signature.presignedUrl(
+                        instance.getEndpoint(),
+                        bucket,
+                        key,
+                        instance.getRegion(),
+                        credentials.path("accessKey").asText(),
+                        credentials.path("secretKey").asText(),
+                        expiresSeconds,
+                        headers,
+                        signedAt);
+        return new PutGrant(url, Map.copyOf(headers));
+    }
+
     public ObjectPage list(
             StorageInstance instance,
             String bucket,

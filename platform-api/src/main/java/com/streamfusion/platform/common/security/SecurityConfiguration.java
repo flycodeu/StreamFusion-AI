@@ -3,6 +3,8 @@ package com.streamfusion.platform.common.security;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.web.ApiErrorWriter;
+import com.streamfusion.platform.inspection.evidence.InspectionEvidenceProperties;
+import com.streamfusion.platform.inspection.evidence.InspectionNodeAuthentication;
 import com.streamfusion.platform.monitor.loginrecord.service.LoginRecordService;
 import com.streamfusion.platform.system.auth.security.SessionGuardFilter;
 import com.streamfusion.platform.system.auth.service.CurrentUserService;
@@ -11,6 +13,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -26,6 +29,41 @@ import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class SecurityConfiguration {
     @Bean
+    @Order(1)
+    SecurityFilterChain inspectionEvidenceChain(
+            HttpSecurity http, ApiErrorWriter writer, InspectionEvidenceProperties properties)
+            throws Exception {
+        http.securityMatcher(
+                        "/inspection-nodes/evidence/authorize",
+                        "/inspection-nodes/evidence/complete")
+                .authorizeHttpRequests(authorize -> authorize.anyRequest().authenticated())
+                .csrf(AbstractHttpConfigurer::disable)
+                .securityContext(context -> context.requireExplicitSave(true))
+                .sessionManagement(
+                        session ->
+                                session.sessionCreationPolicy(
+                                        org.springframework.security.config.http
+                                                .SessionCreationPolicy.STATELESS))
+                .formLogin(AbstractHttpConfigurer::disable)
+                .httpBasic(AbstractHttpConfigurer::disable)
+                .logout(AbstractHttpConfigurer::disable)
+                .requestCache(AbstractHttpConfigurer::disable)
+                .exceptionHandling(
+                        errors ->
+                                errors.authenticationEntryPoint(
+                                        (request, response, exception) ->
+                                                writer.write(
+                                                        request,
+                                                        response,
+                                                        ErrorCode.UNAUTHORIZED)));
+        http.addFilterAfter(
+                new InspectionNodeAuthentication(properties, writer),
+                SecurityContextHolderFilter.class);
+        return http.build();
+    }
+
+    @Bean
+    @Order(2)
     SecurityFilterChain securityFilterChain(
             HttpSecurity http,
             ApiErrorWriter writer,

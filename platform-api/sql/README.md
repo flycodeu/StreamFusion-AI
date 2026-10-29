@@ -1,6 +1,6 @@
 # 数据库
 
-要求 MySQL 8.0.17+。新安装只需执行 [streamfusion-mysql.sql](streamfusion-mysql.sql)，包含44张应用表、索引、约束和初始数据。应用启动只检查结构，不自动建表或迁移。
+要求 MySQL 8.0.17+。新安装只需执行 [streamfusion-mysql.sql](streamfusion-mysql.sql)，包含51张应用表、索引、约束和初始数据。应用启动只检查结构，不自动建表或迁移。
 
 **初始化文件包含 DROP TABLE，只能用于专用空库；已有数据的库禁止重复导入。**
 
@@ -46,6 +46,7 @@ SHOW TABLES;
 | 状态与巡检 | camera_status_check、camera_status_snapshot、camera_status_plan、camera_status_plan_target |
 | 本机及可选远程预览 | preview_node、preview_source、preview_output、preview_viewer、preview_operation |
 | 视频分组与范围 | camera_group、camera_user_scope、camera_user_group_grant、camera_user_device_grant、camera_user_channel_grant |
+| 独立巡检交换与证据 | inspection_control、inspection_budget、inspection_job、inspection_run、inspection_result、inspection_claim_receipt、inspection_evidence |
 
 设备、通道、码流分别保存。状态快照以 `(profile_id, layer)` 为主键，区分控制连接、媒体收帧和平台状态；巡检计划保存固定范围、执行间隔、期限和并发方式。检查时间是采样时间，不是设备真实上下线时间。
 
@@ -54,6 +55,10 @@ SHOW TABLES;
 保留业务数据时，先备份数据库及相机加密密钥，核对实际表、列、索引和约束，再制定针对当前结构的变更。在隔离副本验证数据保留和应用启动后，停写执行并保留恢复点。MySQL DDL 隐式提交，失败后应核对已执行内容，不能盲目重试。
 
 本目录只交付当前安装结构，不要求新用户依次执行开发阶段的历史 SQL。已有菜单通过菜单管理维护，新增页面会自动关联超级管理员，普通角色须明确授权。
+
+### 独立巡检 P0 增量
+
+新库汇总已包含[巡检 P0 七份逐表源](业务/巡检P0/)。现有库先备份并停写，在隔离副本核对七表均不存在，再按 `01-control.sql` 至 `07-evidence.sql` 顺序执行各文件中的 `CREATE TABLE`。这些逐表源不含 `DROP`；汇总文件含 `DROP`，**不得用于已有库升级**。如已有部分巡检表或不同结构，应逐项核对并制定定向迁移，不能盲目重跑。应用启动会检查映射表列，但不执行 DDL；正式启用节点前须完成目标库迁移和隔离回归。
 
 ### 设备授权增量（2026-10-24）
 

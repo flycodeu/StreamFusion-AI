@@ -116,6 +116,7 @@ public class DiagnosticCaptureService {
 
     private static boolean eligible(String path) {
         return !path.startsWith("/auth")
+                && !path.startsWith("/inspection-nodes")
                 && !path.startsWith("/diagnostics")
                 && !path.startsWith("/audit/exports")
                 && !path.toLowerCase(Locale.ROOT)

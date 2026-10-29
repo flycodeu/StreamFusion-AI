@@ -392,7 +392,8 @@ public class StorageConfigurationService {
         var row = lock(id);
         StorageRules.version(input.version(), row.getVersion());
         access.recheck(actor);
-        if (input.writeEnabled())
+        busy(id);
+        if (input.writeEnabled() && !writeProbeReady(row))
             throw BusinessException.error(ErrorCode.STORAGE_CHECK_REQUIRED)
                     .diagnosed("STORAGE_WRITE_PROBE_NOT_VERIFIED");
         var selected =
@@ -400,7 +401,8 @@ public class StorageConfigurationService {
                         new LambdaQueryWrapper<StorageDefault>()
                                 .eq(StorageDefault::getId, 1L)
                                 .last("FOR UPDATE"));
-        if (selected.getScopeId() != null
+        if (!input.writeEnabled()
+                && selected.getScopeId() != null
                 && scopes(id).stream().anyMatch(s -> s.getId().equals(selected.getScopeId()))) {
             if (!input.clearDefault()) throw BusinessException.error(ErrorCode.CONFLICT);
             StorageRules.version(input.defaultVersion(), selected.getVersion());
@@ -408,8 +410,12 @@ public class StorageConfigurationService {
             selected.setVersion(selected.getVersion() + 1);
             defaults.updateById(selected);
         }
-        auditConfiguration("STORAGE_INSTANCE", id, "PAUSE_WRITING", row.getName());
-        row.setWriteEnabled(false);
+        auditConfiguration(
+                "STORAGE_INSTANCE",
+                id,
+                input.writeEnabled() ? "ENABLE_WRITING" : "PAUSE_WRITING",
+                row.getName());
+        row.setWriteEnabled(input.writeEnabled());
         row.setVersion(row.getVersion() + 1);
         instances.updateById(row);
         return detail(id);
@@ -418,6 +424,9 @@ public class StorageConfigurationService {
     @Transactional
     public Map<String, Object> setDefault(StorageCommands.DefaultTarget input) {
         long actor = access.actor();
+        StorageScope selectedScope = input.scopeId() == null ? null : scope(input.scopeId());
+        StorageInstance selectedInstance =
+                selectedScope == null ? null : lock(selectedScope.getInstanceId());
         var row =
                 defaults.selectOne(
                         new LambdaQueryWrapper<StorageDefault>()
@@ -425,13 +434,40 @@ public class StorageConfigurationService {
                                 .last("FOR UPDATE"));
         StorageRules.version(input.version(), row.getVersion());
         access.recheck(actor);
-        if (input.scopeId() != null)
-            throw BusinessException.error(ErrorCode.STORAGE_CHECK_REQUIRED);
-        row.setScopeId(null);
+        if (selectedInstance != null) busy(selectedInstance.getId());
+        if (input.scopeId() != null) {
+            if (input.instanceVersion() == null || input.scopeVersion() == null)
+                throw BusinessException.error(ErrorCode.PRECONDITION_REQUIRED);
+            selectedScope = scope(input.scopeId());
+            StorageRules.version(input.instanceVersion(), selectedInstance.getVersion());
+            StorageRules.version(input.scopeVersion(), selectedScope.getVersion());
+            if (!Boolean.TRUE.equals(selectedInstance.getWriteEnabled())
+                    || !writeProbeReady(selectedInstance, selectedScope))
+                throw BusinessException.error(ErrorCode.STORAGE_CHECK_REQUIRED)
+                        .diagnosed("STORAGE_WRITE_PROBE_NOT_VERIFIED");
+            row.setScopeId(selectedScope.getId());
+        } else row.setScopeId(null);
         row.setVersion(row.getVersion() + 1);
         defaults.updateById(row);
-        auditConfiguration("STORAGE_DEFAULT", 1L, "CLEAR", "全局默认位置");
+        auditConfiguration(
+                "STORAGE_DEFAULT", 1L, input.scopeId() == null ? "CLEAR" : "SET", "全局默认位置");
         return views.defaultTarget(row);
+    }
+
+    private boolean writeProbeReady(StorageInstance instance) {
+        return scopes(instance.getId()).stream()
+                .anyMatch(scope -> writeProbeReady(instance, scope));
+    }
+
+    private boolean writeProbeReady(StorageInstance instance, StorageScope scope) {
+        var observation = json.read(scope.getObservation());
+        return "ACCESSIBLE".equals(observation.path("status").asText())
+                && "PASSED".equals(observation.path("writeCheckStatus").asText())
+                && secrets.fingerprint(instance)
+                        .equals(observation.path("connectionFingerprint").asText())
+                && scope.getVersion().toString().equals(observation.path("scopeVersion").asText())
+                && observation.path("checkedAt").asLong() + 600
+                        > java.time.Instant.now().getEpochSecond();
     }
 
     public void busy(long id) {

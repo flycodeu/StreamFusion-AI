@@ -12,6 +12,34 @@ import org.junit.jupiter.api.Test;
 
 class StorageProtocolTest {
     @Test
+    void inspectionPresignedPutMatchesBotocoreAndBindsRequiredHeaders() {
+        var url =
+                S3Signature.presignedUrl(
+                        "https://storage.example.com",
+                        "test-bucket",
+                        "inspections/r1/e1/1.jpg",
+                        "us-east-1",
+                        "AKID",
+                        "SECRET",
+                        600,
+                        Map.of(
+                                "if-none-match",
+                                "*",
+                                "content-length",
+                                "5",
+                                "content-type",
+                                "image/jpeg",
+                                "x-amz-checksum-sha256",
+                                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+                        Instant.parse("2026-10-28T00:00:00Z"));
+        assertThat(url)
+                .contains(
+                        "X-Amz-SignedHeaders=content-length%3Bcontent-type%3Bhost%3Bif-none-match%3Bx-amz-checksum-sha256")
+                .contains(
+                        "X-Amz-Signature=fdcff90e5ba8a82931529ff63c149d036096fcd7e449891511ffd6c883964f2a");
+    }
+
+    @Test
     void awsS3GetRangeExampleMatchesIndependentlyCalculatedSignature() {
         var signed =
                 S3Signature.sign(

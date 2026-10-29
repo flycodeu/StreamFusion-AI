@@ -28,6 +28,9 @@ class StorageManagementTest extends CameraTestSupport {
     private final List<String> requests = new CopyOnWriteArrayList<>();
     private volatile String objectKey = "evidence/中文+%25.jpg";
     private volatile boolean empty;
+    private volatile byte[] probeBody;
+    private volatile boolean probeDeleted;
+    private volatile boolean corruptProbeRead;
 
     @BeforeEach
     void s3() throws Exception {
@@ -41,6 +44,39 @@ class StorageManagementTest extends CameraTestSupport {
                     requests.add(method + " " + exchange.getRequestURI());
                     assertThat(exchange.getRequestHeaders().getFirst("Authorization"))
                             .startsWith("AWS4-HMAC-SHA256 Credential=test-access/");
+                    if (exchange.getRequestURI().getPath().contains(".inspection-write-probe-")) {
+                        byte[] probe = probeBody;
+                        if (method.equals("PUT")) {
+                            assertThat(exchange.getRequestHeaders().getFirst("If-None-Match"))
+                                    .isEqualTo("*");
+                            probeBody = exchange.getRequestBody().readAllBytes();
+                            exchange.sendResponseHeaders(200, -1);
+                        } else if (method.equals("DELETE")) {
+                            assertThat(exchange.getRequestHeaders().getFirst("If-Match"))
+                                    .isEqualTo("\"probe\"");
+                            probeDeleted = true;
+                            exchange.sendResponseHeaders(204, -1);
+                        } else {
+                            assertThat(probe).isNotNull();
+                            exchange.getResponseHeaders().set("ETag", "\"probe\"");
+                            exchange.getResponseHeaders()
+                                    .set("Last-Modified", "Thu, 01 Jan 2026 00:00:00 GMT");
+                            exchange.getResponseHeaders()
+                                    .set("Content-Type", "application/octet-stream");
+                            if (method.equals("HEAD")) {
+                                exchange.getResponseHeaders()
+                                        .set("Content-Length", Integer.toString(probe.length));
+                                exchange.sendResponseHeaders(200, -1);
+                            } else {
+                                byte[] returned = probe.clone();
+                                if (corruptProbeRead) returned[0] ^= 1;
+                                exchange.sendResponseHeaders(200, returned.length);
+                                exchange.getResponseBody().write(returned);
+                            }
+                        }
+                        exchange.close();
+                        return;
+                    }
                     byte[] body;
                     int status = 200;
                     if (query != null && query.contains("list-type=2")) {
@@ -241,6 +277,95 @@ class StorageManagementTest extends CameraTestSupport {
                                 .header(auth.header(), auth.token())
                                 .header("If-Match", "\"0\""))
                 .andExpect(status().isConflict());
+    }
+
+    @Test
+    void writeRequiresCompletedScopedProbeAndThenAllowsOneDefault() throws Exception {
+        var auth = admin();
+        var saved = register(auth);
+        String id = saved.path("instanceId").asText();
+        String scope = saved.path("scopes").get(0).path("scopeId").asText();
+        write(
+                put("/storage/instances/" + id + "/write-state"),
+                auth,
+                Map.of("version", "0", "writeEnabled", true),
+                409);
+        var check =
+                write(
+                        post("/storage/instances/" + id + "/checks"),
+                        auth,
+                        Map.of(
+                                "version",
+                                "0",
+                                "scopeId",
+                                scope,
+                                "mode",
+                                "READ_WRITE",
+                                "idempotencyKey",
+                                UUID.randomUUID().toString()),
+                        202);
+        assertThat(finish(check, auth).path("status").asText()).isEqualTo("SUCCEEDED");
+        assertThat(probeDeleted).isTrue();
+        assertThat(read("/storage/instances/" + id, auth).path("writeCheckStatus").asText())
+                .isEqualTo("PASSED");
+        var enabled =
+                write(
+                        put("/storage/instances/" + id + "/write-state"),
+                        auth,
+                        Map.of("version", "0", "writeEnabled", true),
+                        200);
+        assertThat(enabled.path("writeEnabled").asBoolean()).isTrue();
+        assertThat(enabled.path("version").asText()).isEqualTo("1");
+        var selected =
+                write(
+                        put("/storage/default-target"),
+                        auth,
+                        Map.of(
+                                "version", "0",
+                                "scopeId", scope,
+                                "scopeVersion", "0",
+                                "instanceVersion", "1"),
+                        200);
+        assertThat(selected.path("scopeId").asText()).isEqualTo(scope);
+    }
+
+    @Test
+    void mismatchedWriteProbeKeepsWritingDisabledAndRecordsExactKey() throws Exception {
+        corruptProbeRead = true;
+        var auth = admin();
+        var saved = register(auth);
+        String id = saved.path("instanceId").asText();
+        String scope = saved.path("scopes").get(0).path("scopeId").asText();
+        var check =
+                write(
+                        post("/storage/instances/" + id + "/checks"),
+                        auth,
+                        Map.of(
+                                "version",
+                                "0",
+                                "scopeId",
+                                scope,
+                                "mode",
+                                "READ_WRITE",
+                                "idempotencyKey",
+                                UUID.randomUUID().toString()),
+                        202);
+        assertThat(finish(check, auth).path("status").asText()).isEqualTo("PARTIAL");
+        assertThat(probeDeleted).isFalse();
+        var detail = read("/storage/instances/" + id, auth);
+        assertThat(detail.path("writeCheckStatus").asText()).isEqualTo("NOT_TESTED");
+        assertThat(
+                        detail.path("scopes")
+                                .get(0)
+                                .path("observation")
+                                .path("writeProbeObjectKey")
+                                .asText())
+                .contains(".inspection-write-probe-");
+        write(
+                put("/storage/instances/" + id + "/write-state"),
+                auth,
+                Map.of("version", "0", "writeEnabled", true),
+                409);
     }
 
     @Test

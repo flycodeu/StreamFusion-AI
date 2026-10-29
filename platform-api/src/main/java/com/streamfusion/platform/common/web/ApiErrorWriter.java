@@ -35,7 +35,8 @@ public final class ApiErrorWriter {
                 || matchesModule(uri, context + "/auth")
                 || matchesModule(uri, context + "/menus")
                 || matchesModule(uri, context + "/roles")
-                || matchesModule(uri, context + "/departments");
+                || matchesModule(uri, context + "/departments")
+                || matchesModule(uri, context + "/inspection-nodes");
     }
 
     private static boolean matchesModule(String uri, String module) {

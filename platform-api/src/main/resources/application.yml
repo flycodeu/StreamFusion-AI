@@ -51,6 +51,12 @@ streamfusion:
   work-dir: ${SF_API_WORK_DIR:.run}
   shutdown-grace: ${SF_API_SHUTDOWN_GRACE:15s}
 platform:
+  inspection:
+    evidence:
+      # Zero keeps machine evidence authorization closed until a tested store is enabled.
+      max-accounted-bytes-per-scope: ${SF_INSPECTION_MAX_ACCOUNTED_BYTES_PER_SCOPE:0}
+      # Set nodeId to token mappings in deployment-owned configuration.
+      node-tokens: {}
   security-monitor:
     enabled: ${SF_SECURITY_MONITOR_ENABLED:true}
   storage:

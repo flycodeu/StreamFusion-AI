@@ -52,7 +52,29 @@ public class StorageViews {
         view.put(
                 "accessStatus",
                 matching ? observation.path("status").asText("UNCHECKED") : "UNCHECKED");
-        view.put("writeCheckStatus", "NOT_TESTED");
+        view.put(
+                "writeCheckStatus",
+                scopes.stream()
+                                .anyMatch(
+                                        scope -> {
+                                            var observed = json.read(scope.getObservation());
+                                            return "PASSED"
+                                                            .equals(
+                                                                    observed.path(
+                                                                                    "writeCheckStatus")
+                                                                            .asText())
+                                                    && observed.path("connectionFingerprint")
+                                                            .asText()
+                                                            .equals(secrets.fingerprint(row))
+                                                    && observed.path("scopeVersion")
+                                                            .asText()
+                                                            .equals(scope.getVersion().toString())
+                                                    && observed.path("checkedAt").asLong() + 600
+                                                            > java.time.Instant.now()
+                                                                    .getEpochSecond();
+                                        })
+                        ? "PASSED"
+                        : "NOT_TESTED");
         view.put("observation", observation);
         view.put("checkedAt", observation.path("finishedAt"));
         view.put("usage", json.read(row.getUsageSnapshot()));
