@@ -71,8 +71,8 @@ func readJSON(filename string, v any) error {
 	return StrictJSON(b, v)
 }
 
-// InitTarget is an offline, explicit administrator command. No HTTP request
-// installs executables or changes sudo policy.
+// InitTarget is an explicit administrator command. The host onboarding flow
+// invokes the same fixed installer over SSH after the operator confirms it.
 func InitTarget(root, controller, target, socket, dockerBinary string) error {
 	if runtime.GOOS != "linux" || os.Geteuid() != 0 {
 		return errors.New("LINUX_ROOT_REQUIRED")

@@ -19,6 +19,10 @@ import (
 
 const targetPackageLimit int64 = 256 << 20
 
+func localTargetPlatformSupported(goos, goarch string) bool {
+	return goos == "linux" && goarch == "amd64"
+}
+
 type targetPreparationPackage struct {
 	Available   bool   `json:"available"`
 	Code        string `json:"code"`
@@ -61,6 +65,7 @@ type hostPreparation struct {
 	Commands            targetPreparationCommands      `json:"commands"`
 	Authorization       targetPreparationAuthorization `json:"authorization"`
 	Steps               []targetPreparationStep        `json:"steps"`
+	RemoteJob           any                            `json:"remoteJob,omitempty"`
 }
 
 type targetPackageFile struct {
@@ -193,7 +198,7 @@ func preparationForHost(t target, controllerID, directory string) (hostPreparati
 			p.Account = current.Username
 		}
 	}
-	p.Package.FileName = "streamfusion-ops-target-" + t.ID + ".tar.gz"
+	p.Package.FileName = "streamfusion-ops-target-linux-amd64-" + t.ID + ".tar.gz"
 	material, err := readTargetPackage(directory)
 	if err != nil {
 		p.Package.Code, p.Package.Message = err.Error(), targetPackageMessage(err.Error())
@@ -203,9 +208,9 @@ func preparationForHost(t target, controllerID, directory string) (hostPreparati
 		p.Package.SHA256, p.Package.ByteSize = material.Binary.Hash, material.Binary.Size
 		p.Package.DownloadURL = api + "/hosts/" + t.ID + "/preparation/download?expectedVersion=" + t.Version
 	}
-	if t.Kind == "LOCAL" && runtime.GOOS != "linux" {
+	if t.Kind == "LOCAL" && !localTargetPlatformSupported(runtime.GOOS, runtime.GOARCH) {
 		p.Package.Available = false
-		p.Package.Code, p.Package.Message = "LINUX_TARGET_REQUIRED", "当前登记为非Linux本机，请新增远程Linux主机后准备安装"
+		p.Package.Code, p.Package.Message = "LINUX_TARGET_REQUIRED", "当前本机不是Linux amd64，请新增Linux amd64远程主机后准备安装"
 		p.Package.DownloadURL = ""
 	}
 	p.Authorization = targetPreparationAuthorization{Scope: "仅允许指定受管执行器的target-exec入口", Command: "'" + t.InstallRoot + "/executor' target-exec"}
@@ -217,14 +222,13 @@ func preparationForHost(t target, controllerID, directory string) (hostPreparati
 		sha = "REPLACE_WITH_VERIFIED_SHA256"
 	}
 	if sshUserPattern.MatchString(p.Account) {
-		args := " --binary ./streamfusion-ops --sha256 " + sha + " --root " + t.InstallRoot + " --controller-id " + controllerID + " --target-id " + t.ID + " --account " + p.Account
-		p.Commands.Preview = "bash ./install-target.sh" + args
+		p.Commands.Preview = "bash ./install.sh --preview"
 		prefix := "sudo "
 		if p.Account == "root" {
 			prefix = ""
 		}
-		p.Commands.Apply = prefix + "bash ./install-target.sh" + args + " --apply"
-		p.Commands.Authorize = prefix + "bash ./install-target.sh" + args + " --authorize-only --apply"
+		p.Commands.Apply = "bash ./install.sh"
+		p.Commands.Authorize = "bash ./install.sh"
 		p.Commands.Upgrade = prefix + "./streamfusion-ops target-upgrade --binary \"$(realpath ./streamfusion-ops)\" --sha256 " + sha + " --root " + t.InstallRoot + " --controller-id " + controllerID + " --target-id " + t.ID
 	}
 	expired := true
@@ -264,6 +268,7 @@ func (h *HTTP) hostPreparation(w http.ResponseWriter, r *http.Request, id string
 		return
 	}
 	p, _ := preparationForHost(t, h.store.controllerID(), targetReleaseDirectory())
+	p.RemoteJob = h.latestPreparationJob(id)
 	h.success(w, r, p)
 }
 
@@ -312,7 +317,7 @@ func createTargetPreparationArchive(p hostPreparation, material verifiedTargetPa
 	}()
 	gz := gzip.NewWriter(file)
 	tw := tar.NewWriter(gz)
-	for _, item := range []targetPackageFile{material.Binary, material.Script} {
+	for _, item := range []targetPackageFile{material.Binary} {
 		source, e := os.Open(item.Path)
 		if e != nil {
 			return nil, e
@@ -333,10 +338,23 @@ func createTargetPreparationArchive(p hostPreparation, material verifiedTargetPa
 			return nil, errors.New("TARGET_PACKAGE_CHANGED")
 		}
 	}
-	readme := fmt.Sprintf("# Linux目标准备\n\n主机ID: %s\n控制器ID: %s\n受管目录: %s\n连接账号: %s\n\n先核对SHA256SUMS，再检查计划：\n\n```bash\nsha256sum -c SHA256SUMS\n%s\n```\n\n仅首次初始化使用以下命令。已有目录不要重复初始化：\n\n```bash\n%s\n```\n\n已有执行器升级（须先核对无pending）：\n\n```bash\n%s\n```\n\n已有同一owner仅修复受限授权（保留pending以供核对）：\n\n```bash\n%s\n```\n\n只授权指定executor target-exec；不授予任意shell或Docker命令。执行后返回Ops重新检查主机能力。本材料不包含SSH密码、私钥或服务凭据。\n", p.TargetID, p.ControllerID, p.InstallRoot, p.Account, p.Commands.Preview, p.Commands.Apply, p.Commands.Upgrade, p.Commands.Authorize)
-	checksums := fmt.Sprintf("%s  streamfusion-ops\n%s  install-target.sh\n%x  HOST-SETUP.md\n", material.Binary.Hash, material.Script.Hash, sha256.Sum256([]byte(readme)))
-	for _, item := range []struct{ name, content string }{{"HOST-SETUP.md", readme}, {"SHA256SUMS", checksums}} {
-		if err = tw.WriteHeader(&tar.Header{Name: item.name, Mode: 0644, Size: int64(len(item.content))}); err != nil {
+	script, err := os.Open(material.Script.Path)
+	if err != nil {
+		return nil, err
+	}
+	helper, err := io.ReadAll(io.LimitReader(script, (64<<10)+1))
+	script.Close()
+	if err != nil || int64(len(helper)) != material.Script.Size || fmt.Sprintf("%x", sha256.Sum256(helper)) != material.Script.Hash {
+		return nil, errors.New("TARGET_PACKAGE_CHANGED")
+	}
+	readme, installer := targetSetupReadme(p), targetInstaller(p, string(helper))
+	checksums := fmt.Sprintf("%s  streamfusion-ops\n%x  install.sh\n%x  HOST-SETUP.md\n", material.Binary.Hash, sha256.Sum256([]byte(installer)), sha256.Sum256([]byte(readme)))
+	for _, item := range []struct{ name, content string }{{"install.sh", installer}, {"HOST-SETUP.md", readme}, {"SHA256SUMS", checksums}} {
+		mode := int64(0644)
+		if item.name == "install.sh" {
+			mode = 0755
+		}
+		if err = tw.WriteHeader(&tar.Header{Name: item.name, Mode: mode, Size: int64(len(item.content))}); err != nil {
 			return nil, err
 		}
 		if _, err = io.WriteString(tw, item.content); err != nil {

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -70,11 +71,8 @@ func TestTargetPreparationArchiveBindsHostAndVerifiesAllFiles(t *testing.T) {
 	targetID, controllerID := uuid.NewString(), uuid.NewString()
 	host := target{ID: targetID, sshTarget: sshTarget{Kind: "SSH", User: "ops"}, InstallRoot: "/srv/sfops-test", Version: "3", Capabilities: unknownHostCapabilities()}
 	p, material := preparationForHost(host, controllerID, dir)
-	if !p.Package.Available || !strings.Contains(p.Package.DownloadURL, "expectedVersion=3") || !strings.Contains(p.Commands.Apply, "sudo bash") || !strings.Contains(p.Commands.Apply, "--account ops") || !strings.Contains(p.Commands.Apply, "--target-id "+targetID) {
+	if !p.Package.Available || !strings.Contains(p.Package.DownloadURL, "expectedVersion=3") || p.Commands.Apply != "bash ./install.sh" || p.Commands.Authorize != "bash ./install.sh" {
 		t.Fatalf("incorrect host preparation: %+v", p)
-	}
-	if !strings.Contains(p.Commands.Authorize, "--authorize-only --apply") || !strings.Contains(p.Commands.Authorize, "--controller-id "+controllerID) {
-		t.Fatal("existing owner authorization repair missing")
 	}
 	if !strings.Contains(p.Commands.Upgrade, `--binary "$(realpath ./streamfusion-ops)"`) {
 		t.Fatal("upgrade command does not provide the required absolute binary path")
@@ -105,8 +103,11 @@ func TestTargetPreparationArchiveBindsHostAndVerifiesAllFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if len(files) != 4 || !strings.Contains(string(files["HOST-SETUP.md"]), controllerID) || !strings.Contains(string(files["HOST-SETUP.md"]), targetID) {
+	if len(files) != 4 || files["install-target.sh"] != nil || !strings.Contains(string(files["HOST-SETUP.md"]), controllerID) || !strings.Contains(string(files["HOST-SETUP.md"]), targetID) || !strings.Contains(string(files["install.sh"]), "SFOPS_SETUP_READY") {
 		t.Fatal("host identity missing or unexpected package files")
+	}
+	if !strings.Contains(string(files["install.sh"]), "--authorize-only --apply") || !strings.Contains(string(files["install.sh"]), controllerID) || !strings.Contains(string(files["install.sh"]), targetID) || !strings.Contains(string(files["install.sh"]), "--account 'ops'") {
+		t.Fatal("installer is missing the bound identity or existing authorization repair")
 	}
 	for _, line := range strings.Split(strings.TrimSpace(string(files["SHA256SUMS"])), "\n") {
 		fields := strings.Fields(line)
@@ -220,5 +221,39 @@ func TestHostPreparationExpiredCapabilitiesAreNotPresentedAsReady(t *testing.T) 
 		if step.Key != "package" && step.Status == "AVAILABLE" {
 			t.Fatal("expired capability presented as ready")
 		}
+	}
+}
+
+func TestHostPreparationLocalPackageMatchesSupportedPlatform(t *testing.T) {
+	for _, test := range []struct {
+		goos, goarch string
+		want         bool
+	}{
+		{"linux", "amd64", true},
+		{"linux", "arm64", false},
+		{"darwin", "amd64", false},
+		{"windows", "amd64", false},
+	} {
+		if got := localTargetPlatformSupported(test.goos, test.goarch); got != test.want {
+			t.Fatalf("localTargetPlatformSupported(%q, %q)=%v, want %v", test.goos, test.goarch, got, test.want)
+		}
+	}
+	host := target{ID: uuid.NewString(), sshTarget: sshTarget{Kind: "LOCAL", User: "root"}, InstallRoot: "/opt/managed", Version: "1", Capabilities: unknownHostCapabilities()}
+	p, _ := preparationForHost(host, uuid.NewString(), targetPreparationFixture(t))
+	supported := runtime.GOOS == "linux" && runtime.GOARCH == "amd64"
+	if p.Package.Available != supported {
+		t.Fatalf("local package availability=%v for %s/%s", p.Package.Available, runtime.GOOS, runtime.GOARCH)
+	}
+	if !supported && (p.Package.Code != "LINUX_TARGET_REQUIRED" || p.Package.DownloadURL != "" || !strings.Contains(p.Package.Message, "Linux amd64")) {
+		t.Fatalf("unsupported local platform has a downloadable package or misleading message: %+v", p.Package)
+	}
+	for _, step := range p.Steps {
+		if step.Key == "package" && (step.Status == "AVAILABLE") != supported {
+			t.Fatalf("local package step differs from platform support: %+v", step)
+		}
+	}
+	readme := targetSetupReadme(p)
+	if strings.Contains(readme, "非空目录") || !strings.Contains(readme, "未知已有目录") {
+		t.Fatal("offline instructions do not describe the refusal of all unknown existing directories")
 	}
 }

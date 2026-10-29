@@ -57,6 +57,9 @@ func sensitiveRequestPath(path string) bool {
 	if path == "/auth/login" || path == "/auth/password" || path == "/credentials" {
 		return true
 	}
+	if strings.HasPrefix(path, "/hosts/") && strings.HasSuffix(path, "/preparation/install") {
+		return true
+	}
 	parts := strings.Split(path, "/")
 	if len(parts) != 4 || parts[0] != "" || parts[1] != "credentials" || parts[3] != "revisions" {
 		return false

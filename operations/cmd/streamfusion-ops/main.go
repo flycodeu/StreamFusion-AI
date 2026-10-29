@@ -327,7 +327,10 @@ func run(args []string) error {
 	if err = handler.ConfigurePlatformTokenFile(*platformTokenFile); err != nil {
 		return err
 	}
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, ErrorLog: logger}
+	// Host preparation performs a bounded SSH upload/install in the request and
+	// records UNKNOWN on disconnect. Keep the server deadline above its 3-minute
+	// operation bound so the UI can receive the durable result.
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 240 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, ErrorLog: logger}
 	stop, done := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer done()
 	cleanupControl, err := s.LocalControl(stop, *listen, done)

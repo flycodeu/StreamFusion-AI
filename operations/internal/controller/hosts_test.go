@@ -28,6 +28,13 @@ type hostSSHFixture struct {
 	Authentications atomic.Int32
 	Commands        atomic.Int32
 	Key             atomic.Pointer[ssh.Signer]
+	Responses       atomic.Pointer[func(string) *hostSSHResponse]
+}
+
+type hostSSHResponse struct {
+	Stdout, Stderr string
+	Exit           uint32
+	Input          func([]byte)
 }
 
 func hostSSHServer(t *testing.T, s *Store, b *browser, executorAvailable, dockerAvailable bool, extensions ...func(string) ([]byte, bool)) *hostSSHFixture {
@@ -85,6 +92,20 @@ func hostSSHServer(t *testing.T, s *Store, b *browser, executorAvailable, docker
 							continue
 						}
 						f.Commands.Add(1)
+						if handler := f.Responses.Load(); handler != nil {
+							if response := (*handler)(payload.Command); response != nil {
+								request.Reply(true, nil)
+								input, _ := io.ReadAll(io.LimitReader(ch, 2<<20))
+								if response.Input != nil {
+									response.Input(input)
+								}
+								io.WriteString(ch, response.Stdout)
+								io.WriteString(ch.Stderr(), response.Stderr)
+								ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{response.Exit}))
+								ch.Close()
+								continue
+							}
+						}
 						handled := false
 						for _, extension := range extensions {
 							if data, ok := extension(payload.Command); ok {

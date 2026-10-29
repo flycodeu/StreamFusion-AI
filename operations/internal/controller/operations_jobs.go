@@ -53,7 +53,7 @@ func (h *HTTP) RunOperations(ctx context.Context) {
 		case <-ticker.C:
 			h.finishPendingAck(ctx)
 			var id, kind, raw string
-			e := h.store.DB.QueryRow("SELECT id,kind,input_json FROM jobs WHERE status='QUEUED' AND phase<>'WAITING_UPLOAD' AND phase<>'UPLOADING' AND phase<>'UPLOADED' AND (target_id IS NULL OR EXISTS(SELECT 1 FROM targets WHERE targets.id=jobs.target_id AND maintenance=0)) ORDER BY created_at LIMIT 1").Scan(&id, &kind, &raw)
+			e := h.store.DB.QueryRow("SELECT id,kind,input_json FROM jobs WHERE status='QUEUED' AND kind<>'HOST_PREPARE' AND phase<>'WAITING_UPLOAD' AND phase<>'UPLOADING' AND phase<>'UPLOADED' AND (target_id IS NULL OR EXISTS(SELECT 1 FROM targets WHERE targets.id=jobs.target_id AND maintenance=0)) ORDER BY created_at LIMIT 1").Scan(&id, &kind, &raw)
 			if e == nil {
 				if kind == "IMPORT" {
 					h.processImport(id, raw)

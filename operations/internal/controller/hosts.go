@@ -110,6 +110,16 @@ func (h *HTTP) hostsRoute(w http.ResponseWriter, r *http.Request, s *session, pa
 		h.downloadHostPreparation(w, r, p[1])
 		return true
 	}
+	if len(p) == 4 && p[2] == "preparation" && r.Method == "POST" {
+		if p[3] == "install" {
+			h.installHostPreparation(w, r, s, p[1])
+			return true
+		}
+		if p[3] == "reconcile" {
+			h.reconcileHostPreparation(w, r, s, p[1])
+			return true
+		}
+	}
 	return false
 }
 

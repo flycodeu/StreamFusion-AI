@@ -275,6 +275,7 @@ const statusLabels: Record<string, string> = {
 };
 const jobKindLabels: Record<string, string> = {
   FIREWALL_CHANGE: "防火墙变更",
+  HOST_PREPARE: "主机接入",
   PLUGIN_INSTALL: "安装环境",
   PLUGIN_REMOVE: "卸载环境",
   IMPORT: "导入制品",
@@ -313,6 +314,11 @@ const phaseLabels: Record<string, string> = {
   BASELINE_RESTORED: "已恢复原版本",
   EMPTY_BASELINE_RESTORED: "候选已停止",
   RECOVERY_REQUIRED: "需要恢复",
+  CONNECTING: "连接目标",
+  UPLOADING_EXECUTOR: "上传接入材料",
+  INSTALLING_EXECUTOR: "安装接入组件",
+  VERIFYING_EXECUTOR: "检查接入结果",
+  PREPARATION_RESULT: "接入结果",
 };
 async function act(fn: () => Promise<void>) {
   if (busy.value) return;

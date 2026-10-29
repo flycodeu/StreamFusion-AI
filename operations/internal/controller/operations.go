@@ -230,10 +230,10 @@ func (h *HTTP) operationsRoute(w http.ResponseWriter, r *http.Request, s *sessio
 			h.uploadImport(w, r, s, p[1])
 			return true
 		case "POST jobs reconcile":
-			h.reconcile(w, r, p[1], false)
+			h.reconcile(w, r, s, p[1], false)
 			return true
 		case "POST jobs recover":
-			h.reconcile(w, r, p[1], true)
+			h.reconcile(w, r, s, p[1], true)
 			return true
 		}
 	}

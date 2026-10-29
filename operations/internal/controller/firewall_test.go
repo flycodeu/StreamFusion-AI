@@ -131,8 +131,8 @@ func TestFirewallPlanJobReplayConfirmAndEvidenceGuards(t *testing.T) {
 	}
 	var schema int
 	s.DB.QueryRow("pragma user_version").Scan(&schema)
-	if schema != 12 {
-		t.Fatal("missing schema12")
+	if schema != SchemaVersion {
+		t.Fatal("missing current schema")
 	}
 	rows, e := s.DB.Query("pragma foreign_key_check")
 	if e != nil {

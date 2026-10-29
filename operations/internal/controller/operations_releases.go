@@ -410,13 +410,22 @@ func (h *HTTP) ackResult(ctx context.Context, t target, req deploy.Request, resu
 		_ = tx.Commit()
 	}
 }
-func (h *HTTP) reconcile(w http.ResponseWriter, r *http.Request, id string, recover bool) {
+func (h *HTTP) reconcile(w http.ResponseWriter, r *http.Request, actor *session, id string, recover bool) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Minute))
-	var raw, status, resultRaw string
+	var kind, raw, status, resultRaw string
 	var pending bool
-	e := h.store.DB.QueryRow("SELECT input_json,status,result_json,target_ack_pending FROM jobs WHERE id=? AND kind<>'IMPORT'", id).Scan(&raw, &status, &resultRaw, &pending)
+	e := h.store.DB.QueryRow("SELECT kind,input_json,status,result_json,target_ack_pending FROM jobs WHERE id=? AND kind<>'IMPORT'", id).Scan(&kind, &raw, &status, &resultRaw, &pending)
 	if e != nil {
 		h.opsError(w, r, e)
+		return
+	}
+	if kind == "HOST_PREPARE" {
+		var snapshot preparationSnapshot
+		if deploy.StrictJSON([]byte(raw), &snapshot) != nil || snapshot.Host.ID == "" {
+			h.fail(w, r, 409, "PREPARATION_INPUT_DAMAGED", preparationMessages["PREPARATION_INPUT_DAMAGED"])
+			return
+		}
+		h.reconcilePreparation(w, r, actor, snapshot.Host.ID, id, "")
 		return
 	}
 	if status != "UNKNOWN" && !pending {

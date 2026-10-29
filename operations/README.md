@@ -93,7 +93,7 @@ cd web && pnpm build
 python scripts/test-browser.py --binary ./streamfusion-ops.exe --output "$env:TEMP/sfops-browser-$(New-Guid)"
 ```
 
-看进程日志及状态目录下 `logs/controller.log`。目录锁冲突返回STATE_LOCKED；端口冲突返回LISTEN_FAILED；高版本数据库返回SCHEMA_TOO_NEW；缺少已有凭据密钥返回KEY_MISSING。现行Schema为12，增量维护安装/配置及防火墙计划、主机端口快照、作业种类和引用；原主机ID、凭据、实例、观察、作业和历史发布关系保留。每次增量升级前生成对应 `before-schema-N` 一致性归档，再事务升级，旧迁移摘要保持不变。旧程序拒绝打开高版本数据库；代码回退须用原密钥与对应升级前备份恢复到新目录。备份不包含大镜像归档，恢复后文件缺失会阻断新安装，不能把数据库恢复当作材料齐备。
+看进程日志及状态目录下 `logs/controller.log`。目录锁冲突返回STATE_LOCKED；端口冲突返回LISTEN_FAILED；高版本数据库返回SCHEMA_TOO_NEW；缺少已有凭据密钥返回KEY_MISSING。现行Schema为13，增量维护安装/配置、防火墙计划和主机接入作业；原主机ID、凭据、实例、观察、作业和历史发布关系保留。每次增量升级前生成对应 `before-schema-N` 一致性归档，再事务升级，旧迁移摘要保持不变。旧程序拒绝打开高版本数据库；代码回退须用原密钥与对应升级前备份恢复到新目录。备份不包含大镜像归档，恢复后文件缺失会阻断新安装，不能把数据库恢复当作材料齐备。
 
 `STATE_LOCKED` 表示该目录仍被进程持有，锁文件存在本身不表示故障，不能通过删除它关闭服务。优先用 `stop --state`；旧版后台实例未提供本地关闭记录时返回 `STOP_UNAVAILABLE`，需核实监听端口、可执行文件和启动参数后关闭对应进程，随后使用新二进制。
 
@@ -197,9 +197,18 @@ API以`/ops/api/v1`为前缀：目录`GET /software-recipes`；安装`POST /host
 
 ### 主机安装准备
 
-“主机管理 → 详情 → 安装准备”分别显示SSH、指纹、执行器文件/身份/版本、受限授权和Engine/Compose。错误区分EXECUTOR_MISSING、SUDO_AUTHORIZATION_REQUIRED、EXECUTOR_IDENTITY_MISMATCH、EXECUTOR_UPGRADE_REQUIRED等，提供对应动作，不再只显示笼统未就绪。
+“主机管理 → 详情 → 安装准备”只保留两个入口：
 
-准备包来自真实Linux发行材料，含二进制、install-target.sh、SHA256SUMS和主机指引；控制器没有材料时明确不可下载。脚本默认只预览，`--apply`才创建受管目录及精确授权。已有目标仅修复授权可用`--authorize-only --apply`，先核对归属，不覆盖已有owner、待核对作业或外来sudo策略。root连接直接执行，普通账号仅授权固定executor target-exec，不授予任意shell。主机API为`GET /hosts/{id}/preparation`及带主机版本的`/preparation/download`。
+1. **远程安装**：选择已核对指纹的 SSH 主机，输入本次 sudo 密码（root 或免密 sudo 可留空），勾选确认后点击“连接并安装”。Ops 会检查 Linux amd64、上传完整材料、执行固定安装程序并验证控制器/主机归属；请求失败、控制器重启或连接中断会保留 `UNKNOWN` 作业，页面提供“核对安装结果”，不会自动重放。
+2. **离线安装**：点击“下载离线安装包”，把 `streamfusion-ops-target-linux-amd64-<主机ID>.tar.gz` 上传到目标服务器当前账号的主目录并解压，进入目录后只需执行：
+
+   ```bash
+   bash install.sh
+   ```
+
+   包内只提供 `streamfusion-ops`、`install.sh`、`SHA256SUMS` 和 `HOST-SETUP.md`；`install.sh` 已绑定当前控制器、主机、目录和连接账号，并把原有受限安装器逻辑内嵌其中。它会自动识别首次接入、同归属升级或授权修复，校验摘要后再修改文件。安装完成后回到 Ops 点击“检查接入结果”。目标服务器不需要访问外网，也不需要额外启动常驻服务。
+
+高级诊断区折叠显示能力检查、摘要和只读安装预览；首次安装、升级和授权修复共用同一个入口。主机 API 增加 `POST /hosts/{id}/preparation/install` 和 `POST /hosts/{id}/preparation/reconcile`，在线安装请求必须使用现有敏感请求加密；统一作业页也可核对接入作业。单次安装最多执行3分钟，页面请求期限210秒，控制器写期限240秒；中断后先核对原作业。
 
 已有受管目标升级执行器时，在可信包目录执行准备页生成的命令，二进制必须为绝对路径，例如：
 
@@ -213,7 +222,7 @@ sudo ./streamfusion-ops target-upgrade --root /opt/streamfusion-ops-target \
 
 ## I02 发布闭环
 
-目标初始化必须由负责人在 Linux 目标上明确执行，控制器不会通过任意 SSH 命令自动授予 root 或 Docker 权限：
+首次接入使用上面的远程安装或离线安装入口。诊断场景可手动执行底层命令：
 
 ```bash
 sudo ./streamfusion-ops target-init \

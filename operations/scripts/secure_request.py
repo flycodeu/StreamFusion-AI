@@ -13,6 +13,7 @@ def protect_request(path, method, data, issue):
     if method != "POST" or not (
         path in ("/auth/login", "/auth/password", "/credentials")
         or re.fullmatch(r"/credentials/[0-9a-fA-F-]{36}/revisions", path)
+        or re.fullmatch(r"/hosts/[0-9a-fA-F-]{36}/preparation/install", path)
     ):
         return data
     challenge = issue(path)

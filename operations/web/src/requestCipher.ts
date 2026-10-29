@@ -12,6 +12,7 @@ export function isSensitiveRequest(path: string, method: string): boolean {
     (path === "/auth/login" ||
       path === "/auth/password" ||
       path === "/credentials" ||
+      /^\/hosts\/[0-9a-f-]{36}\/preparation\/install$/i.test(path) ||
       /^\/credentials\/[0-9a-f-]{36}\/revisions$/i.test(path))
   );
 }
