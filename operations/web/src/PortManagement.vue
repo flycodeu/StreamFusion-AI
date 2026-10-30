@@ -39,6 +39,7 @@ type View = {
   code: string;
   attemptAt: string;
   traceId: string;
+  freshness: "UNOBSERVED" | "FRESH" | "STALE";
 };
 type Plan = {
   id: string;
@@ -125,7 +126,11 @@ const currentJobs = computed(() =>
   ),
 );
 const ready = computed(
-  () => !!snapshot.value?.hash && !view.value?.code && !host.value?.maintenance,
+  () =>
+    !!snapshot.value?.hash &&
+    !view.value?.code &&
+    view.value?.freshness === "FRESH" &&
+    !host.value?.maintenance,
 );
 const expired = computed(
   () => !plan.value || Date.parse(plan.value.expiresAt) <= now.value,
@@ -351,7 +356,10 @@ onUnmounted(() => {
         </div>
         <div>
           <small>最近确认</small
-          ><span>{{ hostTime(snapshot?.observedAt) }}</span>
+          ><span
+            >{{ hostTime(snapshot?.observedAt) }}
+            <em v-if="view?.freshness === 'STALE'">待更新</em></span
+          >
         </div>
       </div>
       <div v-if="view?.code" class="port-notice" role="status">
@@ -370,10 +378,12 @@ onUnmounted(() => {
           @click="emit('preparation', hostId)"
         >
           安装准备</button
-        ><small
-          >{{ hostTime(view.attemptAt)
-          }}<code v-if="view.traceId"> · {{ view.traceId }}</code></small
-        >
+        ><small>{{ hostTime(view.attemptAt) }}</small>
+        <details>
+          <summary>技术详情</summary>
+          <code>{{ view.code }}</code>
+          <code v-if="view.traceId">traceId={{ view.traceId }}</code>
+        </details>
       </div>
       <div class="port-panel">
         <ElTabs v-model="tab">
@@ -789,6 +799,13 @@ onUnmounted(() => {
   font-weight: 500;
   line-height: 30px;
 }
+.port-summary em {
+  margin-left: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 400;
+}
 .enabled {
   color: var(--success);
 }
@@ -813,6 +830,18 @@ onUnmounted(() => {
   font-size: 11px;
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+.port-notice details {
+  width: 100%;
+  color: var(--muted);
+  font-size: 11px;
+}
+.port-notice summary {
+  cursor: pointer;
+}
+.port-notice details code {
+  display: block;
+  margin-top: 5px;
 }
 .port-filter {
   justify-content: space-between;

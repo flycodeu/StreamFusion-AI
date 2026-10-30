@@ -59,6 +59,9 @@ func (x *executor) nativeInstallPreflight(i serviceinstall.Request) serviceinsta
 	case "zlm":
 		dependencies = []string{"openssl", "libsrtp2"}
 	}
+	if i.Definition.Native.BuildRecipe == "DEB" || i.Definition.Native.BuildRecipe == "DEB_PACKAGE" {
+		dependencies = nil
+	}
 	for _, dependency := range dependencies {
 		if _, err = x.softwareRunner(ctx, "/usr/bin/pkg-config", "--exists", dependency); err != nil {
 			check("LIBRARY_"+dependency, "NATIVE_DEPENDENCY_MISSING", "源码构建缺少"+dependency+"开发文件；请先准备依赖，不会联网补装或静默关闭能力")
@@ -112,6 +115,14 @@ func (x *executor) nativeInstallPreflight(i serviceinstall.Request) serviceinsta
 	}
 	if result.Ready {
 		check("PLAN", "", "原生预检通过；此步骤没有创建账号、unit或数据")
+	}
+	if i.Definition.Key == "docker" {
+		result.Endpoint = "unix:///var/run/docker.sock"
+		if err := x.dockerEnginePreflight(ctx); err != nil {
+			check("DOCKER_ENGINE", err.Error(), dockerPreflightMessage(err))
+		} else {
+			check("DOCKER_ENGINE", "", "可安装官方 Docker Engine、CLI、containerd 与 Compose，保留主机已有软件")
+		}
 	}
 	return result
 }

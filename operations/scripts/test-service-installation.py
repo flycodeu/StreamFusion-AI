@@ -11,10 +11,12 @@ import secrets
 import socket
 import subprocess
 import time
+import traceback
+from urllib.parse import urlsplit
 import urllib.request
 from secure_request import protect_request
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 
 def main():
@@ -27,22 +29,31 @@ def main():
     output = pathlib.Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     state = output / "state"
+    # Keep this regression independent of release-sidecar files next to binary.
+    empty_library = output / "empty-library"
+    empty_library.mkdir()
+    (empty_library / "library.json").write_text(json.dumps({"schemaVersion": 1, "materials": []}), encoding="utf8")
     password = "Install-" + secrets.token_hex(16)
+    username = "install_" + secrets.token_hex(6)
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     password_file = output / ".password.secret"
     password_file.write_text(password, encoding="utf8")
     try:
-        subprocess.run([binary, "init-admin", "--state", str(state), "--password-file", str(password_file)], check=True, capture_output=True)
+        subprocess.run([binary, "init-admin", "--state", str(state), "--username", username, "--password-file", str(password_file)], check=True, capture_output=True, timeout=30, creationflags=flags)
     finally:
         password_file.unlink(missing_ok=True)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
     base = f"http://127.0.0.1:{port}"
-    checks, errors, preflights = [], [], []
+    checks, errors, preflights, blocked_mutations = [], [], [], []
+    result = {"status": "RUNNING", "passed": checks, "pageErrors": errors, "blockedTargetMutations": blocked_mutations,
+              "backend": "real isolated controller with explicitly empty material library", "uiFixtures": ["prepared programming material list", "managed-service configuration plan only"],
+              "remoteInstalls": 0, "linuxDockerAcceptance": False}
     process = None
     with (output / "runtime.log").open("w", encoding="utf8") as runtime_log:
         try:
-            process = subprocess.Popen([binary, "serve", "--state", str(state), "--listen", f"127.0.0.1:{port}"], stdout=runtime_log, stderr=runtime_log)
+            process = subprocess.Popen([binary, "serve", "--state", str(state), "--listen", f"127.0.0.1:{port}", "--material-library", str(empty_library)], stdout=runtime_log, stderr=runtime_log, creationflags=flags)
             for _ in range(100):
                 try:
                     urllib.request.urlopen(base + "/ops/api/v1/health", timeout=1).close()
@@ -54,13 +65,26 @@ def main():
             else:
                 raise AssertionError("isolated controller did not start")
 
-            with sync_playwright() as playwright:
+            playwright = sync_playwright().start()
+            try:
                 browser = playwright.chromium.launch(headless=True, executable_path=args.browser_executable)
                 page = browser.new_page(viewport={"width": 1440, "height": 900})
+                page.set_default_timeout(12000)
+                def block_execution(route):
+                    path = urlsplit(route.request.url).path
+                    if route.request.method == "POST" and (
+                        ("/software-install-plans/" in path and path.endswith("/submit")) or
+                        ("/software-instances/" in path and path.endswith(("/actions", "/adopt", "/unmanage"))) or
+                        ("/preparation/" in path and path.endswith(("/install", "/repair")))):
+                        blocked_mutations.append(path)
+                        route.fulfill(status=409, json={"code": "TEST_TARGET_MUTATION_BLOCKED"})
+                    else:
+                        route.continue_()
+                page.route("**/ops/api/v1/**", block_execution)
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.on("request", lambda request: preflights.append(request.post_data_json) if request.method == "POST" and request.url.endswith("/software-install-plans") else None)
                 page.goto(base)
-                page.get_by_label("账号", exact=True).fill("admin")
+                page.get_by_label("账号", exact=True).fill(username)
                 page.get_by_label("密码", exact=True).fill(password)
                 page.get_by_role("button", name="登录", exact=True).click()
                 page.get_by_role("heading", name="运行总览", exact=True).wait_for()
@@ -76,9 +100,11 @@ def main():
 
                 host = api("/hosts", "POST", {"name": "安装界面隔离主机", "kind": "LOCAL"}, 201)
                 definitions = api("/software-recipes")
-                assert {item["key"] for item in definitions} == {"mysql", "redis", "nginx", "seaweedfs", "mediamtx", "zlm", "java", "maven", "python", "ffmpeg", "codex", "claude"}
+                assert {item["key"] for item in definitions} == {"mysql", "redis", "nginx", "seaweedfs", "mediamtx", "zlm", "java", "maven", "python", "ffmpeg", "codex", "claude", "docker"}
+                assert len(definitions) == 17
                 assert all(item["native"]["parts"] and ("DOCKER" not in item["runtimeModes"] or (item["digest"].startswith("sha256:") and item["imageId"].startswith("sha256:"))) for item in definitions)
-                checks.append("real-twelve-software-thirteen-definitions-supported-modes")
+                assert not api("/installation-materials")
+                checks.append("real-thirteen-software-seventeen-definitions-supported-modes-empty-library")
 
                 access_value, secret_value = secrets.token_hex(10), secrets.token_hex(24)
                 access = api("/credentials", "POST", {"name": "S3测试访问键", "kind": "TOKEN", "secret": access_value}, 201)
@@ -98,14 +124,15 @@ def main():
                     drawer.get_by_role("button", name="取消", exact=True).click()
                     drawer.wait_for(state="hidden")
 
-                for name in ("MySQL", "Redis", "Nginx", "SeaweedFS", "MediaMTX", "ZLMediaKit", "Java", "Maven", "Python", "FFmpeg", "Codex CLI", "Claude Code"):
+                for name in ("MySQL", "Redis", "Nginx", "SeaweedFS", "MediaMTX", "ZLMediaKit", "Java", "Maven", "Python", "FFmpeg", "Codex CLI", "Claude Code", "Docker Engine (Ubuntu 24.04)"):
                     page.get_by_role("heading", name=name, exact=True).wait_for()
-                checks.append("twelve-software-cards-visible")
+                assert page.locator("article.plugin-card").count() == 13
+                checks.append("thirteen-software-cards-visible")
                 page.get_by_role("button", name="编程软件", exact=True).click()
                 assert page.locator("article.plugin-card").count() == 2
                 drawer = open_install("Claude Code")
                 assert drawer.get_by_role("radio", name="Docker 容器", exact=False).count() == 0
-                drawer.get_by_role("radio", name="离线归档", exact=False).check()
+                expect(drawer.get_by_role("radio", name="本地离线材料库 · 默认", exact=False)).to_be_checked()
                 drawer.get_by_text("上传离线安装包", exact=True).click()
                 assert drawer.get_by_label("原生安装归档", exact=True).get_attribute("accept") == ""
                 assert "原始二进制" in drawer.inner_text()
@@ -123,7 +150,7 @@ def main():
                 material_route = "**/installation-materials?recipeKey=codex*"
                 page.route(material_route, lambda route: route.fulfill(json={"data": [{"id": "native-layout-fixture", "name": "界面测试材料", "recipeVersion": codex["version"], "recipeRevision": codex["revision"], "runtimeMode": "NATIVE", "available": True, "status": "AVAILABLE"}]}))
                 drawer = open_install("Codex CLI")
-                drawer.get_by_label("已准备的官方材料", exact=True).select_option("native-layout-fixture")
+                drawer.get_by_label("可用安装包", exact=True).select_option("native-layout-fixture")
                 drawer.get_by_role("button", name="下一步", exact=True).click()
                 assert drawer.get_by_role("button", name="新建凭据", exact=True).count() == 0
                 assert "自己的 SSH" in drawer.inner_text()
@@ -144,6 +171,11 @@ def main():
                 native_option = drawer.locator("label").filter(has_text="原生 / systemd")
                 assert native_option.get_by_role("radio").is_enabled()
                 assert "官方材料" in native_option.inner_text()
+                expect(drawer.get_by_role("radio", name="本地离线材料库 · 默认", exact=False)).to_be_checked()
+                drawer.get_by_role("button", name="下一步", exact=True).click()
+                expect(drawer.get_by_role("alert")).to_contain_text("离线归档")
+                drawer.get_by_role("radio", name="Docker 容器", exact=False).check()
+                drawer.get_by_role("radio", name="在线获取 · 可选", exact=False).check()
                 drawer.get_by_role("button", name="下一步", exact=True).click()
                 drawer.get_by_label("实例名称", exact=True).fill("nginx-test-8088")
                 assert drawer.get_by_role("button", name="新建凭据", exact=True).count() == 0
@@ -169,9 +201,13 @@ def main():
                 assert "traceId=" in drawer.get_by_role("alert").inner_text()
                 checks.extend(["native-mode-selectable", "nginx-no-false-password-fields", "invalid-port-blocked-before-request", "edited-port-and-address-reach-real-preflight", "preflight-failure-includes-code-time-trace"])
                 checks.append("installation-draft-survives-two-catalog-refreshes")
+                assert preflights[-1]["source"]["type"] == "REGISTRY"
+                checks.append("empty-library-blocks-next-until-explicit-online-registry-preflight")
                 close_install(drawer)
 
                 drawer = open_install("SeaweedFS")
+                drawer.get_by_role("radio", name="Docker 容器", exact=False).check()
+                drawer.get_by_role("radio", name="在线获取 · 可选", exact=False).check()
                 drawer.get_by_role("button", name="下一步", exact=True).click()
                 drawer.get_by_label("S3 Access Key", exact=True).select_option(access["id"] + ":" + access["revision"])
                 drawer.get_by_label("S3 Secret Key", exact=True).select_option(secret["id"] + ":" + secret["revision"])
@@ -188,7 +224,8 @@ def main():
                 close_install(drawer)
 
                 drawer = open_install("Nginx")
-                drawer.get_by_role("radio", name="离线归档", exact=False).check()
+                drawer.get_by_role("radio", name="Docker 容器", exact=False).check()
+                drawer.get_by_role("radio", name="本地离线材料库 · 默认", exact=False).check()
                 drawer.get_by_text("上传离线镜像", exact=True).click()
                 bad_archive = b"invalid docker archive\n" + bytes(4096)
                 drawer.get_by_label("镜像归档", exact=True).set_input_files({"name": "invalid.tar", "mimeType": "application/x-tar", "buffer": bad_archive})
@@ -266,15 +303,31 @@ def main():
                     assert detail.evaluate("e=>e.scrollWidth<=e.clientWidth+1")
                     page.screenshot(path=str(output/f"configuration-firewall-{width}.png"),animations="disabled")
                 checks.append("software-port-change-shows-firewall-followup-wide-narrow")
+                assert not blocked_mutations, blocked_mutations
                 assert not errors, errors
+                result["status"] = "PASS"
                 browser.close()
-            result = {"passed": checks, "pageErrors": errors, "backend": "real isolated controller", "uiFixtures": ["prepared programming material list", "managed-service configuration plan only"], "remoteInstalls": 0, "linuxDockerAcceptance": False}
-            (output / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf8")
-            print(json.dumps({"passed": len(checks), "pageErrors": errors, "linuxDockerAcceptance": False}))
+            except Exception:
+                try:
+                    page.screenshot(path=str(output / "failure.png"), animations="disabled")
+                except Exception:
+                    pass
+                raise
+            finally:
+                playwright.stop()
+        except Exception as error:
+            result["status"] = "FAIL"
+            result["error"] = str(error)
+            result["traceback"] = traceback.format_exc()
+            raise
         finally:
             if process and process.poll() is None:
-                subprocess.run([binary, "stop", "--state", str(state)], capture_output=True, timeout=20)
+                subprocess.run([binary, "stop", "--state", str(state)], capture_output=True, timeout=20, creationflags=flags)
                 process.wait(timeout=15)
+            if process:
+                result["runtimeExitCode"] = process.returncode
+            (output / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf8")
+            print(json.dumps({"status": result["status"], "passed": len(checks), "pageErrors": errors, "linuxDockerAcceptance": False}))
 
 
 if __name__ == "__main__":

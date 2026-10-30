@@ -10,7 +10,7 @@ const testCredential = "11111111-1111-1111-1111-111111111111"
 func TestServiceCatalogAndRequestValidation(t *testing.T) {
 	for _, d := range Catalog() {
 		r := Request{SoftwareID: testCredential, BindingRevision: 1, Definition: d, Config: Config{Name: d.Name, BindAddress: "127.0.0.1", HostPort: d.Port, MemoryMiB: 1024}, Source: Source{Type: "REGISTRY"}}
-		if d.Key != "nginx" && d.Kind != "TOOL" {
+		if d.Key != "nginx" && d.Key != "docker" && d.Kind != "TOOL" {
 			r.Config.CredentialID, r.Config.CredentialRevision = testCredential, "1"
 		}
 		if d.Key == "seaweedfs" {
@@ -23,7 +23,7 @@ func TestServiceCatalogAndRequestValidation(t *testing.T) {
 		if err := r.Validate(); err != nil {
 			t.Fatalf("%s valid request rejected: %v", d.Key, err)
 		}
-		if d.Kind == "TOOL" {
+		if d.Kind == "TOOL" || d.Key == "docker" {
 			r.Config.HostPort = 1
 			if r.Validate() == nil {
 				t.Fatal("tool accepted fake listening port")

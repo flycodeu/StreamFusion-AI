@@ -61,7 +61,7 @@ func (h *HTTP) softwareConfigurationRoute(w http.ResponseWriter, r *http.Request
 
 func (h *HTTP) checkSoftwareConfiguration(ctx context.Context, t target, i softwareInstance, config serviceinstall.Config) (serviceinstall.Preflight, error) {
 	var out serviceinstall.Preflight
-	if i.Installation == nil || !installationBound(i) || i.InstallationStatus != "READY" || i.RuntimeKind == "TOOL" {
+	if i.Installation == nil || !installationBound(i) || i.InstallationStatus != "READY" || i.RuntimeKind == "TOOL" || i.SoftwareType == "DOCKER" {
 		return out, errors.New("CONFIGURATION_UNAVAILABLE")
 	}
 	change := &serviceinstall.ChangeRequest{Previous: *i.Installation, Config: config, ExpectedBindingRevision: i.BindingRevision}
@@ -102,7 +102,7 @@ func (h *HTTP) createSoftwareConfigurationPlan(w http.ResponseWriter, r *http.Re
 		h.fail(w, r, 409, "VERSION_CONFLICT", "软件已变化，请刷新后重新配置")
 		return
 	}
-	if i.Installation == nil || !installationBound(i) || i.InstallationStatus != "READY" || i.RuntimeKind == "TOOL" {
+	if i.Installation == nil || !installationBound(i) || i.InstallationStatus != "READY" || i.RuntimeKind == "TOOL" || i.SoftwareType == "DOCKER" {
 		h.fail(w, r, 409, "CONFIGURATION_UNAVAILABLE", "仅已确认安装的服务可修改配置；工具无监听端口，外部只读登记不能直接写配置")
 		return
 	}

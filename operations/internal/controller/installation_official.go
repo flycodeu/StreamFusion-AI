@@ -77,6 +77,7 @@ func (h *HTTP) prepareOfficialMaterial(w http.ResponseWriter, r *http.Request, s
 			return
 		}
 		h.store.installationMaterialAvailability(&m)
+		h.store.installationMaterialOrigin(&m)
 		if m.Status == "AVAILABLE" || m.Status == "DOWNLOADING" {
 			h.store.mu.Unlock()
 			h.success(w, r, m)
@@ -195,6 +196,9 @@ func (h *HTTP) prepareOfficialMaterial(w http.ResponseWriter, r *http.Request, s
 				err = errors.New("INSTALL_MATERIAL_STATE_CONFLICT")
 			}
 		}
+	}
+	if err == nil {
+		err = h.store.writeMaterialOrigin(id, materialOrigin{Kind: "OFFICIAL_DOWNLOAD", ImportedAt: Now(), FileName: d.Name + " " + d.Version})
 	}
 	if err == nil {
 		err = auditTx(commit, s.Username, "OFFICIAL_MATERIAL_PREPARED", id, "SUCCESS", r.Context().Value(traceKey{}).(string))

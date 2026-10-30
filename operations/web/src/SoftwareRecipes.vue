@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
 import { request } from "./api";
 import SoftwareIcon from "./SoftwareIcon.vue";
@@ -7,9 +7,11 @@ import ServiceInstallDialog from "./ServiceInstallDialog.vue";
 import {
   serviceDescriptions,
   isTool,
+  type InstallationMaterial,
   type ServiceRecipe,
 } from "./serviceInstallation";
 import { hostObservationExpired, type Host } from "./hosts";
+import { softwareIsDockerEngine, softwareState, type SoftwareInstance } from "./software";
 
 interface Installation {
   id: string;
@@ -35,12 +37,16 @@ interface Job {
   targetAckPending: boolean;
 }
 
-const props = defineProps<{ hostId: string }>();
-const emit = defineEmits<{ error: [unknown]; preparation: [string] }>();
+const props = defineProps<{ hostId: string; initialRecipeKey?: string }>();
+const emit = defineEmits<{ error: [unknown]; preparation: [string]; openInstance: [string] }>();
 const targets = ref<Host[]>([]);
 const serviceDefinitions = ref<ServiceRecipe[]>([]);
 const serviceRecipe = ref<ServiceRecipe>();
 const installations = ref<Installation[]>([]);
+const softwareInstances = ref<SoftwareInstance[]>([]);
+const dockerRecipe = computed(() => serviceDefinitions.value.find((item) => item.key === "docker"));
+const dockerInstance = computed(() => softwareInstances.value.find((item) => item.hostId === targetId.value &&
+  item.managementMode !== "RELEASED" && softwareIsDockerEngine(item)));
 const targetId = ref("");
 const search = ref("");
 const category = ref("ALL");
@@ -48,12 +54,14 @@ const selectedVersions = ref<Record<string, string>>({});
 const categories = [
   { key: "ALL", label: "全部软件" },
   { key: "SERVICES", label: "服务软件" },
+  { key: "ENGINE", label: "容器引擎" },
   { key: "JAVA_RUNTIME", label: "运行环境" },
   { key: "MAVEN_JDK_BUILD", label: "构建工具" },
   { key: "MEDIA_TOOLS", label: "媒体工具" },
   { key: "PROGRAMMING", label: "编程软件" },
 ];
 function recipeSubtitle(d: ServiceRecipe) {
+  if (d.key === "docker") return "主机容器运行引擎";
   if (d.category === "PROGRAMMING") return "编程软件";
   if (["java", "python"].includes(d.key)) return "应用运行环境";
   if (d.key === "maven") return "项目构建工具";
@@ -70,6 +78,8 @@ const catalogEntries = computed(() => {
   const term = search.value.trim().toLowerCase();
   const groups = new Map<string, ServiceRecipe[]>();
   for (const definition of serviceDefinitions.value) {
+    if (category.value === "ENGINE" && definition.key !== "docker") continue;
+    if (category.value === "SERVICES" && definition.key === "docker") continue;
     if (category.value === "SERVICES" && isTool(definition)) continue;
     if (
       category.value === "JAVA_RUNTIME" &&
@@ -165,15 +175,26 @@ async function refresh() {
   if (loading.value) return;
   loading.value = true;
   try {
-    const [ts, rows, services] = await Promise.all([
+    const [ts, rows, services, software, materials] = await Promise.all([
       request<Host[]>("/hosts"),
       request<Installation[]>("/plugin-installations"),
       request<ServiceRecipe[]>("/software-recipes"),
+      request<SoftwareInstance[]>("/software-instances"),
+      request<InstallationMaterial[]>("/installation-materials"),
     ]);
     if (disposed) return;
     targets.value = ts;
     installations.value = rows;
     serviceDefinitions.value = services;
+    softwareInstances.value = software;
+    for (const material of materials) {
+      if (selectedVersions.value[material.recipeKey] !== undefined ||
+        !material.available || material.origin?.kind !== "BUNDLED") continue;
+      const matching = services.find((definition) => definition.key === material.recipeKey &&
+        definition.version === material.recipeVersion && definition.revision === material.recipeRevision &&
+        definition.runtimeModes.includes(material.runtimeMode));
+      if (matching) selectedVersions.value[matching.key] = matching.version;
+    }
     if (!targetId.value && ts.length)
       targetId.value = ts.some((t) => t.id === props.hostId)
         ? props.hostId
@@ -184,6 +205,15 @@ async function refresh() {
     loading.value = false;
   }
 }
+watch(() => [props.initialRecipeKey, props.hostId, serviceDefinitions.value.length], () => {
+  if (props.initialRecipeKey && props.hostId && !serviceRecipe.value) {
+    const recipe = serviceDefinitions.value.find((item) => item.key === props.initialRecipeKey);
+    if (recipe) {
+      targetId.value = props.hostId;
+      if (!dockerInstance.value && currentTarget.value?.capabilities?.docker.status !== "AVAILABLE") serviceRecipe.value = recipe;
+    }
+  }
+}, { immediate: true });
 async function act(fn: () => Promise<void>) {
   if (busy.value) return;
   busy.value = true;
@@ -346,6 +376,18 @@ onUnmounted(() => {
         </dl>
       </details>
     </div>
+    <section v-if="currentTarget" class="docker-engine-bar" aria-label="主机 Docker Engine">
+      <SoftwareIcon type="DOCKER" />
+      <div>
+        <strong>Docker Engine <span>主机容器运行引擎</span></strong>
+        <p>{{ dockerInstance ? `已登记 · ${softwareState(dockerInstance).label}` :
+          hostObservationExpired(currentTarget, Date.now()) ? '当前状态待检查' :
+          currentTarget.capabilities?.docker.status === 'AVAILABLE' ? '已检测到外部 Docker，可用于容器安装；启停由原安装方式管理' : '未确认可用 Engine；安装容器软件前请先准备引擎' }}</p>
+      </div>
+      <button v-if="dockerInstance" class="secondary" :disabled="busy" @click="emit('openInstance', dockerInstance.id)">查看与启停</button>
+      <button v-else-if="currentTarget.capabilities?.docker.status !== 'AVAILABLE'" class="secondary" :disabled="busy || !dockerRecipe || currentTarget.maintenance"
+        @click="serviceRecipe = dockerRecipe">安装 Docker Engine</button>
+    </section>
     <div class="catalog-toolbar">
       <div class="catalog-categories" aria-label="软件分类">
         <button
@@ -444,7 +486,7 @@ onUnmounted(() => {
               >官方说明</a
             ><button
               class="primary"
-              :disabled="busy || !currentTarget || currentTarget.maintenance"
+              :disabled="busy || !currentTarget || currentTarget.maintenance || (definition.key === 'docker' && (!!dockerInstance || currentTarget.capabilities?.docker.status === 'AVAILABLE'))"
               @click="serviceRecipe = definition"
             >
               安装
@@ -568,6 +610,13 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.docker-engine-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; padding: 17px 0; border-bottom: 1px solid var(--border); }
+.docker-engine-bar > div { flex: 1; min-width: 180px; }
+.docker-engine-bar strong { font-size: 14px; font-weight: 500; }
+.docker-engine-bar strong span, .docker-engine-bar p { font-size: 12px; color: var(--muted); font-weight: 400; }
+.docker-engine-bar strong span { margin-left: 8px; }
+.docker-engine-bar p { margin: 7px 0 0; line-height: 1.7; }
+.docker-engine-bar :deep(.software-icon) { width: 38px; height: 38px; font-size: 16px; }
 .legacy-installations {
   margin-top: 28px;
   border-top: 1px solid var(--border);

@@ -8,6 +8,7 @@ import {
   softwareDesiredLabels,
   softwareActualLabels,
   softwareJobLabels,
+  softwareJobErrorMessages,
   softwareJobPhaseLabels,
   softwareModes,
   softwareRuntimeLabels,
@@ -15,6 +16,7 @@ import {
   softwareIsTool,
   softwareInstallationReady,
   softwareLifecycleAvailable,
+  softwareUninstallAvailable,
   softwareTypes,
   softwareVersionLabel,
   softwareVersionReason,
@@ -39,6 +41,7 @@ const emit = defineEmits<{
   close: [];
   observe: [SoftwareInstance];
   unmanage: [SoftwareInstance];
+  uninstall: [SoftwareInstance];
   adopt: [SoftwareInstance];
   changeState: [SoftwareInstance, "START" | "STOP"];
   readLogs: ["software" | "job"];
@@ -228,6 +231,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
                   : "结果未确认，请核对原作业"
               }}
             </p>
+            <p v-if="softwareJobErrorMessages[job.errorCode]">{{ softwareJobErrorMessages[job.errorCode] }}</p>
             <code v-if="job.errorCode">{{ job.errorCode }}</code>
             <div class="software-job-actions">
               <button
@@ -331,6 +335,10 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
           @click="emit('unmanage', detail)"
         >
           解除管理
+        </button>
+        <button v-if="softwareUninstallAvailable(detail)" class="quiet danger"
+          :disabled="busy || pendingJob || !!host?.maintenance" @click="emit('uninstall', detail)">
+          卸载软件
         </button>
         <span class="spacer"></span>
         <button

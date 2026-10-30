@@ -62,7 +62,7 @@ func (s SoftwareRequest) Validate(observation bool) error {
 			return errors.New("SOFTWARE_OWNERSHIP_INVALID")
 		}
 		if o.RuntimeMode == "NATIVE" {
-			if (s.Kind != "SYSTEMD" && s.Kind != "TOOL") || !Hex.MatchString(o.BinaryHash) || !validNativeBinaryPath(o.BinaryPath) {
+			if (s.Kind != "SYSTEMD" && s.Kind != "TOOL") || !Hex.MatchString(o.BinaryHash) || !validNativeBinaryPath(o.BinaryPath) && !(s.SoftwareKey == "DOCKER" && s.Kind == "SYSTEMD" && s.Locator == "docker.service" && o.BinaryPath == "/usr/bin/dockerd") {
 				return errors.New("SOFTWARE_NATIVE_OWNERSHIP_INVALID")
 			}
 		} else if (s.Kind != "DOCKER" && s.Kind != "TOOL") || !strings.HasPrefix(o.ImageID, "sha256:") || !Hex.MatchString(strings.TrimPrefix(o.ImageID, "sha256:")) {
@@ -72,7 +72,8 @@ func (s SoftwareRequest) Validate(observation bool) error {
 	switch s.Kind {
 	case "SYSTEMD":
 		name := strings.ToLower(strings.TrimSuffix(s.Locator, ".service"))
-		if !softwareUnitPattern.MatchString(s.Locator) || protectedSoftwareUnits[name] || strings.HasPrefix(name, "systemd-") || strings.HasPrefix(name, "streamfusion-ops") || strings.HasPrefix(name, "sfops-") && !(s.Ownership != nil && s.Ownership.RuntimeMode == "NATIVE" && s.Locator == "sfops-service-"+s.ID+".service") {
+		ownedEngine := s.SoftwareKey == "DOCKER" && s.Locator == "docker.service" && s.Ownership != nil && s.Ownership.RuntimeMode == "NATIVE" && s.Ownership.BinaryPath == "/usr/bin/dockerd"
+		if !softwareUnitPattern.MatchString(s.Locator) || protectedSoftwareUnits[name] && !ownedEngine || strings.HasPrefix(name, "systemd-") || strings.HasPrefix(name, "streamfusion-ops") || strings.HasPrefix(name, "sfops-") && !(s.Ownership != nil && s.Ownership.RuntimeMode == "NATIVE" && s.Locator == "sfops-service-"+s.ID+".service") {
 			return errors.New("SOFTWARE_UNIT_FORBIDDEN")
 		}
 	case "DOCKER":
@@ -100,7 +101,7 @@ func (s SoftwareRequest) Validate(observation bool) error {
 }
 
 func softwareMutation(action string) bool {
-	return action == "SOFTWARE_CONFIGURE" || action == "SOFTWARE_INSTALL" || action == "SOFTWARE_ADOPT" || action == "SOFTWARE_START" || action == "SOFTWARE_STOP" || action == "SOFTWARE_UNMANAGE"
+	return action == "SOFTWARE_UNINSTALL" || action == "SOFTWARE_CONFIGURE" || action == "SOFTWARE_INSTALL" || action == "SOFTWARE_ADOPT" || action == "SOFTWARE_START" || action == "SOFTWARE_STOP" || action == "SOFTWARE_UNMANAGE"
 }
 
 func validNativeBinaryPath(value string) bool {

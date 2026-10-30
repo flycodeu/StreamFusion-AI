@@ -66,6 +66,7 @@ type hostPreparation struct {
 	Authorization       targetPreparationAuthorization `json:"authorization"`
 	Steps               []targetPreparationStep        `json:"steps"`
 	RemoteJob           any                            `json:"remoteJob,omitempty"`
+	RepairSHA           string                         `json:"-"`
 }
 
 type targetPackageFile struct {
@@ -267,7 +268,8 @@ func (h *HTTP) hostPreparation(w http.ResponseWriter, r *http.Request, id string
 		h.opsError(w, r, err)
 		return
 	}
-	p, _ := preparationForHost(t, h.store.controllerID(), targetReleaseDirectory())
+	p, _ := preparationForHost(t, h.store.controllerID(), h.targetPackageDir)
+	p.RepairSHA = h.preparationRepairSHA(t)
 	p.RemoteJob = h.latestPreparationJob(id)
 	h.success(w, r, p)
 }
@@ -282,7 +284,8 @@ func (h *HTTP) downloadHostPreparation(w http.ResponseWriter, r *http.Request, i
 		h.fail(w, r, 409, "VERSION_CONFLICT", "主机连接已变化或缺少版本，请重新打开安装准备")
 		return
 	}
-	p, material := preparationForHost(t, h.store.controllerID(), targetReleaseDirectory())
+	p, material := preparationForHost(t, h.store.controllerID(), h.targetPackageDir)
+	p.RepairSHA = h.preparationRepairSHA(t)
 	if !p.Package.Available {
 		h.fail(w, r, 409, p.Package.Code, p.Package.Message)
 		return

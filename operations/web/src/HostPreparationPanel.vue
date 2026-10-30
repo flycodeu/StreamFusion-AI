@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
 import { ApiError, request } from "./api";
-import { hostTime, type Host } from "./hosts";
+import { type Host } from "./hosts";
 interface PreparationJob {
   id: string; status: string; phase: string; errorCode: string;
-  message?: string; traceId: string; updatedAt: string;
+  message?: string; traceId: string; createdAt?: string; updatedAt: string;
   result?: { message?: string };
 }
 interface HostPreparation {
@@ -21,19 +21,64 @@ const emit = defineEmits<{ checked: [] }>();
 const data = ref<HostPreparation>();
 const busy = ref(false);
 const mode = ref<"online" | "offline">("online");
-const confirmed = ref(false);
 const sudoPassword = ref("");
+const needsSudoPassword = ref(false);
 const installing = ref(false);
-const error = ref<{ message: string; code: string; at: string; traceId: string; source?: "poll" }>();
-const checkResult = ref<{ ready: boolean; message: string; code: string; at: string }>();
+const updateRequested = ref(false);
+const repairing = ref(false);
+const error = ref<{ message: string; source?: "poll" }>();
+const checkResult = ref<{ ready: boolean; title: string; message: string; code: string }>();
 const copied = ref("");
 const job = computed(() => data.value?.remoteJob);
 const blocked = computed(() => ["RUNNING", "UNKNOWN"].includes(job.value?.status || ""));
+const recoverableCodes = ["EXECUTOR_PATH_UNSAFE", "EXECUTOR_PATH_UNREADABLE", "EXECUTOR_HASH_UNAVAILABLE", "EXECUTOR_MISSING", "EXECUTOR_NOT_EXECUTABLE", "PREPARATION_SUDO_REQUIRED"];
+const canRecover = computed(() => job.value?.status === "UNKNOWN" && recoverableCodes.includes(checkResult.value?.code || ""));
+const missingFiles = computed(() => checkResult.value?.code === "EXECUTOR_MISSING");
 const phaseLabels: Record<string, string> = {
-  CONNECTING: "正在连接并检查服务器", UPLOADING_EXECUTOR: "正在传输安装材料",
-  INSTALLING_EXECUTOR: "正在安装并配置权限", VERIFYING_EXECUTOR: "正在检查接入结果",
-  PREPARATION_RESULT: "安装结果",
+  CONNECTING: "连接服务器", UPLOADING_EXECUTOR: "传输安装材料",
+  INSTALLING_EXECUTOR: "安装接入组件", VERIFYING_EXECUTOR: "验证接入结果",
 };
+const phaseOrder = ["CONNECTING", "UPLOADING_EXECUTOR", "INSTALLING_EXECUTOR", "VERIFYING_EXECUTOR"];
+const visibleStatus = computed(() => job.value?.status || (installing.value ? "RUNNING" : ""));
+const statusTone = computed(() => ({ RUNNING: "running", UNKNOWN: "unknown", SUCCEEDED: "success", FAILED: "failed" }[visibleStatus.value] || "running"));
+const statusLabel = computed(() => ({ RUNNING: "执行中", UNKNOWN: "待确认", SUCCEEDED: "已完成", FAILED: "未完成" }[visibleStatus.value] || "执行中"));
+const currentPhaseIndex = computed(() => phaseOrder.indexOf(job.value?.phase || ""));
+const showPhaseTrack = computed(() => Boolean(visibleStatus.value));
+const statusTitle = computed(() => {
+  if (!job.value) return "正在创建安装任务";
+  if (job.value.status === "RUNNING") return phaseLabels[job.value.phase] || "正在处理安装任务";
+  if (job.value.status === "UNKNOWN") return "安装结果待确认";
+  if (job.value.status === "SUCCEEDED") return "服务器已接入";
+  return "服务器未接入";
+});
+const statusSummary = computed(() => {
+  if (!job.value) return "正在建立安全连接。";
+  if (job.value.status === "RUNNING") return "当前进度会自动更新。";
+  if (job.value.status === "UNKNOWN") {
+    return "请检查服务器上的安装结果。";
+  }
+  if (job.value.status === "SUCCEEDED") return "接入组件已安装并通过检查。";
+  return "本次安装未完成，请根据下方提示处理后重试。";
+});
+const phaseNote = computed(() => {
+  if (!job.value) return "";
+  const label = phaseLabels[job.value.phase];
+  if (!label && job.value.status === "UNKNOWN") return "历史进度不完整，正在以服务器实际状态为准";
+  if (!label) return "";
+  if (job.value.status === "UNKNOWN") return `最后确认到：${label}`;
+  if (job.value.status === "FAILED") return `停止于：${label}`;
+  if (job.value.status === "SUCCEEDED") return "四个接入步骤均已完成";
+  return `当前阶段：${label}`;
+});
+function phaseState(index: number) {
+  if (visibleStatus.value === "SUCCEEDED") return "done";
+  if (currentPhaseIndex.value < 0) return "pending";
+  if (index < currentPhaseIndex.value) return "done";
+  if (index > currentPhaseIndex.value) return "pending";
+  if (visibleStatus.value === "UNKNOWN") return "uncertain";
+  if (visibleStatus.value === "FAILED") return "failed";
+  return "active";
+}
 let generation = 0;
 let hostGeneration = 0;
 let operation = 0;
@@ -42,10 +87,7 @@ let installationIntent: { key: string; previousJobId?: string; jobId?: string } 
 let polling: ReturnType<typeof setTimeout> | undefined;
 let installAbort: AbortController | undefined;
 function report(cause: unknown, source?: "poll") {
-  error.value = { message: cause instanceof Error ? cause.message : "操作未完成，请刷新安装记录",
-    code: cause instanceof ApiError ? cause.code : "REQUEST_NOT_CONFIRMED",
-    at: cause instanceof ApiError ? cause.timestamp : new Date().toISOString(),
-    traceId: cause instanceof ApiError ? cause.traceId : "", source };
+  error.value = { message: cause instanceof Error ? cause.message : "操作未完成，请重新加载", source };
 }
 function beginOperation() {
   busy.value = true;
@@ -75,11 +117,15 @@ async function load(quiet = false) {
   try {
     const value = await request<HostPreparation>(`/hosts/${hostId}/preparation`);
     if (revision !== generation || hostRevision !== hostGeneration) return;
+    const refreshStatus = value.remoteJob?.status === "SUCCEEDED" && job.value?.status !== "SUCCEEDED";
     data.value = value;
+    if (value.remoteJob?.errorCode === "PREPARATION_SUDO_REQUIRED") needsSudoPassword.value = true;
+    if (value.remoteJob?.status === "SUCCEEDED") needsSudoPassword.value = false;
     observeJob(value.remoteJob);
     pollFailures = 0;
     if (error.value?.source === "poll") error.value = undefined;
     schedulePoll();
+    if (refreshStatus) await refreshHostStatus(hostRevision);
   } catch (cause) {
     if (revision !== generation || hostRevision !== hostGeneration) return;
     if (quiet && (job.value?.status === "RUNNING" || installing.value)) {
@@ -99,13 +145,22 @@ async function load(quiet = false) {
 watch([() => props.host.id, () => props.host.version], () => {
   hostGeneration++; generation++; operation++;
   installAbort?.abort(); clearTimeout(polling); data.value = undefined;
-  busy.value = false; installing.value = false; pollFailures = 0; installationIntent = undefined;
+  busy.value = false; installing.value = false; repairing.value = false; pollFailures = 0; installationIntent = undefined;
+  updateRequested.value = false;
   checkResult.value = undefined; copied.value = "";
-  confirmed.value = false; sudoPassword.value = ""; error.value = undefined;
+  sudoPassword.value = ""; needsSudoPassword.value = false; error.value = undefined;
   mode.value = props.host.kind === "SSH" ? "online" : "offline";
   void load();
 }, { immediate: true });
 onUnmounted(() => { generation++; hostGeneration++; clearTimeout(polling); installAbort?.abort(); sudoPassword.value = ""; });
+async function refreshHostStatus(revision = hostGeneration) {
+  try {
+    await request<Host>(`/hosts/${props.host.id}/checks`, "POST", {});
+    if (revision === hostGeneration) emit("checked");
+  } catch (cause) {
+    if (revision === hostGeneration) report(cause);
+  }
+}
 async function copy(label: string, text: string) {
   const revision = hostGeneration;
   try { await navigator.clipboard.writeText(text); if (revision === hostGeneration) copied.value = label; }
@@ -131,8 +186,12 @@ async function download() {
   } catch (cause) { if (currentOperation(active)) report(cause); }
   finally { if (currentOperation(active)) busy.value = false; }
 }
+function openUpdate() {
+  if (busy.value || blocked.value || job.value?.status !== "SUCCEEDED") return;
+  updateRequested.value = true;
+}
 async function install() {
-  if (!data.value || busy.value || blocked.value || !confirmed.value) return;
+  if (!data.value || busy.value || blocked.value) return;
   const hostId = props.host.id;
   const active = beginOperation();
   installing.value = true; pollFailures = 0; checkResult.value = undefined;
@@ -145,7 +204,11 @@ async function install() {
     if (!currentOperation(active) || !data.value) return;
     data.value.remoteJob = result;
     observeJob(result);
-    if (result.status === "SUCCEEDED") emit("checked");
+    if (result.status === "SUCCEEDED") {
+      needsSudoPassword.value = false;
+      updateRequested.value = false;
+      await refreshHostStatus(active.host);
+    }
   } catch (cause) { if (currentOperation(active)) report(cause); }
   finally {
     input.sudoPassword = "";
@@ -163,11 +226,73 @@ async function reconcile() {
   const hostId = props.host.id;
   const input = { jobId: job.value.id, expectedVersion: data.value.expectedHostVersion };
   try {
-    await request(`/hosts/${hostId}/preparation/reconcile`, "POST", input);
+    const result = await request<PreparationJob>(`/hosts/${hostId}/preparation/reconcile`, "POST", input);
     if (!currentOperation(active)) return;
-    emit("checked"); await load(true);
-  } catch (cause) { if (currentOperation(active)) report(cause); }
+    if (data.value) data.value.remoteJob = result;
+    checkResult.value = undefined;
+    await refreshHostStatus(active.host); await load(true);
+  } catch (cause) {
+    if (!currentOperation(active)) return;
+    if (cause instanceof ApiError) {
+      const titles: Record<string, string> = {
+        EXECUTOR_PATH_UNSAFE: "接入目录权限不符合要求",
+        EXECUTOR_IDENTITY_MISMATCH: "接入目录归属不匹配",
+        EXECUTOR_HASH_MISMATCH: "接入文件版本不一致",
+        EXECUTOR_UPGRADE_REQUIRED: "接入文件版本不一致",
+        EXECUTOR_HASH_UNAVAILABLE: "接入文件不可读取",
+        EXECUTOR_MISSING: "接入组件尚未安装",
+        EXECUTOR_PATH_UNREADABLE: "接入目录不可读取",
+        EXECUTOR_NOT_EXECUTABLE: "接入文件不可执行",
+        SUDO_AUTHORIZATION_REQUIRED: "服务器授权未完成",
+        SSH_UNAVAILABLE: "服务器连接失败",
+        SSH_TIMEOUT: "服务器检查超时",
+      };
+      const messages: Record<string, string> = {
+        EXECUTOR_PATH_UNSAFE: "接入目录权限有误，点击下方按钮修复。",
+        EXECUTOR_MISSING: "点击下方按钮恢复安装。",
+        SUDO_AUTHORIZATION_REQUIRED: "请使用 root 账号，或提供当前连接账号的 sudo 权限后再试。",
+      };
+      checkResult.value = { ready: false, title: titles[cause.code] || "安装结果仍待确认", message: messages[cause.code] || cause.message, code: cause.code };
+    } else report(cause);
+  }
   finally { if (currentOperation(active)) busy.value = false; }
+}
+async function repair() {
+  if (!data.value || !job.value || busy.value || !canRecover.value) return;
+  const active = beginOperation();
+  const hostId = props.host.id;
+  repairing.value = true;
+  installAbort = new AbortController();
+  const input = { jobId: job.value.id, expectedVersion: data.value.expectedHostVersion, confirmed: true, sudoPassword: sudoPassword.value };
+  sudoPassword.value = "";
+  try {
+    const result = await request<PreparationJob>(`/hosts/${hostId}/preparation/repair`, "POST", input, installAbort.signal);
+    if (!currentOperation(active) || !data.value) return;
+    data.value.remoteJob = result;
+    needsSudoPassword.value = false;
+    checkResult.value = undefined;
+    await refreshHostStatus(active.host);
+  } catch (cause) {
+    if (!currentOperation(active)) return;
+    if (cause instanceof ApiError) {
+      const titles: Record<string, string> = {
+        PREPARATION_SUDO_REQUIRED: "请输入登录账号的密码",
+        PREPARATION_REPAIR_UNCONFIRMED: "修复结果待确认",
+        PREPARATION_CONNECT_FAILED: "服务器连接失败",
+        VERSION_CONFLICT: "服务器配置已变化",
+        EXECUTOR_RESPONSE_INVALID: "安装结果检查未完成",
+      };
+      if (cause.code === "PREPARATION_SUDO_REQUIRED") needsSudoPassword.value = true;
+      checkResult.value = { ready: false, title: titles[cause.code] || "权限修复未完成", message: cause.message, code: cause.code };
+    } else report(cause);
+  } finally {
+    input.sudoPassword = "";
+    if (currentOperation(active)) {
+      repairing.value = false; installAbort = undefined;
+      await load(true);
+      if (currentOperation(active)) busy.value = false;
+    }
+  }
 }
 async function check() {
   if (busy.value) return;
@@ -181,8 +306,8 @@ async function check() {
     const facts = [capabilities?.reachability, capabilities?.readOnly, capabilities?.mutation];
     const unready = facts.find((fact) => fact?.status !== "AVAILABLE");
     const ready = facts.every((fact) => fact?.status === "AVAILABLE");
-    checkResult.value = { ready, message: ready ? "主机接入完成，可以继续安装软件。" : unready?.message || "接入状态尚未确认，请查看接入检查。",
-      code: ready ? "HOST_PREPARATION_READY" : unready?.code || "HOST_CHECK_REQUIRED", at: checked.observedAt || new Date().toISOString() };
+    checkResult.value = { ready, title: ready ? "服务器已接入" : "服务器尚未接入", message: ready ? "现在可以继续安装和管理软件。" : unready?.message || "暂时无法确认接入状态，请重新检查。",
+      code: unready?.code || "" };
     emit("checked"); await load(true);
   } catch (cause) { if (currentOperation(active)) report(cause); }
   finally { if (currentOperation(active)) busy.value = false; }
@@ -191,86 +316,121 @@ async function check() {
 
 <template>
   <div class="host-preparation">
-    <header><div><h3>接入服务器</h3><p>选择一种安装方式，完成后即可在 Ops 中安装和管理软件。</p></div><button class="quiet" :disabled="busy" @click="load()">刷新</button></header>
-    <div v-if="error" class="preparation-error" role="alert"><strong>{{ error.message }}</strong><small>{{ error.code }} · {{ hostTime(error.at) }}</small><code>hostId={{ host.id }}</code><code v-if="error.traceId">traceId={{ error.traceId }}</code></div>
+    <header class="preparation-heading"><h3>服务器接入</h3><button class="quiet" :disabled="busy" @click="load()">重新加载</button></header>
+    <div v-if="error" class="preparation-error" role="alert"><strong>页面暂时未更新</strong><p>{{ error.message }}</p><button class="secondary" :disabled="busy" @click="load()">重新加载</button></div>
     <p v-if="!data && busy">读取安装信息…</p>
     <template v-if="data">
-      <div class="mode-switch" role="group" aria-label="安装方式">
-        <button :class="{ selected: mode === 'online' }" :aria-pressed="mode === 'online'" :disabled="busy || host.kind !== 'SSH'" @click="mode = 'online'">远程安装 <small>通过 SSH 自动完成</small></button>
-        <button :class="{ selected: mode === 'offline' }" :aria-pressed="mode === 'offline'" :disabled="busy" @click="mode = 'offline'">离线安装 <small>上传完整安装包</small></button>
-      </div>
-      <section v-if="mode === 'online'" class="install-card">
-        <h3>连接服务器，直接安装</h3><p>Ops 使用已保存的 SSH 连接传输材料并安装，目标服务器无需访问外网。</p>
-        <dl><dt>目标服务器</dt><dd>{{ host.address }}:{{ host.sshPort }}</dd><dt>连接账号</dt><dd>{{ data.account }}</dd><dt>安装目录</dt><dd><code>{{ data.installRoot }}</code></dd></dl>
-        <form @submit.prevent="install">
-          <label v-if="data.account !== 'root'" class="password-field">sudo 密码 <span>仅用于本次安装；已有免密管理员权限可留空</span><input v-model="sudoPassword" type="password" autocomplete="off" maxlength="1024" :disabled="busy || blocked" aria-label="本次安装的 sudo 密码" /></label>
-          <label class="confirm-line"><input v-model="confirmed" type="checkbox" :disabled="busy || blocked" />允许在此服务器安装接入组件并配置该账号的受限操作权限</label>
-          <button class="primary" type="submit" :disabled="busy || blocked || !confirmed || !data.package.available || host.maintenance">{{ busy ? '正在处理…' : '连接并安装' }}</button>
-        </form><p v-if="installing || job?.status === 'RUNNING'">安装期间请保持此页面打开；若中断，重新进入后核对安装结果。</p><p v-if="host.maintenance">主机正在维护，请先退出维护模式。</p>
+      <section class="target-overview" aria-label="安装信息">
+        <div class="install-location"><span>安装位置</span><code>{{ data.installRoot }}</code></div>
+        <div class="target-meta"><span><small>服务器</small>{{ host.address || '控制器本机' }}<template v-if="host.sshPort">:{{ host.sshPort }}</template></span><span><small>安装权限</small>{{ data.account === 'root' ? 'root' : `${data.account} + sudo` }}</span></div>
       </section>
-      <section v-else class="install-card">
-        <header><h3>上传一次，按提示安装</h3><button class="primary" :disabled="busy || !data.package.available" @click="download">下载离线安装包</button></header>
-        <p>适用主机：{{ host.name }} · {{ host.address || '控制器本机' }} · {{ data.account }} · <code>{{ data.installRoot }}</code></p>
-        <ol class="offline-steps">
-          <li><strong>下载 Linux amd64 安装包</strong><p>包含当前主机的接入信息和安装程序。</p></li>
-          <li><strong>上传并解压</strong><p>上传到服务器当前账号的主目录，用文件管理器解压。主目录通常有写入权限，可避免向 /opt 上传失败。</p></li>
-          <li><strong>进入解压目录，运行安装</strong><div class="single-command"><code>bash install.sh</code><button class="quiet" @click="copy('install', 'bash install.sh')">{{ copied === 'install' ? '已复制' : '复制' }}</button></div><p>按提示确认，普通账号输入 sudo 密码。安装程序自动完成文件校验、接入和权限配置。</p></li>
-          <li><strong>回到 Ops 检查结果</strong><p>接入组件由 SSH 按需调用，无需另行启动常驻服务。安装 MySQL 等软件时，再选择对应的软件离线材料。</p></li>
-        </ol><button class="secondary" :disabled="busy" @click="check">检查接入结果</button>
+      <section v-if="visibleStatus" class="operation-status" :class="`status-${statusTone}`" aria-live="polite">
+        <div class="status-heading"><h3>{{ statusTitle }}</h3><span class="state-tag" :class="`state-${statusTone === 'success' ? 'success' : statusTone === 'failed' ? 'error' : 'muted'}`">{{ statusLabel }}</span></div>
+        <p class="status-summary">{{ statusSummary }}</p>
+        <div v-if="showPhaseTrack" class="phase-track" aria-label="接入进度">
+          <div v-for="(phase, index) in phaseOrder" :key="phase" class="phase-item" :class="`phase-${phaseState(index)}`"><span class="phase-dot">{{ phaseState(index) === 'done' ? '✓' : index + 1 }}</span><span>{{ phaseLabels[phase] }}</span></div>
+        </div>
+        <p v-if="phaseNote && ['UNKNOWN', 'FAILED'].includes(visibleStatus)" class="phase-note">{{ phaseNote }}</p>
+        <div class="status-actions">
+          <button v-if="job?.status === 'UNKNOWN'" class="primary" :disabled="busy" @click="reconcile">{{ busy ? '正在检查…' : '检查安装结果' }}</button>
+          <button v-if="job?.status === 'SUCCEEDED'" class="secondary" :disabled="busy" @click="check">重新检查</button>
+          <button v-if="job?.status === 'SUCCEEDED' && !updateRequested" class="secondary" :disabled="busy || !data.package.available || host.maintenance" @click="openUpdate">更新接入组件</button>
+          <button v-if="job?.status === 'RUNNING'" class="secondary" :disabled="busy" @click="load()">立即刷新进度</button>
+        </div>
       </section>
-      <p v-if="!data.package.available" class="material-error" role="alert">{{ data.package.message }} <code>{{ data.package.code }}</code></p>
-      <section v-if="checkResult" class="job-result" :class="{ success: checkResult.ready, attention: !checkResult.ready }" aria-live="polite">
-        <strong>{{ checkResult.ready ? '接入检查通过' : '主机接入尚未就绪' }}</strong><p>{{ checkResult.message }}</p><small>{{ hostTime(checkResult.at) }}</small><code v-if="!checkResult.ready">{{ checkResult.code }}</code>
+      <section v-if="checkResult" class="verification-result" :class="{ success: checkResult.ready, attention: !checkResult.ready }" aria-live="polite">
+        <div class="verification-copy"><strong>{{ checkResult.title }}</strong><p>{{ checkResult.message }}</p>
+          <div v-if="canRecover" class="repair-panel">
+            <label v-if="data.account !== 'root' && needsSudoPassword" class="password-field">{{ data.account }} 的登录密码 <span>用于 sudo 提权，仅本次使用</span><input v-model="sudoPassword" type="password" autocomplete="off" maxlength="1024" :disabled="busy" :aria-label="`${data.account} 的登录密码`" placeholder="请输入该账号的系统密码" /></label>
+            <div class="repair-actions"><button class="primary" :disabled="busy" @click="repair">{{ repairing ? '正在恢复并检查…' : missingFiles ? '恢复接入并继续安装' : '修复权限并继续安装' }}</button><button class="quiet" :disabled="busy" @click="reconcile">只重新检查</button></div>
+          </div>
+        </div>
+        <button v-if="!checkResult.ready && job?.status === 'UNKNOWN' && !canRecover" class="secondary" :disabled="busy" @click="reconcile">重新检查</button>
       </section>
-      <section v-if="job" class="job-result" :class="{ success: job.status === 'SUCCEEDED', attention: ['FAILED','UNKNOWN'].includes(job.status) }" aria-live="polite">
-        <strong>{{ job.status === 'SUCCEEDED' ? '主机接入完成' : job.status === 'RUNNING' ? phaseLabels[job.phase] || '安装进行中' : job.status === 'UNKNOWN' ? '需要核对安装结果' : '本次安装未完成' }}</strong>
-        <p>{{ job.message || job.result?.message }}</p><small>{{ hostTime(job.updatedAt) }} · jobId={{ job.id }}</small><code v-if="job.errorCode && job.status !== 'SUCCEEDED'">{{ job.errorCode }} · traceId={{ job.traceId }}</code>
-        <button v-if="job.status === 'UNKNOWN'" class="secondary" :disabled="busy" @click="reconcile">核对安装结果</button><button v-if="job.status === 'SUCCEEDED' && mode === 'online'" class="secondary" :disabled="busy" @click="check">检查接入结果</button>
+      <section v-if="!blocked && (job?.status !== 'SUCCEEDED' || updateRequested)" class="install-workspace">
+        <header class="install-heading"><div><span class="section-kicker">{{ updateRequested ? '接入组件更新' : mode === 'online' ? '在线安装' : '离线安装' }}</span><h3>{{ updateRequested ? '更新此服务器的接入组件' : mode === 'online' ? '一键安装到服务器' : '下载后运行一条命令' }}</h3><p>{{ updateRequested ? '新软件配方和卸载功能需要匹配的接入组件。确认后会传输当前版本并检查结果；业务软件和数据保留。' : mode === 'online' ? 'Ops 会连接服务器、上传材料、安装并自动检查结果。' : '适合服务器无法由 Ops 直接连接的情况。' }}</p></div><div class="method-switch"><button :class="{ active: mode === 'online' }" :disabled="busy || host.kind !== 'SSH'" @click="mode = 'online'">在线</button><button :class="{ active: mode === 'offline' }" :disabled="busy" @click="mode = 'offline'">离线</button></div></header>
+        <div v-if="mode === 'online'" class="install-card">
+          <form @submit.prevent="install">
+            <label v-if="data.account !== 'root' && needsSudoPassword" class="password-field">{{ data.account }} 的登录密码 <span>用于 sudo 提权，仅本次使用</span><input v-model="sudoPassword" type="password" autocomplete="off" maxlength="1024" :disabled="busy" :aria-label="`${data.account} 的登录密码`" placeholder="请输入该账号的系统密码" /></label>
+            <div class="install-action"><button class="primary" type="submit" :disabled="busy || !data.package.available || host.maintenance">{{ busy ? '正在处理…' : updateRequested ? '确认更新接入组件' : '开始安装' }}</button><button v-if="updateRequested" class="quiet" type="button" :disabled="busy" @click="updateRequested = false">取消更新</button></div>
+          </form><p v-if="host.maintenance" class="maintenance-note">主机正在维护，请先退出维护模式。</p>
+        </div>
+        <div v-else class="install-card offline-card">
+          <div class="offline-intro"><p>下载后上传到服务器、解压，并在解压目录运行：</p><button class="secondary" :disabled="busy || !data.package.available" @click="download">下载离线安装包</button></div>
+          <div class="single-command"><code>bash install.sh</code><button class="quiet" @click="copy('install', 'bash install.sh')">{{ copied === 'install' ? '已复制' : '复制命令' }}</button></div>
+          <p>命令会请求 root 或 sudo 权限，并自动识别首次安装、同一服务器升级或授权恢复。</p>
+          <button class="secondary check-button" :disabled="busy" @click="check">检查安装结果</button>
+        </div>
       </section>
-      <details class="diagnostics"><summary>接入检查与高级维护</summary>
-        <div class="preparation-steps"><article v-for="step in data.steps" :key="step.key"><strong>{{ step.label }}</strong><span :class="['state-tag', step.status === 'AVAILABLE' ? 'state-success' : 'state-muted']">{{ step.status === 'AVAILABLE' ? '已就绪' : step.status === 'UNAVAILABLE' ? '待处理' : '待检查' }}</span><p>{{ step.message }}</p><code>{{ step.code }}</code></article></div>
-        <button class="secondary" :disabled="busy" @click="check">重新检查主机能力</button>
-        <dl><dt>系统架构</dt><dd>{{ data.platform }}（当前支持）</dd><dt>包文件</dt><dd>{{ data.package.fileName }}</dd><dt>执行器大小</dt><dd>{{ (data.package.byteSize / 1024 / 1024).toFixed(1) }} MiB</dd><dt>SHA-256</dt><dd><code>{{ data.package.sha256 }}</code></dd></dl>
-        <div class="command-block"><header><strong>仅查看安装信息</strong><button class="quiet" :disabled="!data.commands.preview" @click="copy('preview', data.commands.preview)">{{ copied === 'preview' ? '已复制' : '复制' }}</button></header><pre>{{ data.commands.preview }}</pre></div>
-        <p>授权范围：{{ data.authorization.scope }}</p><code>{{ data.authorization.command }}</code><code>controllerId={{ data.controllerId }}</code><code>targetId={{ data.targetId }}</code>
-      </details>
+      <p v-if="!data.package.available" class="material-error" role="alert">{{ data.package.message }}</p>
     </template>
   </div>
 </template>
 
 <style scoped>
-.host-preparation { display:grid; gap:20px; padding-top:12px; min-width:0; }
-.host-preparation header { display:flex; align-items:center; justify-content:space-between; gap:14px; }
-.host-preparation>header>div { min-width:0; }
-.host-preparation>header>.quiet { flex-shrink:0; white-space:nowrap; }
-h3 { font-size:14px; margin:0; }
-p { font-size:12px; line-height:1.8; color:var(--muted); margin:8px 0 0; }
+.host-preparation { display:grid; gap:16px; padding:8px 0 6px; min-width:0; color:var(--text); }
+.host-preparation header { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.preparation-heading>div { min-width:0; }
+.preparation-heading>.quiet { flex-shrink:0; white-space:nowrap; }
+h3 { font-size:15px; line-height:1.5; margin:0; }
+p { font-size:12px; line-height:1.75; color:var(--muted); margin:7px 0 0; }
 code { font:11px/1.8 var(--mono); overflow-wrap:anywhere; }
-small { font-size:11px; color:var(--muted); overflow-wrap:anywhere; }
-.mode-switch { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-.mode-switch button { display:grid; gap:6px; text-align:left; background:var(--surface,#fff); border:1px solid var(--border); border-radius:6px; padding:16px; color:var(--text); }
-.mode-switch button.selected { border-color:var(--accent,#315a97); box-shadow:inset 3px 0 var(--accent,#315a97); }
-.mode-switch button:focus-visible { outline:2px solid var(--accent,#315a97); outline-offset:2px; }
-.install-card,.diagnostics,.job-result { border:1px solid var(--border); border-radius:6px; padding:20px; min-width:0; }
-dl { display:grid; grid-template-columns:85px minmax(0,1fr); gap:10px; font-size:12px; margin:18px 0; }
-dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; }
-form { display:grid; gap:18px; margin-top:18px; } form>.primary { justify-self:start; }
-.password-field { display:grid; gap:8px; font-size:12px; }
-.password-field span { font-size:11px; color:var(--muted); }
-.password-field input { max-width:340px; width:100%; min-width:0; box-sizing:border-box; }
-.confirm-line { display:flex; align-items:flex-start; gap:8px; font-size:12px; line-height:1.7; }
-.confirm-line input { width:auto; flex-shrink:0; margin-top:4px; }
-.offline-steps { padding-left:22px; margin:22px 0; display:grid; gap:20px; font-size:12px; }
-.offline-steps li::marker { color:var(--muted); font-weight:600; }
-.single-command { display:flex; align-items:center; justify-content:space-between; margin-top:10px; padding:8px 12px; background:var(--surface-soft,#f6f8fb); border:1px solid var(--border); border-radius:5px; }
-.job-result { display:grid; gap:10px; font-size:12px; } .job-result .secondary { justify-self:start; }
-.job-result.success { border-left:3px solid #478362; } .job-result.attention { border-left:3px solid #ba8642; }
-.preparation-error,.material-error { display:grid; gap:8px; padding:14px; background:#fff5f3; border:1px solid #efd2c9; border-radius:6px; font-size:12px; }
-.diagnostics summary { cursor:pointer; font-size:12px; color:var(--muted); }
-.preparation-steps { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:20px 0; }
-.preparation-steps article { min-width:0; padding:12px; border:1px solid var(--border); border-radius:4px; font-size:12px; }
-.preparation-steps .state-tag { margin-left:8px; }
-.command-block { margin-top:18px; font-size:12px; }
-.command-block pre { white-space:pre-wrap; overflow-wrap:anywhere; padding:12px; background:#f6f8fb; border:1px solid var(--border); border-radius:5px; font:11px/1.9 var(--mono); }
-@media(max-width:550px) { .mode-switch,.preparation-steps { grid-template-columns:1fr; } .install-card,.diagnostics,.job-result { padding:14px; } .install-card>header { align-items:flex-start; flex-direction:column; } }
+small { font-size:11px; line-height:1.6; color:var(--muted); overflow-wrap:anywhere; }
+.target-overview { display:grid; grid-template-columns:minmax(0,1.65fr) minmax(240px,1fr); gap:0; overflow:hidden; border:1px solid var(--border); border-radius:8px; background:#f8fafc; }
+.install-location { display:grid; gap:7px; min-width:0; padding:16px 18px; border-right:1px solid var(--border); }
+.install-location>span,.target-meta small,.section-kicker { font-size:10px; font-weight:700; line-height:1.4; letter-spacing:.08em; color:#718096; text-transform:uppercase; }
+.install-location code { font-size:13px; color:#1f3a5f; }
+.target-meta { display:grid; grid-template-columns:1fr 1fr; min-width:0; }
+.target-meta>span { display:grid; gap:5px; align-content:center; min-width:0; padding:14px 16px; font-size:12px; color:#2d3c50; overflow-wrap:anywhere; }
+.target-meta>span+span { border-left:1px solid var(--border); }
+.operation-status { --status:#315a97; display:grid; gap:13px; padding:18px 20px; border:1px solid var(--border); border-left:3px solid var(--status); border-radius:8px; background:var(--surface,#fff); box-shadow:var(--card-shadow); }
+.status-running { --status:#315a97; }
+.status-unknown { --status:#a66b18; }
+.status-success { --status:#397454; }
+.status-failed { --status:#a0443d; }
+.status-heading { display:flex; align-items:center; justify-content:space-between!important; gap:10px; }
+.status-heading h3 { font-size:15px; }
+.status-summary { margin:0; color:var(--text-secondary,#475569); }
+.phase-track { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0; padding-top:3px; }
+.phase-item { display:grid; grid-template-columns:24px minmax(0,1fr); align-items:center; gap:7px; position:relative; min-width:0; color:#8792a2; font-size:11px; }
+.phase-item::after { content:""; position:absolute; left:24px; right:7px; top:11px; height:1px; background:#d7dde5; }
+.phase-item:last-child::after { display:none; }
+.phase-item>span:last-child { position:relative; z-index:1; width:max-content; max-width:calc(100% - 4px); padding-right:7px; background:#fff; }
+.phase-dot { display:grid; place-items:center; position:relative; z-index:1; width:22px; height:22px; border:1px solid #cbd3dd; border-radius:50%; background:#fff; font:600 10px/1 var(--mono); }
+.phase-done,.phase-active,.phase-uncertain,.phase-failed { color:#243247; font-weight:600; }
+.phase-done .phase-dot { border-color:var(--status); background:var(--status); color:#fff; }
+.phase-active .phase-dot { border:5px solid color-mix(in srgb,var(--status) 22%,#fff); background:var(--status); box-shadow:0 0 0 1px var(--status); color:transparent; }
+.phase-uncertain .phase-dot,.phase-failed .phase-dot { border-color:var(--status); background:#fff; color:var(--status); }
+.phase-note { margin:0; color:var(--status); font-weight:600; }
+.status-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.install-workspace { display:grid; gap:18px; padding:20px; border:1px solid var(--border); border-radius:8px; min-width:0; background:#fff; }
+.install-heading { align-items:flex-start!important; }
+.install-heading>div:first-child { min-width:0; }
+.install-heading h3 { margin-top:4px; font-size:16px; }
+.method-switch { display:flex; flex-shrink:0; padding:3px; border-radius:6px; background:#eef2f6; }
+.method-switch button { min-width:58px; padding:7px 10px; border:0; border-radius:4px; background:transparent; color:#64748b; font-size:11px; }
+.method-switch button.active { background:#fff; color:#26364b; box-shadow:0 1px 3px #0f172a18; font-weight:700; }
+.install-card { display:grid; gap:16px; min-width:0; }
+form { display:grid; gap:17px; }
+.password-field { display:grid; gap:7px; max-width:430px; font-size:12px; font-weight:600; }
+.password-field span { font-size:11px; font-weight:400; color:var(--muted); }
+.password-field input { width:100%; min-width:0; box-sizing:border-box; }
+.install-action { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }.install-action span { font-size:11px; color:var(--muted); }
+.maintenance-note { color:#946619; }
+.offline-intro { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+.offline-intro p { margin:0; }
+.single-command { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; background:#f4f7fa; border:1px solid var(--border); border-radius:6px; }
+.single-command code { font-size:13px; color:#1e3a5f; }
+.check-button { justify-self:start; }
+.verification-result { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; padding:14px 16px; border-left:3px solid #ba8642; background:#fafafa; border-radius:4px; font-size:12px; }
+.verification-result.success { border-left-color:#478362; }.verification-result p { margin-top:3px; }
+.verification-copy { flex:1; min-width:0; }
+.repair-panel { display:grid; gap:13px; max-width:720px; margin-top:14px; padding:15px; border:1px solid #e8d4b4; border-radius:7px; background:#fffaf1; }
+.repair-panel p { color:#66543a; }
+.repair-panel .password-field { max-width:420px; }
+.repair-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.preparation-error,.material-error { display:grid; gap:7px; padding:14px 16px; background:#fff5f3; border:1px solid #efd2c9; border-radius:6px; font-size:12px; }
+.preparation-error p { margin:0; }.preparation-error button { justify-self:start; }
+@media(max-width:720px) { .target-overview { grid-template-columns:1fr; }.install-location { border-right:0; border-bottom:1px solid var(--border); }.phase-track { grid-template-columns:1fr 1fr; gap:12px 0; }.phase-item:nth-child(2)::after { display:none; } }
+@media(max-width:550px) { .host-preparation { gap:14px; }.preparation-heading,.install-heading { align-items:flex-start!important; }.operation-status,.install-workspace { padding:16px; }.status-heading h3 { font-size:15px; }.status-summary { font-size:12px; }.install-heading { flex-direction:column; }.method-switch { width:100%; }.method-switch button { flex:1; }.offline-intro,.verification-result { align-items:flex-start; flex-direction:column; gap:9px; }.target-meta { grid-template-columns:1fr; }.target-meta>span+span { border-left:0; border-top:1px solid var(--border); } }
 </style>

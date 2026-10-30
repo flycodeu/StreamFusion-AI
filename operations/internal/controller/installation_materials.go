@@ -17,6 +17,9 @@ import (
 )
 
 type installationMaterial struct {
+	RecipeName     string                    `json:"recipeName"`
+	Origin         materialOrigin            `json:"origin"`
+	Sources        []materialSource          `json:"sources"`
 	RuntimeMode    string                    `json:"runtimeMode"`
 	ID             string                    `json:"id"`
 	Name           string                    `json:"name"`
@@ -45,6 +48,9 @@ func scanInstallationMaterial(row interface{ Scan(...any) error }) (installation
 		err = deploy.StrictJSON([]byte(raw), &m.Definition)
 	}
 	m.RecipeKey, m.RecipeVersion, m.RecipeRevision = m.Definition.Key, m.Definition.Version, m.Definition.Revision
+	m.RecipeName = m.Definition.Name
+	m.Origin = materialOrigin{Kind: "UNKNOWN", Verification: materialVerification(m)}
+	m.Sources = materialSources(m.Definition, m.RuntimeMode)
 	return m, err
 }
 
@@ -60,6 +66,9 @@ func (s *Store) readInstallationMaterial(id string) (installationMaterial, error
 	m, err := scanInstallationMaterial(s.DB.QueryRow("SELECT "+materialColumns+" FROM installation_materials WHERE id=?", id))
 	if err == nil && m.Status == "AVAILABLE" {
 		s.installationMaterialAvailability(&m)
+	}
+	if err == nil {
+		s.installationMaterialOrigin(&m)
 	}
 	return m, err
 }
@@ -180,6 +189,7 @@ func (h *HTTP) createInstallationMaterial(w http.ResponseWriter, r *http.Request
 			return
 		}
 		h.store.installationMaterialAvailability(&m)
+		h.store.installationMaterialOrigin(&m)
 		h.success(w, r, m)
 		return
 	}
@@ -207,6 +217,10 @@ func (h *HTTP) createInstallationMaterial(w http.ResponseWriter, r *http.Request
 		err = tx.Commit()
 	}
 	if err != nil {
+		h.internal(w, r, err)
+		return
+	}
+	if err = h.store.writeMaterialOrigin(id, materialOrigin{Kind: "UPLOADED", FileName: strings.TrimSpace(in.Name), ImportedAt: now}); err != nil {
 		h.internal(w, r, err)
 		return
 	}
@@ -458,6 +472,10 @@ func (h *HTTP) deleteInstallationMaterial(w http.ResponseWriter, r *http.Request
 			h.fail(w, r, 500, "INSTALL_MATERIAL_CLEANUP_FAILED", "材料已禁用，但文件清理失败；检查磁盘后重试删除")
 			return
 		}
+	}
+	if e := os.Remove(h.store.materialOriginPath(id)); e != nil && !os.IsNotExist(e) {
+		h.fail(w, r, 500, "INSTALL_MATERIAL_CLEANUP_FAILED", "材料已禁用，但来源记录清理失败；检查磁盘后重试删除")
+		return
 	}
 	h.success(w, r, map[string]string{"id": id})
 }

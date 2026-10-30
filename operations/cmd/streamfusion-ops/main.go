@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -32,7 +33,13 @@ func main() {
 }
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("用法: streamfusion-ops <serve|stop|init-admin|backup|restore|export-key|native-package|target-init|target-verify|target-upgrade|version> --help")
+		return errors.New("用法: streamfusion-ops <serve|stop|init-admin|backup|restore|export-key|native-package|material-catalog|material-library-check|import-materials|target-init|target-verify|target-repair|target-upgrade|version> --help")
+	}
+	if args[0] == "material-catalog" {
+		return writeMaterialCatalog(args[1:], os.Stdout)
+	}
+	if args[0] == "material-library-check" {
+		return checkMaterialLibrary(args[1:], os.Stdout)
 	}
 	if args[0] == "native-package" {
 		flags := flag.NewFlagSet("native-package", flag.ContinueOnError)
@@ -129,6 +136,24 @@ func run(args []string) error {
 		fmt.Printf("TARGET_UPGRADED: 旧执行器保留于 %s；请重新检查主机能力\n", backup)
 		return nil
 	}
+	if args[0] == "target-repair" {
+		f := flag.NewFlagSet("target-repair", flag.ContinueOnError)
+		root := f.String("root", "", "已有受管目标目录")
+		cid := f.String("controller-id", "", "已有控制器ID")
+		tid := f.String("target-id", "", "已有目标ID")
+		expected := f.String("expected-sha256", "", "原安装作业记录的可信执行器SHA-256")
+		if err := f.Parse(args[1:]); err != nil {
+			return err
+		}
+		if f.NArg() != 0 {
+			return errors.New("NO_POSITIONAL_ARGUMENTS")
+		}
+		if err := deploy.RepairTargetPermissions(*root, *cid, *tid, *expected); err != nil {
+			return err
+		}
+		fmt.Println("TARGET_PERMISSIONS_REPAIRED")
+		return nil
+	}
 	if args[0] == "target-verify" {
 		f := flag.NewFlagSet("target-verify", flag.ContinueOnError)
 		root := f.String("root", "", "已有受管目标目录")
@@ -162,11 +187,21 @@ func run(args []string) error {
 	tlsKey := flags.String("tls-key", "", "HTTPS私钥路径")
 	platformTokenFile := flags.String("platform-token-file", "", "Platform 服务身份令牌文件；不配置则关闭预览实例目录")
 	stopTimeout := flags.Duration("timeout", 15*time.Second, "关闭等待时间，1s至2m")
+	materialLibrary := flags.String("material-library", "", "本地材料库目录；serve默认读取程序相邻materials，缺失则跳过")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return errors.New("不支持位置参数")
+	}
+	materialLibraryExplicit := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "material-library" {
+			materialLibraryExplicit = true
+		}
+	})
+	if (args[0] == "import-materials" || materialLibraryExplicit) && strings.TrimSpace(*materialLibrary) == "" {
+		return errors.New("MATERIAL_LIBRARY_REQUIRED: 请使用--material-library指定有效目录")
 	}
 	if args[0] == "stop" {
 		if *stopTimeout < time.Second || *stopTimeout > 2*time.Minute {
@@ -181,7 +216,7 @@ func run(args []string) error {
 		return controller.Restore(*archive, *key, *state)
 	}
 	switch args[0] {
-	case "serve", "init-admin", "backup", "export-key", "check-state":
+	case "serve", "init-admin", "backup", "export-key", "check-state", "import-materials":
 	default:
 		return errors.New("未知命令")
 	}
@@ -224,6 +259,8 @@ func run(args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "import-materials":
+		return importMaterialLibrary(s, *materialLibrary, true, "", os.Stdout)
 	case "init-admin":
 		var count int
 		if err = s.DB.QueryRow("SELECT count(*) FROM admins").Scan(&count); err != nil {
@@ -306,6 +343,13 @@ func run(args []string) error {
 	if admins == 0 {
 		return errors.New("ADMIN_REQUIRED: 请先用 init-admin 初始化管理员")
 	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if err = importMaterialLibrary(s, *materialLibrary, materialLibraryExplicit, executable, os.Stdout); err != nil {
+		return err
+	}
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
 		return fmt.Errorf("LISTEN_FAILED: %w", err)
@@ -359,6 +403,36 @@ func run(args []string) error {
 	}
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
+	}
+	return err
+}
+
+func writeMaterialCatalog(args []string, output io.Writer) error {
+	flags := flag.NewFlagSet("material-catalog", flag.ContinueOnError)
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("NO_POSITIONAL_ARGUMENTS")
+	}
+	return json.NewEncoder(output).Encode(serviceinstall.Catalog())
+}
+
+func importMaterialLibrary(store *controller.Store, selected string, explicit bool, executable string, output io.Writer) error {
+	if !explicit {
+		selected = filepath.Join(filepath.Dir(executable), "materials")
+		if _, err := os.Lstat(selected); os.IsNotExist(err) {
+			return nil
+		}
+		if _, err := os.Lstat(filepath.Join(selected, "library.json")); os.IsNotExist(err) {
+			return nil
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+	result, err := store.ImportInstallationMaterialLibrary(ctx, selected)
+	if outputErr := json.NewEncoder(output).Encode(result); outputErr != nil {
+		return outputErr
 	}
 	return err
 }

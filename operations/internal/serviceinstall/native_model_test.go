@@ -10,7 +10,7 @@ func nativeConfigFixture(d Definition) Config {
 	c := Config{Name: d.Name, RuntimeMode: "NATIVE", BindAddress: "10.0.0.8", HostPort: d.Port, MemoryMiB: 512}
 	if d.Kind == "TOOL" {
 		c.HostPort = 0
-	} else if d.Key != "nginx" {
+	} else if d.Key != "nginx" && d.Key != "docker" {
 		c.CredentialID, c.CredentialRevision = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", "1"
 	}
 	if d.Key == "seaweedfs" {

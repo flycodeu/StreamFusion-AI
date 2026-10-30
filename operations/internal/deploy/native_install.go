@@ -17,6 +17,9 @@ import (
 type nativeInstallation struct{ SoftwareID, JobID, ConfigHash, BinaryPath, BinaryHash, UnitHash string }
 
 func (x *executor) installNative(req Request, dir string) (Result, error) {
+	if req.Installation.Definition.Key == "docker" {
+		return x.installDockerEngine(req, dir)
+	}
 	result := softwareResult(req)
 	i := req.Installation
 	preflight := x.nativeInstallPreflight(*i)
@@ -159,6 +162,9 @@ func (x *executor) installNative(req Request, dir string) (Result, error) {
 func (x *executor) nativeSoftware(req Request, n nativeInstallation, identity string) SoftwareRequest {
 	i := req.Installation
 	kind, locator := "SYSTEMD", nativeUnit(i.SoftwareID)
+	if i.Definition.Key == "docker" {
+		locator = "docker.service"
+	}
 	if i.Definition.Kind == "TOOL" {
 		kind, locator = "TOOL", n.BinaryPath
 	}
@@ -166,6 +172,9 @@ func (x *executor) nativeSoftware(req Request, n nativeInstallation, identity st
 }
 
 func (x *executor) reconcileNative(req Request, dir string) Result {
+	if req.Installation.Definition.Key == "docker" {
+		return x.reconcileDockerEngine(req, dir)
+	}
 	result := softwareResult(req)
 	result.ErrorCode = "NATIVE_RECONCILE_REQUIRED"
 	var marker nativeInstallation

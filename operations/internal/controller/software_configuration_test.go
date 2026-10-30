@@ -84,6 +84,10 @@ func installReceiptFixture(req deploy.Request, i serviceinstall.Request, marker 
 			locator = e.BinaryPath
 			state = "INSTALLED"
 		}
+		if i.Definition.Key == "docker" {
+			locator = "docker.service"
+			e.BinaryPath = "/usr/bin/dockerd"
+		}
 	}
 	e.Locator = locator
 	e.IdentityHash = deploy.Digest([]string{kind, locator, e.ImageID})

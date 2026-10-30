@@ -46,7 +46,8 @@ var executorFailureMessages = map[string]string{
 	"EXECUTOR_NOT_EXECUTABLE":          "受管执行器不可执行，请核对文件权限及Linux架构",
 	"EXECUTOR_INITIALIZATION_REQUIRED": "执行器尚未完成受管初始化，请核对安装准备；不要覆盖已有目录",
 	"EXECUTOR_PRIVILEGE_REQUIRED":      "执行器没有所需的Linux root身份，请核对受限sudo授权或主机类型",
-	"EXECUTOR_PATH_UNSAFE":             "执行器路径不安全，请核对受管目录及符号链接",
+	"EXECUTOR_PATH_UNSAFE":             "接入目录不满足安全要求，请检查符号链接、所有者和写入权限",
+	"EXECUTOR_PATH_UNREADABLE":         "当前 SSH 账号无法访问接入目录或读取执行器，请在安装准备中恢复接入权限",
 	"SUDO_UNAVAILABLE":                 "目标未提供sudo；请由管理员完成受限授权，root连接可直接执行",
 	"SUDO_AUTHORIZATION_REQUIRED":      "连接账号未获受限免交互授权，请按安装准备中的固定策略授权",
 	"EXECUTOR_IDENTITY_MISMATCH":       "执行器归属不匹配，请核对控制器、主机ID和受管目录",
@@ -130,11 +131,12 @@ func (h *HTTP) executorFailure(ctx context.Context, t target, err error) (string
 
 func executorFileProbeCommand(root string, rootUser ...bool) string {
 	file := "'" + root + "/executor'"
+	directory := "'" + root + "'"
 	authorization := ""
 	if len(rootUser) == 0 || !rootUser[0] {
 		authorization = "elif [ ! -x /usr/bin/sudo ]; then printf 'SFOPS_EXECUTOR_V1\\nSUDO_MISSING\\n'; elif ! /usr/bin/sudo -n -l -- " + file + " target-exec >/dev/null 2>&1; then printf 'SFOPS_EXECUTOR_V1\\nAUTHORIZATION_REQUIRED\\n'; "
 	}
-	return "/bin/sh -c \"if [ -L " + file + " ]; then printf 'SFOPS_EXECUTOR_V1\\nUNSAFE\\n'; elif [ ! -e " + file + " ]; then printf 'SFOPS_EXECUTOR_V1\\nMISSING\\n'; elif [ ! -f " + file + " ] || [ ! -x " + file + " ]; then printf 'SFOPS_EXECUTOR_V1\\nNOT_EXECUTABLE\\n'; " + authorization + "else printf 'SFOPS_EXECUTOR_V1\\nPRESENT\\n'; fi\""
+	return "/bin/sh -c \"if [ -L " + directory + " ] || [ -L " + file + " ]; then printf 'SFOPS_EXECUTOR_V1\\nUNSAFE\\n'; elif [ -d " + directory + " ] && [ ! -x " + directory + " ]; then printf 'SFOPS_EXECUTOR_V1\\nUNREADABLE\\n'; elif [ ! -e " + file + " ]; then printf 'SFOPS_EXECUTOR_V1\\nMISSING\\n'; elif [ ! -r " + file + " ]; then printf 'SFOPS_EXECUTOR_V1\\nUNREADABLE\\n'; elif [ ! -f " + file + " ] || [ ! -x " + file + " ]; then printf 'SFOPS_EXECUTOR_V1\\nNOT_EXECUTABLE\\n'; " + authorization + "else printf 'SFOPS_EXECUTOR_V1\\nPRESENT\\n'; fi\""
 }
 
 // This fallback only inspects the configured path and asks sudo to list the
@@ -172,6 +174,8 @@ func (h *HTTP) executorFileState(ctx context.Context, t target) string {
 	switch state {
 	case "MISSING":
 		return "EXECUTOR_MISSING"
+	case "UNREADABLE":
+		return "EXECUTOR_PATH_UNREADABLE"
 	case "UNSAFE":
 		return "EXECUTOR_PATH_UNSAFE"
 	case "NOT_EXECUTABLE":

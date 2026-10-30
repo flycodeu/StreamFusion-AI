@@ -1,10 +1,14 @@
 package controller
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -54,7 +58,7 @@ func TestHostPreparationEncryptedRequestAndVersionGuards(t *testing.T) {
 }
 
 func TestHostPreparationSSHResultsIdempotencyAndRecovery(t *testing.T) {
-	for _, scenario := range []string{"success", "sudo-required", "interrupted", "wrong-digest", "arm64", "host-changed", "root"} {
+	for _, scenario := range []string{"success", "sudo-required", "interrupted", "wrong-digest", "arm64", "host-changed", "root", "invalid-reply-once", "invalid-reply-always"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, b := setup(t)
 			b.login()
@@ -99,6 +103,7 @@ func TestHostPreparationSSHResultsIdempotencyAndRecovery(t *testing.T) {
 			}
 
 			var privileged, uploads atomic.Int32
+			var capabilityCalls atomic.Int32
 			var receivedPassword, correctDigest atomic.Bool
 			correctDigest.Store(scenario != "wrong-digest")
 			password := "test-only-sudo-$'secret"
@@ -107,6 +112,11 @@ func TestHostPreparationSSHResultsIdempotencyAndRecovery(t *testing.T) {
 			}
 			handler := func(command string) *hostSSHResponse {
 				switch {
+				case command == executorSSHCommand(target) && strings.HasPrefix(scenario, "invalid-reply-"):
+					if capabilityCalls.Add(1) == 1 || scenario == "invalid-reply-always" {
+						return &hostSSHResponse{Stdout: `{"owner":`}
+					}
+					return nil
 				case command == hostReadOnlyCommand && scenario == "arm64":
 					return &hostSSHResponse{Stdout: "SFOPS_HOST_V1\nLinux\naarch64\nDOCKER_MISSING\n"}
 				case strings.Contains(command, "&& cat >"):
@@ -149,10 +159,13 @@ func TestHostPreparationSSHResultsIdempotencyAndRecovery(t *testing.T) {
 			f.Responses.Store(&handler)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			code, uncertain := b.h.runHostPreparation(ctx, actor, job, target, archive, material.Binary.Hash, password)
-			want := map[string]string{"success": "PREPARATION_READY", "root": "PREPARATION_READY", "sudo-required": "PREPARATION_SUDO_REQUIRED", "arm64": "PREPARATION_PLATFORM_UNSUPPORTED", "host-changed": "PREPARATION_HOST_CHANGED", "interrupted": "PREPARATION_RESULT_UNKNOWN", "wrong-digest": "PREPARATION_RESULT_UNKNOWN"}[scenario]
-			if code != want || uncertain != (scenario == "interrupted" || scenario == "wrong-digest") {
+			code, uncertain := b.h.runHostPreparation(ctx, actor, job, target, archive, material.Binary.Hash, password, false)
+			want := map[string]string{"success": "PREPARATION_READY", "root": "PREPARATION_READY", "sudo-required": "PREPARATION_SUDO_REQUIRED", "arm64": "PREPARATION_PLATFORM_UNSUPPORTED", "host-changed": "PREPARATION_HOST_CHANGED", "interrupted": "PREPARATION_RESULT_UNKNOWN", "wrong-digest": "EXECUTOR_HASH_MISMATCH", "invalid-reply-once": "PREPARATION_READY", "invalid-reply-always": "EXECUTOR_RESPONSE_INVALID"}[scenario]
+			if code != want || uncertain != (scenario == "interrupted" || scenario == "wrong-digest" || scenario == "invalid-reply-always") {
 				t.Fatalf("code=%s uncertain=%v, expected %s", code, uncertain, want)
+			}
+			if strings.HasPrefix(scenario, "invalid-reply-") && (capabilityCalls.Load() != 2 || privileged.Load() != 1) {
+				t.Fatal("invalid reply did not get exactly one read-only retry", capabilityCalls.Load(), privileged.Load())
 			}
 			if (scenario == "success" || scenario == "root") && !receivedPassword.Load() {
 				t.Fatal("password was not passed only through stdin")
@@ -168,6 +181,14 @@ func TestHostPreparationSSHResultsIdempotencyAndRecovery(t *testing.T) {
 			}
 			if err := b.h.finishPreparation(job, status, code); err != nil {
 				t.Fatal(err)
+			}
+			var finalPhase string
+			if err := s.DB.QueryRow("SELECT phase FROM jobs WHERE id=?", job).Scan(&finalPhase); err != nil {
+				t.Fatal(err)
+			}
+			wantPhase := map[string]string{"success": "VERIFYING_EXECUTOR", "root": "VERIFYING_EXECUTOR", "sudo-required": "INSTALLING_EXECUTOR", "arm64": "CONNECTING", "host-changed": "UPLOADING_EXECUTOR", "interrupted": "INSTALLING_EXECUTOR", "wrong-digest": "VERIFYING_EXECUTOR", "invalid-reply-once": "VERIFYING_EXECUTOR", "invalid-reply-always": "VERIFYING_EXECUTOR"}[scenario]
+			if finalPhase != wantPhase {
+				t.Fatalf("finalization erased progress phase: got %s want %s", finalPhase, wantPhase)
 			}
 			if scenario == "interrupted" {
 				_, _ = s.DB.Exec("UPDATE jobs SET status='RUNNING' WHERE id=?", job)
@@ -206,6 +227,265 @@ func boolInt(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+func TestPreparationRecoveryKeepsOriginalIdentityAndReconcilesReplacement(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	f := hostSSHServer(t, s, b, true, false)
+	host := f.create(t, b, "recover-replacement")
+	target, err := s.readTarget(host["id"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	actor := preparationActor(t, b)
+	_, material := preparationForHost(target, s.controllerID(), targetPreparationFixture(t))
+	original := preparationSnapshot{Host: target, BinarySHA: strings.Repeat("a", 64), ScriptSHA: strings.Repeat("b", 64)}
+	job, _, err := b.h.acceptPreparation(actor, uuid.NewString(), "recovery-frozen", original, "recovery-frozen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = b.h.finishPreparation(job, "UNKNOWN", "PREPARATION_RESULT_UNKNOWN"); err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	if err = s.DB.QueryRow("SELECT input_json FROM jobs WHERE id=?", job).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.h.acceptPreparationRepair(actor, target, job, raw, material, "recovery-accepted"); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.DB.QueryRow("SELECT input_json FROM jobs WHERE id=?", job).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var saved preparationSnapshot
+	if err = deploy.StrictJSON([]byte(raw), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if saved.BinarySHA != original.BinarySHA || saved.ScriptSHA != original.ScriptSHA || saved.RecoveryBinarySHA != material.Binary.Hash || saved.RecoveryScriptSHA != material.Script.Hash {
+		t.Fatal("accepted recovery lost frozen identities")
+	}
+	handler := func(command string) *hostSSHResponse {
+		if strings.HasPrefix(command, "sha256sum -- ") {
+			return &hostSSHResponse{Stdout: material.Binary.Hash + "  " + target.InstallRoot + "/executor\n"}
+		}
+		if strings.Contains(command, "SFOPS_SETUP_ENTERED") {
+			t.Error("reconciliation replayed installation")
+		}
+		return nil
+	}
+	f.Responses.Store(&handler)
+	response := b.call("POST", "/hosts/"+target.ID+"/preparation/reconcile", map[string]string{"jobId": job, "expectedVersion": target.Version}, 200)
+	if dataOf(t, response)["status"] != "SUCCEEDED" {
+		t.Fatal("accepted replacement could not be reconciled")
+	}
+	var locks int
+	if err = s.DB.QueryRow("SELECT count(*) FROM operation_locks WHERE job_id=?", job).Scan(&locks); err != nil || locks != 0 {
+		t.Fatal("confirmed recovery retained lock", locks, err)
+	}
+}
+
+func TestPreparationRecoveryRejectsChangedMaterialsBeforeSSH(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	b.h.targetPackageDir = targetPreparationFixture(t)
+	f := hostSSHServer(t, s, b, true, false)
+	host := f.create(t, b, "recover-material-change")
+	target, err := s.readTarget(host["id"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := preparationSnapshot{Host: target, BinarySHA: strings.Repeat("a", 64), ScriptSHA: strings.Repeat("b", 64), RecoveryBinarySHA: strings.Repeat("c", 64), RecoveryScriptSHA: strings.Repeat("d", 64)}
+	job, _, err := b.h.acceptPreparation(preparationActor(t, b), uuid.NewString(), "material-change", snapshot, "material-change")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = b.h.finishPreparation(job, "UNKNOWN", "PREPARATION_RESULT_UNKNOWN"); err != nil {
+		t.Fatal(err)
+	}
+	response := b.call("POST", "/hosts/"+target.ID+"/preparation/repair", preparationRepairInput{JobID: job, ExpectedVersion: target.Version, Confirmed: true}, 409)
+	if !strings.Contains(response.Body.String(), "PREPARATION_RECOVERY_MATERIAL_CHANGED") || f.Commands.Load() != 0 {
+		t.Fatal("changed recovery materials reached SSH", response.Body.String())
+	}
+}
+
+func TestPreparationFailureKeepsOnlyStableDiagnosticCodes(t *testing.T) {
+	if got := preparationScriptFailure("SFOPS_SETUP_ENTERED\nSFOPS_ERROR=PREPARATION_AUTHORIZATION_CONFLICT\nprivate output"); got != "PREPARATION_AUTHORIZATION_CONFLICT" {
+		t.Fatal(got)
+	}
+	if got := preparationScriptFailure("SFOPS_ERROR=arbitrary-private-output\n"); got != "PREPARATION_RESULT_UNKNOWN" {
+		t.Fatal(got)
+	}
+	if preparationVerificationMessage("EXECUTOR_MISSING") == preparationVerificationMessage("EXECUTOR_HASH_UNAVAILABLE") {
+		t.Fatal("missing and unreadable still share a diagnosis")
+	}
+}
+
+func targetArchiveEntry(t *testing.T, archive []byte, name string) []byte {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gz.Close()
+	reader := tar.NewReader(gz)
+	for {
+		header, nextErr := reader.Next()
+		if nextErr == io.EOF {
+			break
+		}
+		if nextErr != nil {
+			t.Fatal(nextErr)
+		}
+		if header.Name == name {
+			content, readErr := io.ReadAll(reader)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			return content
+		}
+	}
+	t.Fatalf("archive entry %s not found", name)
+	return nil
+}
+
+func TestHostPreparationRepairRequiresOriginalUnknownLock(t *testing.T) {
+	for _, scenario := range []string{"terminal", "lock-missing"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, b := setup(t)
+			b.login()
+			f := hostSSHServer(t, s, b, true, false)
+			host := f.create(t, b, "repair-guard-"+scenario)
+			target, err := s.readTarget(host["id"].(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			actor := preparationActor(t, b)
+			snapshot := preparationSnapshot{Host: target, BinarySHA: strings.Repeat("a", 64), ScriptSHA: strings.Repeat("b", 64)}
+			job, _, err := b.h.acceptPreparation(actor, uuid.NewString(), "repair-guard-"+scenario, snapshot, "repair-guard")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = b.h.finishPreparation(job, "UNKNOWN", "PREPARATION_RESULT_UNKNOWN"); err != nil {
+				t.Fatal(err)
+			}
+			if got := b.h.preparationRepairSHA(target); got != snapshot.BinarySHA {
+				t.Fatal("protected unknown job did not expose its bound repair digest", got)
+			}
+			if scenario == "terminal" {
+				if err = b.h.finishPreparation(job, "FAILED", "PREPARATION_REPAIR_UNCONFIRMED"); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, err = s.DB.Exec("DELETE FROM operation_locks WHERE job_id=?", job); err != nil {
+				t.Fatal(err)
+			}
+			if got := b.h.preparationRepairSHA(target); got != "" {
+				t.Fatal("unprotected job still exposed a repair digest", got)
+			}
+			response := b.call("POST", "/hosts/"+target.ID+"/preparation/repair", preparationRepairInput{JobID: job, ExpectedVersion: target.Version, Confirmed: true}, 409)
+			if !strings.Contains(response.Body.String(), "PREPARATION_REPAIR_NOT_ALLOWED") || f.Commands.Load() != 0 {
+				t.Fatal("repair guard allowed remote execution", response.Body.String(), f.Commands.Load())
+			}
+		})
+	}
+}
+
+func TestHostPreparationRepairEncryptedSuccessAndInterruptedRetention(t *testing.T) {
+	for _, scenario := range []string{"success", "interrupted"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, b := setup(t)
+			b.login()
+			b.h.targetPackageDir = targetPreparationFixture(t)
+			f := hostSSHServer(t, s, b, true, false)
+			host := f.create(t, b, "repair-"+scenario)
+			target, err := s.readTarget(host["id"].(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			actor := preparationActor(t, b)
+			_, material := preparationForHost(target, s.controllerID(), b.h.targetPackageDir)
+			originalSHA := strings.Repeat("a", 64)
+			if originalSHA == material.Binary.Hash {
+				t.Fatal("test requires distinct original and current executors")
+			}
+			snapshot := preparationSnapshot{Host: target, BinarySHA: originalSHA, ScriptSHA: strings.Repeat("b", 64)}
+			job, _, err := b.h.acceptPreparation(actor, uuid.NewString(), "repair-"+scenario, snapshot, "repair-test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = b.h.finishPreparation(job, "UNKNOWN", "PREPARATION_RESULT_UNKNOWN"); err != nil {
+				t.Fatal(err)
+			}
+
+			password := "repair-only-sudo-secret"
+			path := "/hosts/" + target.ID + "/preparation/repair"
+			plaintext := b.rawCall("POST", path, preparationRepairInput{JobID: job, ExpectedVersion: target.Version, Confirmed: true, SudoPassword: password}, 400)
+			if !strings.Contains(plaintext.Body.String(), "SECURE_REQUEST_INVALID") || strings.Contains(plaintext.Body.String(), password) {
+				t.Fatal("plaintext repair was accepted or disclosed")
+			}
+
+			var uploaded atomic.Pointer[[]byte]
+			var privileged, passwordReceived atomic.Bool
+			handler := func(command string) *hostSSHResponse {
+				switch {
+				case strings.Contains(command, "&& cat >"):
+					return &hostSSHResponse{Input: func(input []byte) {
+						copyOfInput := append([]byte(nil), input...)
+						uploaded.Store(&copyOfInput)
+					}}
+				case strings.Contains(command, "SFOPS_SETUP_ENTERED"):
+					privileged.Store(true)
+					if strings.Contains(command, password) || !strings.Contains(command, "--repair-only --non-interactive") {
+						t.Error("repair command disclosed the password or omitted repair mode")
+					}
+					if scenario == "interrupted" {
+						return &hostSSHResponse{Stderr: "SFOPS_SETUP_ENTERED\nconnection closed\n", Exit: 1, Input: func(input []byte) { passwordReceived.Store(string(input) == password+"\n") }}
+					}
+					return &hostSSHResponse{Stdout: "SFOPS_SETUP_READY\n", Input: func(input []byte) { passwordReceived.Store(string(input) == password+"\n") }}
+				case strings.HasPrefix(command, "sha256sum -- "):
+					return &hostSSHResponse{Stdout: material.Binary.Hash + "  " + target.InstallRoot + "/executor\n"}
+				case strings.Contains(command, "rmdir --"):
+					return &hostSSHResponse{}
+				}
+				return nil
+			}
+			f.Responses.Store(&handler)
+			want := 200
+			if scenario == "interrupted" {
+				want = 409
+			}
+			response := b.call("POST", path, preparationRepairInput{JobID: job, ExpectedVersion: target.Version, Confirmed: true, SudoPassword: password}, want)
+			if !privileged.Load() || !passwordReceived.Load() {
+				t.Fatal("repair did not use the transient sudo input")
+			}
+			archive := uploaded.Load()
+			if archive == nil {
+				t.Fatal("repair package was not uploaded")
+			}
+			installer := targetArchiveEntry(t, *archive, "install.sh")
+			if !bytes.Contains(installer, []byte(originalSHA)) || !bytes.Contains(installer, []byte("target-repair")) {
+				t.Fatal("repair package was not bound to the original executor digest")
+			}
+			var status, persisted string
+			var locks int
+			if err = s.DB.QueryRow("SELECT status,input_json||result_json FROM jobs WHERE id=?", job).Scan(&status, &persisted); err != nil {
+				t.Fatal(err)
+			}
+			if err = s.DB.QueryRow("SELECT count(*) FROM operation_locks WHERE job_id=?", job).Scan(&locks); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(persisted, password) {
+				t.Fatal("repair password was persisted")
+			}
+			if scenario == "success" {
+				if status != "SUCCEEDED" || locks != 0 {
+					t.Fatal("confirmed repair did not release the original lock", status, locks)
+				}
+			} else if status != "UNKNOWN" || locks != 1 || !strings.Contains(response.Body.String(), "PREPARATION_REPAIR_UNCONFIRMED") {
+				t.Fatal("interrupted repair lost the original protected job", status, locks, response.Body.String())
+			}
+		})
+	}
 }
 
 func TestHostPreparationReconcileFinalization(t *testing.T) {
@@ -356,7 +636,7 @@ func TestHostPreparationCanceledRequestCleansOnlyUpload(t *testing.T) {
 				return nil
 			}
 			f.Responses.Store(&handler)
-			code, uncertain := b.h.runHostPreparation(ctx, actor, job, target, archive, material.Binary.Hash, "transient-cancel-test")
+			code, uncertain := b.h.runHostPreparation(ctx, actor, job, target, archive, material.Binary.Hash, "transient-cancel-test", false)
 			if uploads.Load() != 1 || privileged.Load() != int32(boolInt(scenario == "installation")) || uncertain != (scenario == "installation") {
 				t.Fatal("canceled request replayed or misclassified the installation", code, uncertain, uploads.Load(), privileged.Load())
 			}

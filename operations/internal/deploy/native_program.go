@@ -15,6 +15,9 @@ import (
 
 func (x *executor) prepareNativeProgram(ctx context.Context, req Request, dir, root, user string, uid, gid int, parts map[string]string) error {
 	d := req.Installation.Definition
+	if d.Native.BuildRecipe == "DEB" {
+		return x.prepareDebProgram(ctx, req, root, parts)
+	}
 	if d.Native.BuildRecipe == "RAW_BINARY" {
 		return copyNativeFile(parts[d.Native.Parts[0].Name], filepath.Join(root, nativeBinaryRelative(d)))
 	}

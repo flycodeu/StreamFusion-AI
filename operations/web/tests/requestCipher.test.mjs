@@ -106,6 +106,7 @@ test("only login, password changes and credential writes use the envelope", () =
     "/credentials",
     "/credentials/00000000-0000-0000-0000-000000000001/revisions",
     "/hosts/00000000-0000-0000-0000-000000000001/preparation/install",
+    "/hosts/00000000-0000-0000-0000-000000000001/preparation/repair",
   ]) {
     assert.equal(isSensitiveRequest(path, "POST"), true);
     assert.equal(isSensitiveRequest(path, "GET"), false);

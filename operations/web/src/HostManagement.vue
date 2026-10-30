@@ -24,6 +24,7 @@ const emit = defineEmits<{
   error: [unknown];
   preparationOpened: [];
   credentialSaved: [];
+  docker: [string];
 }>();
 const hosts = ref<Host[]>([]);
 const credentials = ref<SSHCredential[]>([]);
@@ -422,7 +423,7 @@ onUnmounted(() => {
   <ElDrawer
     :model-value="!!detail"
     :title="detail?.name || '主机详情'"
-    size="min(760px, 100vw)"
+    size="min(900px, 100vw)"
     @close="detailId = ''"
   >
     <div v-if="detail" class="host-detail">
@@ -489,8 +490,14 @@ onUnmounted(() => {
                 </span>
               </header>
               <p>{{ detail.capabilities?.[key]?.message || "尚未检查" }}</p>
+              <button v-if="key === 'docker'" class="secondary" :disabled="!!actionHost || detail.maintenance"
+                @click="emit('docker', detail.id)">Docker Engine 安装与管理</button>
               <details
-                v-if="detail.capabilities?.[key]?.code"
+                v-if="
+                  detail.capabilities?.[key]?.observedAt ||
+                  (detail.capabilities?.[key]?.source &&
+                    detail.capabilities?.[key]?.source !== 'NONE')
+                "
                 class="capability-evidence"
               >
                 <summary>检查依据</summary>
@@ -501,7 +508,6 @@ onUnmounted(() => {
                     ] || detail.capabilities?.[key]?.source
                   }}
                 </span>
-                <code>{{ detail.capabilities?.[key]?.code }}</code>
                 <time>
                   {{ hostTime(detail.capabilities?.[key]?.observedAt) }}
                 </time>

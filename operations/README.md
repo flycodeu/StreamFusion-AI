@@ -55,7 +55,7 @@ sudo bash scripts/install-linux.sh --binary release/0.2.0/streamfusion-ops --sha
 
 第一条安装命令只展示计划，第二条执行同一计划并在本机初始化管理员。可指定 `--prefix`、`--state`、`--port`；路径须为不含空格的规范绝对路径。需要 systemd、curl、sha256sum、useradd、runuser 等系统工具。卸载执行 `sudo bash scripts/uninstall-linux.sh --prefix /opt/streamfusion-ops --apply`，保留状态和服务账号。
 
-发行包只含二进制、SHA256SUMS、安装/卸载脚本和说明。将包传到Linux目标后解包，在解包目录执行 `sha256sum -c SHA256SUMS`；文件内摘要须先与可信发行渠道核对，再执行 `sudo bash install-linux.sh --binary ./streamfusion-ops --sha256 <可信二进制摘要> --apply`。
+发行包包含二进制、SHA256SUMS、安装/卸载脚本和说明，可选附带 `materials/` 离线材料库。将包传到Linux目标后解包，在解包目录执行 `sha256sum -c SHA256SUMS`；文件内摘要须先与可信发行渠道核对，再执行 `sudo bash install-linux.sh --binary ./streamfusion-ops --sha256 <可信二进制摘要> --apply`。
 
 ## 备份与恢复
 
@@ -93,7 +93,7 @@ cd web && pnpm build
 python scripts/test-browser.py --binary ./streamfusion-ops.exe --output "$env:TEMP/sfops-browser-$(New-Guid)"
 ```
 
-看进程日志及状态目录下 `logs/controller.log`。目录锁冲突返回STATE_LOCKED；端口冲突返回LISTEN_FAILED；高版本数据库返回SCHEMA_TOO_NEW；缺少已有凭据密钥返回KEY_MISSING。现行Schema为13，增量维护安装/配置、防火墙计划和主机接入作业；原主机ID、凭据、实例、观察、作业和历史发布关系保留。每次增量升级前生成对应 `before-schema-N` 一致性归档，再事务升级，旧迁移摘要保持不变。旧程序拒绝打开高版本数据库；代码回退须用原密钥与对应升级前备份恢复到新目录。备份不包含大镜像归档，恢复后文件缺失会阻断新安装，不能把数据库恢复当作材料齐备。
+看进程日志及状态目录下 `logs/controller.log`。目录锁冲突返回STATE_LOCKED；端口冲突返回LISTEN_FAILED；高版本数据库返回SCHEMA_TOO_NEW；缺少已有凭据密钥返回KEY_MISSING。现行Schema为14，增量维护安装/配置、防火墙、主机接入及软件卸载作业；原主机ID、凭据、实例、观察、作业和历史发布关系保留。每次增量升级前生成对应 `before-schema-N` 一致性归档，再事务升级，旧迁移摘要保持不变。旧程序拒绝打开高版本数据库；代码回退须用原密钥与对应升级前备份恢复到新目录。备份不包含大镜像归档，恢复后文件缺失会阻断新安装，不能把数据库恢复当作材料齐备。
 
 `STATE_LOCKED` 表示该目录仍被进程持有，锁文件存在本身不表示故障，不能通过删除它关闭服务。优先用 `stop --state`；旧版后台实例未提供本地关闭记录时返回 `STOP_UNAVAILABLE`，需核实监听端口、可执行文件和启动参数后关闭对应进程，随后使用新二进制。
 
@@ -121,7 +121,7 @@ SSH连通、只读观察、执行器变更授权、Docker/Compose能力分别显
 
 主机API统一为 `/ops/api/v1/hosts`，详情/编辑/删除使用 `/{id}`，指纹发现使用 `/fingerprint`，能力检查使用 `/{id}/checks`，维护使用 `/{id}/maintenance`，插件预检使用 `/{id}/plugin-install-plans`。原 `/targets` 主机入口已移除；调用方需切换，实例和作业中的稳定 `targetId` 保持。Platform预览交接接口保持原路径。
 
-I02 当前实现本机/SSH Linux目标登记、固定 Java Compose 制品发布和应用回滚；S4另接入预览节点固定配方、维护许可与版本回退，操作见[预览节点维护](preview-nodes.md)，工程验证与负责人验收分开。Docker引擎自动安装、项目组合发布、应用源码构建及Jenkins尚未实现。I02仍需当前项目后端和真实第二台主机验收。Linux安装范围为Ubuntu24.04/systemd/amd64，Windows仅支持本机开发运行。
+I02 当前实现本机/SSH Linux目标登记、固定 Java Compose 制品发布和应用回滚；S4另接入预览节点固定配方、维护许可与版本回退，操作见[预览节点维护](preview-nodes.md)，工程验证与负责人验收分开。Docker Engine 可从主机或软件目录发起固定官方包安装，真实系统安装仍需实机验收；项目组合发布、应用源码构建及Jenkins尚未实现。I02仍需当前项目后端和真实第二台主机验收。Linux安装范围为Ubuntu24.04/systemd/amd64，Windows仅支持本机开发运行。
 
 软件管理分为“软件中心”和“软件目录”。软件中心使用卡片，主机和软件详情按标签组织，底部操作固定。已有 systemd 服务与 Docker 容器可先只读登记，经普通 SSH 固定探针检查身份、状态和时间；不要求先安装执行器或 Docker。Docker 观察仍需要实际 socket 读取权限，systemd 使用明确的规范 unit 名称。Java、Python、FFmpeg 工具只检查固定系统命令，不提供启停。声明版本与实际观测版本分别展示，SSH 不通不会显示为已停止。卡片将状态、版本、主机和端口放在主视图；路径及身份依据进入详情标签，发现结果在弹窗内滚动。
 
@@ -133,7 +133,7 @@ I02 当前实现本机/SSH Linux目标登记、固定 Java Compose 制品发布�
 
 软件 API 为 `/ops/api/v1/software-instances`，详情使用 `/{id}`，检查/接管/启停/日志/解除分别使用 `/{id}/observe`、`adopt`、`actions`、`logs`、`unmanage`。写操作沿用登录、来源、CSRF、记录版本和幂等校验。新工具安装使用统一安装计划，旧工具记录及发布引用保留。
 
-软件目录按十二种软件展示卡片，Java可选择17/21；分类包含服务软件、运行环境、构建工具、媒体工具和编程软件。Java/Maven/Python/FFmpeg/Codex CLI/Claude Code为工具，安装后显示“已安装”和程序/环境路径，没有监听端口或启停按钮。Docker Java21工具沿用原JAR发布消费者；原生JDK/Maven不自动替换已有Compose发布环境。主机连接、登记和安装使用抽屉，页头和操作固定，窄屏单列。
+软件目录按十三种软件展示卡片，Java可选择8/17/21；分类包含服务软件、容器引擎、运行环境、构建工具、媒体工具和编程软件。首次打开优先选择随包材料已就绪的版本，手动选择后保持该选择。Java/Maven/Python/FFmpeg/Codex CLI/Claude Code为工具，安装后显示“已安装”和程序/环境路径，没有监听端口或启停按钮。Docker Java21工具沿用原JAR发布消费者；原生JDK/Maven不自动替换已有Compose发布环境。主机连接、登记和安装使用抽屉，页头和操作固定，窄屏单列。
 
 ## 端口管理
 
@@ -148,6 +148,10 @@ I02 当前实现本机/SSH Linux目标登记、固定 Java Compose 制品发布�
 内部会话API：`GET /hosts/{id}/ports`、`POST /hosts/{id}/ports-observe`、`POST /hosts/{id}/firewall-plans`、`POST /firewall-plans/{id}/submit`、`POST /jobs/{id}/firewall-confirm`；沿用原Job日志/核对/排队取消、Origin/CSRF与审计。定位查看页面traceId、作业回执、控制器日志及目标`sfops-fw-<job>.service`日志。Windows隔离测试不替代真实Linux包过滤、SSH新连接或到期恢复验收。
 
 ## 软件安装与配置
+
+材料库制作、启动导入及发行打包见[材料库说明](materials/README.md)。当前固定随包材料面向 Ubuntu24.04/amd64；其他容器离线包可将固定配方的 Docker-save 导入同一库。五个 Docker 包仍要求主机已有 iptables、nftables、libc6、libseccomp2、libsystemd0，不在线补装系统依赖。
+
+“卸载软件”独立于“解除管理”：仅支持 Ops 安装且归属已确认的对象，默认保留配置、数据、日志与备份；勾选“同时删除数据”后显示精确实例路径，并要求输入软件名称。历史软件记录、安装计划、作业与审计仍保留。Docker有容器或受管依赖时拒绝卸载；停止包含 service/socket，已停止引擎需先启动核对依赖。`/var/lib/containerd` 始终保留。保留目录后的再次安装不会覆盖原数据，恢复复用需管理员另行评估。新增卸载要求目标执行器 `softwareUninstallVersion=1`；已接入主机可显式点击“更新接入组件”，打开页面不会自动升级。
 
 入口为“软件管理 → 软件目录”，选择主机后点击“安装”。固定配方包括：
 
@@ -165,6 +169,9 @@ I02 当前实现本机/SSH Linux目标登记、固定 Java Compose 制品发布�
 | FFmpeg9.0.2 | 官方源码，非root编译，含ffprobe/libx264 | 不提供非官方镜像 |
 | Codex CLI0.163.0 | 官方固定Linux musl程序包 | 不提供 |
 | Claude Code2.1.304 | 官方固定Linux原始二进制 | 不提供 |
+| Docker Engine29.9.2 | Docker官方CE/CLI/containerd/Buildx/Compose五个DEB | 主机引擎 |
+| Redis7.0.15 / Nginx1.24.0 | Ubuntu24.04官方DEB，提取到独立实例目录 | 此版本仅原生 |
+| Java8u504-b01 | Temurin官方JDK8 | 此版本仅原生 |
 
 MinIO社区仓库已归档，本轮仅识别/登记已有systemd或Docker实例，明确接管后沿原启停/日志流程；不提供已撤回官方渠道的安装入口，不引入AIStor。已有对象、账号和配置不被登记操作修改。自定义unit名称可手动登记。
 
@@ -176,7 +183,7 @@ FFmpeg/Python原生构建只使用已有编译依赖，预检缺项会提示，�
 
 原生安装面向Ubuntu24.04/systemd/amd64。Redis、Nginx、ZLM由专用非root账号构建，预检列出缺失工具/开发库，不自动安装系统依赖、创建兼容库软链接或临时下载源码。程序、配置、数据按实例隔离；原生服务采用受管systemd unit，工具不伪装常驻服务。
 
-步骤为“安装来源 → 实例配置 → 网络端口 → 预检确认 → 执行结果”。Docker在线由目标拉固定digest；原生在线先由Ops下载并验证官方材料，再传给目标，目标无需外网。离线上传与运行方式匹配的Docker save或官方原生归档。多部件原生材料可在有网机器准备，再上传到内网Ops：
+步骤为“安装来源 → 实例配置 → 网络端口 → 预检确认 → 执行结果”；Docker Engine和工具不显示无关端口/密码。默认从离线材料库选择已核验文件；可选择在线获取或上传入库，后续安装复用已有记录。材料显示软件、版本、发布方、原文件、依赖和直接来源链接，摘要进入折叠详情。Docker在线由目标拉固定digest；原生在线先由Ops下载并验证官方材料，再传给目标，目标无需外网。多部件原生材料可在有网机器准备：
 
 ```bash
 ./streamfusion-ops native-package --recipe zlm --out ./zlm-native.tar
@@ -199,16 +206,16 @@ API以`/ops/api/v1`为前缀：目录`GET /software-recipes`；安装`POST /host
 
 “主机管理 → 详情 → 安装准备”只保留两个入口：
 
-1. **远程安装**：选择已核对指纹的 SSH 主机，输入本次 sudo 密码（root 或免密 sudo 可留空），勾选确认后点击“连接并安装”。Ops 会检查 Linux amd64、上传完整材料、执行固定安装程序并验证控制器/主机归属；请求失败、控制器重启或连接中断会保留 `UNKNOWN` 作业，页面提供“核对安装结果”，不会自动重放。
+1. **在线安装**：选择已核对指纹的 SSH 主机，点击“开始安装”。Ops 会检查 Linux amd64、上传材料、安装并验证结果。仅当服务器要求 sudo 密码时，页面才显示“当前账号的登录密码”；填写该 SSH 账号的系统密码，凭据只用于本次操作。连接中断后先点击“检查安装结果”；需要修复时使用页面的恢复按钮继续原作业。接入成功后自动刷新主机状态。
 2. **离线安装**：点击“下载离线安装包”，把 `streamfusion-ops-target-linux-amd64-<主机ID>.tar.gz` 上传到目标服务器当前账号的主目录并解压，进入目录后只需执行：
 
    ```bash
    bash install.sh
    ```
 
-   包内只提供 `streamfusion-ops`、`install.sh`、`SHA256SUMS` 和 `HOST-SETUP.md`；`install.sh` 已绑定当前控制器、主机、目录和连接账号，并把原有受限安装器逻辑内嵌其中。它会自动识别首次接入、同归属升级或授权修复，校验摘要后再修改文件。安装完成后回到 Ops 点击“检查接入结果”。目标服务器不需要访问外网，也不需要额外启动常驻服务。
+   包内只提供 `streamfusion-ops`、`install.sh`、`SHA256SUMS` 和 `HOST-SETUP.md`；`install.sh` 已绑定当前控制器、主机、目录和连接账号，并把原有受限安装器逻辑内嵌其中。它会自动识别首次接入、同归属升级或授权修复，校验摘要后再修改文件。安装完成后回到 Ops 点击“检查安装结果”。目标服务器不需要访问外网，也不需要额外启动常驻服务。
 
-高级诊断区折叠显示能力检查、摘要和只读安装预览；首次安装、升级和授权修复共用同一个入口。主机 API 增加 `POST /hosts/{id}/preparation/install` 和 `POST /hosts/{id}/preparation/reconcile`，在线安装请求必须使用现有敏感请求加密；统一作业页也可核对接入作业。单次安装最多执行3分钟，页面请求期限210秒，控制器写期限240秒；中断后先核对原作业。
+主机 API 使用 `POST /hosts/{id}/preparation/install`、`POST /hosts/{id}/preparation/reconcile` 和 `POST /hosts/{id}/preparation/repair`；安装与修复请求使用现有敏感请求加密，统一作业页也可核对接入作业。单次安装最多执行3分钟，页面请求期限210秒，控制器写期限240秒；中断后先核对原作业。恢复操作核对主机归属、原作业与可信材料；不匹配时停止并保留原文件。
 
 已有受管目标升级执行器时，在可信包目录执行准备页生成的命令，二进制必须为绝对路径，例如：
 

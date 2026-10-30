@@ -119,6 +119,10 @@ func (h *HTTP) hostsRoute(w http.ResponseWriter, r *http.Request, s *session, pa
 			h.reconcileHostPreparation(w, r, s, p[1])
 			return true
 		}
+		if p[3] == "repair" {
+			h.repairHostPreparation(w, r, s, p[1])
+			return true
+		}
 	}
 	return false
 }

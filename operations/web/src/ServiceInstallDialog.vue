@@ -3,13 +3,14 @@ import { ElDrawer } from "element-plus";
 import { hostTime } from "./hosts";
 import SoftwareIcon from "./SoftwareIcon.vue";
 import ServiceNetworkFields from "./ServiceNetworkFields.vue";
+import InstallationMaterialDetails from "./InstallationMaterialDetails.vue";
 import { softwareJobPhaseLabels } from "./software";
 import {
-  materialSize,
-  materialStatusLabels,
+  materialChoiceLabel,
   serviceEndpoint,
   runtimeLabels,
   isTool,
+  isDockerEngine,
   type ServiceInstallReceipt,
 } from "./serviceInstallation";
 import {
@@ -187,28 +188,6 @@ const {
         <div class="install-options">
           <label
             class="option-card"
-            :class="{ selected: sourceType !== 'ARCHIVE' }"
-            ><input
-              v-model="sourceType"
-              type="radio"
-              :value="
-                configuration.runtimeMode === 'NATIVE' ? 'ONLINE' : 'REGISTRY'
-              "
-              :disabled="busy"
-            /><span
-              ><strong>{{
-                configuration.runtimeMode === "NATIVE"
-                  ? "在线官方材料"
-                  : "在线镜像"
-              }}</strong
-              ><small>{{
-                configuration.runtimeMode === "NATIVE"
-                  ? "Ops 下载并分发，目标无需外网"
-                  : "目标服务器拉取固定镜像"
-              }}</small></span
-            ></label
-          ><label
-            class="option-card"
             :class="{ selected: sourceType === 'ARCHIVE' }"
             ><input
               v-model="sourceType"
@@ -216,11 +195,29 @@ const {
               value="ARCHIVE"
               :disabled="busy || !recipe.sourceModes.includes('ARCHIVE')"
             /><span
-              ><strong>离线归档</strong
-              ><small>Ops 经 SSH 传送到目标</small></span
+              ><strong>本地离线材料库 · 默认</strong
+              ><small>优先复用随包材料，无需再次下载</small></span
+            ></label
+          ><label
+            class="option-card"
+            :class="{ selected: sourceType !== 'ARCHIVE' }"
+            ><input
+              v-model="sourceType"
+              type="radio"
+              :value="configuration.runtimeMode === 'NATIVE' ? 'ONLINE' : 'REGISTRY'"
+              :disabled="busy"
+            /><span
+              ><strong>在线获取 · 可选</strong
+              ><small>{{ configuration.runtimeMode === 'NATIVE' ? 'Ops 下载后入库复用' : '目标联网拉取固定镜像' }}</small></span
             ></label
           >
         </div>
+        <InstallationMaterialDetails
+          :recipe="recipe"
+          :runtime-mode="configuration.runtimeMode"
+          :material="sourceType === 'REGISTRY' ? undefined : selectedMaterial"
+          :online="sourceType !== 'ARCHIVE'"
+        />
         <div v-if="sourceType === 'ONLINE'" class="archive-picker">
           <label
             >已准备材料<select
@@ -235,8 +232,7 @@ const {
                 :value="item.id"
                 :disabled="!item.available"
               >
-                {{ item.name }} ·
-                {{ materialStatusLabels[item.status] || item.status }}
+                {{ materialChoiceLabel(item) }}
               </option>
             </select></label
           >
@@ -267,20 +263,19 @@ const {
         </div>
         <div v-if="sourceType === 'ARCHIVE'" class="archive-picker">
           <label
-            >可用安装包<select
+            >离线材料<select
               v-model="materialId"
               aria-label="可用安装包"
               :disabled="busy"
             >
-              <option value="">选择已校验的安装归档</option>
+              <option value="">当前版本暂无就绪材料，请在线获取或上传补充</option>
               <option
                 v-for="item in materials"
                 :key="item.id"
                 :value="item.id"
                 :disabled="!item.available"
               >
-                {{ item.name }} · {{ materialSize(item.byteSize) }} ·
-                {{ materialStatusLabels[item.status] || item.status }}
+                {{ materialChoiceLabel(item) }}
               </option>
             </select></label
           >
@@ -397,33 +392,6 @@ const {
             >
           </details>
         </div>
-        <details class="image-detail">
-          <summary>官方来源与材料身份</summary>
-          <a
-            :href="recipe.officialUrl"
-            target="_blank"
-            rel="noopener noreferrer"
-            >官方安装说明 ↗</a
-          ><code v-if="configuration.runtimeMode === 'DOCKER'"
-            >{{ recipe.image }}@{{ recipe.digest }}</code
-          >
-          <template v-else
-            ><div
-              v-for="part in recipe.native?.parts || []"
-              :key="part.name"
-              class="native-part"
-            >
-              <strong>{{ part.name }}</strong
-              ><a :href="part.url" target="_blank" rel="noopener noreferrer"
-                >官方材料 ↗</a
-              ><code>{{ part.sha256 }}</code>
-            </div>
-            <small v-if="recipe.native?.requiredTools?.length"
-              >目标需具备：{{ recipe.native.requiredTools.join("、") }}</small
-            ></template
-          >
-          <small>{{ recipe.platform }}</small>
-        </details>
       </section>
 
       <section
@@ -609,7 +577,7 @@ const {
                 ? plan.source.type === "ONLINE"
                   ? "在线官方材料"
                   : "在线镜像"
-                : selectedMaterial?.name || "离线归档"
+                : selectedMaterial ? materialChoiceLabel(selectedMaterial) : "离线材料库"
             }}
           </dd>
           <dt>访问入口</dt>
@@ -624,7 +592,7 @@ const {
           <dd>
             <code>{{ plan.paths.config }}</code>
           </dd>
-          <template v-if="!isTool(recipe)"
+          <template v-if="!isTool(recipe) && !isDockerEngine(recipe)"
             ><dt>内存上限</dt>
             <dd>{{ plan.config.memoryMiB }} MiB</dd></template
           >

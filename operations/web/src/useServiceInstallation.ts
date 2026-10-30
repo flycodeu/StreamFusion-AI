@@ -7,6 +7,8 @@ import {
   materialSize,
   materialNextAction,
   isTool,
+  isDockerEngine,
+  preferredInstallationMaterial,
   visibleServicePorts,
   storageDirectoryValid,
   type InstallationMaterial,
@@ -33,7 +35,7 @@ export function useServiceInstallation(
   const step = ref(0);
   const busy = ref(false);
   const configuration = ref<ServiceConfiguration>();
-  const sourceType = ref<InstallationSource["type"]>("REGISTRY");
+  const sourceType = ref<InstallationSource["type"]>("ARCHIVE");
   const materials = ref<InstallationMaterial[]>([]);
   const materialId = ref("");
   const credentials = ref<SSHCredential[]>([]);
@@ -70,7 +72,7 @@ export function useServiceInstallation(
   let disposed = false;
 
   const credentialRoles = computed<CredentialRole[]>(() => {
-    if (!props.recipe || isTool(props.recipe) || props.recipe.key === "nginx")
+    if (!props.recipe || isTool(props.recipe) || isDockerEngine(props.recipe) || props.recipe.key === "nginx")
       return [];
     if (props.recipe?.key === "seaweedfs") return ["access", "primary"];
     return props.recipe?.key === "mysql" && configuration.value?.username
@@ -160,13 +162,16 @@ export function useServiceInstallation(
     const items = await request<InstallationMaterial[]>(
       `/installation-materials?recipeKey=${encodeURIComponent(props.recipe.key)}`,
     );
-    if (current(revision))
+    if (current(revision)) {
       materials.value = items.filter(
         (item) =>
           item.recipeVersion === props.recipe?.version &&
           item.recipeRevision === props.recipe?.revision &&
           (item.runtimeMode || "DOCKER") === configuration.value?.runtimeMode,
       );
+      if (!materials.value.some((item) => item.id === materialId.value && item.available))
+        materialId.value = preferredInstallationMaterial(materials.value)?.id || "";
+    }
   }
   async function refreshJob() {
     if (!receipt.value) return;
@@ -227,8 +232,7 @@ export function useServiceInstallation(
       officialNeedsImport.value = false;
       materialProgress.value = "";
       materialNeedsImport.value = false;
-      sourceType.value =
-        configuration.value.runtimeMode === "NATIVE" ? "ONLINE" : "REGISTRY";
+      sourceType.value = "ARCHIVE";
       credentialChoices.value = { primary: "", access: "", user: "" };
       clearError();
       try {
@@ -248,7 +252,7 @@ export function useServiceInstallation(
     () => configuration.value?.runtimeMode,
     (mode, previous) => {
       if (!mode || !previous || mode === previous || !props.recipe) return;
-      sourceType.value = mode === "NATIVE" ? "ONLINE" : "REGISTRY";
+      sourceType.value = "ARCHIVE";
       materialId.value = "";
       selectedFile.value = undefined;
       archiveSHA.value = "";
@@ -628,10 +632,10 @@ export function useServiceInstallation(
     if (step.value === 2) {
       if (!storageDirectoryValid(config.storageRoot))
         return "存储根目录须为/opt、/srv、/var/lib、/data或/mnt下的专用规范目录";
-      if (!isTool(props.recipe) && !explicitIPv4(config.bindAddress))
+      if (!isTool(props.recipe) && !isDockerEngine(props.recipe) && !explicitIPv4(config.bindAddress))
         return "填写服务器明确的IPv4地址，不能使用0.0.0.0";
       if (
-        !isTool(props.recipe) &&
+        !isTool(props.recipe) && !isDockerEngine(props.recipe) &&
         (!Number.isInteger(config.hostPort) ||
           config.hostPort < 1 ||
           config.hostPort > 65535)
@@ -660,11 +664,11 @@ export function useServiceInstallation(
         Boolean(config.ports.webrtc) !== Boolean(config.ports.webrtcUdp)
       )
         return "WebRTC 信令与媒体端口须同时启用";
-      if (
+      if (!isDockerEngine(props.recipe) && (
         !Number.isInteger(config.memoryMiB) ||
         config.memoryMiB < 128 ||
         config.memoryMiB > 16384
-      )
+      ))
         return "内存上限须为128–16384 MiB";
     }
     return "";

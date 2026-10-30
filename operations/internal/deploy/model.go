@@ -110,6 +110,7 @@ func (b Binding) Validate() error {
 }
 
 type Request struct {
+	Uninstallation       *SoftwareUninstallRequest     `json:"uninstallation,omitempty"`
 	Firewall             *FirewallChange               `json:"firewall,omitempty"`
 	Reconfiguration      *serviceinstall.ChangeRequest `json:"reconfiguration,omitempty"`
 	Installation         *serviceinstall.Request       `json:"installation,omitempty"`
@@ -154,33 +155,35 @@ type Owner struct {
 	DockerBinary    string `json:"dockerBinary"`
 }
 type Result struct {
-	FirewallConfirmBy string                   `json:"firewallConfirmBy,omitempty"`
-	Firewall          *FirewallSnapshot        `json:"firewall,omitempty"`
-	Installation      *serviceinstall.Evidence `json:"installation,omitempty"`
-	Software          *SoftwareObservation     `json:"software,omitempty"`
-	Preview           *PreviewObservation      `json:"preview,omitempty"`
-	ProtocolVersion   int                      `json:"protocolVersion"`
-	ExecutorVersion   string                   `json:"executorVersion"`
-	ControllerID      string                   `json:"controllerId"`
-	TargetID          string                   `json:"targetId"`
-	JobID             string                   `json:"jobId"`
-	InputHash         string                   `json:"inputHash"`
-	Status            string                   `json:"status"`
-	Phase             string                   `json:"phase"`
-	ErrorCode         string                   `json:"errorCode"`
-	ReleaseID         string                   `json:"releaseId"`
-	ImageID           string                   `json:"imageId"`
-	ConfigHash        string                   `json:"configHash"`
-	ContainerID       string                   `json:"containerId"`
-	Health            string                   `json:"health"`
-	PluginKey         string                   `json:"pluginKey,omitempty"`
-	PluginVersion     string                   `json:"pluginVersion,omitempty"`
-	PluginKind        string                   `json:"pluginKind,omitempty"`
-	PluginImageDigest string                   `json:"pluginImageDigest,omitempty"`
-	ObservedVersion   string                   `json:"observedVersion,omitempty"`
-	Platform          string                   `json:"platform,omitempty"`
-	ObservedAt        string                   `json:"observedAt"`
-	Ack               bool                     `json:"ack"`
+	DockerSocketInactive bool                       `json:"dockerSocketInactive,omitempty"`
+	Uninstallation       *SoftwareUninstallEvidence `json:"uninstallation,omitempty"`
+	FirewallConfirmBy    string                     `json:"firewallConfirmBy,omitempty"`
+	Firewall             *FirewallSnapshot          `json:"firewall,omitempty"`
+	Installation         *serviceinstall.Evidence   `json:"installation,omitempty"`
+	Software             *SoftwareObservation       `json:"software,omitempty"`
+	Preview              *PreviewObservation        `json:"preview,omitempty"`
+	ProtocolVersion      int                        `json:"protocolVersion"`
+	ExecutorVersion      string                     `json:"executorVersion"`
+	ControllerID         string                     `json:"controllerId"`
+	TargetID             string                     `json:"targetId"`
+	JobID                string                     `json:"jobId"`
+	InputHash            string                     `json:"inputHash"`
+	Status               string                     `json:"status"`
+	Phase                string                     `json:"phase"`
+	ErrorCode            string                     `json:"errorCode"`
+	ReleaseID            string                     `json:"releaseId"`
+	ImageID              string                     `json:"imageId"`
+	ConfigHash           string                     `json:"configHash"`
+	ContainerID          string                     `json:"containerId"`
+	Health               string                     `json:"health"`
+	PluginKey            string                     `json:"pluginKey,omitempty"`
+	PluginVersion        string                     `json:"pluginVersion,omitempty"`
+	PluginKind           string                     `json:"pluginKind,omitempty"`
+	PluginImageDigest    string                     `json:"pluginImageDigest,omitempty"`
+	ObservedVersion      string                     `json:"observedVersion,omitempty"`
+	Platform             string                     `json:"platform,omitempty"`
+	ObservedAt           string                     `json:"observedAt"`
+	Ack                  bool                       `json:"ack"`
 }
 
 func StrictJSON(data []byte, dst any) error {

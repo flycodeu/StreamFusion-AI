@@ -16,7 +16,7 @@ import (
 // separation of software configuration from firewall state, not Linux packets.
 func TestFirewallAndSoftwareConfigurationShareHostResponsibility(t *testing.T) {
 	var mu sync.Mutex
-	snap := deploy.FirewallSnapshot{Status: "INACTIVE", Hash: strings.Repeat("a", 64), RulesHash: strings.Repeat("b", 64), ManagementSource: "192.0.2.1/32", ManagementPort: 22, Ports: []deploy.HostPort{}, ManagedRules: []deploy.FirewallRule{}}
+	snap := deploy.FirewallSnapshot{Status: "INACTIVE", Hash: strings.Repeat("a", 64), RulesHash: strings.Repeat("b", 64), ManagementSource: "192.0.2.1/32", ManagementPort: 22, ObservedAt: Now(), Ports: []deploy.HostPort{}, ManagedRules: []deploy.FirewallRule{}}
 	results := map[string]deploy.Result{}
 	firewallCalls := 0
 	s, b, host, id, software := readyNginxFixture(t, func(req deploy.Request) ([]byte, bool) {
@@ -72,6 +72,9 @@ func TestFirewallAndSoftwareConfigurationShareHostResponsibility(t *testing.T) {
 	}
 	b.call("POST", "/jobs/"+job+"/firewall-confirm", map[string]any{}, 200)
 	confirmed := dataOf(t, b.call("GET", "/hosts/"+host+"/ports", nil, 200))
+	if confirmed["freshness"] != "FRESH" {
+		t.Fatal("persisted firewall snapshot was not marked fresh", confirmed)
+	}
 	configJob := dataOf(t, b.call("POST", configPath, map[string]string{"idempotencyKey": "config-after-firewall"}, 202))["jobId"].(string)
 	plan2 := dataOf(t, b.call("POST", "/hosts/"+host+"/firewall-plans", map[string]any{"expectedVersion": "1", "operation": "DISABLE", "snapshotHash": snap.Hash}, 200))
 	blocked = b.call("POST", "/firewall-plans/"+plan2["id"].(string)+"/submit", map[string]any{"confirmed": true, "idempotencyKey": "firewall-after-config"}, 409)

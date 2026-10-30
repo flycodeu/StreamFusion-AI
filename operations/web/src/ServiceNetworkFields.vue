@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import {
   isTool,
+  isDockerEngine,
   servicePortAddress,
   servicePortValue,
   visibleServicePorts,
@@ -82,7 +83,7 @@ function portInputValue(key: string) {
 
 <template>
   <div class="network-fields">
-    <template v-if="!isTool(recipe)">
+    <template v-if="!isTool(recipe) && !isDockerEngine(recipe)">
       <div class="form-row">
         <label
           >监听地址<input
@@ -187,6 +188,9 @@ function portInputValue(key: string) {
         </div>
       </details>
     </template>
+    <p v-else-if="isDockerEngine(recipe)" class="install-note">
+      Docker Engine 使用主机本地 Unix socket。容器的网络端口在安装各软件时单独配置。
+    </p>
     <p v-else class="install-note">
       这是按需使用的程序工具，不监听端口，也无需保持后台进程。
     </p>
@@ -210,7 +214,7 @@ function portInputValue(key: string) {
         ></template
       >
     </div>
-    <details v-if="!isTool(recipe)">
+    <details v-if="!isTool(recipe) && !isDockerEngine(recipe)">
       <summary>资源设置</summary>
       <label
         >内存上限（MiB）<input

@@ -363,6 +363,35 @@ func TestObservationFailureRetentionHostIdentityAndUnknownLock(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestObservationFreshnessWindowsKeepLastConfirmedFactsVisible(t *testing.T) {
+	format := func(age time.Duration) string {
+		return time.Now().Add(-age).UTC().Format(time.RFC3339Nano)
+	}
+	for _, test := range []struct {
+		name string
+		age  time.Duration
+		ttl  time.Duration
+		want string
+	}{
+		{"host remains fresh through short disconnects", 9 * time.Minute, hostObservationFreshnessTTL, "FRESH"},
+		{"host eventually needs an update", 11 * time.Minute, hostObservationFreshnessTTL, "STALE"},
+		{"software remains fresh through short disconnects", 14 * time.Minute, softwareObservationFreshnessTTL, "FRESH"},
+		{"software eventually needs an update", 16 * time.Minute, softwareObservationFreshnessTTL, "STALE"},
+		{"ports remain fresh through short disconnects", 14 * time.Minute, firewallObservationFreshnessTTL, "FRESH"},
+		{"ports eventually need an update", 16 * time.Minute, firewallObservationFreshnessTTL, "STALE"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := observationFreshness(format(test.age), test.ttl); got != test.want {
+				t.Fatalf("freshness=%s want=%s", got, test.want)
+			}
+		})
+	}
+	if hostCapabilityFreshnessTTL != 30*time.Minute {
+		t.Fatalf("host capability freshness=%s", hostCapabilityFreshnessTTL)
+	}
+}
+
 func TestObservationSnapshotSurvivesStoreReopen(t *testing.T) {
 	s, b := setup(t)
 	b.login()

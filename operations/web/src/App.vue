@@ -88,6 +88,8 @@ const title = computed(
 );
 const active = ref("overview");
 const preparationHostId = ref("");
+const dockerHostId = ref("");
+watch(active, (page) => { if (page !== "software") dockerHostId.value = ""; });
 function showHostPreparation(hostId: string) {
   preparationHostId.value = hostId;
   active.value = "hosts";
@@ -190,6 +192,8 @@ const actionLabels: Record<string, string> = {
   HOST_DELETED: "移除主机登记",
   HOST_PREPARATION_ACCEPTED: "开始主机接入",
   HOST_PREPARATION_RESULT: "主机接入结果",
+  HOST_PREPARATION_REPAIR_ACCEPTED: "开始修复接入权限",
+  HOST_PREPARATION_REPAIR_RESULT: "接入权限修复结果",
   HOST_PREPARED: "准备主机运行依赖",
   SOFTWARE_REGISTERED: "登记已有软件",
   SOFTWARE_OBSERVED: "检查软件状态",
@@ -780,6 +784,7 @@ onUnmounted(() => {
           @error="report"
           @preparation-opened="preparationHostId = ''"
           @credential-saved="load"
+          @docker="(hostId) => { dockerHostId = hostId; active = 'software'; }"
         />
         <PortManagement
           v-else-if="active === 'ports'"
@@ -788,6 +793,7 @@ onUnmounted(() => {
         />
         <SoftwareManagement
           v-else-if="active === 'software'"
+          :docker-host-id="dockerHostId"
           @error="report"
           @preparation="showHostPreparation"
         />

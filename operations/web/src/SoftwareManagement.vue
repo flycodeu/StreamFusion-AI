@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { request } from "./api";
 import { hostTime, type Host } from "./hosts";
@@ -8,15 +8,16 @@ import type { ObservationBatch } from "./observation";
 import SoftwareIcon from "./SoftwareIcon.vue";
 import SoftwareRecipes from "./SoftwareRecipes.vue";
 import SoftwareDetailsDialog from "./SoftwareDetailsDialog.vue";
+import SoftwareUninstallDialog from "./SoftwareUninstallDialog.vue";
 import SoftwareRegistrationDialog from "./SoftwareRegistrationDialog.vue";
 import SoftwareDiscoveryDialog from "./SoftwareDiscoveryDialog.vue";
-import type { ServiceInstallReceipt } from "./serviceInstallation";
 import {
   softwareDesiredLabels,
   softwareModes,
   softwareRuntimeLabels,
   softwareState,
   softwareIsTool,
+  softwareIsDockerEngine,
   softwareInstallationReady,
   softwareLifecycleAvailable,
   softwareTypes,
@@ -30,10 +31,14 @@ import {
 } from "./software";
 
 const emit = defineEmits<{ error: [unknown]; preparation: [string] }>();
+const props = defineProps<{ dockerHostId?: string }>();
 const tab = ref<"instances" | "recipes">("instances");
 const rows = ref<SoftwareInstance[]>([]);
 const hosts = ref<Host[]>([]);
 const hostId = ref("");
+watch(() => props.dockerHostId, (id) => {
+  if (id) { hostId.value = id; tab.value = "recipes"; }
+}, { immediate: true });
 const query = ref("");
 const mode = ref("ACTIVE");
 const loading = ref(false);
@@ -48,6 +53,11 @@ const detectionCount = computed(
 const busy = ref(false);
 const registration = ref(false);
 const discovery = ref(false);
+const uninstallItem = ref<SoftwareInstance>();
+const uninstallOpen = ref(false);
+const dependentContainers = (item?: SoftwareInstance) => rows.value.filter((other) =>
+  other.hostId === item?.hostId && other.runtimeKind === "DOCKER" && other.managementMode !== "RELEASED",
+).map((other) => other.name);
 const registrationPrefill = ref<SoftwareRegistrationDraft>();
 const detailId = ref("");
 const job = ref<SoftwareJob>();
@@ -241,7 +251,7 @@ async function mutationDone(result: SoftwareMutationResult, revision: number) {
     job.value = acceptedJob;
   await refresh();
 }
-async function configurationSubmitted(receipt: ServiceInstallReceipt) {
+async function configurationSubmitted(receipt: SoftwareMutationResult) {
   const revision = detailRevision;
   await act(() => mutationDone(receipt, revision));
 }
@@ -283,7 +293,9 @@ async function changeState(item: SoftwareInstance, action: "START" | "STOP") {
   if (action === "STOP") {
     try {
       await ElMessageBox.confirm(
-        `停止“${item.name}”？使用该服务的业务可能受到影响。`,
+        softwareIsDockerEngine(item)
+          ? `停止主机 Docker Engine“${item.name}”？此主机已登记 ${dependentContainers(item).length} 个容器${dependentContainers(item).length ? `（${dependentContainers(item).join("、")}）` : ""}。容器服务可能中断，未登记容器也可能受影响。`
+          : `停止“${item.name}”？使用该服务的业务可能受到影响。`,
         "停止服务",
         {
           confirmButtonText: "停止服务",
@@ -434,6 +446,8 @@ onUnmounted(() => {
     <SoftwareRecipes
       v-if="tab === 'recipes'"
       :host-id="hostId"
+      :initial-recipe-key="dockerHostId ? 'docker' : undefined"
+      @open-instance="(id) => { const item = rows.find((row) => row.id === id); if (item) { tab = 'instances'; showDetails(item); } }"
       @error="emit('error', $event)"
       @preparation="emit('preparation', $event)"
     />
@@ -591,10 +605,16 @@ onUnmounted(() => {
           <footer class="software-card-footer">
             <span
               v-if="
-                item.latestAttempt?.code && item.latestAttempt.code !== 'READY'
+                item.freshness === 'STALE' ||
+                (item.latestAttempt?.code &&
+                  !['READY', 'NOT_CHECKED'].includes(item.latestAttempt.code))
               "
-              :title="`${item.latestAttempt.code} · ${hostTime(item.latestAttempt.at)}`"
-              >当前未确认</span
+              :title="
+                item.latestAttempt?.code
+                  ? `${item.latestAttempt.code} · ${hostTime(item.latestAttempt.at)}`
+                  : '上次确认结果待更新'
+              "
+              >待更新</span
             >
             <span :title="hostTime(item.observation?.observedAt)">
               {{
@@ -662,6 +682,7 @@ onUnmounted(() => {
     @observe="observe"
     @adopt="adopt"
     @unmanage="unmanage"
+    @uninstall="(item) => { uninstallItem = item; uninstallOpen = true; }"
     @change-state="changeState"
     @read-logs="readLogs"
     @reconcile="reconcile"
@@ -669,6 +690,9 @@ onUnmounted(() => {
     @configuration-submitted="configurationSubmitted"
     @preparation="emit('preparation', $event)"
   />
+  <SoftwareUninstallDialog :open="uninstallOpen" :item="uninstallItem"
+    :dependent-containers="dependentContainers(uninstallItem)"
+    @close="uninstallOpen = false" @submitted="configurationSubmitted" />
 </template>
 
 <style scoped>

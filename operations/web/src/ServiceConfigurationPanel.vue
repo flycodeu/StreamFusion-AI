@@ -5,6 +5,7 @@ import { hostTime, type Host } from "./hosts";
 import ServiceNetworkFields from "./ServiceNetworkFields.vue";
 import {
   isTool,
+  isDockerEngine,
   runtimeLabels,
   serviceEndpoint,
   servicePortAddress,
@@ -64,6 +65,7 @@ const canEdit = computed(
   () =>
     !!recipe.value &&
     !isTool(recipe.value) &&
+    !isDockerEngine(recipe.value) &&
     props.detail.managementMode === "MANAGED" &&
     props.detail.installationStatus === "READY" &&
     !props.disabled,
@@ -196,10 +198,12 @@ async function submit() {
         <dt>配置目录</dt>
         <dd>
           <code>{{ instanceRoot }}/config</code>
+          <small v-if="isDockerEngine(recipe)">配置副本；主机实际配置 /etc/docker/daemon.json</small>
         </dd>
         <dt>日志位置</dt>
         <dd>
-          <code v-if="currentConfig.runtimeMode === 'NATIVE'"
+          <code v-if="isDockerEngine(recipe)">docker.service 的系统日志（journalctl）</code>
+          <code v-else-if="currentConfig.runtimeMode === 'NATIVE'"
             >{{ instanceRoot }}/logs</code
           ><span v-else>Docker 有界日志，可在运行日志中读取</span>
         </dd>
@@ -216,7 +220,7 @@ async function submit() {
         密钥鉴权），请由管理员限制该端口的访问来源。
       </p>
       <button
-        v-if="!editing && !isTool(recipe)"
+        v-if="!editing && !isTool(recipe) && !isDockerEngine(recipe)"
         class="secondary"
         :disabled="!canEdit"
         @click="

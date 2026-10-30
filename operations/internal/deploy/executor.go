@@ -101,6 +101,11 @@ func InitTarget(root, controller, target, socket, dockerBinary string) error {
 	if e := os.Mkdir(root, 0755); e != nil {
 		return e
 	}
+	// The installer deliberately uses umask 077. Set public control-path modes
+	// explicitly so the SSH account can traverse and verify this fixed binary.
+	if e := os.Chmod(root, 0755); e != nil {
+		return e
+	}
 	for _, d := range []string{"jobs", "instances", "packages"} {
 		if e := os.Mkdir(filepath.Join(root, d), 0700); e != nil {
 			return e
@@ -120,6 +125,9 @@ func InitTarget(root, controller, target, socket, dockerBinary string) error {
 		return e
 	}
 	_, e = io.Copy(dst, src)
+	if e == nil {
+		e = dst.Chmod(0755)
+	}
 	if e == nil {
 		e = dst.Sync()
 	}

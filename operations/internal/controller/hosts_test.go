@@ -215,6 +215,10 @@ func TestHostFingerprintConfirmationAndCapabilities(t *testing.T) {
 	if caps["expiresAt"] == "" || checked["observedAt"] == "" {
 		t.Fatal("missing freshness")
 	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, caps["expiresAt"].(string))
+	if err != nil || time.Until(expiresAt) < 29*time.Minute {
+		t.Fatal("host capability window is too short", caps["expiresAt"], err)
+	}
 	_, newKey, _ := ed25519.GenerateKey(rand.Reader)
 	newSigner, _ := ssh.NewSignerFromKey(newKey)
 	f.Key.Store(&newSigner)

@@ -50,8 +50,7 @@ const hosts = ref<Host[]>([]),
   software = ref<SoftwareInstance[]>([]),
   metrics = ref<Record<string, Metrics>>({});
 const selectedId = ref(""),
-  loading = ref(false),
-  now = ref(Date.now());
+  loading = ref(false);
 const selected = computed(() =>
   hosts.value.find((h) => h.id === selectedId.value),
 );
@@ -65,7 +64,6 @@ const available = (m?: Metrics) => !!m && ["READY", "PARTIAL"].includes(m.code);
 const live = (m?: Metrics) =>
   available(m) &&
   m?.freshness === "FRESH" &&
-  now.value - Date.parse(m.observedAt) < 90000 &&
   ["READY", "PARTIAL"].includes(m.latestAttempt?.code || "") &&
   m.enabled !== false;
 const observedCount = computed(
@@ -182,7 +180,6 @@ async function refresh() {
         },
       ]),
     );
-    now.value = Date.now();
   } catch (error) {
     if (!disposed) emit("error", error);
   } finally {
@@ -220,7 +217,6 @@ async function toggleMonitoring() {
 }
 function poll() {
   timer = setTimeout(async () => {
-    now.value = Date.now();
     if (!document.hidden) await refresh();
     if (!disposed) poll();
   }, 5000);
@@ -322,8 +318,7 @@ onUnmounted(() => {
           >上次确认 {{ hostTime(current.observedAt) }}</small
         >
         <small v-if="current.latestAttempt?.at"
-          >最近尝试 {{ hostTime(current.latestAttempt.at) }} ·
-          {{ current.latestAttempt.code }}</small
+          >最近尝试 {{ hostTime(current.latestAttempt.at) }}</small
         >
       </div>
       <div class="overview-columns">
@@ -847,7 +842,15 @@ onUnmounted(() => {
 }
 .observation-notice small {
   display: block;
-  font: 11px/1.7 var(--mono);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.observation-notice details {
+  margin-top: 5px;
+  font-size: 11px;
+}
+.observation-notice summary {
+  cursor: pointer;
 }
 @media (max-width: 1200px) {
   .overview-columns {

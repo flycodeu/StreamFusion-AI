@@ -45,6 +45,7 @@ type HTTP struct {
 	requestCipher    requestCipher
 	platformToken    []byte
 	hostCheckSlots   chan struct{}
+	targetPackageDir string
 	observationMu    sync.Mutex
 	observationHosts map[string]struct{}
 }
@@ -65,7 +66,7 @@ func NewHTTP(s *Store, origin string, assets http.Handler, logger *log.Logger) (
 	if err != nil {
 		return nil, err
 	}
-	return &HTTP{store: s, origin: u, assets: assets, started: time.Now(), logger: logger, hashSlots: make(chan struct{}, 2), dummyHash: dummy, hostCheckSlots: make(chan struct{}, 4)}, nil
+	return &HTTP{store: s, origin: u, assets: assets, started: time.Now(), logger: logger, hashSlots: make(chan struct{}, 2), dummyHash: dummy, hostCheckSlots: make(chan struct{}, 4), targetPackageDir: targetReleaseDirectory()}, nil
 }
 
 // ConfigurePlatformTokenFile enables the server-to-server preview catalog.

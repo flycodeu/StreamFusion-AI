@@ -26,6 +26,7 @@ type firewallView struct {
 	Code      string                  `json:"code"`
 	AttemptAt string                  `json:"attemptAt"`
 	TraceID   string                  `json:"traceId"`
+	Freshness string                  `json:"freshness"`
 }
 
 func (h *HTTP) firewallRoute(w http.ResponseWriter, r *http.Request, s *session, path string) bool {
@@ -73,6 +74,7 @@ func (h *HTTP) getHostFirewall(w http.ResponseWriter, r *http.Request, id string
 	} else {
 		v.Code = "FIREWALL_NOT_OBSERVED"
 	}
+	v.Freshness = observationFreshness(v.Snapshot.ObservedAt, firewallObservationFreshnessTTL)
 	h.success(w, r, v)
 }
 func (h *HTTP) observeHostFirewall(w http.ResponseWriter, r *http.Request, s *session, id string) {

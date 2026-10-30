@@ -22,7 +22,7 @@ import (
 // systemd, real socket checks or a successful installation on a Linux host.
 func TestServiceInstallMatrixControlledProtocol(t *testing.T) {
 	definitions := serviceinstall.Catalog()
-	if len(definitions) != 13 {
+	if len(definitions) != 17 {
 		t.Fatalf("update the installation matrix for catalog size %d", len(definitions))
 	}
 	for _, definition := range definitions {
@@ -112,7 +112,11 @@ func TestServiceInstallMatrixControlledProtocol(t *testing.T) {
 					if ownership == nil || ownership.JobID != job || ownership.TargetID != host || ownership.ConfigHash != serviceinstall.Digest(config) {
 						t.Fatal("installation ownership was not bound")
 					}
-					if mode == "NATIVE" && (installed.InstallationEvidence.BinaryPath != plan.Paths.Root+"/"+serviceinstall.NativeBinaryRelative(definition) || ownership.RuntimeMode != "NATIVE" || ownership.ImageID != "") {
+					binaryPath := plan.Paths.Root + "/" + serviceinstall.NativeBinaryRelative(definition)
+					if definition.Key == "docker" {
+						binaryPath = "/usr/bin/dockerd"
+					}
+					if mode == "NATIVE" && (installed.InstallationEvidence.BinaryPath != binaryPath || ownership.RuntimeMode != "NATIVE" || ownership.ImageID != "") {
 						t.Fatal("native installation lost the real binary path or requires an image")
 					}
 					matrixCheckJobFinished(t, s, job)
@@ -208,7 +212,7 @@ func matrixInstallationConfig(t *testing.T, b *browser, d serviceinstall.Definit
 		ref := dataOf(t, b.call("POST", "/credentials", map[string]string{"name": name, "kind": kind, "secret": value}, 201))
 		return ref["id"].(string), ref["revision"].(string)
 	}
-	if d.Kind != "TOOL" {
+	if d.Kind != "TOOL" && d.Key != "docker" {
 		c.HostPort, c.Ports = d.Port+20000, map[string]int{}
 		for _, p := range d.Ports {
 			if p.Key != "main" && (!p.NativeOnly || mode == "NATIVE") {

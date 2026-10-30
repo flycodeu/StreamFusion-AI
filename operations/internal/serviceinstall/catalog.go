@@ -62,7 +62,8 @@ func legacyDefinitions() []Definition {
 	return out
 }
 func Catalog() []Definition {
-	return append(install03Definitions(), additionalDefinitions()...)
+	out := append(install03Definitions(), additionalDefinitions()...)
+	return append(out, bundledDefinitions()...)
 }
 
 // Keep frozen definitions unchanged: existing jobs retain their input hashes.

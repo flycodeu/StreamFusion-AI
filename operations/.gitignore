@@ -23,4 +23,7 @@
 *.key
 *.pem
 *.tar.gz
+/materials/*.tar
+/materials/*.deb
+/materials/library.json
 *.exe

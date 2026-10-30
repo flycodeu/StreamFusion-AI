@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"time"
 )
 
@@ -25,6 +26,9 @@ func (x *executor) boundSoftware(s SoftwareRequest) error {
 }
 
 func (x *executor) applySoftware(req Request, dir string) (Result, error) {
+	if req.Uninstallation != nil {
+		return x.uninstallSoftware(req, dir)
+	}
 	if req.Reconfiguration != nil {
 		return x.configureSoftware(req, dir)
 	}
@@ -81,7 +85,13 @@ func (x *executor) applySoftware(req Request, dir string) (Result, error) {
 	if req.Action == "SOFTWARE_STOP" {
 		desired = "STOPPED"
 	}
-	if actual.State != desired {
+	if req.Action == "SOFTWARE_STOP" && s.SoftwareKey == "DOCKER" && s.Ownership != nil && s.Ownership.RuntimeMode == "NATIVE" {
+		if err = x.dockerEngineHasNoContainers(ctx); err != nil {
+			return result, err
+		}
+	}
+	engineStop := req.Action == "SOFTWARE_STOP" && ownedDockerEngine(s)
+	if actual.State != desired || engineStop && !x.softwareDockerSocketInactive(ctx) {
 		// Persist the command boundary before invoking it. Lost or timed-out
 		// replies are reconciled by observing, never by replaying start/stop.
 		if err = atomicJSON(filepath.Join(dir, "software-command.json"), s); err != nil {
@@ -92,7 +102,7 @@ func (x *executor) applySoftware(req Request, dir string) (Result, error) {
 			if req.Action == "SOFTWARE_STOP" {
 				action = "stop"
 			}
-			_, err = x.softwareRunner(ctx, "/usr/bin/systemctl", action, "--", s.Locator)
+			_, err = x.softwareRunner(ctx, "/usr/bin/systemctl", softwareSystemdAction(s, action)...)
 		} else {
 			args := []string{"container", "start", "--", s.Locator}
 			if req.Action == "SOFTWARE_STOP" {
@@ -105,11 +115,12 @@ func (x *executor) applySoftware(req Request, dir string) (Result, error) {
 		observeCtx, observeCancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer observeCancel()
 		actual, err = ObserveSoftware(observeCtx, s, x.softwareRunner)
-		if err != nil || actual.State != desired {
+		if err != nil || actual.State != desired || engineStop && !x.softwareDockerSocketInactive(observeCtx) {
 			result.Phase, result.ErrorCode = "SOFTWARE_RECONCILE_REQUIRED", "SOFTWARE_COMMAND_UNCONFIRMED"
 			return result, nil
 		}
 	}
+	result.DockerSocketInactive = engineStop
 	result.Status, result.Phase, result.Software = "SUCCEEDED", "SOFTWARE_STATE_VERIFIED", actual
 	return result, nil
 }
@@ -142,6 +153,9 @@ func (x *executor) adoptSoftware(req Request) error {
 }
 
 func (x *executor) verifySoftwareResult(req Request, result Result) error {
+	if req.Uninstallation != nil {
+		return x.verifySoftwareUninstall(req, result)
+	}
 	if req.Reconfiguration != nil {
 		return x.verifyConfiguration(req, result)
 	}
@@ -167,10 +181,16 @@ func (x *executor) verifySoftwareResult(req Request, result Result) error {
 	if req.SoftwareOperation == "SOFTWARE_START" && result.Software.State != "RUNNING" || req.SoftwareOperation == "SOFTWARE_STOP" && result.Software.State != "STOPPED" {
 		return errors.New("SOFTWARE_ACTUAL_STATE_DRIFT")
 	}
+	if req.SoftwareOperation == "SOFTWARE_STOP" && ownedDockerEngine(s) && !result.DockerSocketInactive {
+		return errors.New("DOCKER_SOCKET_STOP_UNCONFIRMED")
+	}
 	return nil
 }
 
 func (x *executor) reconcileSoftware(req Request, dir string) Result {
+	if req.Uninstallation != nil {
+		return x.reconcileSoftwareUninstall(req, dir)
+	}
 	if req.Reconfiguration != nil {
 		return x.reconcileConfiguration(req, dir)
 	}
@@ -205,6 +225,28 @@ func (x *executor) reconcileSoftware(req Request, dir string) Result {
 	if req.SoftwareOperation == "SOFTWARE_START" && actual.State != "RUNNING" || req.SoftwareOperation == "SOFTWARE_STOP" && actual.State != "STOPPED" {
 		return result
 	}
+	if req.SoftwareOperation == "SOFTWARE_STOP" && ownedDockerEngine(*req.Software) {
+		if !x.softwareDockerSocketInactive(ctx) {
+			return result
+		}
+		result.DockerSocketInactive = true
+	}
 	result.Status, result.Phase, result.ErrorCode, result.Software = "SUCCEEDED", "SOFTWARE_RECONCILED", "", actual
 	return result
+}
+
+func ownedDockerEngine(s SoftwareRequest) bool {
+	return s.SoftwareKey == "DOCKER" && s.Kind == "SYSTEMD" && s.Locator == "docker.service" && s.Ownership != nil && s.Ownership.RuntimeMode == "NATIVE" && s.Ownership.BinaryPath == "/usr/bin/dockerd"
+}
+
+func softwareSystemdAction(s SoftwareRequest, action string) []string {
+	if action == "stop" && ownedDockerEngine(s) {
+		return []string{"stop", "--", "docker.service", "docker.socket"}
+	}
+	return []string{action, "--", s.Locator}
+}
+
+func (x *executor) softwareDockerSocketInactive(ctx context.Context) bool {
+	out, err := x.softwareRunner(ctx, "/usr/bin/systemctl", "show", "--no-pager", "--property=ActiveState", "--", "docker.socket")
+	return err == nil && strings.TrimSpace(string(out)) == "ActiveState=inactive"
 }

@@ -43,10 +43,14 @@ func (x *executor) softwareRunner(ctx context.Context, command string, args ...s
 	}
 	cmd := exec.CommandContext(ctx, resolved, args...)
 	commandPath := "/usr/bin:/bin"
-	if command == "/usr/sbin/ufw" {
+	if command == "/usr/sbin/ufw" || command == "/usr/bin/apt-get" || command == "/usr/bin/dpkg" {
 		commandPath = "/usr/sbin:/usr/bin:/sbin:/bin"
 	}
 	cmd.Env = []string{"PATH=" + commandPath, "HOME=/root", "LC_ALL=C", "SYSTEMD_COLORS=0", "SYSTEMD_PAGER="}
+	if command == "/usr/bin/apt-get" || command == "/usr/bin/dpkg" {
+		cmd.Env = append(cmd.Env, "DEBIAN_FRONTEND=noninteractive")
+		boundPackageCommand(cmd)
+	}
 	buffer := &cappedBuffer{limit: 64 << 10}
 	cmd.Stdout, cmd.Stderr = buffer, buffer
 	err = cmd.Run()
@@ -57,7 +61,11 @@ func validateSoftwareInput(req Request) error {
 	if !ID.MatchString(req.JobID) || !Hex.MatchString(req.InputHash) || !softwareMutation(req.SoftwareOperation) {
 		return errors.New("SOFTWARE_JOB_IDENTITY_INVALID")
 	}
-	if req.Reconfiguration != nil {
+	if req.Uninstallation != nil {
+		if err := validateSoftwareUninstall(req); err != nil {
+			return err
+		}
+	} else if req.Reconfiguration != nil {
 		if req.Installation != nil || req.Software == nil || req.Software.Validate(false) != nil || req.SoftwareOperation != "SOFTWARE_CONFIGURE" || req.Reconfiguration.Validate() != nil || req.Software.ID != req.Reconfiguration.Previous.SoftwareID || req.Software.Version != req.Reconfiguration.ExpectedBindingRevision || req.Software.Ownership == nil || req.Software.Ownership.ConfigHash != Digest(req.Reconfiguration.Previous.Config) {
 			return errors.New("SERVICE_CONFIGURATION_INPUT_INVALID")
 		}
@@ -65,7 +73,7 @@ func validateSoftwareInput(req Request) error {
 		if req.Software != nil || req.SoftwareOperation != "SOFTWARE_INSTALL" || req.Installation.Validate() != nil {
 			return errors.New("SERVICE_INSTALL_INPUT_INVALID")
 		}
-	} else if req.Software == nil || req.Software.Validate(false) != nil || req.SoftwareOperation == "SOFTWARE_INSTALL" {
+	} else if req.Software == nil || req.Software.Validate(false) != nil || req.SoftwareOperation == "SOFTWARE_INSTALL" || req.SoftwareOperation == "SOFTWARE_UNINSTALL" {
 		return errors.New("SOFTWARE_JOB_IDENTITY_INVALID")
 	}
 	if req.Plugin != nil || req.Candidate != nil || req.Baseline != nil || req.Binding != nil {
@@ -273,7 +281,7 @@ func (x *executor) ackSoftware(req, intent Request, result Result, dir string, o
 }
 
 func (x *executor) softwareNotStarted(req Request, dir string, output io.Writer) error {
-	for _, name := range []string{"intent.json", "progress.json", "result.json", "ack.json", "software-command.json", "software-detach.json"} {
+	for _, name := range []string{"intent.json", "progress.json", "result.json", "ack.json", "software-command.json", "software-detach.json", "software-uninstall.json", "software-uninstalled.json"} {
 		if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
 			return errors.New("TARGET_EVIDENCE_PRESENT_OR_DAMAGED")
 		}

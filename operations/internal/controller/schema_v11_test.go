@@ -224,7 +224,7 @@ func TestSchemaTenUpgradePreservesInstallationsReceiptsLocksAndCredentials(t *te
 	assertSchemaElevenForeignKeys(t, s.DB)
 	assertSchemaElevenNewRelations(t, s, f)
 	backups, err := filepath.Glob(filepath.Join(f.dir, "before-schema-*.tar.gz"))
-	if err != nil || len(backups) != 3 || !strings.HasPrefix(filepath.Base(backups[0]), "before-schema-11-") || !strings.HasPrefix(filepath.Base(backups[1]), "before-schema-12-") || !strings.HasPrefix(filepath.Base(backups[2]), "before-schema-13-") {
+	if err != nil || len(backups) != 4 || !strings.HasPrefix(filepath.Base(backups[0]), "before-schema-11-") || !strings.HasPrefix(filepath.Base(backups[1]), "before-schema-12-") || !strings.HasPrefix(filepath.Base(backups[2]), "before-schema-13-") || !strings.HasPrefix(filepath.Base(backups[3]), "before-schema-14-") {
 		t.Fatal("upgrade must preserve historical backups and add the current migration backup", backups, err)
 	}
 	assertSchemaTenBackup(t, backups[0], f)

@@ -12,6 +12,8 @@ export interface ServiceRecipe {
   digest: string;
   imageId: string;
   officialUrl: string;
+  publisher?: string;
+  sources?: MaterialSource[];
   runtimeModes: string[];
   sourceModes: string[];
   port: number;
@@ -28,6 +30,19 @@ export interface ServiceRecipe {
     requiredTools?: string[];
   };
   ports?: ServicePort[];
+}
+
+export interface MaterialSource {
+  name: string;
+  displayName?: string;
+  version?: string;
+  publisher?: string;
+  url: string;
+  sha256: string;
+  byteSize: number;
+  role: "MAIN" | "DEPENDENCY";
+  packaging?: "OS_PACKAGE" | "ISOLATED_EXTRACTION" | "BINARY_ARCHIVE" | "DOCKER_SAVE";
+  requirements?: string[];
 }
 
 export type RuntimeMode = "DOCKER" | "NATIVE";
@@ -76,6 +91,14 @@ export interface InstallationMaterial {
   errorCode: string;
   createdAt: string;
   updatedAt: string;
+  recipeName?: string;
+  origin?: {
+    kind: "BUNDLED" | "UPLOADED" | "OFFICIAL_DOWNLOAD" | "UNKNOWN";
+    verification: "PENDING" | "RECIPE_SHA256" | "PINNED_IMAGE";
+    importedAt?: string;
+    fileName?: string;
+  };
+  sources?: MaterialSource[];
 }
 
 export interface InstallationSource {
@@ -125,6 +148,7 @@ export interface ServiceInstallJob extends SoftwareJob {
 }
 
 export const serviceDescriptions: Record<string, string> = {
+  docker: "主机容器运行引擎；安装后可运行 Docker 容器。",
   mysql: "关系数据库，支持独立数据目录与初始业务账号。",
   redis: "内存数据服务，使用独立认证与持久化配置。",
   nginx: "Web 服务与反向代理，独立站点配置和访问端口。",
@@ -146,6 +170,25 @@ export const runtimeLabels: Record<RuntimeMode, string> = {
 
 export function isTool(recipe: ServiceRecipe) {
   return recipe.kind === "TOOL";
+}
+
+export function isDockerEngine(recipe: ServiceRecipe) {
+  return recipe.key === "docker";
+}
+
+export function preferredInstallationMaterial(items: InstallationMaterial[]) {
+  return items.find((item) => item.available && item.origin?.kind === "BUNDLED") ||
+    items.find((item) => item.available);
+}
+
+export function materialOriginLabel(material: InstallationMaterial) {
+  return material.origin?.kind === "BUNDLED" ? "随包离线材料" :
+    material.origin?.kind === "OFFICIAL_DOWNLOAD" ? "在线获取后入库" :
+    material.origin?.kind === "UPLOADED" ? "上传入库" : "历史材料（来源未记录）";
+}
+
+export function materialChoiceLabel(material: InstallationMaterial) {
+  return `${material.recipeName || material.name} ${material.recipeVersion} · ${materialOriginLabel(material)} · ${materialSize(material.byteSize)} · ${material.available ? "已就绪" : materialStatusLabels[material.status] || "未就绪"}`;
 }
 
 export function visibleServicePorts(
@@ -260,7 +303,7 @@ export function initialServiceConfiguration(
       ]),
     ),
     bindAddress: explicitIPv4(address) ? address : "127.0.0.1",
-    hostPort: isTool(recipe) ? 0 : recipe.port,
+    hostPort: isTool(recipe) || isDockerEngine(recipe) ? 0 : recipe.port,
     memoryMiB:
       recipe.key === "mysql" ? 1024 : recipe.key === "nginx" ? 256 : 512,
     credentialId: "",
@@ -278,6 +321,7 @@ export function serviceEndpoint(
   recipe: ServiceRecipe,
   config: ServiceConfiguration,
 ) {
+  if (isDockerEngine(recipe)) return "主机 Docker Engine · 本地 Unix socket";
   if (isTool(recipe))
     return config.runtimeMode === "NATIVE"
       ? "程序工具 · 无监听端口"

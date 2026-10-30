@@ -164,7 +164,7 @@ func (c ChangeRequest) Validate() error {
 	if err := c.Previous.Validate(); err != nil {
 		return err
 	}
-	if c.ExpectedBindingRevision != c.Previous.BindingRevision || c.Config.StorageRoot != c.Previous.Config.StorageRoot || c.Config.Mode() != c.Previous.Config.Mode() || c.Previous.Definition.Kind == "TOOL" {
+	if c.ExpectedBindingRevision != c.Previous.BindingRevision || c.Config.StorageRoot != c.Previous.Config.StorageRoot || c.Config.Mode() != c.Previous.Config.Mode() || c.Previous.Definition.Kind == "TOOL" || c.Previous.Definition.Key == "docker" {
 		return errors.New("SERVICE_CONFIGURATION_BOUNDARY_INVALID")
 	}
 	if c.Previous.Definition.Key == "mysql" {
@@ -190,7 +190,8 @@ func (c Config) Validate(d Definition) error {
 		return errors.New("SERVICE_RUNTIME_UNSUPPORTED")
 	}
 	tool := d.Kind == "TOOL"
-	if tool {
+	engine := d.Key == "docker" && c.Mode() == "NATIVE"
+	if tool || engine {
 		if c.HostPort != 0 || len(c.Ports) > 0 {
 			return errors.New("TOOL_PORT_UNEXPECTED")
 		}
@@ -207,10 +208,10 @@ func (c Config) Validate(d Definition) error {
 			return errors.New("SERVICE_PORT_CONFIG_INVALID")
 		}
 	}
-	if !tool && !credential(c.CredentialID, c.CredentialRevision) && d.Key != "nginx" {
+	if !tool && !engine && !credential(c.CredentialID, c.CredentialRevision) && d.Key != "nginx" {
 		return errors.New("SERVICE_CREDENTIAL_REQUIRED")
 	}
-	if (tool || d.Key == "nginx") && (c.CredentialID != "" || c.CredentialRevision != "") {
+	if (tool || engine || d.Key == "nginx") && (c.CredentialID != "" || c.CredentialRevision != "") {
 		return errors.New("SERVICE_CREDENTIAL_UNEXPECTED")
 	}
 	if d.Key == "seaweedfs" {
@@ -309,7 +310,7 @@ func ValidateSecrets(d Definition, c Config, values map[string]string) error {
 	valid := func(value string) bool {
 		return len(value) >= 8 && len(value) <= 256 && !strings.ContainsAny(value, "\r\n\x00") && strings.TrimSpace(value) == value
 	}
-	if d.Key != "nginx" && d.Kind != "TOOL" && !valid(secret) {
+	if d.Key != "nginx" && d.Key != "docker" && d.Kind != "TOOL" && !valid(secret) {
 		return errors.New("SERVICE_SECRET_INVALID")
 	}
 	if d.Key == "mysql" && c.Username != "" && !valid(userSecret) {
@@ -348,7 +349,7 @@ func (e Evidence) ValidateFor(r Request) error {
 			if kind != "TOOL" || !path.IsAbs(locator) || strings.ContainsAny(locator, "\r\n\x00") {
 				return errors.New("TOOL_RECEIPT_INVALID")
 			}
-		} else if kind != "SYSTEMD" || locator != "sfops-service-"+r.SoftwareID+".service" {
+		} else if kind != "SYSTEMD" || locator != "sfops-service-"+r.SoftwareID+".service" && !(r.Definition.Key == "docker" && locator == "docker.service") {
 			return errors.New("NATIVE_RECEIPT_INVALID")
 		}
 	} else if r.Definition.Kind == "TOOL" {
@@ -365,6 +366,8 @@ func NativeBinaryRelative(d Definition) string {
 	switch d.Key {
 	case "java":
 		return "runtime/bin/java"
+	case "docker":
+		return "bin/dockerd"
 	case "maven":
 		return "bin/mvn"
 	case "mysql":

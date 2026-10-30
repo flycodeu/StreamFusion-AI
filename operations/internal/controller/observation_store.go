@@ -19,6 +19,13 @@ type observationPrincipal struct {
 	BatchID string
 }
 
+const (
+	hostObservationFreshnessTTL     = 10 * time.Minute
+	softwareObservationFreshnessTTL = 15 * time.Minute
+	firewallObservationFreshnessTTL = 15 * time.Minute
+	hostCapabilityFreshnessTTL      = 30 * time.Minute
+)
+
 type hostObservation struct {
 	HostID    string             `json:"hostId"`
 	Confirmed *hostMetrics       `json:"lastConfirmed,omitempty"`
@@ -62,7 +69,7 @@ func (s *Store) readHostObservation(t target) (hostObservation, error) {
 			return o, e
 		}
 		if o.Confirmed != nil {
-			o.Freshness = observationFreshness(o.Confirmed.ObservedAt, 90*time.Second)
+			o.Freshness = observationFreshness(o.Confirmed.ObservedAt, hostObservationFreshnessTTL)
 		}
 	}
 	e = s.DB.QueryRow("SELECT enabled FROM observation_plans WHERE host_id=?", t.ID).Scan(&o.Enabled)

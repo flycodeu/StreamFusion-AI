@@ -23,32 +23,75 @@ type preparationInput struct {
 	SudoPassword    string `json:"sudoPassword,omitempty"`
 }
 
+type preparationRepairInput struct {
+	JobID           string `json:"jobId"`
+	ExpectedVersion string `json:"expectedVersion"`
+	Confirmed       bool   `json:"confirmed"`
+	SudoPassword    string `json:"sudoPassword,omitempty"`
+}
+
 type preparationSnapshot struct {
-	Host      target `json:"host"`
-	BinarySHA string `json:"binarySha256"`
-	ScriptSHA string `json:"scriptSha256"`
+	Host              target `json:"host"`
+	BinarySHA         string `json:"binarySha256"`
+	ScriptSHA         string `json:"scriptSha256"`
+	RecoveryBinarySHA string `json:"recoveryBinarySha256,omitempty"`
+	RecoveryScriptSHA string `json:"recoveryScriptSha256,omitempty"`
 }
 
 var preparationMessages = map[string]string{
-	"PREPARATION_READY":                "主机接入完成，可以继续安装软件。",
-	"PREPARATION_CONNECT_FAILED":       "SSH 连接失败，请核对网络、账号、凭据和主机指纹。",
-	"PREPARATION_PLATFORM_UNSUPPORTED": "此安装包仅支持 Linux amd64（x86_64），请核对服务器架构。",
-	"PREPARATION_UPLOAD_FAILED":        "安装材料上传未完成，请检查目标临时目录空间和写入权限后重试。",
-	"PREPARATION_SUDO_REQUIRED":        "需要管理员权限：请在页面输入当前连接账号的 sudo 密码，或使用已有管理员权限的连接。",
-	"PREPARATION_RESULT_UNKNOWN":       "安装结果尚未确认，请点击核对安装结果。原作业已保留，避免重复安装。",
-	"PREPARATION_TARGET_NOT_READY":     "执行器或授权尚未就绪，请保留原目录，在高级诊断中核对归属和未决作业。",
-	"PREPARATION_INPUT_DAMAGED":        "安装记录不完整，请保留原作业并检查控制器日志。",
-	"PREPARATION_MATERIAL_CHANGED":     "安装材料已变化，请重新打开主机安装页面。",
-	"PREPARATION_HOST_CHANGED":         "主机配置或维护状态已变化，安装尚未开始，请刷新后重试。",
-	"CONTROLLER_RESTARTED":             "控制器在安装期间重启，请核对原作业的安装结果。",
+	"PREPARATION_READY":                      "主机接入完成，可以继续安装软件。",
+	"PREPARATION_CONNECT_FAILED":             "SSH 连接失败，请核对网络、账号、凭据和主机指纹。",
+	"PREPARATION_PLATFORM_UNSUPPORTED":       "此安装包仅支持 Linux amd64（x86_64），请核对服务器架构。",
+	"PREPARATION_UPLOAD_FAILED":              "安装材料上传未完成，请检查目标临时目录空间和写入权限后重试。",
+	"PREPARATION_SUDO_REQUIRED":              "服务器需要 sudo 验证，请输入当前 SSH 账号的系统登录密码。",
+	"PREPARATION_RESULT_UNKNOWN":             "接入状态待确认，请检查服务器。",
+	"PREPARATION_REPAIR_UNCONFIRMED":         "权限修复结果尚未确认，原目录和作业仍受保护，请重新检查安装结果。",
+	"PREPARATION_INPUT_DAMAGED":              "安装记录不完整，请保留原作业并检查控制器日志。",
+	"PREPARATION_MATERIAL_CHANGED":           "安装材料已变化，请重新打开主机安装页面。",
+	"PREPARATION_HOST_CHANGED":               "主机配置或维护状态已变化，安装尚未开始，请刷新后重试。",
+	"PREPARATION_INSTALL_FAILED":             "接入安装脚本未完成，请检查安装结果后使用恢复接入继续原作业。",
+	"PREPARATION_AUTHORIZATION_CONFLICT":     "服务器现有授权与本主机的账号或安装目录不匹配，已停止并保留原文件。",
+	"PREPARATION_RECOVERY_IDENTITY_MISMATCH": "现有接入文件与原作业及本次恢复材料均不匹配，已停止恢复并保留原文件。",
+	"PREPARATION_RECOVERY_MATERIAL_CHANGED":  "原作业已有已确认的恢复材料，请使用相同材料继续恢复，不能自动替换。",
+	"CONTROLLER_RESTARTED":                   "控制器在安装期间重启，请核对原作业的安装结果。",
+}
+
+func preparationMessage(code string) string {
+	if message, ok := preparationMessages[code]; ok {
+		return message
+	}
+	return preparationVerificationMessage(code)
+}
+
+func preparationScriptFailure(stderr string) string {
+	for _, line := range strings.Split(stderr, "\n") {
+		code := strings.TrimPrefix(strings.TrimSpace(line), "SFOPS_ERROR=")
+		switch code {
+		case "PREPARATION_INSTALL_FAILED", "PREPARATION_AUTHORIZATION_CONFLICT", "PREPARATION_RECOVERY_IDENTITY_MISMATCH":
+			return code
+		}
+	}
+	return "PREPARATION_RESULT_UNKNOWN"
 }
 
 func (h *HTTP) latestPreparationJob(id string) any {
-	var job, status, phase, code, trace, at string
-	if h.store.DB.QueryRow("SELECT id,status,phase,error_code,trace_id,updated_at FROM jobs WHERE target_id=? AND kind='HOST_PREPARE' ORDER BY created_at DESC,id DESC LIMIT 1", id).Scan(&job, &status, &phase, &code, &trace, &at) != nil {
+	var job, status, phase, code, trace, created, updated string
+	if h.store.DB.QueryRow("SELECT id,status,phase,error_code,trace_id,created_at,updated_at FROM jobs WHERE target_id=? AND kind='HOST_PREPARE' ORDER BY created_at DESC,id DESC LIMIT 1", id).Scan(&job, &status, &phase, &code, &trace, &created, &updated) != nil {
 		return nil
 	}
-	return map[string]string{"id": job, "status": status, "phase": phase, "errorCode": code, "message": preparationMessages[code], "traceId": trace, "updatedAt": at}
+	return map[string]string{"id": job, "status": status, "phase": phase, "errorCode": code, "message": preparationMessage(code), "traceId": trace, "createdAt": created, "updatedAt": updated}
+}
+
+func (h *HTTP) preparationRepairSHA(t target) string {
+	var raw, status string
+	if h.store.DB.QueryRow(`SELECT j.input_json,j.status FROM jobs j JOIN operation_locks l ON l.job_id=j.id AND l.resource_key='target:'||j.target_id WHERE j.target_id=? AND j.kind='HOST_PREPARE' ORDER BY j.created_at DESC,j.id DESC LIMIT 1`, t.ID).Scan(&raw, &status) != nil || status != "UNKNOWN" {
+		return ""
+	}
+	var snapshot preparationSnapshot
+	if deploy.StrictJSON([]byte(raw), &snapshot) != nil || !validSHA256(snapshot.BinarySHA) || snapshot.Host.ID != t.ID || snapshot.Host.sshTarget != t.sshTarget || snapshot.Host.InstallRoot != t.InstallRoot {
+		return ""
+	}
+	return snapshot.BinarySHA
 }
 
 // The request owns the transient sudo password. Only a frozen, secret-free
@@ -78,7 +121,7 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 		h.fail(w, r, 409, "SSH_TARGET_REQUIRED", "在线安装请选择 SSH 主机；本机请使用离线安装包")
 		return
 	}
-	p, material := preparationForHost(t, h.store.controllerID(), targetReleaseDirectory())
+	p, material := preparationForHost(t, h.store.controllerID(), h.targetPackageDir)
 	if !p.Package.Available {
 		h.fail(w, r, 409, p.Package.Code, p.Package.Message)
 		return
@@ -121,7 +164,7 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	code, uncertain := h.runHostPreparation(ctx, actor, job, t, archive, material.Binary.Hash, in.SudoPassword)
+	code, uncertain := h.runHostPreparation(ctx, actor, job, t, archive, material.Binary.Hash, in.SudoPassword, false)
 	in.SudoPassword = ""
 	status := "FAILED"
 	if code == "PREPARATION_READY" {
@@ -213,7 +256,10 @@ func (h *HTTP) finishPreparationTx(tx *sql.Tx, job, status, code string) error {
 	if current == "SUCCEEDED" || current == "FAILED" {
 		return nil
 	}
-	_, err := tx.Exec("UPDATE jobs SET status=?,error_code=?,phase='PREPARATION_RESULT',result_json=?,updated_at=? WHERE id=? AND kind='HOST_PREPARE'", status, code, jsonText(map[string]string{"message": preparationMessages[code]}), Now(), job)
+	// Keep the last confirmed execution phase. The terminal status and error code
+	// already describe the outcome; replacing the phase with a generic result
+	// marker would erase the only durable progress evidence after a disconnect.
+	_, err := tx.Exec("UPDATE jobs SET status=?,error_code=?,result_json=?,updated_at=? WHERE id=? AND kind='HOST_PREPARE'", status, code, jsonText(map[string]string{"message": preparationMessage(code)}), Now(), job)
 	if err == nil && status != "UNKNOWN" {
 		_, err = tx.Exec("DELETE FROM operation_locks WHERE job_id=?", job)
 	}
@@ -263,7 +309,7 @@ func (h *HTTP) finishReconciledPreparation(actor *session, observed target, job 
 	return tx.Commit()
 }
 
-func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job string, t target, archive *os.File, binarySHA, password string) (string, bool) {
+func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job string, t target, archive *os.File, binarySHA, password string, repair bool) (string, bool) {
 	client, closeClient, err := h.store.connectSSH(ctx, t)
 	if err != nil {
 		return "PREPARATION_CONNECT_FAILED", false
@@ -278,6 +324,9 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 		return "PREPARATION_PLATFORM_UNSUPPORTED", false
 	}
 	stage := "/tmp/sfops-upload-" + job
+	if repair {
+		stage = "/tmp/sfops-repair-" + job
+	}
 	defer func() {
 		// Remove only the exact temporary upload created by this job. A canceled
 		// request also closes the SSH connection, so use a short independent
@@ -322,6 +371,13 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 		if authErr == nil && (currentVersion != t.Version || maintenance) {
 			authErr = errors.New("HOST_CHANGED")
 		}
+		if authErr == nil && repair {
+			var protected int
+			authErr = tx.QueryRow(`SELECT count(*) FROM jobs j JOIN operation_locks l ON l.job_id=j.id AND l.resource_key='target:'||j.target_id WHERE j.id=? AND j.target_id=? AND j.kind='HOST_PREPARE' AND j.status='UNKNOWN'`, job, t.ID).Scan(&protected)
+			if authErr == nil && protected != 1 {
+				authErr = errors.New("HOST_CHANGED")
+			}
+		}
 		if authErr == nil {
 			authErr = tx.Commit()
 		} else {
@@ -333,7 +389,7 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 		return "PREPARATION_HOST_CHANGED", false
 	}
 	h.preparationPhase(job, "INSTALLING_EXECUTOR")
-	command = remotePreparationCommand(stage, fmt.Sprintf("%x", hash.Sum(nil)), t.User == "root", password != "")
+	command = remotePreparationCommand(stage, fmt.Sprintf("%x", hash.Sum(nil)), t.User == "root", password != "", repair)
 	var input io.Reader
 	if t.User != "root" && password != "" {
 		input = strings.NewReader(password + "\n")
@@ -344,7 +400,9 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 	if err != nil {
 		// Only failures known to precede privileged script execution release the lock.
 		if strings.Contains(stderr.String(), "SFOPS_SETUP_ENTERED") {
-			return "PREPARATION_RESULT_UNKNOWN", true
+			code := preparationScriptFailure(stderr.String())
+			h.logPreparationFailure(job, "INSTALLING_EXECUTOR", code)
+			return code, true
 		}
 		if t.User != "root" && (strings.Contains(strings.ToLower(stderr.String()), "sudo") || strings.Contains(strings.ToLower(stderr.String()), "password")) {
 			return "PREPARATION_SUDO_REQUIRED", false
@@ -355,17 +413,28 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 		return "PREPARATION_RESULT_UNKNOWN", true
 	}
 	h.preparationPhase(job, "VERIFYING_EXECUTOR")
-	if !h.verifyPreparation(ctx, t, binarySHA) {
-		return "PREPARATION_RESULT_UNKNOWN", true
+	if ready, code := h.verifyPreparation(ctx, t, binarySHA); !ready {
+		h.logPreparationFailure(job, "VERIFYING_EXECUTOR", code)
+		return code, true
 	}
 	return "PREPARATION_READY", false
+}
+
+func (h *HTTP) logPreparationFailure(job, phase, code string) {
+	var trace string
+	_ = h.store.DB.QueryRow("SELECT trace_id FROM jobs WHERE id=?", job).Scan(&trace)
+	h.logger.Printf("traceId=%s jobId=%s phase=%s code=%s", trace, job, phase, code)
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 
 // A fixed bootstrap over the existing SSH transport, not a general shell API.
 // Root stages a private copy and verifies the entire archive before executing.
-func remotePreparationCommand(stage, digest string, root, password bool) string {
+func remotePreparationCommand(stage, digest string, root, password, repair bool) string {
+	mode := "--non-interactive"
+	if repair {
+		mode = "--repair-only --non-interactive"
+	}
 	script := `set -eu
 printf 'SFOPS_SETUP_ENTERED\n' >&2
 umask 077
@@ -377,7 +446,7 @@ cat -- ` + shellQuote(stage+"/bundle.tar.gz") + ` > "$work/bundle.tar.gz"
 printf '%s  %s\n' ` + shellQuote(digest) + ` "$work/bundle.tar.gz" | sha256sum -c - --status
 tar -xzf "$work/bundle.tar.gz" -C "$work" --no-same-owner
 cd "$work"
-bash ./install.sh --non-interactive
+bash ./install.sh ` + mode + `
 `
 	command := "/bin/bash -c " + shellQuote(script)
 	if root {
@@ -389,25 +458,200 @@ bash ./install.sh --non-interactive
 	return "/usr/bin/sudo -n -- " + command
 }
 
-func (h *HTTP) verifyPreparation(ctx context.Context, t target, sha string) bool {
+func (h *HTTP) repairHostPreparation(w http.ResponseWriter, r *http.Request, actor *session, id string) {
+	var in preparationRepairInput
+	if h.decodeSensitive(w, r, actor, &in) != nil {
+		h.rejectSecureRequest(w, r)
+		return
+	}
+	defer func() { in.SudoPassword = "" }()
+	if !in.Confirmed || !deploy.ID.MatchString(in.JobID) || len(in.SudoPassword) > 1024 || strings.ContainsAny(in.SudoPassword, "\r\n\x00") {
+		h.fail(w, r, 400, "INVALID_INPUT", "请确认原安装记录和管理员权限后再修复")
+		return
+	}
+	var raw, status, locked string
+	err := h.store.DB.QueryRow(`SELECT j.input_json,j.status,coalesce(l.job_id,'') FROM jobs j LEFT JOIN operation_locks l ON l.job_id=j.id AND l.resource_key='target:'||j.target_id WHERE j.id=? AND j.target_id=? AND j.kind='HOST_PREPARE'`, in.JobID, id).Scan(&raw, &status, &locked)
+	if err != nil {
+		h.opsError(w, r, err)
+		return
+	}
+	if status != "UNKNOWN" || locked != in.JobID {
+		h.fail(w, r, 409, "PREPARATION_REPAIR_NOT_ALLOWED", "只有结果待确认且仍受保护的原安装记录可以修复")
+		return
+	}
+	t, err := h.store.readTarget(id)
+	if err != nil {
+		h.opsError(w, r, err)
+		return
+	}
+	var snapshot preparationSnapshot
+	if deploy.StrictJSON([]byte(raw), &snapshot) != nil || !validSHA256(snapshot.BinarySHA) || snapshot.Host.ID != id || snapshot.Host.sshTarget != t.sshTarget || snapshot.Host.InstallRoot != t.InstallRoot || in.ExpectedVersion != t.Version {
+		h.fail(w, r, 409, "VERSION_CONFLICT", "主机连接、安装目录或原安装记录已变化，请停止修复并核对")
+		return
+	}
+	p, material := preparationForHost(t, h.store.controllerID(), h.targetPackageDir)
+	p.RepairSHA = snapshot.BinarySHA
+	if !p.Package.Available {
+		h.fail(w, r, 409, p.Package.Code, p.Package.Message)
+		return
+	}
+	if snapshot.RecoveryBinarySHA != "" && (snapshot.RecoveryBinarySHA != material.Binary.Hash || snapshot.RecoveryScriptSHA != material.Script.Hash) {
+		h.fail(w, r, 409, "PREPARATION_RECOVERY_MATERIAL_CHANGED", preparationMessage("PREPARATION_RECOVERY_MATERIAL_CHANGED"))
+		return
+	}
+	archive, err := createTargetPreparationArchive(p, material)
+	if err != nil {
+		h.fail(w, r, 409, "TARGET_PACKAGE_CHANGED", "修复材料已变化，请刷新后重试")
+		return
+	}
+	defer os.Remove(archive.Name())
+	defer archive.Close()
+	release, err := h.acquireObservation(r.Context(), id, false)
+	if err != nil {
+		h.fail(w, r, 409, "HOST_BUSY", "这台主机正在检查或恢复，请稍后重试。")
+		return
+	}
+	defer release()
+	if err = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(210 * time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		h.internal(w, r, err)
+		return
+	}
+	if err = h.acceptPreparationRepair(actor, t, in.JobID, raw, material, r.Context().Value(traceKey{}).(string)); err != nil {
+		h.opsError(w, r, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+	code, _ := h.runHostPreparation(ctx, actor, in.JobID, t, archive, material.Binary.Hash, in.SudoPassword, true)
+	in.SudoPassword = ""
+	if code != "PREPARATION_READY" {
+		if code == "PREPARATION_RESULT_UNKNOWN" {
+			code = "PREPARATION_REPAIR_UNCONFIRMED"
+		}
+		_, _ = h.store.DB.Exec("INSERT INTO audit VALUES(?,?,?,?,?,?,?)", uuid.NewString(), actor.Username, "HOST_PREPARATION_REPAIR_RESULT", in.JobID, code, r.Context().Value(traceKey{}).(string), Now())
+		h.fail(w, r, 409, code, preparationMessage(code))
+		return
+	}
+	if err = h.finishReconciledPreparation(actor, t, in.JobID); err != nil {
+		h.internal(w, r, err)
+		return
+	}
+	_, _ = h.store.DB.Exec("INSERT INTO audit VALUES(?,?,?,?,?,?,?)", uuid.NewString(), actor.Username, "HOST_PREPARATION_REPAIR_RESULT", in.JobID, "SUCCESS", r.Context().Value(traceKey{}).(string), Now())
+	h.getJob(w, r, in.JobID)
+}
+
+// Freeze the recovery materials before elevation while retaining the original
+// immutable digests. Reconciliation can verify either accepted result after a
+// lost response; an unrelated release can never silently replace the recovery.
+func (h *HTTP) acceptPreparationRepair(actor *session, observed target, job, expectedRaw string, material verifiedTargetPackage, trace string) error {
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+	tx, err := h.beginAuthorized(actor)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	current, err := scanHost(tx.QueryRow("SELECT "+hostColumns+" FROM targets WHERE id=?", observed.ID))
+	if err != nil {
+		return err
+	}
+	if current.Maintenance || current.Version != observed.Version || current.sshTarget != observed.sshTarget || current.InstallRoot != observed.InstallRoot {
+		return errors.New("VERSION_CONFLICT")
+	}
+	var raw, status, locked string
+	if err = tx.QueryRow(`SELECT j.input_json,j.status,coalesce(l.job_id,'') FROM jobs j LEFT JOIN operation_locks l ON l.job_id=j.id AND l.resource_key='target:'||j.target_id WHERE j.id=? AND j.target_id=? AND j.kind='HOST_PREPARE'`, job, observed.ID).Scan(&raw, &status, &locked); err != nil {
+		return err
+	}
+	if raw != expectedRaw || status != "UNKNOWN" || locked != job {
+		return errors.New("VERSION_CONFLICT")
+	}
+	var snapshot preparationSnapshot
+	if deploy.StrictJSON([]byte(raw), &snapshot) != nil {
+		return errors.New("VERSION_CONFLICT")
+	}
+	snapshot.RecoveryBinarySHA, snapshot.RecoveryScriptSHA = material.Binary.Hash, material.Script.Hash
+	if _, err = tx.Exec("UPDATE jobs SET input_json=? WHERE id=?", jsonText(snapshot), job); err != nil {
+		return err
+	}
+	if err = auditTx(tx, actor.Username, "HOST_PREPARATION_REPAIR_ACCEPTED", job, "SUCCESS", trace); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (h *HTTP) verifyPreparation(ctx context.Context, t target, sha string, alternatives ...string) (bool, string) {
 	var caps executorCapabilities
-	if h.store.callTarget(ctx, t, deploy.Request{Action: "CAPABILITIES"}, "", &caps) != nil || caps.Owner.ControllerID != h.store.controllerID() || caps.Owner.TargetID != t.ID || caps.Owner.ProtocolVersion != 1 || caps.Owner.ExecutorVersion != deploy.Version || caps.Platform != "linux/amd64" {
-		return false
+	if err := h.store.callTarget(ctx, t, deploy.Request{Action: "CAPABILITIES"}, "", &caps); err != nil {
+		code, _ := h.executorFailure(ctx, t, err)
+		if code != "EXECUTOR_RESPONSE_INVALID" {
+			return false, code
+		}
+		// Only repeat this read-only check. A truncated reply must never replay
+		// installation or release the protected job without a valid response.
+		caps = executorCapabilities{}
+		if err = h.store.callTarget(ctx, t, deploy.Request{Action: "CAPABILITIES"}, "", &caps); err != nil {
+			code, _ = h.executorFailure(ctx, t, err)
+			return false, code
+		}
+	}
+	if caps.Owner.ControllerID != h.store.controllerID() || caps.Owner.TargetID != t.ID {
+		return false, "EXECUTOR_IDENTITY_MISMATCH"
+	}
+	if caps.Owner.ProtocolVersion != 1 || caps.Owner.ExecutorVersion != deploy.Version || caps.Platform != "linux/amd64" {
+		return false, "EXECUTOR_UPGRADE_REQUIRED"
 	}
 	if sha == "" {
-		return true
+		return true, ""
 	}
 	client, closeClient, err := h.store.connectSSH(ctx, t)
 	if err != nil {
-		return false
+		code, _ := hostSSHError(err)
+		return false, code
 	}
 	defer closeClient()
 	out := &limitedOutput{limit: 512}
 	if runSSHCommand(client, "sha256sum -- "+shellQuote(t.InstallRoot+"/executor"), nil, out, io.Discard) != nil {
-		return false
+		return false, "EXECUTOR_HASH_UNAVAILABLE"
 	}
 	parts := strings.Fields(out.String())
-	return len(parts) == 2 && parts[0] == sha
+	if len(parts) != 2 {
+		return false, "EXECUTOR_HASH_MISMATCH"
+	}
+	for _, expected := range append([]string{sha}, alternatives...) {
+		if validSHA256(expected) && parts[0] == expected {
+			return true, ""
+		}
+	}
+	return false, "EXECUTOR_HASH_MISMATCH"
+}
+
+func preparationVerificationMessage(code string) string {
+	switch code {
+	case "EXECUTOR_PATH_UNSAFE":
+		return "接入目录不满足安全要求，请让服务器管理员检查符号链接、所有者和写入权限。"
+	case "EXECUTOR_IDENTITY_MISMATCH":
+		return "接入目录不属于当前主机，不能直接覆盖，请先核对目录归属。"
+	case "EXECUTOR_HASH_MISMATCH", "EXECUTOR_UPGRADE_REQUIRED":
+		return "接入文件与当前版本不一致，请先核对现有目录。"
+	case "EXECUTOR_MISSING":
+		return "未找到接入目录或执行器。请使用下方“恢复接入并继续安装”，Ops 会核对原作业后重新准备接入。"
+	case "EXECUTOR_HASH_UNAVAILABLE", "EXECUTOR_PATH_UNREADABLE":
+		return "当前 SSH 账号无法读取接入文件，安装目录或执行器的读取权限未正确设置。请使用下方恢复接入修复并重新检查。"
+	case "EXECUTOR_NOT_EXECUTABLE":
+		return "接入文件存在但无法执行，请使用下方恢复接入核对文件权限和可信摘要。"
+	case "EXECUTOR_INITIALIZATION_REQUIRED":
+		return "接入目录中的归属文件缺失或不可读取。恢复会先核对归属，无法确认时保留原文件并停止。"
+	case "EXECUTOR_RESPONSE_INVALID":
+		return "安装结果检查收到无效回执，请点击“检查安装结果”重新核对。"
+	case "SUDO_UNAVAILABLE", "SUDO_AUTHORIZATION_REQUIRED", "EXECUTOR_PRIVILEGE_REQUIRED":
+		return "服务器授权尚未完成，请让服务器管理员检查受限授权。"
+	case "EXECUTOR_CHECK_TIMEOUT", "SSH_TIMEOUT":
+		return "服务器检查超时，请检查连接后重试。"
+	case "SSH_UNAVAILABLE", "SSH_AUTH_FAILED", "SSH_HOST_KEY_CHANGED", "CREDENTIAL_UNAVAILABLE":
+		return "无法连接服务器，请检查 SSH 连接。"
+	default:
+		return "接入状态仍未确认，请根据接入检查处理后重试。"
+	}
 }
 
 func (h *HTTP) reconcileHostPreparation(w http.ResponseWriter, r *http.Request, actor *session, id string) {
@@ -456,8 +700,8 @@ func (h *HTTP) reconcilePreparation(w http.ResponseWriter, r *http.Request, acto
 	defer func() { <-h.hostCheckSlots }()
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	if !h.verifyPreparation(ctx, t, snapshot.BinarySHA) {
-		h.fail(w, r, 409, "PREPARATION_TARGET_NOT_READY", preparationMessages["PREPARATION_TARGET_NOT_READY"])
+	if ready, code := h.verifyPreparation(ctx, t, snapshot.BinarySHA, snapshot.RecoveryBinarySHA); !ready {
+		h.fail(w, r, 409, code, preparationVerificationMessage(code))
 		return
 	}
 	if err = h.finishReconciledPreparation(actor, t, jobID); err != nil {

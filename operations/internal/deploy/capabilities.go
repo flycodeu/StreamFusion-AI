@@ -19,6 +19,7 @@ func inspectExecutorCapabilities(owner Owner, platform string, command func(time
 		"dockerComposeAvailable":   composeErr == nil,
 		"nativeInstallVersion":     1,
 		"softwareConfigureVersion": 1,
+		"softwareUninstallVersion": 1,
 		"toolProbeVersion":         1,
 		// F02 is independently gated: older 0.2.0 executors do not understand
 		// software requests even though their original protocol still matches.

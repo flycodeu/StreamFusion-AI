@@ -83,7 +83,7 @@ def main():
                 checks.extend(["real-empty-host-port-snapshot", "windows-no-fake-firewall-control", "firewall-independent-four-character-menu"])
                 fixture = {"status": "INACTIVE", "code": "", "incomingPolicy":"DROP", "outgoingPolicy":"ACCEPT", "hash": "a"*64, "observedAt": "2026-10-21T08:00:00Z", "rawRules": "Status: inactive", "addedRules": "ufw allow 22/tcp", "ports": [{"protocol":"tcp","address":"0.0.0.0","port":22,"process":"sshd"},{"protocol":"udp","address":"::","port":8554,"process":"mediamtx"}], "dockerPorts": "zlm 0.0.0.0:8088->80/tcp", "managedRules": [{"id":"11111111-1111-4111-8111-111111111111","action":"allow","protocol":"tcp","source":"192.0.2.0/24","start":6379,"end":6379}], "protectedPorts":[22], "managementSource":"192.0.2.5/32", "managementPort":22}
                 entries, changes, submits = [], [], []
-                page.route("**/hosts/"+hid+"/ports", lambda route: route.fulfill(json={"data":{"snapshot":fixture,"code":"","attemptAt":fixture["observedAt"],"traceId":"fixture"}}))
+                page.route("**/hosts/"+hid+"/ports", lambda route: route.fulfill(json={"data":{"snapshot":fixture,"code":"","attemptAt":fixture["observedAt"],"traceId":"fixture","freshness":"FRESH"}}))
                 page.route("**/ops/api/v1/jobs", lambda route: route.fulfill(json={"data":entries}))
                 def preflight(route):
                     data=route.request.post_data_json

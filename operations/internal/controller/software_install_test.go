@@ -100,6 +100,9 @@ func installSSHFixture(t *testing.T, s *Store, b *browser, extensions ...func(de
 				state = "RUNNING"
 			}
 			result := deploy.Result{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID, JobID: req.JobID, InputHash: req.InputHash, Status: "SUCCEEDED", Phase: "SOFTWARE_VERIFIED", ObservedAt: Now(), Software: &deploy.SoftwareObservation{Kind: req.Software.Kind, Locator: req.Software.Locator, IdentityHash: req.Software.IdentityHash, State: state, ObservedAt: Now()}}
+			if req.Action == "SOFTWARE_STOP" && req.Software.SoftwareKey == "DOCKER" {
+				result.DockerSocketInactive = true
+			}
 			if req.Action == "ACK" {
 				result = fixture.Results[req.JobID]
 				if !fixture.NoAck.Load() && req.ResultHash == deploy.Digest(result) {

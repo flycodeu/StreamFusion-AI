@@ -32,6 +32,7 @@ type executorCapabilities struct {
 	CatalogHash              string       `json:"serviceCatalogHash"`
 	NativeInstallVersion     int          `json:"nativeInstallVersion"`
 	SoftwareConfigureVersion int          `json:"softwareConfigureVersion"`
+	SoftwareUninstallVersion int          `json:"softwareUninstallVersion"`
 	ToolProbeVersion         int          `json:"toolProbeVersion"`
 }
 
@@ -97,7 +98,7 @@ func hostSSHError(err error) (string, string) {
 
 func (h *HTTP) observeHost(ctx context.Context, t target) hostCapabilities {
 	facts := unknownHostCapabilities()
-	facts.ExpiresAt = time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339Nano)
+	facts.ExpiresAt = time.Now().UTC().Add(hostCapabilityFreshnessTTL).Format(time.RFC3339Nano)
 	out := &limitedOutput{limit: 4096}
 	errOut := &limitedOutput{limit: 1024}
 	if t.Kind == "SSH" {

@@ -15,11 +15,13 @@ import (
 
 func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session, id, operation string) {
 	var in struct {
-		ExpectedVersion string `json:"expectedVersion"`
-		IdentityHash    string `json:"identityHash"`
-		Confirmed       bool   `json:"confirmed"`
-		Key             string `json:"idempotencyKey"`
-		Action          string `json:"action"`
+		ExpectedVersion  string `json:"expectedVersion"`
+		IdentityHash     string `json:"identityHash"`
+		Confirmed        bool   `json:"confirmed"`
+		Key              string `json:"idempotencyKey"`
+		Action           string `json:"action"`
+		DeleteData       bool   `json:"deleteData"`
+		ConfirmationName string `json:"confirmationName"`
 	}
 	if e := decode(w, r, &in); e != nil {
 		h.fail(w, r, 400, "INVALID_INPUT", e.Error())
@@ -31,16 +33,27 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	}
 	action := "SOFTWARE_" + strings.ToUpper(operation)
 	if operation == "actions" {
-		if in.Action != "START" && in.Action != "STOP" {
-			h.fail(w, r, 400, "SOFTWARE_ACTION_INVALID", "仅支持启动或停止")
+		if in.Action != "START" && in.Action != "STOP" && in.Action != "UNINSTALL" {
+			h.fail(w, r, 400, "SOFTWARE_ACTION_INVALID", "仅支持启动、停止或卸载")
 			return
 		}
 		action = "SOFTWARE_" + in.Action
+	}
+	if action != "SOFTWARE_UNINSTALL" && (in.DeleteData || in.ConfirmationName != "") {
+		h.fail(w, r, 400, "SOFTWARE_DELETE_DATA_ACTION_INVALID", "数据删除选项仅适用于卸载")
+		return
 	}
 	hash := deploy.Digest(struct {
 		ID, Version, Action, Identity string
 		Confirmed                     bool
 	}{id, in.ExpectedVersion, action, in.IdentityHash, in.Confirmed})
+	if action == "SOFTWARE_UNINSTALL" {
+		hash = deploy.Digest(struct {
+			Base             string
+			DeleteData       bool
+			ConfirmationName string
+		}{hash, in.DeleteData, in.ConfirmationName})
+	}
 	// Detect already-accepted requests before network preflight. A replay must
 	// still return its original receipt when the host is now unavailable.
 	if h.replaySoftwareChange(w, r, s, id, action, in.Key, hash) {
@@ -49,6 +62,14 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	prepared, e := h.store.readSoftware(id)
 	if e != nil {
 		h.opsError(w, r, e)
+		return
+	}
+	if action == "SOFTWARE_UNINSTALL" && (prepared.Installation == nil || !installationBound(prepared)) {
+		h.fail(w, r, 409, "SOFTWARE_UNINSTALL_NOT_OWNED", "仅支持卸载由Ops安装且身份已确认的软件；外部接管对象请使用解除管理")
+		return
+	}
+	if action == "SOFTWARE_UNINSTALL" && (!in.Confirmed || in.DeleteData && in.ConfirmationName != prepared.Name) {
+		h.fail(w, r, 409, "SOFTWARE_UNINSTALL_CONFIRMATION_REQUIRED", "请确认卸载；删除数据还需输入当前软件名称")
 		return
 	}
 	var checkedHostVersion string
@@ -76,6 +97,10 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 		}
 		if capability.SoftwareLifecycleVersion != 1 {
 			h.fail(w, r, 409, "EXECUTOR_SOFTWARE_UNSUPPORTED", "执行器尚未支持软件生命周期管理，请先升级目标执行器")
+			return
+		}
+		if action == "SOFTWARE_UNINSTALL" && capability.SoftwareUninstallVersion != 1 {
+			h.fail(w, r, 409, "EXECUTOR_SOFTWARE_UNINSTALL_UNSUPPORTED", "执行器尚未支持软件卸载，请先升级目标执行器")
 			return
 		}
 		if prepared.RuntimeKind == "DOCKER" && operation != "unmanage" && !capability.DockerEngine {
@@ -131,6 +156,10 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 		h.fail(w, r, 409, "VERSION_CONFLICT", "软件已变化，请刷新")
 		return
 	}
+	if action == "SOFTWARE_UNINSTALL" && (i.Installation == nil || !installationBound(i) || !in.Confirmed || in.DeleteData && in.ConfirmationName != i.Name) {
+		h.fail(w, r, 409, "SOFTWARE_UNINSTALL_CONFIRMATION_REQUIRED", "软件安装身份或名称已变化，请刷新后重新确认卸载")
+		return
+	}
 	if i.ManagementMode == "RELEASED" {
 		h.fail(w, r, 409, "SOFTWARE_RELEASED", "记录已解除管理")
 		return
@@ -181,7 +210,7 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 		h.success(w, r, map[string]string{"softwareInstanceId": id})
 		return
 	}
-	if i.RuntimeKind == "TOOL" && operation == "unmanage" && i.Installation != nil {
+	if i.RuntimeKind == "TOOL" && (operation == "unmanage" || action == "SOFTWARE_UNINSTALL") && i.Installation != nil {
 		bridge, e := scanPlugin(tx.QueryRow("SELECT "+pluginColumns+" FROM plugin_installations WHERE id=?", i.ID))
 		if e == nil {
 			refs, e := pluginReferences(tx, bridge)
@@ -198,7 +227,7 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 			return
 		}
 	}
-	if i.RuntimeKind == "TOOL" && operation != "unmanage" {
+	if i.RuntimeKind == "TOOL" && operation != "unmanage" && action != "SOFTWARE_UNINSTALL" {
 		h.fail(w, r, 409, "SOFTWARE_TOOL_READ_ONLY", "工具没有常驻进程，仅支持观察与解除登记")
 		return
 	}
@@ -224,6 +253,17 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 		h.fail(w, r, 409, "SOFTWARE_NOT_MANAGED", "请先明确接管该服务，再执行启停")
 		return
 	}
+	if i.SoftwareType == "DOCKER" && i.Installation != nil && i.Installation.Definition.Key == "docker" && (action == "SOFTWARE_STOP" || action == "SOFTWARE_UNINSTALL") {
+		dependencies, dependencyErr := softwareDockerEngineDependencies(tx, i.HostID, i.ID)
+		if dependencyErr != nil {
+			h.internal(w, r, dependencyErr)
+			return
+		}
+		if dependencies > 0 {
+			h.fail(w, r, 409, "DOCKER_ENGINE_IN_USE", "该主机仍有依赖Docker的软件、工具或应用，请先处理这些依赖")
+			return
+		}
+	}
 	if e = tx.QueryRow("SELECT count(*) FROM jobs WHERE status IN ('QUEUED','RUNNING','UNKNOWN')").Scan(&count); e != nil {
 		h.internal(w, r, e)
 		return
@@ -234,6 +274,9 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	}
 	job, now := uuid.NewString(), Now()
 	req := deploy.Request{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: h.storeIDTx(tx), TargetID: i.HostID, JobID: job, TraceID: r.Context().Value(traceKey{}).(string), Action: action, SoftwareOperation: action, Software: softwareRequest(i), DeadlineAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)}
+	if action == "SOFTWARE_UNINSTALL" {
+		req.Uninstallation = &deploy.SoftwareUninstallRequest{Installation: *i.Installation, DeleteData: in.DeleteData}
+	}
 	req.InputHash = deploy.Digest(req)
 	desired := i.DesiredState
 	if action == "SOFTWARE_START" {
@@ -241,6 +284,9 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	}
 	if action == "SOFTWARE_STOP" {
 		desired = "STOPPED"
+	}
+	if action == "SOFTWARE_UNINSTALL" {
+		desired = "REMOVED"
 	}
 	_, e = tx.Exec("INSERT INTO jobs(id,actor_id,kind,target_id,idempotency_key,request_hash,status,phase,input_json,trace_id,created_at,updated_at) VALUES(?,?,?,?,?,?,'QUEUED','PREFLIGHT',?,?,?,?)", job, s.AdminID, action, i.HostID, in.Key, hash, jsonText(req), req.TraceID, now, now)
 	if e == nil {
@@ -296,4 +342,13 @@ func (h *HTTP) replaySoftwareChange(w http.ResponseWriter, r *http.Request, s *s
 		h.success(w, r, map[string]string{"softwareInstanceId": id})
 	}
 	return true
+}
+
+func softwareDockerEngineDependencies(q interface{ QueryRow(string, ...any) *sql.Row }, hostID, softwareID string) (int, error) {
+	var count int
+	err := q.QueryRow(`SELECT
+	(SELECT count(*) FROM software_instances WHERE host_id=? AND id<>? AND management_mode<>'RELEASED' AND (runtime_kind='DOCKER' OR (runtime_kind='TOOL' AND coalesce(nullif(json_extract(installation_json,'$.config.runtimeMode'),''),'DOCKER')='DOCKER' AND json_extract(installation_json,'$.definition.imageId')<>''))) +
+	(SELECT count(*) FROM plugin_installations WHERE target_id=?) +
+	(SELECT count(*) FROM instances WHERE target_id=? AND (coalesce(current_release_id,'')<>'' OR coalesce(previous_release_id,'')<>''))`, hostID, softwareID, hostID, hostID).Scan(&count)
+	return count, err
 }

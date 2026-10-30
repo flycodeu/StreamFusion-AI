@@ -6,7 +6,7 @@ docker_binary=/usr/bin/docker
 docker_socket=/var/run/docker.sock
 apply=false
 authorize_only=false
-fail(){ echo "$*" >&2; exit 1; }
+fail(){ printf 'SFOPS_ERROR=%s\n' "${2:-PREPARATION_INSTALL_FAILED}" >&2; echo "$1" >&2; exit 1; }
 while (($#)); do
   case "$1" in
     --binary|--sha256|--root|--controller-id|--target-id|--account|--controller-unit|--docker-binary|--docker-socket)
@@ -38,7 +38,7 @@ policy="/etc/sudoers.d/sfops-${target_id}"
 expected_policy=$(printf '%s ALL=(root) NOPASSWD: %s/executor target-exec' "$account" "$root")
 if [[ $account != root ]]; then
   if [[ -e $policy || -L $policy ]]; then
-    $authorize_only && [[ -f $policy && ! -L $policy && $(stat -c %u "$policy") == 0 && $(stat -c %a "$policy") == 440 && $(cat "$policy") == "$expected_policy" ]] || fail '已有权限策略不属于本连接，拒绝覆盖'
+    [[ -f $policy && ! -L $policy && $(stat -c %u "$policy") == 0 && $(stat -c %a "$policy") == 440 && $(cat "$policy") == "$expected_policy" ]] || fail '已有权限策略与本连接不匹配，拒绝覆盖' PREPARATION_AUTHORIZATION_CONFLICT
   fi
 fi
 if [[ -n $controller_unit ]]; then

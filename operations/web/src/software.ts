@@ -1,10 +1,12 @@
 import type { ObservationAttempt } from "./observation";
 import type {
+  InstallationPaths,
   ServiceConfiguration,
   ServiceRecipe,
 } from "./serviceInstallation";
 export type SoftwareType =
   | "JAVA"
+  | "DOCKER"
   | "MAVEN"
   | "MINIO"
   | "CODEX"
@@ -40,9 +42,9 @@ export interface SoftwareInstance {
   runtimeKind: SoftwareRuntime;
   locator: string;
   managementMode: "OBSERVE" | "MANAGED" | "RELEASED";
-  desiredState: "UNCHANGED" | "RUNNING" | "STOPPED" | "INSTALLED";
+  desiredState: "UNCHANGED" | "RUNNING" | "STOPPED" | "INSTALLED" | "REMOVED";
   actualState:
-    "UNKNOWN" | "RUNNING" | "STOPPED" | "INSTALLED" | "MISSING" | "FAILED";
+    "UNKNOWN" | "RUNNING" | "STOPPED" | "INSTALLED" | "MISSING" | "FAILED" | "REMOVED";
   observation?: SoftwareMetadata & {
     state: SoftwareInstance["actualState"];
     identityHash: string;
@@ -62,8 +64,9 @@ export interface SoftwareInstance {
   createdAt: string;
   updatedAt: string;
   installationStatus?:
-    "" | "INSTALLING" | "READY" | "FAILED" | "UNKNOWN" | "CANCELLED";
+    "" | "INSTALLING" | "READY" | "FAILED" | "UNKNOWN" | "CANCELLED" | "UNINSTALLED";
   installationJobId?: string;
+  installationPaths?: InstallationPaths;
   installationEvidence?: {
     observedVersion: string;
     observedAt: string;
@@ -133,6 +136,7 @@ export interface SoftwareDiscoveryReport {
 }
 
 export const softwareTypes: Record<SoftwareType, string> = {
+  DOCKER: "Docker Engine",
   JAVA: "Java",
   MAVEN: "Maven",
   MINIO: "MinIO",
@@ -195,12 +199,14 @@ export function softwareVersionText(value?: string) {
   );
 }
 export const softwareDesiredLabels = {
+  REMOVED: "已卸载",
   UNCHANGED: "保持现状",
   INSTALLED: "已安装（按需使用）",
   RUNNING: "运行",
   STOPPED: "停止",
 };
 export const softwareActualLabels = {
+  REMOVED: "已卸载",
   UNKNOWN: "未确认",
   RUNNING: "运行中",
   STOPPED: "已停止",
@@ -216,7 +222,13 @@ export const softwareJobLabels: Record<string, string> = {
   UNKNOWN: "结果未确认",
   CANCELLED: "已取消",
 };
+export const softwareJobErrorMessages: Record<string, string> = {
+  DOCKER_CONTAINER_DEPENDENCIES_UNCONFIRMED: "Docker Engine 当前不可访问，无法确认容器依赖。请检查 Engine 状态；若已停止，请先明确启动 Docker，再提交卸载。启动可能恢复原有容器，请先确认业务影响。",
+};
 export const softwareJobPhaseLabels: Record<string, string> = {
+  SOFTWARE_UNINSTALL: "卸载软件",
+  SOFTWARE_UNINSTALLED: "软件已卸载",
+  SOFTWARE_UNINSTALLING: "正在卸载软件",
   PREFLIGHT: "等待执行",
   TARGET_EXECUTION: "目标执行中",
   SERVICE_IMAGE_PULL: "拉取固定镜像",
@@ -250,6 +262,16 @@ export function softwareInstallationReady(item: SoftwareInstance) {
   return !item.installationStatus || item.installationStatus === "READY";
 }
 
+export function softwareUninstallAvailable(item: SoftwareInstance) {
+  return item.managementMode === "MANAGED" && !!item.installation &&
+    !["INSTALLING", "UNKNOWN", "UNINSTALLED"].includes(item.installationStatus || "");
+}
+
+export function softwareIsDockerEngine(item: SoftwareInstance) {
+  return item.softwareType === "DOCKER" || item.installation?.definition?.key === "docker" ||
+    (item.runtimeKind === "SYSTEMD" && item.locator === "docker.service");
+}
+
 export function softwareIsTool(item: SoftwareInstance) {
   return (
     item.runtimeKind === "TOOL" ||
@@ -270,6 +292,8 @@ export function softwareLifecycleAvailable(item: SoftwareInstance) {
 }
 
 export function softwareState(item: SoftwareInstance) {
+  if (item.installationStatus === "UNINSTALLED" || item.actualState === "REMOVED")
+    return { label: "已卸载", tone: "state-muted" };
   if (item.managementMode === "RELEASED")
     return { label: "已解除", tone: "state-muted" };
   if (!softwareInstallationReady(item)) {
@@ -290,14 +314,15 @@ export function softwareState(item: SoftwareInstance) {
     item.latestAttempt?.code &&
     !["READY", "NOT_CHECKED"].includes(item.latestAttempt.code)
   )
-    return { label: "当前未确认", tone: "state-muted" };
+    return item.observation?.observedAt
+      ? {
+          label: `上次${softwareActualLabels[item.observation.state] || "未知"}`,
+          tone: "state-muted",
+        }
+      : { label: "待检查", tone: "state-muted" };
   if (item.freshness === "UNOBSERVED")
     return { label: "未检查", tone: "state-muted" };
-  if (
-    item.freshness === "STALE" ||
-    (item.observation?.observedAt &&
-      Date.now() - Date.parse(item.observation.observedAt) >= 180000)
-  )
+  if (item.freshness === "STALE")
     return {
       label: `上次${softwareActualLabels[item.observation?.state || item.actualState] || "未知"}`,
       tone: "state-muted",

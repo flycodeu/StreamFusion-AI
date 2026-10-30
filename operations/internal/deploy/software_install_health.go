@@ -306,8 +306,19 @@ func (x *executor) nativeServiceHealth(ctx context.Context, req Request, s Softw
 	}
 	output, err := softwareCommand(ctx, x.softwareRunner, binary, args...)
 	version := strings.TrimSpace(string(output))
-	if err != nil || version == "" || len(version) > 8192 || i.Definition.Key != "zlm" && !strings.Contains(version, i.Definition.Version) {
+	if err != nil || version == "" || len(version) > 8192 || !nativeServiceVersionMatches(i.Definition, version) {
 		return "", errors.New("SERVICE_VERSION_MISMATCH")
 	}
 	return version, nil
+}
+
+func nativeServiceVersionMatches(d serviceinstall.Definition, observed string) bool {
+	if d.Key == "zlm" {
+		return true
+	}
+	version := d.Version
+	if d.Native != nil && d.Native.BuildRecipe == "DEB" {
+		version = strings.SplitN(version, "-", 2)[0]
+	}
+	return strings.Contains(observed, version)
 }

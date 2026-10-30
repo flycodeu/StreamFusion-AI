@@ -6,6 +6,9 @@ import ts from "typescript";
 
 // Exercise the component's real script with controlled requests and timers.
 const component = await readFile(new URL("../src/HostPreparationPanel.vue", import.meta.url), "utf8");
+const hostManagement = await readFile(new URL("../src/HostManagement.vue", import.meta.url), "utf8");
+const hostOverview = await readFile(new URL("../src/HostOverview.vue", import.meta.url), "utf8");
+const app = await readFile(new URL("../src/App.vue", import.meta.url), "utf8");
 const source = component.split('<script setup lang="ts">')[1].split("</script>")[0]
   .replace(/^import .+;\r?$/gm, "");
 const compiled = ts.transpileModule(source, {
@@ -14,7 +17,7 @@ const compiled = ts.transpileModule(source, {
 const createPanel = new Function(
   "computed", "ref", "watch", "onUnmounted", "defineProps", "defineEmits",
   "ApiError", "request", "setTimeout", "clearTimeout", "fetch", "location", "document", "URL", "navigator",
-  compiled + "\nreturn { data, busy, error, confirmed, sudoPassword, checkResult, load, install, check, reconcile, download };",
+  compiled + "\nreturn { data, busy, error, sudoPassword, needsSudoPassword, canRecover, checkResult, updateRequested, openUpdate, load, install, repair, check, reconcile, download };",
 );
 
 function deferred() {
@@ -23,13 +26,22 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+class TestApiError extends Error {
+  constructor(message, code, timestamp = "2026-10-29T01:01:00Z", traceId = "test-trace") {
+    super(message);
+    this.code = code;
+    this.timestamp = timestamp;
+    this.traceId = traceId;
+  }
+}
+
 async function flush() {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
 function preparation(id = "host-a", remoteJob) {
   return {
-    hostId: id, expectedHostVersion: "1", account: "ubuntu", remoteJob,
+    hostId: id, expectedHostVersion: "1", account: "ubuntu", installRoot: "/opt/streamfusion-ops-target", remoteJob,
     package: { available: true, fileName: `${id}.tar.gz`, downloadUrl: `/ops/api/v1/hosts/${id}/preparation/download?expectedVersion=1` },
   };
 }
@@ -45,12 +57,11 @@ function harness(request, fetch = async () => Response.json({})) {
     static createObjectURL() { return "blob:test-download"; }
     static revokeObjectURL() {}
   }
-  class ApiError extends Error {}
   const panel = createPanel(
     computed, ref,
     (_sources, callback) => { change = callback; callback(); },
     (callback) => { unmount = callback; },
-    () => props, () => (name) => emitted.push(name), ApiError, request,
+    () => props, () => (name) => emitted.push(name), TestApiError, request,
     (callback, delay) => { const id = ++timerId; timers.set(id, { callback, delay }); return id; },
     (id) => timers.delete(id), fetch, { origin: "http://ops.test" },
     { createElement: () => ({ click() { clicks.push(this.download); } }) },
@@ -125,7 +136,7 @@ test("progress failures stop after three attempts and manual refresh restores po
   h.unmount();
 });
 
-test("an unconfirmed install request reuses its idempotency key without retaining the sudo password", async () => {
+test("an install with a lost response reuses its idempotency key without retaining the sudo password", async () => {
   let reads = 0;
   const inputs = [];
   const h = harness(async (_path, method, input) => {
@@ -134,7 +145,6 @@ test("an unconfirmed install request reuses its idempotency key without retainin
     return preparation();
   });
   await flush();
-  h.panel.confirmed.value = true;
   h.panel.sudoPassword.value = "temporary-password";
   await h.panel.install();
   assert.equal(h.panel.sudoPassword.value, "");
@@ -157,10 +167,30 @@ test("a confirmed terminal install permits a new install intent", async () => {
     }
     return preparation("host-a", latest);
   });
-  await flush(); h.panel.confirmed.value = true;
-  await h.panel.install(); await h.panel.install();
+  await flush();
+  await h.panel.install();
+  await h.panel.install();
   assert.equal(keys.length, 2);
   assert.notEqual(keys[0], keys[1]);
+});
+
+test("a successful historical connection offers an explicit update without auto installing", async () => {
+  const mutations = [];
+  const h = harness(async (path, method, input) => {
+    if (path.endsWith("/checks")) return { capabilities: {} };
+    if (method === "POST") { mutations.push({ path, input: { ...input } }); return { id: "update-job", status: "SUCCEEDED" }; }
+    return preparation("host-a", { id: "old-success", status: "SUCCEEDED" });
+  });
+  await flush();
+  assert.equal(mutations.length, 0);
+  assert.equal(h.panel.data.value.remoteJob.id, "old-success");
+  h.panel.openUpdate();
+  assert.equal(h.panel.updateRequested.value, true);
+  assert.equal(mutations.length, 0);
+  await h.panel.install();
+  assert.equal(mutations.length, 1);
+  assert.equal(mutations[0].path, "/hosts/host-a/preparation/install");
+  assert.equal(h.panel.updateRequested.value, false);
 });
 
 test("download uses its initial file name and ignores completion after a host switch", async () => {
@@ -198,5 +228,157 @@ test("offline check reports executor and authorization readiness separately from
   checked.capabilities.mutation = available;
   await h.panel.check();
   assert.equal(h.panel.checkResult.value.ready, true);
-  assert.match(h.panel.checkResult.value.message, /可以继续安装软件/);
+  assert.match(h.panel.checkResult.value.message, /继续安装和管理软件/);
+});
+
+test("unknown reconciliation gives a concise path problem without exposing codes", async () => {
+  const job = { id: "job-unknown", status: "UNKNOWN", phase: "INSTALLING_EXECUTOR" };
+  const h = harness(async (_path, method) => {
+    if (method === "POST") {
+      throw new TestApiError(
+        "接入目录不满足安全要求，请让服务器管理员检查符号链接、所有者和写入权限。",
+        "EXECUTOR_PATH_UNSAFE",
+      );
+    }
+    return preparation("host-a", job);
+  });
+  await flush();
+  await h.panel.reconcile();
+  assert.equal(h.panel.checkResult.value.title, "接入目录权限不符合要求");
+  assert.match(h.panel.checkResult.value.message, /点击下方按钮修复/);
+  assert.equal(h.panel.checkResult.value.code, "EXECUTOR_PATH_UNSAFE");
+  assert.equal(h.panel.error.value, undefined);
+});
+
+test("permission repair uses one transient sudo input and refreshes actual host readiness", async () => {
+  let job = { id: "job-unknown", status: "UNKNOWN", phase: "INSTALLING_EXECUTOR" };
+  const repairs = [];
+  let checks = 0;
+  const h = harness(async (path, method, input) => {
+    if (path.endsWith("/checks")) { checks++; return {}; }
+    if (method === "POST" && path.endsWith("/preparation/repair")) {
+      repairs.push({ ...input });
+      job = { ...job, status: "SUCCEEDED" }; return job;
+    }
+    return preparation("host-a", job);
+  });
+  await flush();
+  h.panel.checkResult.value = {
+    ready: false,
+    title: "接入目录权限不符合要求",
+    message: "现有安装目录未通过安全检查。",
+    code: "EXECUTOR_PATH_UNSAFE",
+  };
+  h.panel.sudoPassword.value = "one-use-sudo-password";
+  await h.panel.repair();
+  assert.equal(h.panel.sudoPassword.value, "");
+  assert.deepEqual(repairs, [{
+    jobId: "job-unknown",
+    expectedVersion: "1",
+    confirmed: true,
+    sudoPassword: "one-use-sudo-password",
+  }]);
+  assert.equal(h.panel.checkResult.value, undefined);
+  assert.equal(h.panel.data.value.remoteJob.status, "SUCCEEDED");
+  assert.equal(checks, 1);
+});
+
+test("operator-facing preparation is a single concise install flow", () => {
+  for (const text of [
+    "控制器没有收到可信的最终回执",
+    "执行器或授权尚未就绪，请保留原目录",
+    "请先确认当前页面状态",
+    "安装期间请保持此页面打开",
+    "任务编号",
+    "状态代码",
+    "请求标识",
+    "技术详情",
+    "接入检查与高级维护",
+  ]) {
+    assert.equal(component.includes(text), false, text);
+  }
+  assert.match(component, /安装位置/);
+  assert.match(component, /开始安装/);
+  assert.match(component, /检查安装结果/);
+  assert.match(component, /bash install\.sh/);
+  assert.equal(component.includes("{{ error.code }}"), false);
+  assert.equal(component.includes("{{ checkResult.code }}"), false);
+  assert.equal(hostManagement.includes("<code>{{ detail.capabilities?.[key]?.code }}</code>"), false);
+  assert.equal(hostOverview.includes("<code>{{ current.latestAttempt.code }}</code>"), false);
+  assert.match(component, /修复权限并继续安装/);
+  assert.match(component, /用于 sudo 提权，仅本次使用/);
+  assert.equal(component.includes("Ops 会核对接入归属和可信摘要，只修复固定控制文件的权限"), false);
+  assert.match(app, /HOST_PREPARATION_REPAIR_ACCEPTED: "开始修复接入权限"/);
+  assert.match(app, /HOST_PREPARATION_REPAIR_RESULT: "接入权限修复结果"/);
+});
+
+test("missing executor can recover the original unknown installation", async () => {
+  let latest = { id: "job-missing", status: "UNKNOWN" };
+  const repairs = [];
+  const h = harness(async (path, method, input) => {
+    if (method === "POST" && path.endsWith("/reconcile")) throw new TestApiError("安装目录不存在", "EXECUTOR_MISSING");
+    if (method === "POST" && path.endsWith("/repair")) {
+      repairs.push({ ...input }); latest = { id: "job-missing", status: "SUCCEEDED" }; return latest;
+    }
+    return preparation("host-a", latest);
+  });
+  await flush(); await h.panel.reconcile();
+  assert.equal(h.panel.checkResult.value.title, "接入组件尚未安装");
+  await h.panel.repair();
+  assert.equal(repairs.length, 1);
+  assert.equal(repairs[0].jobId, "job-missing");
+  assert.equal(h.panel.data.value.remoteJob.status, "SUCCEEDED");
+  assert.equal(h.panel.checkResult.value, undefined);
+  assert.match(component, /恢复接入并继续安装/);
+});
+
+test("sudo password appears only after the server requires it, and repair stays available", async () => {
+  const job = { id: "job-unknown", status: "UNKNOWN" };
+  const passwords = [];
+  const h = harness(async (path, method, input) => {
+    if (method === "POST" && path.endsWith("/repair")) {
+      passwords.push(input.sudoPassword);
+      throw new TestApiError("请输入当前 SSH 账号的系统密码", "PREPARATION_SUDO_REQUIRED");
+    }
+    return preparation("host-a", job);
+  });
+  await flush();
+  assert.equal(h.panel.needsSudoPassword.value, false);
+  h.panel.checkResult.value = { ready: false, code: "EXECUTOR_MISSING" };
+  await h.panel.repair();
+  assert.equal(h.panel.needsSudoPassword.value, true);
+  assert.equal(h.panel.canRecover.value, true);
+  h.panel.sudoPassword.value = "current-account-password";
+  await h.panel.repair();
+  assert.deepEqual(passwords, ["", "current-account-password"]);
+  assert.equal(h.panel.sudoPassword.value, "");
+});
+
+test("opening a completed installation refreshes stale host readiness once", async () => {
+  let checks = 0;
+  const h = harness(async (path) => {
+    if (path.endsWith("/checks")) { checks++; return {}; }
+    return preparation("host-a", { id: "job-ready", status: "SUCCEEDED" });
+  });
+  await flush();
+  assert.equal(checks, 1);
+  assert.deepEqual(h.emitted, ["checked"]);
+  await h.panel.load();
+  assert.equal(checks, 1);
+});
+
+test("successful reconciliation clears the previous failure and refreshes host readiness", async () => {
+  let job = { id: "job-unknown", status: "UNKNOWN" };
+  let checks = 0;
+  const h = harness(async (path) => {
+    if (path.endsWith("/checks")) { checks++; return {}; }
+    if (path.endsWith("/reconcile")) { job = { ...job, status: "SUCCEEDED" }; return job; }
+    return preparation("host-a", job);
+  });
+  await flush();
+  h.panel.checkResult.value = { ready: false, code: "EXECUTOR_RESPONSE_INVALID" };
+  await h.panel.reconcile();
+  assert.equal(h.panel.checkResult.value, undefined);
+  assert.equal(h.panel.data.value.remoteJob.status, "SUCCEEDED");
+  assert.equal(checks, 1);
 });

@@ -71,6 +71,9 @@ func executeNativeTool(ctx context.Context, s SoftwareRequest, run SoftwareComma
 }
 
 func installedToolVersionMatches(d serviceinstall.Definition, version string) bool {
+	if d.Key == "java" && d.Version == "8" {
+		return strings.Contains(version, `openjdk version "1.8.0_504"`) && strings.Contains(version, "build 1.8.0_504-b01") && strings.Contains(version, "Temurin")
+	}
 	if serviceinstall.UsesJavaBridge(d) {
 		p, err := toolPluginDefinition(d)
 		return err == nil && plugin.VersionMatches(p, version)
