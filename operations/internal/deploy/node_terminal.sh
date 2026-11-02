@@ -29,9 +29,14 @@ check_file
 hash=$(sha256sum -- "$stage"); [ "${hash%% *}" = "$after" ] || exit 1
 check_path "$backup"
 mkdir -p -- "$backup"
+chmod 700 -- "$backup"
 if [ -n "$before" ]; then
-  # Backup is exclusive and never overwrites an earlier attempt.
-  (set -C; cat -- "$file" > "$backup/${file##*/}")
+  # Default ACLs can override umask. Restrict the empty, exclusively created
+  # backup before writing any profile or npm credentials to it.
+  (set -C
+   exec 3> "$backup/${file##*/}"
+   chmod 600 -- "$backup/${file##*/}"
+   cat -- "$file" >&3)
 fi
 temporary=$(mktemp "$HOME/.sfops-node-profile.XXXXXXXX")
 trap 'rm -f -- "$temporary"' EXIT

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +16,79 @@ import (
 
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
+
+func TestNodeRegistryBackupPermissions(t *testing.T) {
+	for _, mask := range []string{"022", "077"} {
+		t.Run("umask-"+mask, func(t *testing.T) { testNodeRegistryBackupPermissions(t, mask, "") })
+	}
+	if setfacl, err := exec.LookPath("setfacl"); err == nil {
+		t.Run("default-acl", func(t *testing.T) { testNodeRegistryBackupPermissions(t, "022", setfacl) })
+	} else {
+		t.Log("default ACL case unavailable: setfacl is not installed")
+	}
+}
+
+func testNodeRegistryBackupPermissions(t *testing.T, mask, setfacl string) {
+	home := t.TempDir()
+	config, stage := filepath.Join(home, ".npmrc"), filepath.Join(home, "candidate")
+	before := []byte("registry=https://registry.npmjs.org/\n# fixture configuration\n")
+	after := []byte("registry=https://registry.npmmirror.com/\n# fixture configuration\n")
+	for file, content := range map[string][]byte{config: before, stage: after} {
+		if err := os.WriteFile(file, content, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(config, 0640); err != nil {
+		t.Fatal(err)
+	}
+	parent := filepath.Join(home, "backups")
+	if err := os.Mkdir(parent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if setfacl != "" {
+		if out, err := exec.Command(setfacl, "-m", "d:u::rwx,d:g::r-x,d:o::r-x", parent).CombinedOutput(); err != nil {
+			t.Fatalf("set default ACL: %v %s", err, out)
+		}
+	}
+	backup := filepath.Join(parent, "job")
+	invoke := func(old, next []byte) error {
+		cmd := exec.Command("/usr/bin/bash", "--noprofile", "--norc", "-c", "umask "+mask+"\n"+nodeTerminalScript, "fixture", config, nodeBytesSHA(old), nodeBytesSHA(next), "640", stage, backup, strconv.Itoa(os.Getuid()))
+		cmd.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin", "LC_ALL=C"}
+		return cmd.Run()
+	}
+	if err := invoke(before, after); err != nil {
+		t.Fatal(err)
+	}
+	check := func(file string, want []byte, mode os.FileMode) {
+		t.Helper()
+		raw, err := os.ReadFile(file)
+		if err != nil || !bytes.Equal(raw, want) {
+			t.Fatalf("unexpected content for %s: %v", filepath.Base(file), err)
+		}
+		st, err := os.Stat(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Mode().Perm() != mode {
+			t.Fatalf("%s mode=%#o, want %#o", filepath.Base(file), st.Mode().Perm(), mode)
+		}
+	}
+	check(config, after, 0640)
+	check(filepath.Join(backup, ".npmrc"), before, 0600)
+	st, err := os.Stat(backup)
+	if err != nil || st.Mode().Perm() != 0700 {
+		t.Fatal("backup directory is not private")
+	}
+	// A repeated attempt cannot replace its first backup or update the config.
+	if err := os.WriteFile(stage, before, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := invoke(after, before); err == nil {
+		t.Fatal("existing backup was overwritten")
+	}
+	check(config, after, 0640)
+	check(filepath.Join(backup, ".npmrc"), before, 0600)
+}
 
 // Runs under the existing isolated user + pinned real npm fixture. No business
 // account is touched, and a dead local port proves setting config is offline.
@@ -94,9 +168,12 @@ func testNodeRegistryLinux(t *testing.T, x *executor, n serviceinstall.NodeConte
 	if !bytes.Equal(saved, original) {
 		t.Fatal("original backup not preserved")
 	}
-	st, _ = os.Stat(backup)
+	st, err = os.Stat(backup)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if st.Mode().Perm() != 0600 {
-		t.Fatal("backup not private")
+		t.Fatalf("backup mode=%#o, want 0600", st.Mode().Perm())
 	}
 	// A durable marker with only its before state remains UNKNOWN; reconciliation
 	// never reruns npm. Restoring the already-computed after file completes it.
