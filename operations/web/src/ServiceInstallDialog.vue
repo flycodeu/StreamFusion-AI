@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import { ElDialog, ElDrawer } from "element-plus";
 import HostPreparationPanel from "./HostPreparationPanel.vue";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
@@ -8,7 +8,7 @@ import { hostTime } from "./hosts";
 import SoftwareIcon from "./SoftwareIcon.vue";
 import ServiceNetworkFields from "./ServiceNetworkFields.vue";
 import InstallationMaterialDetails from "./InstallationMaterialDetails.vue";
-import { softwareJobPhaseLabels } from "./software";
+import { softwareJobPhaseLabel } from "./software";
 import {
   materialChoiceLabel,
   serviceEndpoint,
@@ -74,6 +74,7 @@ const {
   submissionAttempted,
   job,
   logs,
+  logsLimited, logsAt, logsLoading, logsPaused, logError,
   fieldError,
   actionError,
   credentialRoles,
@@ -92,8 +93,6 @@ const {
   submit,
   jobAction,
   loadLogs,
-  act,
-  refreshJob,
   clearError,
   close,
 } = useServiceInstallation(
@@ -102,6 +101,22 @@ const {
   (receipt) => emit("submitted", receipt),
 );
 const visibleStep = computed(() => method.value === "OFFICIAL" ? step.value === 4 ? 2 : step.value === 3 ? 1 : 0 : step.value);
+const logPane = ref<HTMLElement>();
+const followOutput = ref(true);
+watch(logs, async () => {
+  if (!followOutput.value) return;
+  await nextTick();
+  if (logPane.value) logPane.value.scrollTop = logPane.value.scrollHeight;
+});
+watch(() => receipt.value?.jobId, () => { followOutput.value = true; });
+function outputScrolled() {
+  const pane = logPane.value;
+  if (pane) followOutput.value = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 32;
+}
+function followLatest() {
+  followOutput.value = true;
+  if (logPane.value) logPane.value.scrollTop = logPane.value.scrollHeight;
+}
 function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value - 1; clearError(); }
 </script>
 
@@ -670,7 +685,7 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
 
       <section
         v-else-if="step === 4 && receipt"
-        class="install-panel"
+        class="install-panel execution-panel"
         aria-label="执行结果"
       >
         <div class="job-result" :class="job?.status?.toLowerCase()">
@@ -688,9 +703,7 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
                   : "安装正在执行"
           }}</strong
           ><span>{{
-            softwareJobPhaseLabels[job?.phase || ""] ||
-            job?.phase ||
-            "等待作业回执"
+            softwareJobPhaseLabel(job?.phase)
           }}</span>
         </div>
         <p
@@ -703,7 +716,7 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
               : "目标结果未确认，保留原作业与资源锁，请先核对。"
           }}
         </p>
-        <dl class="install-facts">
+        <details class="execution-details"><summary>任务详情</summary><dl class="install-facts">
           <dt>目标主机</dt>
           <dd>{{ host.name }}</dd>
           <dt v-if="!plan?.official">访问入口</dt>
@@ -720,6 +733,7 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
           <dd>
             <code>{{ receipt.jobId }}</code>
           </dd>
+          <dt>阶段标识</dt><dd><code>{{ job?.phase || '—' }}</code></dd>
           <dt v-if="job?.errorCode">错误码</dt>
           <dd v-if="job?.errorCode">
             <code>{{ job.errorCode }}</code><ErrorHelpLink :code="job.errorCode" />
@@ -730,11 +744,9 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
           </dd>
           <dt>最近更新</dt>
           <dd>{{ hostTime(job?.updatedAt) }}</dd>
-        </dl>
-        <div class="inline-actions">
-          <button class="secondary" :disabled="busy" @click="act(refreshJob)">
-            刷新状态</button
-          ><button
+        </dl></details>
+        <div v-if="job?.status === 'UNKNOWN' || job?.targetAckPending || job?.status === 'QUEUED'" class="inline-actions">
+          <button
             v-if="job?.status === 'UNKNOWN' || job?.targetAckPending"
             class="secondary"
             :disabled="busy"
@@ -748,11 +760,20 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
             @click="jobAction('cancel')"
           >
             取消排队</button
-          ><button class="quiet" :disabled="busy" @click="loadLogs">
-            读取执行记录
-          </button>
+          >
         </div>
-        <pre v-if="logs" class="install-logs">{{ logs }}</pre>
+        <section class="execution-terminal" aria-label="安装输出">
+          <header><strong>安装输出</strong><span>{{ logsPaused ? '已暂停' : ['QUEUED', 'RUNNING', 'UNKNOWN'].includes(job?.status || '') || job?.targetAckPending ? '自动刷新 · 3 秒' : '执行结束' }}</span>
+            <button v-if="!logsPaused && (['QUEUED', 'RUNNING', 'UNKNOWN'].includes(job?.status || '') || job?.targetAckPending)" class="quiet" @click="logsPaused = true">暂停刷新</button>
+            <button class="quiet" :disabled="logsLoading" @click="loadLogs">{{ logsLoading ? '读取中…' : logsPaused ? '继续刷新' : '刷新输出' }}</button>
+          </header>
+          <pre ref="logPane" class="execution-output" tabindex="0" aria-label="安装过程输出" @scroll="outputScrolled">{{ logs || (job?.status === 'QUEUED' ? '等待开始安装…' : '等待安装输出…') }}</pre>
+          <footer v-if="logsAt || !followOutput"><span>{{ logsLimited ? '最近输出 · ' : '' }}{{ hostTime(logsAt) }}</span><button v-if="!followOutput" class="quiet" @click="followLatest">回到最新</button></footer>
+        </section>
+        <div v-if="logError" class="execution-log-error" role="status">
+          <span>{{ logsPaused ? '自动刷新已暂停。' : '' }}{{ logError.message }}</span>
+          <details><summary>错误详情</summary><code>{{ logError.code }} · {{ hostTime(logError.at) }}</code><code v-if="logError.traceId">traceId={{ logError.traceId }}</code><ErrorHelpLink :code="logError.code" /></details>
+        </div>
       </section>
     </div>
     <template #footer
@@ -798,6 +819,21 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
     <HostPreparationPanel v-if="props.open && preparationOpen && props.host" :host="readinessHost || props.host" :automatic-update="automaticUpdate" update-only @updated="preparationChecked" />
   </ElDialog>
 </template>
+
+<style scoped>
+.execution-panel { gap: 14px; }
+.execution-details { margin: 0; color: var(--text-secondary, #64748b); }
+.execution-details summary { cursor: pointer; }
+.execution-terminal { overflow: hidden; border: 1px solid #334155; border-radius: 8px; background: #172334; color: #dce5f2; }
+.execution-terminal header, .execution-terminal footer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 16px; }
+.execution-terminal header { border-bottom: 1px solid #334155; }
+.execution-terminal header span { flex: 1; color: #a9bbd1; font-size: 12px; }
+.execution-terminal .quiet { color: #dce5f2; border-color: #52637a; background: transparent; }
+.execution-output { min-height: 160px; max-height: 420px; overflow: auto; margin: 0; padding: 16px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.8 Consolas, monospace; tab-size: 2; }
+.execution-terminal footer { justify-content: space-between; color: #a9bbd1; font-size: 12px; border-top: 1px solid #334155; }
+.execution-log-error { margin-top: 10px; font-size: 13px; color: #b45309; overflow-wrap: anywhere; }
+.execution-log-error code { display: block; }
+</style>
 
 <style scoped src="./service-installation.css"></style>
 <style scoped>

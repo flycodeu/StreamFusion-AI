@@ -272,6 +272,7 @@ const statusLabels: Record<string, string> = {
   UNKNOWN: "结果未确认",
   SUCCEEDED: "成功",
   FAILED: "失败",
+  CANCELLED: "已取消",
 };
 const jobKindLabels: Record<string, string> = {
   FIREWALL_CHANGE: "防火墙变更",
@@ -285,6 +286,10 @@ const jobKindLabels: Record<string, string> = {
   SOFTWARE_START: "启动软件",
   SOFTWARE_STOP: "停止软件",
   SOFTWARE_UNMANAGE: "解除管理",
+  SOFTWARE_INSTALL: "安装软件",
+  SOFTWARE_UNINSTALL: "卸载软件",
+  SOFTWARE_CONFIGURE: "修改软件配置",
+  NODE_ENVIRONMENT_CHANGE: "更新 Node 环境",
 };
 const phaseLabels: Record<string, string> = {
   ...softwareJobPhaseLabels,
@@ -979,10 +984,10 @@ function credentialSelected(
                 {{ time(j.createdAt) }}<small>{{ short(j.id) }}</small>
               </td>
               <td>
-                {{ jobKindLabels[j.kind] || j.kind }}
+                {{ jobKindLabels[j.kind] || '其他操作' }}
               </td>
               <td>
-                {{ phaseLabels[j.phase] || j.phase
+                {{ phaseLabels[j.phase] || '阶段待确认'
                 }}<small v-if="j.targetAckPending">目标确认收尾中</small>
               </td>
               <td>
@@ -995,7 +1000,7 @@ function credentialSelected(
                         ? 'state-error'
                         : 'state-muted'
                   "
-                  >{{ statusLabels[j.status] || j.status }}</span
+                  >{{ statusLabels[j.status] || '状态待确认' }}</span
                 >
               </td>
               <td>
@@ -1531,12 +1536,14 @@ function credentialSelected(
         <dt>状态</dt>
         <dd>
           {{ statusLabels[detail.status] }} ·
-          {{ phaseLabels[detail.phase] || detail.phase }}
+          {{ phaseLabels[detail.phase] || '阶段待确认' }}
         </dd>
-        <dt>错误码</dt>
-        <dd>{{ detail.errorCode || "—" }}</dd>
         <dt>时间</dt>
         <dd>{{ time(detail.updatedAt) }}</dd>
+      </dl>
+      <details><summary>诊断信息</summary><dl class="plan-detail">
+        <dt>状态 / 阶段</dt><dd><code>{{ detail.status }} · {{ detail.phase }}</code></dd>
+        <dt>错误码</dt><dd>{{ detail.errorCode || "—" }}</dd>
         <dt>追踪</dt>
         <dd>
           <code>{{ detail.traceId }}</code>
@@ -1545,7 +1552,7 @@ function credentialSelected(
         <dd>
           <pre>{{ JSON.stringify(detail.result, null, 2) }}</pre>
         </dd>
-      </dl>
+      </dl></details>
     </div>
   </ElDialog>
 </template>

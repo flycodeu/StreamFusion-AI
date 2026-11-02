@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -159,12 +158,7 @@ func (x *executor) serviceDocker(req Request, phase string, limit time.Duration,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
-	out, err := x.softwareRunner(ctx, "/usr/bin/docker", args...)
-	text := x.redactSoftwareSecrets(strings.TrimSpace(string(out)))
-	if len(text) > 8<<10 {
-		text = text[len(text)-(8<<10):]
-	}
-	x.appendServiceLog(req, phase, text)
+	out, err := x.loggedSoftwareCommand(ctx, req, phase, "/usr/bin/docker", args...)
 	return out, err
 }
 
@@ -260,20 +254,6 @@ func (x *executor) readServiceInstallation(req Request, output io.Writer) error 
 		}
 	}
 	return json.NewEncoder(output).Encode(map[string]any{"text": x.redactSoftwareSecrets(string(data)), "limited": true, "source": "TARGET_EXECUTION"})
-}
-
-func (x *executor) appendServiceLog(req Request, phase, text string) {
-	file := filepath.Join(x.root, "jobs", req.JobID, "service-install.log")
-	info, err := os.Stat(file)
-	if err == nil && info.Size() >= 128<<10 {
-		return
-	}
-	f, err := os.OpenFile(file, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, _ = fmt.Fprintf(f, "%s phase=%s\n%s\n", stamp(), phase, x.redactSoftwareSecrets(text))
 }
 
 func (x *executor) serviceImage(req Request) error {

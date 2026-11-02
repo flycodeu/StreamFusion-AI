@@ -233,6 +233,31 @@ export const softwareJobErrorMessages: Record<string, string> = {
   DOCKER_CONTAINER_DEPENDENCIES_UNCONFIRMED: "Docker Engine 当前不可访问，无法确认容器依赖。请检查 Engine 状态；若已停止，请先明确启动 Docker，再提交卸载。启动可能恢复原有容器，请先确认业务影响。",
 };
 export const softwareJobPhaseLabels: Record<string, string> = {
+  TRANSFER: "传输安装文件",
+  IMPORT: "导入镜像",
+  ACTIVATE: "启动服务",
+  HEALTH: "检查服务健康",
+  RECOVERY: "恢复原版本",
+  DOCKER_MATERIAL: "准备 Docker 安装材料",
+  DOCKER_PACKAGES_APPLY: "安装 Docker 软件包",
+  OFFICIAL_REFRESH: "更新官方软件索引",
+  OFFICIAL_PACKAGES_APPLY: "安装官方软件包",
+  SOFTWARE_PREFLIGHT: "检查软件安装条件",
+  SERVICE_CONFIGURE: "写入服务配置",
+  SERVICE_HEALTH: "检查服务健康",
+  CONFIGURATION_STOP: "停止服务以应用配置",
+  CONFIGURATION_CREATE: "应用服务配置",
+  SERVICE_INSTALLED: "软件已安装",
+  SERVICE_NOT_CREATED: "服务尚未创建",
+  SERVICE_HEALTH_FAILED: "服务健康检查未通过",
+  SERVICE_NOT_STARTED: "安装未开始",
+  SERVICE_RECONCILE_REQUIRED: "安装结果待核对",
+  NATIVE_RECONCILE_REQUIRED: "安装结果待核对",
+  OFFICIAL_PLAN_CHANGED: "安装计划已变化",
+  OFFICIAL_PREPARATION_INTERRUPTED: "安装准备已中断",
+  NODE_INSTALL: "安装 Node.js",
+  NODE_CHANGE: "更新 Node 环境",
+  NODE_ENVIRONMENT_UPDATED: "Node 环境已更新",
   SOFTWARE_UNINSTALL: "卸载软件",
   SOFTWARE_UNINSTALLED: "软件已卸载",
   SOFTWARE_UNINSTALLING: "正在卸载软件",
@@ -264,6 +289,21 @@ export const softwareJobPhaseLabels: Record<string, string> = {
   SOFTWARE_RECONCILE_REQUIRED: "需要核对软件状态",
   CANCELLED: "已取消",
 };
+
+export function softwareJobStatusLabel(status?: string) {
+  return softwareJobLabels[status || ""] || "状态待确认";
+}
+
+export function softwareJobPhaseLabel(phase?: string) {
+  return softwareJobPhaseLabels[phase || ""] || "阶段待确认";
+}
+
+// Protocol codes remain available in diagnostics, not as normal page copy.
+export function softwareObservationMessage(message?: string, errorCode?: string) {
+  if (errorCode) return "检查未完成，请查看诊断信息";
+  if (!message || ["READY", "SERVICE_INSTALLED", "SOFTWARE_STATE_VERIFIED"].includes(message)) return "";
+  return /^[A-Z][A-Z0-9_]+$/.test(message) ? "检查结果待确认" : message;
+}
 
 export function softwareInstallationReady(item: SoftwareInstance) {
   return !item.installationStatus || item.installationStatus === "READY";

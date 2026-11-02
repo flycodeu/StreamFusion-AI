@@ -29,7 +29,7 @@ func runNativeBuild(ctx context.Context, user, directory, command string, args .
 	cmd.Cancel = func() error { return unix.Kill(-cmd.Process.Pid, unix.SIGKILL) }
 	cmd.WaitDelay = 2 * time.Second
 	output := &cappedBuffer{limit: 64 << 10}
-	cmd.Stdout, cmd.Stderr = output, output
+	cmd.Stdout, cmd.Stderr = commandOutputs(ctx, output)
 	err = cmd.Run()
 	return output.Bytes(), err
 }

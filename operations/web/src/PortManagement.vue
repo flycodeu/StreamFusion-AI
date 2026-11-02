@@ -533,13 +533,17 @@ onUnmounted(() => {
                 </thead>
                 <tbody>
                   <tr v-for="j in currentJobs" :key="j.id">
-                    <td>{{ states[j.status] || j.status }}</td>
+                    <td>{{ states[j.status] || '状态待确认' }}</td>
                     <td>{{ hostTime(j.updatedAt) }}</td>
                     <td>
                       <code>{{ j.id.slice(0, 8) }}</code>
                     </td>
                     <td>
-                      <code>{{ j.errorCode || j.phase }}</code>
+                      <details><summary>{{ j.errorCode ? (findErrorReference(j.errorCode)?.name || '执行未完成') : j.phase === 'FIREWALL_AWAITING_CONFIRM' ? '等待确认规则' : (states[j.status] || '结果待确认') }}</summary>
+                        <ErrorHelpLink v-if="j.errorCode" :code="j.errorCode" />
+                        <code>{{ j.errorCode || j.phase }}</code>
+                        <code>traceId={{ j.traceId }}</code>
+                      </details>
                     </td>
                     <td>
                       <div class="port-actions">

@@ -489,7 +489,7 @@ onUnmounted(() => {
                   {{ capabilityLabel(detail, key) }}
                 </span>
               </header>
-              <p>{{ detail.capabilities?.[key]?.message || "尚未检查" }}</p>
+              <p v-if="detail.capabilities?.[key]?.status !== 'AVAILABLE'">{{ detail.capabilities?.[key]?.message || "尚未检查" }}</p>
               <button v-if="key === 'docker'" class="secondary" :disabled="!!actionHost || detail.maintenance"
                 @click="emit('docker', detail.id)">Docker Engine 安装与管理</button>
               <details
@@ -501,6 +501,7 @@ onUnmounted(() => {
                 class="capability-evidence"
               >
                 <summary>检查依据</summary>
+                <p v-if="detail.capabilities?.[key]?.status === 'AVAILABLE'">{{ detail.capabilities?.[key]?.message }}</p>
                 <span>
                   来源：{{
                     observationSources[

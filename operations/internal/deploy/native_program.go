@@ -87,8 +87,9 @@ func (x *executor) prepareNativeProgram(ctx context.Context, req Request, dir, r
 		if err := x.checkpoint(req, phase); err != nil {
 			return err
 		}
-		output, err := runNativeBuild(ctx, user, source, command, args...)
-		x.appendServiceLog(req, phase, x.redactSoftwareSecrets(string(output)))
+		loggedContext, closeLog := x.installationLogContext(ctx, req, phase)
+		defer closeLog()
+		_, err := runNativeBuild(loggedContext, user, source, command, args...)
 		if err != nil {
 			return errors.New(phase + "_FAILED")
 		}

@@ -387,7 +387,7 @@ onUnmounted(() => {
         <strong>Docker Engine <span>主机容器运行引擎</span></strong>
         <p>{{ dockerInstance ? `已登记 · ${softwareState(dockerInstance).label}` :
           hostObservationExpired(currentTarget, Date.now()) ? '当前状态待检查' :
-          currentTarget.capabilities?.docker.status === 'AVAILABLE' ? '已检测到外部 Docker，可用于容器安装；启停由原安装方式管理' : '未确认可用 Engine；安装容器软件前请先准备引擎' }}</p>
+          currentTarget.capabilities?.docker.status === 'AVAILABLE' ? '外部 Docker 已可用' : '安装容器软件前需准备 Docker Engine' }}</p>
       </div>
       <button v-if="dockerInstance" class="secondary" :disabled="busy" @click="emit('openInstance', dockerInstance.id)">查看与启停</button>
       <button v-else-if="currentTarget.capabilities?.docker.status !== 'AVAILABLE'" class="secondary" :disabled="busy || !dockerRecipe || currentTarget.maintenance"
@@ -514,7 +514,7 @@ onUnmounted(() => {
         class="legacy-row"
       >
         <strong>{{ legacyName(item) }} · {{ item.pluginVersion }}</strong
-        ><span>{{ labels[item.status] || item.status }}</span>
+        ><span>{{ labels[item.status] || '状态待确认' }}</span>
         <div class="recipe-actions">
           <button class="quiet" :disabled="busy" @click="details(item)">
             详情</button
@@ -559,22 +559,18 @@ onUnmounted(() => {
           {{ labels[selected?.status || detailJob?.status || ""] || "—" }}
         </dd>
         <dt>作业阶段</dt>
-        <dd>{{ phases[detailJob?.phase || ""] || detailJob?.phase || "—" }}</dd>
-        <dt>错误码</dt>
-        <dd>{{ selected?.errorCode || detailJob?.errorCode || "—" }}</dd>
+        <dd>{{ phases[detailJob?.phase || ""] || "阶段待确认" }}</dd>
         <dt>观察时间</dt>
         <dd>{{ time(selected?.observedAt || detailJob?.updatedAt) }}</dd>
-        <dt>作业</dt>
-        <dd>
-          <code>{{ detailJob?.id }}</code>
-        </dd>
-        <dt>追踪</dt>
-        <dd>
-          <code>{{ detailJob?.traceId }}</code>
-        </dd>
         <dt>引用数</dt>
         <dd>{{ selected?.referenceCount || 0 }}</dd>
       </dl>
+      <details><summary>诊断信息</summary><dl class="plugin-detail">
+        <dt>状态 / 阶段</dt><dd>{{ selected?.status || detailJob?.status }} · {{ detailJob?.phase }}</dd>
+        <dt>错误码</dt><dd>{{ selected?.errorCode || detailJob?.errorCode || "—" }}</dd>
+        <dt>作业</dt><dd><code>{{ detailJob?.id }}</code></dd>
+        <dt>追踪</dt><dd><code>{{ detailJob?.traceId }}</code></dd>
+      </dl></details>
       <div
         v-if="detailJob?.status === 'UNKNOWN' || detailJob?.targetAckPending"
         class="job-notice"

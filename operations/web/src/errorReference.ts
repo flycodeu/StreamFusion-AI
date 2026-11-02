@@ -9,6 +9,9 @@ export interface ErrorReferenceEntry {
 }
 
 export const errorReference: ErrorReferenceEntry[] = [
+  { code: "SOFTWARE_IDENTITY_DRIFT", name: "软件身份已变化", category: "软件管理", meaning: "当前程序或服务与 Ops 登记的身份不一致，无法安全读取该实例日志或继续操作。", steps: ["核对这台主机是否通过平台外方式替换、升级或重建了该软件。", "在软件详情重新检查状态并核对实际程序路径；保留原作业和数据，不要重复安装覆盖。"] },
+  { code: "SOFTWARE_OWNERSHIP_MISMATCH", name: "软件归属不匹配", category: "软件管理", meaning: "目标上的软件归属记录与当前主机或实例不匹配，操作已停止。", steps: ["核对主机、安装目录与软件实例，检查是否复制或移动过受管目录。", "查看原安装作业和诊断信息，由管理员核对归属后再操作；不要手动修改归属记录绕过检查。"] },
+  { code: "SOFTWARE_LOG_READ_DENIED", name: "软件日志不可读取", category: "软件管理", meaning: "执行器未能通过受支持的日志入口读取该软件日志；不能仅凭此码认定是 sudo 密码问题。", steps: ["检查软件详情中的运行方式和服务标识，核对 systemd 或 Docker 服务是否存在、可访问。", "记录发生时间、主机和 traceId，检查对应服务日志读取权限及目标执行器日志。"] },
   { code: "PREPARATION_UPDATE_UNKNOWN_BINARY", name: "组件来源未确认", category: "主机接入", meaning: "服务器组件摘要没有匹配的成功接入记录，已停止自动更新。", steps: ["核对当前主机、接入目录及原安装来源。", "在主机安装准备中核对后手动更新，再继续预检。"] },
   { code: "PREPARATION_UPDATE_CHANGED", name: "组件状态已变化", category: "主机接入", meaning: "检查后组件或更新资格发生变化，本次自动更新停止。", steps: ["查看该主机是否有其他操作或人工更新。", "待原操作完成后重新预检，未知结果先在原作业核对。"] },
   { code: "PREPARATION_UPDATE_ONLY", name: "自动更新条件不满足", category: "主机接入", meaning: "接入目录、身份或摘要发生变化，自动更新不会转为首次安装或权限修复。", steps: ["查看原更新作业的结果与错误详情。", "在主机安装准备中核对目录和身份后处理，保留原作业记录。"] },

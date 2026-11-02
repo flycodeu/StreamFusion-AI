@@ -7,16 +7,27 @@ import ts from "typescript";
 const compile = (source) => ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
-function moduleFrom(source, imports = {}) {
+function moduleFrom(source, imports = {}, timers = {}) {
   const module = { exports: {} };
   new Function("require", "module", "exports", "setTimeout", "clearTimeout", "document", compile(source))(
-    (name) => imports[name], module, module.exports, () => 1, () => {}, { hidden: true },
+    (name) => imports[name], module, module.exports, timers.setTimeout || (() => 1), timers.clearTimeout || (() => {}), timers.document || { hidden: true },
   );
   return module.exports;
 }
 const installationSource = await readFile(new URL("../src/serviceInstallation.ts", import.meta.url), "utf8");
 const installation = moduleFrom(installationSource);
 const software = moduleFrom(await readFile(new URL("../src/software.ts", import.meta.url), "utf8"));
+test("operator labels hide protocol codes without claiming unknown work succeeded", () => {
+  assert.equal(software.softwareJobPhaseLabel("SERVICE_INSTALLED"), "软件已安装");
+  assert.equal(software.softwareJobPhaseLabel("SOFTWARE_UNINSTALLED"), "软件已卸载");
+  assert.equal(software.softwareJobStatusLabel("UNKNOWN"), "结果未确认");
+  assert.equal(software.softwareJobStatusLabel("FUTURE_STATE"), "状态待确认");
+  assert.equal(software.softwareJobPhaseLabel("FUTURE_PHASE"), "阶段待确认");
+  assert.equal(software.softwareObservationMessage("SERVICE_INSTALLED"), "");
+  assert.equal(software.softwareObservationMessage("服务启动成功"), "服务启动成功");
+  assert.equal(software.softwareObservationMessage("FUTURE_CODE"), "检查结果待确认");
+  assert.equal(software.softwareObservationMessage("SERVICE_INSTALLED", "SSH_TIMEOUT"), "检查未完成，请查看诊断信息");
+});
 const useSource = await readFile(new URL("../src/useServiceInstallation.ts", import.meta.url), "utf8");
 const preparationUpdate = moduleFrom(await readFile(new URL("../src/preparationUpdate.ts", import.meta.url), "utf8"));
 const uninstallComponent = await readFile(new URL("../src/SoftwareUninstallDialog.vue", import.meta.url), "utf8");
@@ -32,6 +43,12 @@ const material = (id, mode, origin = "UPLOADED", available = true) => ({
   recipeRevision: "r1", runtimeMode: mode, origin: { kind: origin }, status: "AVAILABLE", available, byteSize: 1024,
 });
 async function flush() { for (let i = 0; i < 10; i++) { await Promise.resolve(); await vue.nextTick(); } }
+function executionTimer() {
+  let callback;
+  const document = { hidden: false };
+  return { document, setTimeout(fn) { callback = fn; return 1; }, clearTimeout() { callback = undefined; },
+    async tick() { const fn = callback; callback = undefined; if (fn) await fn(); await flush(); } };
+}
 function installationHarness(materials, options = {}) {
   const calls = [], scopes = [];
   const props = vue.reactive({ open: true, recipe: options.recipe || recipe, method: options.method, host: { id: "host-a", version: "1", address: "10.1.2.3", kind: options.hostKind } });
@@ -47,7 +64,7 @@ function installationHarness(materials, options = {}) {
     vue: { ...vue, onUnmounted: (fn) => scopes.push(fn) },
     "./api": { ApiError: Error, request }, "./serviceInstallation": installation,
     "./preparationUpdate": preparationUpdate,
-  });
+  }, options.timers);
   const scope = vue.effectScope();
   const flow = scope.run(() => composable.useServiceInstallation(props, () => {}, () => {}));
   return { flow, props, calls, dispose() { scopes.forEach((fn) => fn()); scope.stop(); } };
@@ -65,6 +82,65 @@ test("installation defaults to ready bundled library material without a network 
   await h.flow.preflight();
   assert.deepEqual(h.calls.at(-1).data.source, { type: "ARCHIVE", materialId: "bundled" });
   h.dispose();
+});
+
+test("installation output follows running work and reads the final tail without submitting anything", async () => {
+  const timers = executionTimer();
+  let status = "QUEUED", text = "downloading package\n";
+  const h = installationHarness([], { timers, request: async (path) => {
+    if (path === "/jobs/job-a") return { id: "job-a", status, phase: status === "SUCCEEDED" ? "SERVICE_INSTALLED" : "TRANSFER" };
+    if (path === "/jobs/job-a/logs") return { text, limited: true };
+    return [];
+  } });
+  await flush(); h.flow.receipt.value = { jobId: "job-a" };
+  await timers.tick();
+  assert.equal(h.calls.filter((c) => c.path.endsWith('/logs')).length, 0);
+  status = "RUNNING"; await timers.tick();
+  assert.equal(h.flow.logs.value, text);
+  assert.equal(h.flow.logsLimited.value, true);
+  h.flow.logsPaused.value = true;
+  const pausedCount = h.calls.length; await timers.tick(); assert.equal(h.calls.length, pausedCount);
+  await h.flow.loadLogs(); assert.equal(h.flow.logsPaused.value, false);
+  timers.document.hidden = true;
+  const hiddenCount = h.calls.length; await timers.tick(); assert.equal(h.calls.length, hiddenCount);
+  timers.document.hidden = false; status = "SUCCEEDED"; text = "installation complete\n";
+  await timers.tick(); assert.equal(h.flow.logs.value, text);
+  const finalCount = h.calls.length; await timers.tick(); assert.equal(h.calls.length, finalCount);
+  assert.equal(h.calls.some((c) => c.method === 'POST'), false);
+  h.dispose();
+});
+
+test("three output failures pause polling, retain known output, and explicit retry resumes", async () => {
+  const timers = executionTimer(); let failing = false;
+  const h = installationHarness([], { timers, request: async (path) => {
+    if (path === "/jobs/job-a") return { id: "job-a", status: "RUNNING", phase: "IMPORT" };
+    if (path.endsWith('/logs')) { if (failing) throw new Error('connection unavailable'); return { text: 'verified previous output' }; }
+    return [];
+  } });
+  await flush(); h.flow.receipt.value = { jobId: 'job-a' }; await timers.tick();
+  failing = true; await timers.tick(); await timers.tick(); await timers.tick();
+  assert.equal(h.flow.logsPaused.value, true);
+  assert.equal(h.flow.logs.value, 'verified previous output');
+  assert.equal(h.flow.job.value.status, 'RUNNING');
+  assert.equal(h.flow.actionError.value, undefined);
+  const count = h.calls.length; await timers.tick(); assert.equal(h.calls.length, count);
+  failing = false; await h.flow.loadLogs(); assert.equal(h.flow.logsPaused.value, false);
+  assert.equal(h.flow.logError.value, undefined); h.dispose();
+});
+
+test("late installation output cannot populate a closed or changed host drawer", async () => {
+  let finish;
+  const h = installationHarness([], { request: async (path) => {
+    if (path === '/jobs/job-a') return { id: 'job-a', status: 'RUNNING' };
+    if (path.endsWith('/logs')) return new Promise((resolve) => { finish = resolve; });
+    return [];
+  } });
+  await flush(); h.flow.receipt.value = { jobId: 'job-a' };
+  const pending = h.flow.loadLogs(); await flush();
+  h.props.open = false; await flush(); finish({ text: 'late output' }); await pending;
+  assert.equal(h.flow.logs.value, '');
+  h.props.host.id = 'host-b'; h.props.open = true; await flush();
+  assert.equal(h.flow.logs.value, ''); assert.equal(h.flow.receipt.value, undefined); h.dispose();
 });
 
 test("switching native to Docker selects a matching offline material and invalidates the old plan", async () => {

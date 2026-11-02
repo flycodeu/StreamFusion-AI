@@ -160,11 +160,11 @@ func (h *HTTP) probeSoftware(ctx context.Context, t target, i softwareInstance, 
 		return failedSoftwareObservation(i, "INSTALLATION_NOT_BOUND")
 	}
 	if i.Installation != nil {
-		var fact deploy.SoftwareObservation
-		if err := h.store.callTarget(ctx, t, deploy.Request{Action: "SOFTWARE_OBSERVE", Software: softwareRequest(i)}, "", &fact); err != nil {
+		fact, err := h.readManagedSoftware(ctx, t, i, "SOFTWARE_OBSERVE")
+		if err != nil {
 			return failedSoftwareObservation(i, executorFailureCode(err))
 		}
-		return softwareObservation{SoftwareObservation: &fact, Source: "EXECUTOR_READ_ONLY"}
+		return softwareObservation{SoftwareObservation: fact, Source: "EXECUTOR_READ_ONLY"}
 	}
 	probe := softwareRequest(i)
 	if i.ManagementMode == "OBSERVE" {
@@ -210,8 +210,7 @@ func (h *HTTP) softwareLogs(w http.ResponseWriter, r *http.Request, id string) {
 	defer cancel()
 	var out *deploy.SoftwareObservation
 	if i.Installation != nil {
-		out = &deploy.SoftwareObservation{}
-		e = h.store.callTarget(ctx, t, deploy.Request{Action: "SOFTWARE_LOGS", Software: softwareRequest(i)}, "", out)
+		out, e = h.readManagedSoftware(ctx, t, i, "SOFTWARE_LOGS")
 	} else {
 		e = h.withSoftwareRunner(ctx, t, func(run deploy.SoftwareCommandRunner) error {
 			var err error
@@ -220,6 +219,15 @@ func (h *HTTP) softwareLogs(w http.ResponseWriter, r *http.Request, id string) {
 		})
 	}
 	if e != nil {
+		if i.Installation != nil {
+			code := executorFailureCode(e)
+			message := executorFailureMessages[code]
+			if message == "" {
+				message = "服务日志读取未完成，请核对主机连接与错误详情"
+			}
+			h.fail(w, r, 409, code, message)
+			return
+		}
 		h.fail(w, r, 409, "SOFTWARE_LOG_UNAVAILABLE", "日志未确认，请检查服务身份和读取权限")
 		return
 	}

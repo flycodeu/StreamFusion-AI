@@ -42,6 +42,9 @@ func executorFailureCode(err error) string {
 }
 
 var executorFailureMessages = map[string]string{
+	"SOFTWARE_IDENTITY_DRIFT":          "服务身份与登记记录不一致，请重新检测并核对服务，不读取其他服务的日志",
+	"SOFTWARE_OWNERSHIP_MISMATCH":      "服务受管归属与安装记录不一致，请核对原安装记录和实际服务",
+	"SOFTWARE_LOG_READ_DENIED":         "服务身份已核对，但日志命令未成功，请检查日志读取条件与服务状态",
 	"EXECUTOR_MISSING":                 "受管执行器尚未安装，请在安装准备中下载材料并初始化",
 	"EXECUTOR_NOT_EXECUTABLE":          "受管执行器不可执行，请核对文件权限及Linux架构",
 	"EXECUTOR_INITIALIZATION_REQUIRED": "执行器尚未完成受管初始化，请核对安装准备；不要覆盖已有目录",
@@ -81,6 +84,12 @@ func classifyExecutorInvocation(err error, stderr string) error {
 	}
 	text := strings.ToLower(stderr)
 	switch {
+	case strings.TrimSpace(text) == "software_identity_drift":
+		return errors.New("SOFTWARE_IDENTITY_DRIFT")
+	case strings.TrimSpace(text) == "software_ownership_mismatch":
+		return errors.New("SOFTWARE_OWNERSHIP_MISMATCH")
+	case strings.TrimSpace(text) == "software_log_read_denied":
+		return errors.New("SOFTWARE_LOG_READ_DENIED")
 	case strings.TrimSpace(text) == "service_recipe_untrusted":
 		return errors.New("SERVICE_RECIPE_UNTRUSTED")
 	case strings.TrimSpace(text) == "service_install_input_invalid":

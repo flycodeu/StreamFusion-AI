@@ -3,13 +3,15 @@ import { ref, watch } from "vue";
 import { ElDrawer, ElTabs, ElTabPane } from "element-plus";
 import { hostTime, type Host } from "./hosts";
 import ServiceConfigurationPanel from "./ServiceConfigurationPanel.vue";
+import ErrorHelpLink from "./ErrorHelpLink.vue";
 import type { ServiceInstallReceipt } from "./serviceInstallation";
 import {
   softwareDesiredLabels,
   softwareActualLabels,
-  softwareJobLabels,
+  softwareJobStatusLabel,
   softwareJobErrorMessages,
-  softwareJobPhaseLabels,
+  softwareJobPhaseLabel,
+  softwareObservationMessage,
   softwareModes,
   softwareRuntimeLabels,
   softwareState,
@@ -138,7 +140,6 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
               <dt>最近检测</dt>
               <dd>
                 当前无法确认 · {{ hostTime(detail.latestAttempt.at) }}
-                <code>{{ detail.latestAttempt.code }}</code>
               </dd>
             </template>
             <dt>确认时间</dt>
@@ -160,7 +161,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
                 }}</pre>
                 <small class="muted"
                   >{{ hostTime(detail.installationEvidence.observedAt) }} ·
-                  安装回执，非实时观测</small
+                  安装回执</small
                 >
               </dd>
             </template>
@@ -199,16 +200,24 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
                 </code>
               </dd>
             </template>
-            <template v-if="detail.observation?.message || detail.errorCode">
+            <template v-if="softwareObservationMessage(detail.observation?.message, detail.observation?.errorCode || detail.errorCode)">
               <dt>检查结果</dt>
               <dd>
-                {{ detail.observation?.message }}
-                <code v-if="detail.observation?.errorCode || detail.errorCode">
-                  {{ detail.observation?.errorCode || detail.errorCode }}
-                </code>
+                {{ softwareObservationMessage(detail.observation?.message, detail.observation?.errorCode || detail.errorCode) }}
               </dd>
             </template>
           </dl>
+          <details v-if="detail.observation?.message || detail.errorCode || detail.observation?.errorCode || detail.latestAttempt?.code" class="software-diagnostics">
+            <summary>诊断信息</summary>
+            <ErrorHelpLink :code="detail.observation?.errorCode || detail.errorCode || detail.latestAttempt?.code || ''" />
+            <dl class="software-facts">
+              <dt>软件标识</dt><dd><code>{{ detail.id }}</code></dd>
+              <dt>检查结果</dt><dd><code>{{ detail.observation?.message || '—' }}</code></dd>
+              <dt>错误码</dt><dd><code>{{ detail.observation?.errorCode || detail.errorCode || '—' }}</code></dd>
+              <dt>最近检测</dt><dd><code>{{ detail.latestAttempt?.code || '—' }}</code>{{ hostTime(detail.latestAttempt?.at) }}</dd>
+              <dt>请求追踪</dt><dd><code>{{ detail.latestAttempt?.traceId || '—' }}</code></dd>
+            </dl>
+          </details>
         </ElTabPane>
         <ElTabPane :label="detail.installation?.official ? '安装详情' : '服务配置'" name="configuration"
           ><ServiceConfigurationPanel
@@ -221,11 +230,11 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
         <ElTabPane label="执行记录" name="job">
           <div v-if="job" class="software-job">
             <header>
-              <strong>{{ softwareJobLabels[job.status] || job.status }}</strong>
-              <code>{{ job.id }}</code>
+              <strong>{{ softwareJobStatusLabel(job.status) }}</strong>
+              <time>{{ hostTime(job.updatedAt) }}</time>
             </header>
             <small class="job-phase">
-              {{ softwareJobPhaseLabels[job.phase] || job.phase }}
+              {{ softwareJobPhaseLabel(job.phase) }}
             </small>
             <p v-if="job.status === 'UNKNOWN' || job.targetAckPending">
               {{
@@ -235,7 +244,14 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
               }}
             </p>
             <p v-if="softwareJobErrorMessages[job.errorCode]">{{ softwareJobErrorMessages[job.errorCode] }}</p>
-            <code v-if="job.errorCode">{{ job.errorCode }}</code>
+            <p v-else-if="job.errorCode">执行未完成，请查看诊断信息。</p>
+            <details class="software-diagnostics">
+              <summary>诊断信息</summary>
+              <ErrorHelpLink v-if="job.errorCode" :code="job.errorCode" />
+              <code>{{ job.status }} · {{ job.phase }}</code>
+              <code v-if="job.errorCode">{{ job.errorCode }}</code>
+              <code>作业 {{ job.id }}</code><code>traceId={{ job.traceId }}</code>
+            </details>
             <div class="software-job-actions">
               <button
                 v-if="job.status === 'UNKNOWN' || job.targetAckPending"
@@ -309,7 +325,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
                 {{
                   detail.dataOwnership === "EXTERNAL"
                     ? "服务器原有文件"
-                    : detail.dataOwnership || "未确认"
+                    : detail.dataOwnership === "OPS" ? "Ops 安装文件" : "未确认"
                 }}
               </dd>
               <dt>身份摘要</dt>
@@ -447,8 +463,18 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
   font-weight: 500;
 }
 .software-job code {
+  display: block;
   font: 11px/1.7 var(--mono);
   overflow-wrap: anywhere;
+}
+.software-diagnostics {
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.software-diagnostics summary {
+  cursor: pointer;
+  margin-bottom: 10px;
 }
 .software-job p {
   font-size: 12px;

@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
@@ -160,6 +161,7 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 }
 
 type executor struct {
+	serviceLogMu      sync.Mutex
 	root              string
 	owner             Owner
 	secrets           map[string]string
@@ -181,14 +183,16 @@ func (x *executor) docker(args ...string) ([]byte, error) {
 func (x *executor) dockerWithin(limit time.Duration, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
+	return x.dockerWithinContext(ctx, args...)
+}
+func (x *executor) dockerWithinContext(ctx context.Context, args ...string) ([]byte, error) {
 	if e := secureAncestors(x.owner.DockerBinary); e != nil {
 		return nil, e
 	}
 	cmd := exec.CommandContext(ctx, x.owner.DockerBinary, append([]string{"--host", "unix://" + x.owner.DockerSocket}, args...)...)
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=/root", "DOCKER_CONFIG=" + filepath.Join(x.root, "docker-config")}
 	out := &cappedBuffer{limit: 64 << 10}
-	cmd.Stdout = out
-	cmd.Stderr = out
+	cmd.Stdout, cmd.Stderr = commandOutputs(ctx, out)
 	err := cmd.Run()
 	return out.Bytes(), err
 }

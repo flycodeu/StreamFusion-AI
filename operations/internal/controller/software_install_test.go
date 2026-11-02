@@ -93,7 +93,7 @@ func installSSHFixture(t *testing.T, s *Store, b *browser, extensions ...func(de
 				if req.Software.Kind == "TOOL" {
 					state = "INSTALLED"
 				}
-				return encode(deploy.SoftwareObservation{Kind: req.Software.Kind, Locator: req.Software.Locator, IdentityHash: req.Software.IdentityHash, State: state, Version: "observed version", ObservedAt: Now(), Log: "bounded target log"})
+				return encode(deploy.Result{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID, Status: "SUCCEEDED", Phase: "SOFTWARE_OBSERVED", ObservedAt: Now(), Software: &deploy.SoftwareObservation{Kind: req.Software.Kind, Locator: req.Software.Locator, IdentityHash: req.Software.IdentityHash, State: state, Version: "observed version", ObservedAt: Now(), Log: "bounded target log"}})
 			}
 			state := "STOPPED"
 			if req.Action == "SOFTWARE_START" {
@@ -218,6 +218,13 @@ func TestServiceInstallPlanSubmitIdentityAckAndReplay(t *testing.T) {
 	}
 	if !strings.Contains(b.call("GET", "/jobs/"+job+"/logs", nil, 200).Body.String(), "verified install step") {
 		t.Fatal("missing target logs")
+	}
+	if !strings.Contains(b.call("GET", "/software-instances/"+id+"/logs", nil, 200).Body.String(), "bounded target log") {
+		t.Fatal("managed software logs did not unwrap target Result")
+	}
+	observed := dataOf(t, b.call("POST", "/software-instances/"+id+"/observe", map[string]any{}, 200))
+	if observed["actualState"] != "RUNNING" {
+		t.Fatal("managed observation did not unwrap target Result", observed)
 	}
 	f.OldExecutor.Store(true)
 	if dataOf(t, b.call("POST", "/software-install-plans/"+planID+"/submit", map[string]string{"idempotencyKey": "install-once-1"}, 200))["jobId"] != job {

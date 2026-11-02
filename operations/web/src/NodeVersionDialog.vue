@@ -130,10 +130,9 @@ const canSubmit = computed(
             >执行账号<input
               v-model="draft.account"
               aria-label="Node 执行账号"
-              placeholder="如 ubuntu"
+              placeholder="已有非 root 账号，如 ubuntu"
               required
           /></label>
-          <p class="hint">使用服务器已有的非 root 账号。</p>
         </template>
         <section v-if="draft.action === 'INITIALIZE'" class="plan">
           <strong>同时安装 Node.js</strong>
@@ -151,7 +150,6 @@ const canSubmit = computed(
               </option>
             </select></label
           >
-          <p>自动安装 nvm 和所选 Node 版本。</p>
           <template v-if="draft.source === 'ARCHIVE'">
             <label
               >Node 离线材料<select
@@ -240,10 +238,7 @@ const canSubmit = computed(
               离线安装</label
             >
           </div>
-          <p v-if="draft.source === 'OFFICIAL'" class="hint">
-            由目标服务器获取已核验的固定版本官方文件。
-          </p>
-          <template v-else>
+          <template v-if="draft.source === 'ARCHIVE'">
             <label
               >平台材料<select
                 v-model="draft.materialId"
@@ -354,7 +349,7 @@ const canSubmit = computed(
         <code v-if="plan.change?.context">{{
           plan.change.context.rootPath
         }}</code>
-        <p v-for="check in plan.checks" :key="check.key">{{ check.message }}</p>
+        <details v-if="plan.checks?.length"><summary>预检详情</summary><p v-for="check in plan.checks" :key="check.key">{{ check.message }}</p></details>
         <code v-if="plan.paths?.root">{{ plan.paths.root }}</code>
         <details v-if="plan.commands?.length" open>
           <summary>将在目标服务器执行</summary>

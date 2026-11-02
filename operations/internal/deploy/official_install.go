@@ -47,8 +47,7 @@ func (x *executor) installOfficialSoftware(req Request, dir string) (Result, err
 	}
 	var files []string
 	refresh := i.Official.Commands[0]
-	refreshOut, refreshErr := x.softwareRunner(ctx, refresh.Executable, refresh.Args...)
-	x.appendServiceLog(req, "OFFICIAL_REFRESH", string(refreshOut))
+	_, refreshErr := x.loggedSoftwareCommand(ctx, req, "OFFICIAL_REFRESH", refresh.Executable, refresh.Args...)
 	if refreshErr != nil {
 		return unknown("OFFICIAL_REFRESH_FAILED")
 	}
@@ -112,8 +111,7 @@ func (x *executor) installOfficialSoftware(req Request, dir string) (Result, err
 	if err = atomicJSON(filepath.Join(dir, "official-apply.json"), marker); err != nil {
 		return unknown("OFFICIAL_RECONCILE_REQUIRED")
 	}
-	out, err := x.softwareRunner(ctx, command.Executable, command.Args...)
-	x.appendServiceLog(req, "OFFICIAL_PACKAGES_APPLY", string(out))
+	_, err = x.loggedSoftwareCommand(ctx, req, "OFFICIAL_PACKAGES_APPLY", command.Executable, command.Args...)
 	if err != nil {
 		return unknown("OFFICIAL_PACKAGE_RECONCILE_REQUIRED")
 	}

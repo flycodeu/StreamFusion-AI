@@ -220,20 +220,24 @@ def main():
                     expect(drawer.get_by_label("可用安装包", exact=True)).to_have_value(material["id"])
                     contents = drawer.get_by_label("安装材料内容", exact=True)
                     expect(contents.get_by_text("本地材料已就绪", exact=True)).to_be_visible()
-                    assert "目标服务器无需外网下载" in contents.inner_text()
+                    assert "由 Ops 分发" in contents.inner_text()
                     for source in material["sources"]:
                         assert source["displayName"] in contents.inner_text() and source["publisher"] in contents.inner_text()
                         assert contents.locator("a").filter(has_text=source["displayName"] + " 下载来源").count() >= 1
-                    assert not contents.locator("details").get_attribute("open")
-                    contents.locator("summary").click()
+                    files = contents.locator("details").filter(has_text="文件与校验详情")
+                    assert not files.get_attribute("open")
+                    files.locator("summary").click()
                     for source in material["sources"]:
                         expect(contents.get_by_text(source["name"], exact=True)).to_be_visible()
                         expect(contents.get_by_text(source["sha256"], exact=True)).to_be_visible()
-                    contents.locator("summary").click()
+                    files.locator("summary").click()
                     checks.append(f"real-ui-{key}-matching-offline-material-auto-selected-and-source-details")
                     if key == "docker":
                         assert contents.get_by_label("目标主机依赖").count() > 0
-                        assert "不会自动将用户加入 docker 用户组" in contents.inner_text()
+                        contents.get_by_text("Docker 安装位置与权限", exact=True).click()
+                        assert "不修改用户组" in contents.inner_text()
+                        assert "/etc/docker/daemon.json" in contents.inner_text()
+                        contents.get_by_text("Docker 安装位置与权限", exact=True).click()
                         screenshot_layout(drawer, "docker-materials-real")
                         drawer.get_by_role("button", name="下一步", exact=True).click()
                         expect(drawer.get_by_label("实例名称", exact=True)).to_be_visible()
@@ -281,7 +285,7 @@ def main():
                 catalog()
                 engine_bar = page.get_by_label("主机 Docker Engine", exact=True)
                 if not args.uninstall_paths_only:
-                    expect(engine_bar.get_by_text("已检测到外部 Docker，可用于容器安装；启停由原安装方式管理", exact=True)).to_be_visible()
+                    expect(engine_bar.get_by_text("外部 Docker 已可用", exact=True)).to_be_visible()
                     assert engine_bar.get_by_role("button").count() == 0
                     expect(card_for(docker["name"]).get_by_role("button", name="安装", exact=True)).to_be_disabled()
                     assert page.get_by_role("button", name=re.compile("接管.*Docker|发现.*Docker")).count() == 0
@@ -449,8 +453,11 @@ def main():
                 assert drawer.get_by_role("button", name="解除管理", exact=True).count() == 0
                 drawer.get_by_role("tab", name="执行记录", exact=True).click()
                 expect(drawer.locator(".software-job")).to_be_visible()
-                assert job["id"] in drawer.inner_text() and "已完成" in drawer.inner_text() and "软件已卸载" in drawer.inner_text()
+                assert "已完成" in drawer.inner_text() and "软件已卸载" in drawer.inner_text()
+                expect(drawer.locator(".software-job code").filter(has_text=job["id"])).not_to_be_visible()
                 screenshot_layout(drawer, "uninstalled-history-fixture")
+                drawer.locator(".software-job details summary").click()
+                assert job["id"] in drawer.inner_text() and job["traceId"] in drawer.inner_text()
                 close_details(drawer)
                 checks.append("fixture-uninstalled-record-and-execution-history-remain-visible")
                 assert len(api("/installation-materials")) == 4 and not api("/software-instances")

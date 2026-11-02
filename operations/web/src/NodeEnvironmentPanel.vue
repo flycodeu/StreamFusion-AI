@@ -832,7 +832,7 @@ poll();
             >{{
               environment.managementMode === "MANAGED" ? "Ops 管理" : "只读登记"
             }}
-            · {{ environment.managerType }}</strong
+            · {{ environment.managerType === 'NVM' ? 'nvm' : '系统安装' }}</strong
           >
         </div>
         <div>
@@ -840,9 +840,11 @@ poll();
           ><strong>{{ hostTime(environment.observedAt) }}</strong>
         </div>
       </div>
-      <p v-if="environment.errorCode" class="hint">
-        检测未完成，显示上次结果。
-      </p>
+      <details v-if="environment.errorCode" class="hint">
+        <summary>检测未完成，显示上次结果</summary>
+        <ErrorHelpLink :code="environment.errorCode" /><code>{{ environment.errorCode }}</code>
+        <p>{{ hostTime(environment.observedAt) }} · {{ environment.id }}</p>
+      </details>
       <div class="node-tabs" role="tablist" aria-label="Node 环境详情">
         <button
           v-for="entry in [
@@ -1024,7 +1026,7 @@ poll();
           class="history-row"
           @click="showJob(item)"
         >
-          <span>{{ jobLabels[item.status] || item.status }}</span
+          <span>{{ jobLabels[item.status] || '状态待确认' }}</span
           ><time>{{ hostTime(item.updatedAt) }}</time
           ><span>查看日志</span>
         </button>
@@ -1033,7 +1035,7 @@ poll();
         <pre v-if="logs">{{ logs }}</pre>
       </section>
       <div v-if="job" class="job-result" role="status">
-        <strong>{{ jobLabels[job.status] || job.status }}</strong
+        <strong>{{ jobLabels[job.status] || '状态待确认' }}</strong
         ><span>{{
           job.targetAckPending
             ? "正在等待目标确认收尾"
@@ -1059,7 +1061,7 @@ poll();
         <details>
           <summary>诊断信息</summary>
           <ErrorHelpLink v-if="job.errorCode" :code="job.errorCode" />
-          <p>{{ job.errorCode }} · {{ hostTime(job.updatedAt) }}</p>
+          <p>{{ job.status }} · {{ job.phase }} · {{ job.errorCode }} · {{ hostTime(job.updatedAt) }}</p>
           <code>{{ job.id }} · {{ job.traceId }}</code>
         </details>
       </div>
@@ -1103,7 +1105,6 @@ poll();
       :close-on-click-modal="false"
       align-center
       ><div class="discovery-form">
-        <p class="hint">只检测并登记指定账号的环境，不修改服务器文件。</p>
         <label
           >执行账号<input
             v-model="discoveryAccount"

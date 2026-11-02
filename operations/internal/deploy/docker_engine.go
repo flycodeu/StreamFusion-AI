@@ -268,8 +268,7 @@ func (x *executor) installDockerEngine(req Request, dir string) (Result, error) 
 		}
 		files = append(files, file)
 	}
-	out, err := x.softwareRunner(ctx, "/usr/bin/apt-get", dockerAptArgs(true, false, files)...)
-	x.appendServiceLog(req, "DOCKER_PACKAGE_PLAN", string(out))
+	out, err := x.loggedSoftwareCommand(ctx, req, "DOCKER_PACKAGE_PLAN", "/usr/bin/apt-get", dockerAptArgs(true, false, files)...)
 	if err != nil {
 		return result, errors.New("DOCKER_OFFLINE_DEPENDENCIES_MISSING")
 	}
@@ -339,8 +338,7 @@ func (x *executor) installDockerEngine(req Request, dir string) (Result, error) 
 	if err = x.checkpoint(req, "DOCKER_PACKAGES_APPLY"); err != nil {
 		return unknown()
 	}
-	out, err = x.softwareRunner(ctx, "/usr/bin/apt-get", dockerAptArgs(false, false, files)...)
-	x.appendServiceLog(req, "DOCKER_PACKAGES_APPLY", string(out))
+	_, err = x.loggedSoftwareCommand(ctx, req, "DOCKER_PACKAGES_APPLY", "/usr/bin/apt-get", dockerAptArgs(false, false, files)...)
 	if err != nil {
 		return unknown()
 	}
@@ -543,8 +541,7 @@ func (x *executor) removeDockerEnginePackages(ctx context.Context, req Request, 
 		names = append(names, p.Name)
 	}
 	sort.Strings(names)
-	out, err := x.softwareRunner(ctx, "/usr/bin/apt-get", dockerAptArgs(false, true, names)...)
-	x.appendServiceLog(req, "DOCKER_PACKAGES_REMOVE", string(out))
+	_, err = x.loggedSoftwareCommand(ctx, req, "DOCKER_PACKAGES_REMOVE", "/usr/bin/apt-get", dockerAptArgs(false, true, names)...)
 	if err != nil {
 		return errors.New("DOCKER_PACKAGE_REMOVE_UNCONFIRMED")
 	}

@@ -25,14 +25,20 @@ func (x *executor) softwareRunner(ctx context.Context, command string, args ...s
 		if deadline, ok := ctx.Deadline(); ok {
 			limit = time.Until(deadline)
 		}
-		return x.softwareRun(limit, command, args...)
+		out, err := x.softwareRun(limit, command, args...)
+		if live := installationOutput(ctx); live != nil {
+			_, _ = live.Write(out)
+		}
+		return out, err
 	}
 	if command == "/usr/bin/docker" {
 		limit := 8 * time.Second
 		if deadline, ok := ctx.Deadline(); ok {
 			limit = time.Until(deadline)
 		}
-		return x.dockerWithin(limit, args...)
+		dockerCtx, cancel := context.WithTimeout(ctx, limit)
+		defer cancel()
+		return x.dockerWithinContext(dockerCtx, args...)
 	}
 	// Canonical tool links (for example /usr/bin/java) must resolve to a
 	// protected binary. The fixed command set is chosen only by this package.
@@ -61,7 +67,7 @@ func (x *executor) softwareRunner(ctx context.Context, command string, args ...s
 		limit = packageInventoryLimit
 	}
 	buffer := &cappedBuffer{limit: limit}
-	cmd.Stdout, cmd.Stderr = buffer, buffer
+	cmd.Stdout, cmd.Stderr = commandOutputs(ctx, buffer)
 	err = cmd.Run()
 	return buffer.Bytes(), err
 }

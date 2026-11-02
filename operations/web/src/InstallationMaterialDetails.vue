@@ -70,16 +70,14 @@ const toolLabels: Record<string, string> = {
       </ul>
     </div>
     <p class="material-network">
-      {{ material?.available ? `${materialOriginLabel(material)}，将从 Ops 分发；目标服务器无需外网下载。` :
+      {{ material?.available ? `${materialOriginLabel(material)} · 由 Ops 分发` :
         online && runtimeMode === "DOCKER" ? "目标服务器需要联网拉取固定镜像。" :
-        online ? "Ops 需要联网获取固定材料，入库后可重复使用；目标服务器无需外网下载。" :
-        "请先准备匹配当前版本和运行方式的材料，再继续安装。" }}
+        online ? "Ops 联网下载，目标服务器可离线。" :
+        "请选择或上传匹配的安装材料。" }}
     </p>
-    <p v-if="recipe.key === 'docker'" class="material-network">
-      使用 Docker 官方 DEB 软件包安装主机 Engine（含 containerd 等依赖）。数据目录使用本实例 data；主机配置写入 /etc/docker/daemon.json，服务日志由 docker.service 管理。不会自动将用户加入 docker 用户组。
-    </p>
+    <details v-if="recipe.key === 'docker'"><summary>Docker 安装位置与权限</summary><p class="material-network">数据位于本实例 data；主机配置为 /etc/docker/daemon.json，日志由 docker.service 管理。不修改用户组。</p></details>
     <p v-if="runtimeMode === 'NATIVE' && recipe.native?.requiredTools?.length" class="material-network">
-      目标机还需具备：{{ recipe.native.requiredTools.map((tool) => toolLabels[tool] || tool).join("、") }}；安装预检会检查。
+      所需工具：{{ recipe.native.requiredTools.map((tool) => toolLabels[tool] || tool).join("、") }}
     </p>
     <details>
       <summary>文件与校验详情 · {{ recipe.platform }}</summary>
@@ -88,7 +86,6 @@ const toolLabels: Record<string, string> = {
         <small v-if="source.byteSize">{{ materialSize(source.byteSize) }}</small>
         <code>{{ source.sha256 }}</code>
       </div>
-      <p>{{ runtimeMode === "DOCKER" ? "校验固定镜像身份。" : "核对材料内容与固定配方 SHA-256 一致。" }}</p>
       <a :href="recipe.officialUrl" target="_blank" rel="noopener noreferrer">软件官方说明 ↗</a>
     </details>
   </section>

@@ -114,6 +114,9 @@ def main():
                 upgraded = False
                 update_scenario = "auto"
                 update_attempts = {}
+                installation_submits, installation_logs = [], []
+                installation_job = {"id": "ui-install-job", "status": "RUNNING", "phase": "OFFICIAL_PACKAGES_APPLY", "errorCode": "",
+                                    "traceId": "UI_FIXTURE_INSTALL_OUTPUT", "updatedAt": stamp, "targetAckPending": False}
 
                 def route_api(route):
                     nonlocal upgraded, update_job
@@ -159,6 +162,16 @@ def main():
                             route.fulfill(json={"data": {"id": "ui-official-plan", "definition": nginx, "config": data["config"], "source": data["source"],
                                                          "checks": [{"key": "UI_FIXTURE", "status": "PASSED", "message": "界面夹具预检，未执行目标命令"}],
                                                          "expiresAt": expiry, "paths": {"root": "/"}, "portMappings": [], "official": official_plan}})
+                    elif path == "/software-install-plans/ui-official-plan/submit" and request.method == "POST":
+                        assert request.post_data_json.get("idempotencyKey")
+                        installation_submits.append(request.post_data_json)
+                        route.fulfill(json={"data": {"jobId": installation_job["id"], "softwareInstanceId": "ui-installed-software"}})
+                    elif path == "/jobs/ui-install-job" and request.method == "GET":
+                        route.fulfill(json={"data": installation_job})
+                    elif path == "/jobs/ui-install-job/logs" and request.method == "GET":
+                        text = "界面夹具安装输出：" + ("安装完成" if installation_job["status"] == "SUCCEEDED" else f"软件包步骤 {len(installation_logs) + 1}")
+                        installation_logs.append(text)
+                        route.fulfill(json={"data": {"text": "\n".join(installation_logs), "limited": False}})
                     elif path == f"/hosts/{host['id']}/software-discovery":
                         route.fulfill(json={"data": {"hostId": host["id"], "hostVersion": fixture_host["version"], "candidates": [], "checks": [], "observedAt": stamp}})
                     elif request.method not in ("GET", "HEAD", "OPTIONS"):
@@ -350,6 +363,60 @@ def main():
                     close(uninstall)
                     detail.get_by_role("button", name="Close this dialog", exact=True).click()
                 checks.append("official-details-show-real-system-paths-readonly-and-uninstall-only-owned-paths-never-root")
+
+                # The submit and all subsequent target reads below are explicit
+                # browser fixtures. The isolated controller never receives them.
+                software_page()
+                drawer = open_install("nginx")
+                drawer.get_by_role("button", name="检查官方安装条件", exact=True).click()
+                expect(drawer.get_by_text("预检完成", exact=True)).to_be_visible()
+                drawer.get_by_role("button", name="确认安装", exact=True).click()
+                terminal = drawer.get_by_label("安装输出", exact=True)
+                expect(terminal.get_by_label("安装过程输出", exact=True)).to_contain_text("软件包步骤 1")
+                assert len(installation_submits) == 1
+                first_count = len(installation_logs)
+                page.wait_for_timeout(3400)
+                assert len(installation_logs) > first_count
+                terminal.get_by_role("button", name="暂停刷新", exact=True).click()
+                paused_count = len(installation_logs)
+                page.wait_for_timeout(3400)
+                assert len(installation_logs) == paused_count
+                expect(terminal.get_by_text("已暂停", exact=True)).to_be_visible()
+                terminal.get_by_role("button", name="继续刷新", exact=True).click()
+                expect(terminal.get_by_label("安装过程输出", exact=True)).to_contain_text(f"软件包步骤 {paused_count + 1}")
+                layout(drawer, "live-install-output")
+                installation_job.update(status="SUCCEEDED", phase="SERVICE_INSTALLED")
+                expect(terminal.get_by_label("安装过程输出", exact=True)).to_contain_text("安装完成", timeout=6000)
+                expect(drawer.get_by_text("软件已安装", exact=True)).to_be_visible()
+                expect(drawer.get_by_text("SERVICE_INSTALLED", exact=True)).not_to_be_visible()
+                expect(terminal.get_by_text("执行结束", exact=True)).to_be_visible()
+                finished_count = len(installation_logs)
+                finished_jobs = sum(call["path"] == "/jobs/ui-install-job" for call in calls)
+                page.wait_for_timeout(3400)
+                assert len(installation_logs) == finished_count
+                assert sum(call["path"] == "/jobs/ui-install-job" for call in calls) == finished_jobs
+                layout(drawer, "finished-install-output")
+                drawer.locator(".execution-details summary").click()
+                expect(drawer.get_by_text("SERVICE_INSTALLED", exact=True)).to_be_visible()
+                expect(drawer.get_by_text(installation_job["traceId"], exact=True)).to_be_visible()
+                drawer.get_by_role("button", name="关闭", exact=True).click()
+                drawer.wait_for(state="hidden")
+                checks.append("fixture-install-output-auto-refresh-pause-resume-final-tail-stops-with-chinese-phase-and-folded-diagnostics")
+
+                rows[0]["lastJobId"] = installation_job["id"]
+                rows[0]["observation"]["message"] = "SERVICE_INSTALLED"
+                software_page(False)
+                page.locator(".software-card").filter(has=page.get_by_role("heading", name=rows[0]["name"], exact=True)).get_by_role("button", name="详情", exact=True).click()
+                detail = page.get_by_role("dialog", name=rows[0]["name"], exact=True)
+                expect(detail.get_by_text("SERVICE_INSTALLED", exact=True)).not_to_be_visible()
+                detail.get_by_role("tab", name="执行记录", exact=True).click()
+                expect(detail.get_by_text("软件已安装", exact=True)).to_be_visible()
+                expect(detail.locator(".software-job code").filter(has_text="SERVICE_INSTALLED")).not_to_be_visible()
+                layout(detail, "software-job-clean-status")
+                detail.locator(".software-job details summary").click()
+                expect(detail.locator(".software-job code").filter(has_text="SERVICE_INSTALLED")).to_be_visible()
+                expect(detail.locator(".software-job code").filter(has_text=installation_job["traceId"])).to_be_visible()
+                checks.append("software-detail-success-message-hidden-and-raw-job-identifiers-retained-in-diagnostics")
                 assert not api("/software-instances") and not api("/installation-materials")
                 assert not blocked and not errors, (blocked, errors)
                 checks.append("real-controller-remains-without-software-materials-or-target-execution")

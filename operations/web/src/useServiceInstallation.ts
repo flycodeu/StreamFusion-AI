@@ -67,6 +67,14 @@ export function useServiceInstallation(
   const submissionAttempted = ref(false);
   const job = ref<ServiceInstallJob>();
   const logs = ref("");
+  const logsLimited = ref(false);
+  const logsAt = ref("");
+  const logsLoading = ref(false);
+  const logsPaused = ref(false);
+  const logError = ref<{ message: string; code: string; traceId: string; at: string }>();
+  let logFailures = 0;
+  let finalLogsRead = false;
+  let executionAbort: AbortController | undefined;
   const now = ref(Date.now());
   const fieldError = ref("");
   const actionError = ref<{
@@ -181,26 +189,57 @@ export function useServiceInstallation(
         materialId.value = preferredInstallationMaterial(materials.value)?.id || "";
     }
   }
-  async function refreshJob() {
+  async function refreshJob(signal?: AbortSignal) {
     if (!receipt.value) return;
     const revision = generation;
+    const id = receipt.value.jobId;
     const actual = await request<ServiceInstallJob>(
-      `/jobs/${receipt.value.jobId}`,
+      `/jobs/${id}`, "GET", undefined, signal,
     );
-    if (current(revision)) job.value = actual;
+    if (current(revision) && receipt.value?.jobId === id) job.value = actual;
+  }
+  async function refreshExecution(retry = false) {
+    if (!receipt.value || logsLoading.value) return;
+    const revision = generation, id = receipt.value.jobId;
+    const abort = new AbortController();
+    executionAbort = abort;
+    if (retry) { logFailures = 0; logsPaused.value = false; }
+    logsLoading.value = true;
+    try {
+      await refreshJob(abort.signal);
+      if (!current(revision) || receipt.value?.jobId !== id) return;
+      // Queued work has no target log yet. Do not call an unstarted job a failure.
+      if (job.value?.status !== "QUEUED") {
+        const result = await request<{ text: string; limited?: boolean }>(`/jobs/${id}/logs`, "GET", undefined, abort.signal);
+        if (!current(revision) || receipt.value?.jobId !== id) return;
+        logs.value = result.text;
+        logsLimited.value = !!result.limited;
+        logsAt.value = new Date().toISOString();
+        finalLogsRead = !pending.value;
+      }
+      logError.value = undefined;
+      logFailures = 0;
+    } catch (error) {
+      if (!current(revision) || receipt.value?.jobId !== id) return;
+      logError.value = {
+        message: error instanceof Error ? error.message : "执行输出暂不可用",
+        code: error instanceof ApiError ? error.code : "REQUEST_NOT_CONFIRMED",
+        traceId: error instanceof ApiError ? error.traceId : "",
+        at: error instanceof ApiError ? error.timestamp : new Date().toISOString(),
+      };
+      if (++logFailures >= 3) logsPaused.value = true;
+    } finally {
+      if (executionAbort === abort) executionAbort = undefined;
+      if (current(revision)) logsLoading.value = false;
+    }
   }
   function poll() {
     stopPolling();
     if (!props.open || disposed) return;
     timer = setTimeout(async () => {
       now.value = Date.now();
-      if (!document.hidden && receipt.value && pending.value && !busy.value) {
-        try {
-          await refreshJob();
-        } catch (error) {
-          report(error);
-        }
-      }
+      if (!document.hidden && receipt.value && (pending.value || !finalLogsRead) && !busy.value && !logsPaused.value)
+        await refreshExecution();
       poll();
     }, 3000);
   }
@@ -216,11 +255,13 @@ export function useServiceInstallation(
     async () => {
       generation += 1;
       stopPolling();
+      executionAbort?.abort();
       uploadController.value?.abort();
       credentialSecret.value = "";
       credentialRole.value = undefined;
       preparationOpen.value = false;
       automaticUpdate.value = undefined;
+      logsLoading.value = false;
       if (!props.open || !props.recipe || !props.host) return;
       const revision = generation;
       configuration.value = official.value ? initialOfficialConfiguration(props.recipe) :
@@ -232,6 +273,8 @@ export function useServiceInstallation(
       submissionAttempted.value = false;
       job.value = undefined;
       logs.value = "";
+      logsLimited.value = false; logsAt.value = ""; logsPaused.value = false;
+      logError.value = undefined; logFailures = 0; finalLogsRead = false;
       materialId.value = "";
       selectedFile.value = undefined;
       archiveSHA.value = "";
@@ -778,7 +821,7 @@ export function useServiceInstallation(
       receipt.value = result;
       step.value = 4;
       onSubmitted(result);
-      await refreshJob();
+      await refreshExecution();
     });
   }
 
@@ -802,16 +845,11 @@ export function useServiceInstallation(
     if (!receipt.value) return;
     await act(async () => {
       await request(`/jobs/${receipt.value!.jobId}/${action}`, "POST", {});
-      await refreshJob();
+      await refreshExecution(true);
     });
   }
   async function loadLogs() {
-    if (!receipt.value) return;
-    await act(async () => {
-      logs.value = (
-        await request<{ text: string }>(`/jobs/${receipt.value!.jobId}/logs`)
-      ).text;
-    });
+    await refreshExecution(true);
   }
   function close() {
     if (!busy.value) onClose();
@@ -820,6 +858,7 @@ export function useServiceInstallation(
     disposed = true;
     generation += 1;
     stopPolling();
+    executionAbort?.abort();
     uploadController.value?.abort();
     credentialSecret.value = "";
   });
@@ -856,6 +895,7 @@ export function useServiceInstallation(
     submissionAttempted,
     job,
     logs,
+    logsLimited, logsAt, logsLoading, logsPaused, logError,
     fieldError,
     actionError,
     credentialRoles,
