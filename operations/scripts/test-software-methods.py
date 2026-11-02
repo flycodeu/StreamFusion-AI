@@ -221,9 +221,11 @@ def main():
                 assert not any(call["query"].startswith("recipeKey=") or call["path"] == "/credentials" for call in calls[baseline:])
                 drawer.get_by_label("实例名称", exact=True).fill("更新后保留的官方实例")
                 layout(drawer, "official-default")
+                preflight_before, update_before = len(preflights), len(updates)
                 drawer.get_by_role("button", name="检查官方安装条件", exact=True).click()
                 expect(drawer.get_by_text("预检完成", exact=True)).to_be_visible()
-                assert len(updates) == 1 and len(preflights) == 1
+                assert len(updates) - update_before == 1 and len(preflights) - preflight_before == 2
+                assert preflights[preflight_before]["expectedHostVersion"] == "1"
                 assert preflights[-1]["expectedHostVersion"] == "2" and preflights[-1]["config"]["name"] == "更新后保留的官方实例"
                 assert update_attempts["auto"] == 1
                 details = drawer.get_by_label("官方安装详情", exact=True)
@@ -247,17 +249,19 @@ def main():
                 software_page()
                 drawer = open_install("nginx")
                 drawer.get_by_label("实例名称", exact=True).fill("sudo后保留的官方实例")
+                preflight_before, update_before = len(preflights), len(updates)
                 drawer.get_by_role("button", name="检查官方安装条件", exact=True).click()
                 update = page.get_by_role("dialog", name="正在准备安装环境", exact=True)
                 password_input = update.get_by_label("ubuntu 的登录密码", exact=True)
                 expect(password_input).to_be_enabled()
-                assert update_attempts["sudo"] == 1 and len(preflights) == 1
+                assert len(updates) - update_before == 1 and len(preflights) - preflight_before == 1
+                assert preflights[preflight_before]["expectedHostVersion"] == "3"
                 layout(update, "inline-update-sudo-challenge")
                 password_input.fill("ui-only-not-a-server-password")
                 update.get_by_role("button", name="验证并继续", exact=True).click()
                 update.wait_for(state="hidden")
                 expect(drawer.get_by_text("预检完成", exact=True)).to_be_visible()
-                assert update_attempts["sudo"] == 2 and len(preflights) == 2
+                assert len(updates) - update_before == 2 and len(preflights) - preflight_before == 2
                 assert preflights[-1]["expectedHostVersion"] == "4" and preflights[-1]["config"]["name"] == "sudo后保留的官方实例"
                 assert not any(call["path"].endswith("/submit") for call in calls)
                 checks.append("automatic-sudo-challenge-pauses-and-encrypted-password-retry-keeps-draft-without-software-submit")
@@ -271,20 +275,23 @@ def main():
                 software_page()
                 drawer = open_install("nginx")
                 drawer.get_by_label("实例名称", exact=True).fill("手工兜底保留的官方实例")
+                preflight_before, update_before = len(preflights), len(updates)
                 drawer.get_by_role("button", name="检查官方安装条件", exact=True).click()
                 drawer.get_by_role("button", name="更新并继续", exact=True).click()
                 update = page.get_by_role("dialog", name="更新接入组件", exact=True)
                 expect(update.get_by_role("button", name="更新并继续", exact=True)).to_be_enabled()
-                assert update_attempts.get("manual", 0) == 0
+                assert len(updates) == update_before and len(preflights) - preflight_before == 1
+                assert preflights[preflight_before]["expectedHostVersion"] == "5"
                 update.get_by_role("button", name="更新并继续", exact=True).click()
                 update.wait_for(state="hidden")
                 expect(drawer.get_by_text("预检完成", exact=True)).to_be_visible()
-                assert update_attempts["manual"] == 1 and len(preflights) == 4
+                assert len(updates) - update_before == 1 and len(preflights) - preflight_before == 2
                 assert preflights[-1]["expectedHostVersion"] == "6" and preflights[-1]["config"]["name"] == "手工兜底保留的官方实例"
                 assert not any(call["path"].endswith("/submit") for call in calls)
                 checks.append("manual-compatibility-fallback-keeps-draft-and-rechecks-without-software-submit")
                 close(drawer)
 
+                preflight_before = len(preflights)
                 drawer = open_install("nginx")
                 drawer.get_by_role("button", name="Ops 离线安装", exact=True).click()
                 drawer.get_by_role("radio", name="原生 / systemd", exact=False).check()
@@ -308,7 +315,7 @@ def main():
                 discovery.get_by_role("button", name="开始识别", exact=True).click()
                 expect(discovery.get_by_text("未发现受支持的软件", exact=True)).to_be_visible()
                 discovery.get_by_role("button", name="Close this dialog", exact=True).click()
-                assert len(preflights) == 4
+                assert len(preflights) == preflight_before
                 checks.append("self-java-opens-existing-readonly-discovery-without-software-install-post")
                 software_page()
                 for key in ("maven", "codex", "claude"):

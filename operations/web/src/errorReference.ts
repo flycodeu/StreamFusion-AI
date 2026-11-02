@@ -9,6 +9,12 @@ export interface ErrorReferenceEntry {
 }
 
 export const errorReference: ErrorReferenceEntry[] = [
+  { code: "PREPARATION_UPLOAD_STALLED", name: "组件上传停滞", category: "主机接入", meaning: "上传连续 45 秒没有推进，连接已停止，安装尚未开始。", steps: ["检查 SSH 网络连通性，恢复后重试。"] },
+  { code: "PREPARATION_UPLOAD_TIMEOUT", name: "组件上传超时", category: "主机接入", meaning: "接入包未能在时限内传完，安装尚未开始。", steps: ["查看上传大小和速度，检查控制器到服务器的 SSH 网络。", "网络恢复后重试；已具备所需能力的操作不需要更新。"] },
+  { code: "PREPARATION_UPLOAD_INTERRUPTED", name: "组件上传连接中断", category: "主机接入", meaning: "SSH 连接在传输完成前中断。", steps: ["检查网络与 SSH 服务状态后重试。"] },
+  { code: "PREPARATION_UPLOAD_NO_SPACE", name: "上传临时空间不足", category: "主机接入", meaning: "目标服务器明确报告临时目录空间或配额不足。", steps: ["检查目标服务器 /tmp 的可用空间及账号配额。"] },
+  { code: "PREPARATION_UPLOAD_DENIED", name: "上传目录不可写", category: "主机接入", meaning: "目标服务器拒绝创建或写入上传临时目录。", steps: ["检查 SSH 账号对 /tmp 的写权限及文件系统状态。"] },
+  { code: "PREPARATION_UPLOAD_FAILED", name: "组件上传未完成", category: "主机接入", meaning: "尚未获得足够信息判断具体原因，不能直接归为权限问题。", steps: ["保留 traceId，查看传输大小、速度及控制器日志。"] },
   { code: "NODE_REGISTRY_CAPABILITY_REQUIRED", name: "组件不支持 npm 镜像管理", category: "Node 环境", meaning: "当前主机组件尚不支持账号级 npm registry 管理。", steps: ["更新接入组件后重新预检。", "更新组件不会自动切换服务器镜像地址。"] },
   { code: "NODE_REGISTRY_CHANGED", name: "镜像或账号配置已变化", category: "Node 环境", meaning: "镜像列表或账号配置已变化，请重新预检并确认。", steps: ["刷新镜像地址列表并检测账号配置。", "重新选择地址并预检确认；删除列表项不会改变服务器已有配置。"] },
   { code: "NODE_TERMINAL_CAPABILITY_REQUIRED", name: "组件不支持 Node 终端接入", category: "Node 环境", meaning: "当前主机组件尚不支持为所选账号配置 Bash。", steps: ["更新接入组件后重新预检。", "更新组件不会自动执行 Node 安装或终端接入。"] },

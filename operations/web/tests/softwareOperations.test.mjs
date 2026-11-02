@@ -416,14 +416,17 @@ test("SSH preflight updates only a known component then preserves the draft and 
   const h = installationHarness([], { method: "OFFICIAL", recipe: officialRecipe(), hostKind: "SSH", request: async (path, method, data) => {
     if (path.includes("?checkUpdate=1")) return {hostId:"host-a",expectedHostVersion:"1",update: current ? {status:"CURRENT"} : {status:"AVAILABLE",currentSHA256:"a".repeat(64),packageSHA256:"b".repeat(64)}};
     if (path === "/hosts") return [{id:"host-a",version:"1",capabilities:{mutation:{status:"AVAILABLE"}}}];
-    if (path.endsWith("/software-install-plans")) return {id:"after-update-plan",expiresAt:"2099-01-01T00:00:00Z",config:data.config};
+    if (path.endsWith("/software-install-plans")) {
+      if (!current) throw Object.assign(new Error("能力不足"), {code:"EXECUTOR_UPGRADE_REQUIRED"});
+      return {id:"after-update-plan",expiresAt:"2099-01-01T00:00:00Z",config:data.config};
+    }
     throw new Error(`Unexpected request ${path}`);
   }});
   await flush();h.flow.configuration.value.name="保留配置";
   await h.flow.next();
   assert.equal(h.flow.preparationOpen.value,true);
   assert.equal(h.flow.automaticUpdate.value.hostId,"host-a");
-  assert.equal(h.calls.some(x=>x.path.endsWith("/software-install-plans")),false);
+  assert.equal(h.calls.filter(x=>x.path.endsWith("/software-install-plans")).length,1);
   current=true;await h.flow.preparationChecked();
   assert.equal(h.flow.preparationOpen.value,false);
   assert.equal(h.flow.configuration.value.name,"保留配置");
@@ -432,36 +435,71 @@ test("SSH preflight updates only a known component then preserves the draft and 
   h.dispose();
 });
 
-test("unknown components, blocked jobs and stale hosts cannot trigger automatic updates or install plans", async () => {
-  for (const state of ["MANUAL_REQUIRED","BLOCKED","stale-host"]) {
-    const h=installationHarness([], {method:"OFFICIAL",recipe:officialRecipe(),hostKind:"SSH",request:async()=>({hostId:"host-a",expectedHostVersion:state==="stale-host"?"2":"1",update:{status:state==="stale-host"?"CURRENT":state,code:"HOST_BUSY"}})});
+test("compatible SSH targets preflight directly without checking build hashes", async () => {
+  const h = installationHarness([], {method:"OFFICIAL",recipe:officialRecipe(),hostKind:"SSH",request:async(path)=>{
+    assert.ok(path.endsWith("/software-install-plans"));
+    return {id:"compatible-plan",expiresAt:"2099-01-01T00:00:00Z"};
+  }});
+  await flush();await h.flow.next();
+  assert.equal(h.flow.plan.value.id,"compatible-plan");
+  assert.equal(h.calls.length,1);
+  assert.equal(h.flow.preparationOpen.value,false);
+  h.dispose();
+});
+
+test("identity, transport and business failures never trigger component update", async () => {
+  for (const code of ["EXECUTOR_IDENTITY_MISMATCH","SSH_TIMEOUT","OFFICIAL_PATH_NOT_PROTECTED","OFFICIAL_PACKAGE_STATE_UNAVAILABLE"]) {
+    const h=installationHarness([], {method:"OFFICIAL",recipe:officialRecipe(),hostKind:"SSH",request:async()=>{
+      throw Object.assign(new Error(code),{code});
+    }});
     await flush();await h.flow.next();
-    assert.equal(h.flow.preparationOpen.value,false,state);
-    assert.equal(h.flow.automaticUpdate.value,undefined,state);
-    assert.equal(h.flow.plan.value,undefined,state);
-    assert.equal(h.calls.length,1,state);
+    assert.equal(h.flow.actionError.value.code,code);
+    assert.equal(h.calls.length,1);
+    assert.equal(h.flow.preparationOpen.value,false);
     h.dispose();
   }
 });
 
+test("unknown components, blocked jobs and stale hosts cannot trigger automatic updates", async () => {
+  for (const state of ["MANUAL_REQUIRED","BLOCKED","stale-host"]) {
+    const h=installationHarness([], {method:"OFFICIAL",recipe:officialRecipe(),hostKind:"SSH",request:async(path)=>{
+      if (path.endsWith("/software-install-plans")) throw Object.assign(new Error("能力不足"),{code:"EXECUTOR_UPGRADE_REQUIRED"});
+      return {hostId:"host-a",expectedHostVersion:state==="stale-host"?"2":"1",update:{status:state==="stale-host"?"CURRENT":state,code:"HOST_BUSY"}};
+    }});
+    await flush();await h.flow.next();
+    assert.equal(h.flow.preparationOpen.value,false,state);
+    assert.equal(h.flow.automaticUpdate.value,undefined,state);
+    assert.equal(h.flow.plan.value,undefined,state);
+    assert.equal(h.calls.length,2,state);
+    h.dispose();
+  }
+});
+
+function unavailableInstallation(path) {
+  if (path.endsWith("/software-install-plans")) throw Object.assign(new Error("能力不足"),{code:"EXECUTOR_UPGRADE_REQUIRED"});
+  if (path === "/hosts") return [{id:"host-a",version:"1",capabilities:{mutation:{status:"AVAILABLE"}}}];
+  return {hostId:"host-a",expectedHostVersion:"1",update:{status:"AVAILABLE",currentSHA256:"a".repeat(64),packageSHA256:"b".repeat(64)}};
+}
+
 test("an update completion cannot start another automatic update in the same continuation", async () => {
-  const h=installationHarness([], {method:"OFFICIAL",recipe:officialRecipe(),hostKind:"SSH",request:async(path)=>path==="/hosts" ? [{id:"host-a",version:"1",capabilities:{mutation:{status:"AVAILABLE"}}}] : {hostId:"host-a",expectedHostVersion:"1",update:{status:"AVAILABLE",currentSHA256:"a".repeat(64),packageSHA256:"b".repeat(64)}}});
+  const h=installationHarness([], {method:"OFFICIAL",recipe:officialRecipe(),hostKind:"SSH",request:async(path)=>unavailableInstallation(path)});
   await flush();await h.flow.next();assert.equal(h.flow.preparationOpen.value,true);
   await h.flow.preparationChecked();
   assert.equal(h.flow.preparationOpen.value,false);
   assert.equal(h.flow.plan.value,undefined);
-  assert.ok(h.flow.actionError.value);
-  assert.equal(h.calls.some(x=>x.path.endsWith("/software-install-plans")),false);
+  assert.equal(h.flow.actionError.value.code,"EXECUTOR_UPGRADE_REQUIRED");
+  assert.equal(h.calls.filter(x=>x.path.includes("checkUpdate=1")).length,1);
+  assert.equal(h.calls.filter(x=>x.path.endsWith("/software-install-plans")).length,2);
   h.dispose();
 });
 
 test("closing the install drawer clears automatic update intent before any reopen", async () => {
- const h=installationHarness([], {method:"OFFICIAL",recipe:officialRecipe(),hostKind:"SSH",request:async()=>({hostId:"host-a",expectedHostVersion:"1",update:{status:"AVAILABLE",currentSHA256:"a".repeat(64),packageSHA256:"b".repeat(64)}})});
+ const h=installationHarness([], {method:"OFFICIAL",recipe:officialRecipe(),hostKind:"SSH",request:async(path)=>unavailableInstallation(path)});
  await flush();await h.flow.next();assert.equal(h.flow.preparationOpen.value,true);
  h.props.open=false;await flush();
  assert.equal(h.flow.preparationOpen.value,false);assert.equal(h.flow.automaticUpdate.value,undefined);
  h.props.open=true;await flush();
- assert.equal(h.flow.preparationOpen.value,false);assert.equal(h.calls.length,1);
+ assert.equal(h.flow.preparationOpen.value,false);assert.equal(h.calls.length,2);
  h.dispose();
 });
 

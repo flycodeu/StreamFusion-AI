@@ -752,13 +752,45 @@ export function useServiceInstallation(
     }
     await act(async () => {
       const revision = generation;
-      if (props.host!.kind === "SSH") {
+      let result: ServiceInstallPlan;
+      try {
+        result = await request<ServiceInstallPlan>(
+          `/hosts/${props.host!.id}/software-install-plans`,
+          "POST",
+          {
+            expectedHostVersion: readinessHost.value?.version || props.host!.version,
+            recipeKey: props.recipe!.key,
+            recipeVersion: props.recipe!.version,
+            recipeRevision: props.recipe!.revision,
+            config: official.value ? {
+              name: configuration.value!.name.trim(),
+              runtimeMode: "NATIVE",
+              bindAddress: configuration.value!.bindAddress,
+              hostPort: configuration.value!.hostPort,
+              memoryMiB: 512,
+            } : {
+              ...configuration.value,
+              name: configuration.value!.name.trim(),
+            },
+            source: official.value ? { type: "OFFICIAL" } :
+              sourceType.value === "REGISTRY"
+                ? { type: "REGISTRY" }
+                : { type: sourceType.value, materialId: materialId.value },
+          },
+        );
+      } catch (cause) {
+        if (!current(revision)) return;
+        // Capability errors come from the selected operation. A different build
+        // hash alone does not mean the target needs an update.
+        if (!allowAutomaticUpdate || props.host!.kind !== "SSH" ||
+            !(cause instanceof ApiError) ||
+            !["EXECUTOR_UPGRADE_REQUIRED", "NODE_CAPABILITY_REQUIRED"].includes(cause.code)) throw cause;
         const checked = await request<PreparationUpdateCheck>(`/hosts/${props.host!.id}/preparation?checkUpdate=1`);
         if (!current(revision)) return;
         if (checked.hostId !== props.host!.id || checked.expectedHostVersion !== (readinessHost.value?.version || props.host!.version)) {
           throw new ApiError("主机配置已变化，请重新选择主机", "VERSION_CONFLICT", "", new Date().toISOString());
         }
-        if (checked.update?.status === "AVAILABLE" && allowAutomaticUpdate) {
+        if (checked.update?.status === "AVAILABLE") {
           const update = automaticPreparationUpdate(checked);
           if (!update) throw new Error("组件更新信息不完整，请重新预检");
           automaticUpdate.value = update;
@@ -766,33 +798,10 @@ export function useServiceInstallation(
           return;
         }
         if (checked.update && checked.update.status !== "CURRENT") {
-          throw new ApiError("接入组件需要核对，请查看主机安装准备", checked.update.code || "EXECUTOR_UPGRADE_REQUIRED", "", new Date().toISOString());
+          throw new ApiError("接入组件需要核对，请查看主机安装准备", checked.update.code || cause.code, "", new Date().toISOString());
         }
+        throw cause;
       }
-      const result = await request<ServiceInstallPlan>(
-        `/hosts/${props.host!.id}/software-install-plans`,
-        "POST",
-        {
-          expectedHostVersion: readinessHost.value?.version || props.host!.version,
-          recipeKey: props.recipe!.key,
-          recipeVersion: props.recipe!.version,
-          recipeRevision: props.recipe!.revision,
-          config: official.value ? {
-            name: configuration.value!.name.trim(),
-            runtimeMode: "NATIVE",
-            bindAddress: configuration.value!.bindAddress,
-            hostPort: configuration.value!.hostPort,
-            memoryMiB: 512,
-          } : {
-            ...configuration.value,
-            name: configuration.value!.name.trim(),
-          },
-          source: official.value ? { type: "OFFICIAL" } :
-            sourceType.value === "REGISTRY"
-              ? { type: "REGISTRY" }
-              : { type: sourceType.value, materialId: materialId.value },
-        },
-      );
       if (!current(revision)) return;
       plan.value = result;
       submitKey.value = crypto.randomUUID();

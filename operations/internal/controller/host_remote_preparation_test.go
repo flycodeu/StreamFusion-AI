@@ -182,6 +182,20 @@ func TestHostPreparationSSHResultsIdempotencyAndRecovery(t *testing.T) {
 			if err := b.h.finishPreparation(job, status, code); err != nil {
 				t.Fatal(err)
 			}
+			if uploads.Load() != 0 {
+				var sent, total int64
+				var message string
+				if err := s.DB.QueryRow("SELECT json_extract(result_json,'$.transfer.sentBytes'),json_extract(result_json,'$.transfer.totalBytes'),json_extract(result_json,'$.message') FROM jobs WHERE id=?", job).Scan(&sent, &total, &message); err != nil || sent != total || total <= 0 || message != preparationMessage(code) {
+					t.Fatal("final receipt lost transfer progress", sent, total, err)
+				}
+				page := dataOf(t, b.call("GET", "/hosts/"+target.ID+"/preparation", nil, 200))
+				remote := page["remoteJob"].(map[string]any)
+				result := remote["result"].(map[string]any)
+				transfer := result["transfer"].(map[string]any)
+				if remote["message"] != message || result["message"] != message || transfer["sentBytes"] != float64(sent) || transfer["totalBytes"] != float64(total) {
+					t.Fatal("polling endpoint lost transfer or legacy message", remote)
+				}
+			}
 			var finalPhase string
 			if err := s.DB.QueryRow("SELECT phase FROM jobs WHERE id=?", job).Scan(&finalPhase); err != nil {
 				t.Fatal(err)
@@ -640,7 +654,7 @@ func TestHostPreparationCanceledRequestCleansOnlyUpload(t *testing.T) {
 			if uploads.Load() != 1 || privileged.Load() != int32(boolInt(scenario == "installation")) || uncertain != (scenario == "installation") {
 				t.Fatal("canceled request replayed or misclassified the installation", code, uncertain, uploads.Load(), privileged.Load())
 			}
-			if scenario == "installation" && code != "PREPARATION_RESULT_UNKNOWN" || scenario != "installation" && code != "PREPARATION_UPLOAD_FAILED" {
+			if scenario == "installation" && code != "PREPARATION_RESULT_UNKNOWN" || scenario != "installation" && code != "PREPARATION_UPLOAD_INTERRUPTED" {
 				t.Fatal("canceled phase was not preserved", code)
 			}
 			if want := int32(boolInt(scenario != "fingerprint-changed")); cleanups.Load() != want {

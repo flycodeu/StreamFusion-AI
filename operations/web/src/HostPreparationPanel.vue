@@ -7,7 +7,7 @@ import type { AutomaticPreparationUpdate } from "./preparationUpdate";
 interface PreparationJob {
   id: string; status: string; phase: string; errorCode: string;
   message?: string; traceId: string; createdAt?: string; updatedAt: string;
-  result?: { message?: string };
+  result?: { message?: string; transfer?: { sentBytes: number; totalBytes: number; startedAt: string; updatedAt: string } };
 }
 interface HostPreparation {
   hostId: string; expectedHostVersion: string; controllerId: string;
@@ -39,7 +39,7 @@ const recoverableCodes = ["EXECUTOR_PATH_UNSAFE", "EXECUTOR_PATH_UNREADABLE", "E
 const canRecover = computed(() => job.value?.status === "UNKNOWN" && recoverableCodes.includes(checkResult.value?.code || ""));
 const missingFiles = computed(() => checkResult.value?.code === "EXECUTOR_MISSING");
 const phaseLabels: Record<string, string> = {
-  CONNECTING: "连接服务器", UPLOADING_EXECUTOR: "传输安装材料",
+  CONNECTING: "连接服务器", UPLOADING_EXECUTOR: "传输接入组件",
   INSTALLING_EXECUTOR: "安装接入组件", VERIFYING_EXECUTOR: "验证接入结果",
 };
 const phaseOrder = ["CONNECTING", "UPLOADING_EXECUTOR", "INSTALLING_EXECUTOR", "VERIFYING_EXECUTOR"];
@@ -49,6 +49,7 @@ const statusLabel = computed(() => ({ RUNNING: "执行中", UNKNOWN: "待确认"
 const currentPhaseIndex = computed(() => installing.value && installationIntent.value && !installationIntent.value.jobId ? 0 : phaseOrder.indexOf(job.value?.phase || ""));
 const showPhaseTrack = computed(() => Boolean(visibleStatus.value));
 const statusTitle = computed(() => {
+  if (job.value?.errorCode === "PREPARATION_SUDO_REQUIRED" && visibleStatus.value === "FAILED") return "需要验证权限";
   if (props.updateOnly || updateRequested.value) {
     if (visibleStatus.value === "RUNNING") return installing.value && installationIntent.value && !installationIntent.value.jobId ? "准备更新接入组件" : phaseLabels[job.value?.phase || ""] || "正在更新接入组件";
     if (visibleStatus.value === "UNKNOWN") return "更新结果待确认";
@@ -62,23 +63,23 @@ const statusTitle = computed(() => {
   return "服务器未接入";
 });
 const statusSummary = computed(() => {
-  if (!job.value) return "正在建立安全连接。";
-  if (job.value.status === "RUNNING") return "当前进度会自动更新。";
-  if (job.value.status === "UNKNOWN") {
+  if (job.value?.errorCode === "PREPARATION_SUDO_REQUIRED") return "";
+  if (job.value?.errorCode === "PREPARATION_UPLOAD_FAILED") return "组件上传未完成，请检查 SSH 连接后重试。";
+  if (job.value?.result?.message) return job.value.result.message;
+  if (job.value?.message) return job.value.message;
+  if (job.value?.status === "UNKNOWN") {
     return "请检查服务器上的安装结果。";
   }
-  if (job.value.status === "SUCCEEDED") return "接入组件已安装并通过检查。";
-  return "本次安装未完成，请根据下方提示处理后重试。";
+  return "";
 });
-const phaseNote = computed(() => {
-  if (!job.value) return "";
-  const label = phaseLabels[job.value.phase];
-  if (!label && job.value.status === "UNKNOWN") return "历史进度不完整，正在以服务器实际状态为准";
-  if (!label) return "";
-  if (job.value.status === "UNKNOWN") return `最后确认到：${label}`;
-  if (job.value.status === "FAILED") return `停止于：${label}`;
-  if (job.value.status === "SUCCEEDED") return "四个接入步骤均已完成";
-  return `当前阶段：${label}`;
+const transfer = computed(() => job.value?.result?.transfer);
+const transferPercent = computed(() => transfer.value?.totalBytes ? Math.min(100, Math.floor(transfer.value.sentBytes / transfer.value.totalBytes * 100)) : 0);
+function transferSize(bytes: number) { return `${(bytes / 1048576).toFixed(1)} MiB`; }
+const transferSpeed = computed(() => {
+  const value = transfer.value;
+  if (!value) return "";
+  const seconds = (Date.parse(value.updatedAt) - Date.parse(value.startedAt)) / 1000;
+  return seconds > 0 ? ` · ${(value.sentBytes / seconds / 1024).toFixed(1)} KiB/s` : "";
 });
 function phaseState(index: number) {
   if (visibleStatus.value === "SUCCEEDED") return "done";
@@ -361,11 +362,14 @@ async function check() {
       </section>
       <section v-if="visibleStatus" class="operation-status" :class="`status-${statusTone}`" aria-live="polite">
         <div class="status-heading"><h3>{{ statusTitle }}</h3><span class="state-tag" :class="`state-${statusTone === 'success' ? 'success' : statusTone === 'failed' ? 'error' : 'muted'}`">{{ statusLabel }}</span></div>
-        <p v-if="visibleStatus === 'UNKNOWN' || visibleStatus === 'FAILED'" class="status-summary">{{ statusSummary }}</p>
+        <p v-if="statusSummary && (visibleStatus === 'UNKNOWN' || visibleStatus === 'FAILED')" class="status-summary">{{ statusSummary }}</p>
         <div v-if="showPhaseTrack" class="phase-track" aria-label="接入进度">
           <div v-for="(phase, index) in phaseOrder" :key="phase" class="phase-item" :class="`phase-${phaseState(index)}`"><span class="phase-dot">{{ phaseState(index) === 'done' ? '✓' : index + 1 }}</span><span>{{ phaseLabels[phase] }}</span></div>
         </div>
-        <p v-if="phaseNote && ['UNKNOWN', 'FAILED'].includes(visibleStatus)" class="phase-note">{{ phaseNote }}</p>
+        <div v-if="transfer && job?.phase === 'UPLOADING_EXECUTOR'" class="transfer-progress" aria-label="组件上传进度">
+          <progress :value="transferPercent" max="100" aria-label="已发送比例" />
+          <span>已发送 {{ transferSize(transfer.sentBytes) }} / {{ transferSize(transfer.totalBytes) }} · {{ transferPercent }}%{{ transferSpeed }}</span>
+        </div>
         <div v-if="!automaticUpdate || visibleStatus === 'UNKNOWN' || visibleStatus === 'FAILED'" class="status-actions">
           <button v-if="job?.status === 'UNKNOWN'" class="primary" :disabled="busy" @click="reconcile">{{ busy ? '正在检查…' : '检查安装结果' }}</button>
           <button v-if="job?.status === 'SUCCEEDED'" class="secondary" :disabled="busy" @click="check">重新检查</button>
@@ -405,6 +409,8 @@ async function check() {
 
 <style scoped>
 .host-preparation { display:grid; gap:16px; padding:8px 0 6px; min-width:0; color:var(--text); }
+.transfer-progress { display:grid; gap:6px; margin-top:16px; color:var(--muted); font-size:12px; }
+.transfer-progress progress { width:100%; height:6px; accent-color:var(--primary); }
 .host-preparation header { display:flex; align-items:center; justify-content:space-between; gap:16px; }
 .preparation-heading>div { min-width:0; }
 .preparation-heading>.quiet { flex-shrink:0; white-space:nowrap; }

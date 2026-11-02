@@ -3,6 +3,9 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import * as vue from "vue";
 import ts from "typescript";
+class ApiError extends Error {
+  constructor(message, code) { super(message); this.code = code; }
+}
 const compile = (s) =>
   ts.transpileModule(s, {
     compilerOptions: {
@@ -110,7 +113,7 @@ function harness(options = {}) {
           "\nexport const flow={draft,plan,environment,error,attempted,openAction,selectRegistry,preflight,submit,source,matchingMaterials,job,initialIntent,continuationRetry,continueInitialInstallation,automaticUpdate,preparationOpen,updatedPreparation};",
         {
           vue: { ...vue, onUnmounted: (fn) => stops.push(fn) },
-          "./api": { request, ApiError: class extends Error {} },
+          "./api": { request, ApiError },
           "./nodeEnvironment": model,
           "./preparationUpdate": preparationUpdate,
           "./hosts": {},
@@ -493,6 +496,7 @@ test("cancelled first initialization stops the continuation without submitting N
 test("Node preflight resumes after component update without submitting its operation", async () => {
   let updated=false;
   const h=harness({hostKind:"SSH",request:(path)=>{
+    if(path.endsWith('-plans')&&!updated) throw new ApiError('更新组件','NODE_CAPABILITY_REQUIRED');
     if(path.includes("?checkUpdate=1")) return {hostId:"host",expectedHostVersion:"2",update:updated?{status:"CURRENT"}:{status:"AVAILABLE",currentSHA256:"a".repeat(64),packageSHA256:"b".repeat(64)}};
     if(path==="/hosts")return [{id:"host",version:"2",kind:"SSH",capabilities:{mutation:{status:"AVAILABLE"}}}];
   }});
@@ -505,6 +509,24 @@ test("Node preflight resumes after component update without submitting its opera
   assert.equal(h.flow.plan.value.id,"plan");
   assert.equal(h.calls.some(c=>c.path.endsWith("/submit")),false);
   h.dispose();
+});
+
+test("supported registry capability skips package hash checks and component updates", async () => {
+  const h=harness({hostKind:"SSH"});await flush();
+  h.flow.selectRegistry({id:'mirror',version:'1'});await h.flow.preflight();
+  assert.equal(h.flow.plan.value.id,'plan');
+  assert.equal(h.calls.some(c=>c.path.includes('/preparation')),false);
+  h.dispose();
+});
+
+test("registry business and identity failures never trigger component update", async () => {
+  for (const code of ['NODE_REGISTRY_CHANGED','EXECUTOR_IDENTITY_MISMATCH','SSH_CONNECT_FAILED']) {
+    const h=harness({hostKind:'SSH',request:(path)=>{
+      if(path.endsWith('-plans')) throw new ApiError('预检失败',code);
+    }});await flush();h.flow.selectRegistry({id:'mirror',version:'1'});await h.flow.preflight();
+    assert.equal(h.calls.some(c=>c.path.includes('/preparation')),false);
+    assert.equal(h.flow.preparationOpen.value,false);h.dispose();
+  }
 });
 
 test("terminal connection preflight preserves no-default choice and never submits automatically", async () => {

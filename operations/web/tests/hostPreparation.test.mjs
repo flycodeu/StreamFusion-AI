@@ -17,7 +17,7 @@ const compiled = ts.transpileModule(source, {
 const createPanel = new Function(
   "computed", "ref", "watch", "onUnmounted", "defineProps", "defineEmits",
   "ApiError", "request", "setTimeout", "clearTimeout", "fetch", "location", "document", "URL", "navigator",
-  compiled + "\nreturn { data, busy, visibleStatus, currentPhaseIndex, statusTitle, phaseState, error, sudoPassword, needsSudoPassword, canRecover, checkResult, updateRequested, openUpdate, load, install, repair, check, reconcile, download };",
+  compiled + "\nreturn { data, busy, visibleStatus, currentPhaseIndex, statusTitle, statusSummary, transferPercent, transferSpeed, phaseState, error, sudoPassword, needsSudoPassword, canRecover, checkResult, updateRequested, openUpdate, load, install, repair, check, reconcile, download };",
 );
 
 function deferred() {
@@ -529,7 +529,7 @@ test("update progress reacts to polled stages before the install POST completes"
   await h.tick();
   assert.equal(postCompleted, false);
   assert.equal(h.panel.currentPhaseIndex.value, 1);
-  assert.equal(h.panel.statusTitle.value, "传输安装材料");
+  assert.equal(h.panel.statusTitle.value, "传输接入组件");
   assert.equal(h.panel.phaseState(0), "done");
   assert.equal(h.panel.phaseState(1), "active");
   latest = { ...latest, phase: "INSTALLING_EXECUTOR" };
@@ -546,5 +546,20 @@ test("update progress reacts to polled stages before the install POST completes"
   assert.equal(h.panel.currentPhaseIndex.value, 3);
   assert.equal(h.panel.phaseState(3), "done");
   submitted.resolve(latest); await pending;
+  h.unmount();
+});
+
+
+test("upload failure after sudo retry keeps the real cause and transfer progress", async () => {
+  let latest = {id: "sudo", status: "FAILED", phase: "CONNECTING", errorCode: "PREPARATION_SUDO_REQUIRED"};
+  const h = harness(async () => preparation("host-a", latest), undefined, {updateOnly: true});
+  await flush();
+  assert.equal(h.panel.needsSudoPassword.value, true);
+  latest = {id: "upload", status: "FAILED", phase: "UPLOADING_EXECUTOR", errorCode: "PREPARATION_UPLOAD_TIMEOUT", result: {message: "组件上传超时", transfer: {sentBytes: 1048576, totalBytes: 4194304, startedAt: "2026-11-02T00:00:00Z", updatedAt: "2026-11-02T00:00:10Z"}}};
+  await h.panel.load();
+  assert.equal(h.panel.statusTitle.value, "组件更新未完成");
+  assert.equal(h.panel.statusSummary.value, "组件上传超时");
+  assert.equal(h.panel.transferPercent.value, 25);
+  assert.equal(h.panel.transferSpeed.value, " · 102.4 KiB/s");
   h.unmount();
 });

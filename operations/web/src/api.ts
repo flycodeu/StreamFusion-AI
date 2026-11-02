@@ -45,7 +45,7 @@ export async function send(
   method = method.toUpperCase();
   const timeout = AbortSignal.timeout(
     /\/preparation\/(install|repair)$/.test(path)
-      ? 210000
+      ? 390000
       : /^\/installation-materials\/[^/]+\/confirm$/.test(path) ||
       path === "/installation-materials/official"
       ? 900000

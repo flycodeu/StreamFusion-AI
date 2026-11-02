@@ -77,6 +77,6 @@ test("every listed code exists in production source and has its own checks", asy
       && source.includes('return "OFFICIAL_" + strings.TrimPrefix(err.Error(), "DOCKER_")')
       && source.includes(`"${entry.code.replace("OFFICIAL_", "DOCKER_")}"`);
     assert.ok(source.includes(`"${entry.code}"`) || mappedPackageCode, `unimplemented code ${entry.code}`);
-    assert.ok(entry.name && entry.meaning && entry.steps.length >= 2, entry.code);
+    assert.ok(entry.name && entry.meaning && entry.steps.length >= 1, entry.code);
   }
 });

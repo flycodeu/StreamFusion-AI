@@ -115,14 +115,16 @@ def main():
                     req = route.request
                     path = urlsplit(req.url).path.removeprefix('/ops/api/v1')
                     data = req.post_data_json if req.method == 'POST' else None
-                    calls.append({'path':path,'method':req.method,'data':data})
+                    calls.append({'path':path,'query':urlsplit(req.url).query,'method':req.method,'data':data})
                     def reply(value,status=200): route.fulfill(status=status,json={'data':value})
                     if path.startswith('/auth/'): route.continue_()
                     elif path == '/hosts': reply([fixture_host])
                     elif path == f"/hosts/{host['id']}/preparation" and urlsplit(req.url).query == 'checkUpdate=1': reply({'hostId':host['id'],'expectedHostVersion':fixture_host['version'],'update':{'status':'AVAILABLE' if update_required else 'CURRENT','currentSHA256':'a'*64,'packageSHA256':'b'*64}})
                     elif path == f"/hosts/{host['id']}/preparation":
                         reply({'hostId':host['id'],'expectedHostVersion':fixture_host['version'],'account':'ubuntu','package':{'available':True,'sha256':'b'*64},'remoteJob':update_job})
-                    elif path == f"/hosts/{host['id']}/preparation/install": pending_update_request=route
+                    elif path == f"/hosts/{host['id']}/preparation/install":
+                        update_job.update(id='upload-running',status='RUNNING',phase='UPLOADING_EXECUTOR',errorCode='',result={'transfer':{'sentBytes':1048576,'totalBytes':4194304,'startedAt':stamp,'updatedAt':(now+timedelta(seconds=10)).isoformat()}})
+                        pending_update_request=route
                     elif path == f"/hosts/{host['id']}/checks": reply(fixture_host)
                     elif path == '/node-registries' and req.method == 'GET': reply(registries)
                     elif path == '/node-registries' and req.method == 'POST':
@@ -146,6 +148,8 @@ def main():
                     elif path == '/node-environments/external/jobs': reply([])
                     elif path.endswith('/observe'): reply(env)
                     elif path.endswith('-plans'):
+                        if data.get('action')=='SET_NPM_REGISTRY' and update_required:
+                            route.fulfill(status=409,json={'code':'NODE_REGISTRY_CAPABILITY_REQUIRED','msg':'接入组件需要更新'});return
                         if data.get('action')=='SET_NPM_REGISTRY' and delay_registry:
                             delay_registry=False;pending_registry_request=route;return
                         plan_id='plan-'+str(len(plans)+1)
@@ -304,6 +308,7 @@ def main():
                 assert env['observation']['registry']['url']=='https://registry.npmjs.org/'
                 checks.append('registry-edit-updates-version-without-changing-server')
                 custom.get_by_role('button',name='切换',exact=True).click()
+                assert not any(c.get('query')=='checkUpdate=1' for c in calls)
                 switch=dialog('切换 npm 镜像')
                 page.mouse.click(400,400);switch.wait_for(state='hidden');expect(manager).to_be_visible()
                 custom.get_by_role('button',name='切换',exact=True).click()
@@ -341,6 +346,9 @@ def main():
                 page.mouse.click(400,400)
                 expect(switch).to_be_visible()
                 assert pending_update_request
+                expect(preparation.get_by_label('组件上传进度')).to_contain_text('1.0 MiB / 4.0 MiB · 25%')
+                expect(preparation.get_by_role('heading',name='传输接入组件',exact=True)).to_be_visible()
+                page.screenshot(path=str(output/'registry-upload-progress.png'))
                 update_required=False
                 update_job={**update_job,'id':'update-completed','status':'SUCCEEDED','errorCode':''}
                 submitted_before_update=len(submissions)

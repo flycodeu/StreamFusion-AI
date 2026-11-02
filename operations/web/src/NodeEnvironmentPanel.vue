@@ -435,93 +435,98 @@ async function runPreflight(allowAutomaticUpdate: boolean) {
     const token = revision,
       d = draft.value!,
       env = environment.value;
-    if (currentHost.value.kind === "SSH") {
-      const checked = await request<PreparationUpdateCheck>(
-        `/hosts/${currentHost.value.id}/preparation?checkUpdate=1`,
-      );
-      if (token !== revision || disposed) return;
-      if (
-        checked.hostId !== currentHost.value.id ||
-        checked.expectedHostVersion !== currentHost.value.version
-      )
-        throw new ApiError(
-          "主机配置已变化，请重新选择主机",
-          "VERSION_CONFLICT",
-          "",
-          new Date().toISOString(),
+    try {
+      let result: NodePlan;
+      if (d.action === "INSTALL_NODE") {
+        if (!env || !recipe.value)
+          throw new Error("请先选择已准备好的 Node 环境");
+        const r = recipe.value;
+        result = await request<NodePlan>(
+          "/hosts/" + currentHost.value.id + "/software-install-plans",
+          "POST",
+          {
+            expectedHostVersion: currentHost.value.version,
+            recipeKey: r.key,
+            recipeVersion: r.version,
+            recipeRevision: r.revision,
+            config: {
+              name: "Node.js " + r.version,
+              runtimeMode: "NATIVE",
+              memoryMiB: 512,
+            },
+            source: source(),
+            node: {
+              environmentId: env.id,
+              environmentVersion: env.version,
+              makeDefault: d.makeDefault,
+              connectTerminal: true,
+            },
+          },
         );
-      if (checked.update?.status === "AVAILABLE" && allowAutomaticUpdate) {
-        const update = automaticPreparationUpdate(checked);
-        if (!update) throw new Error("组件更新信息不完整，请重新预检");
-        automaticUpdate.value = update;
-        preparationOpen.value = true;
-        return;
+      } else {
+        result = await request<NodePlan>(
+          "/hosts/" + currentHost.value.id + "/node-environment-plans",
+          "POST",
+          {
+            expectedHostVersion: currentHost.value.version,
+            ...(d.action === "INITIALIZE"
+              ? { name: d.name.trim(), account: d.account.trim() }
+              : {
+                  environmentId: env!.id,
+                  expectedEnvironmentVersion: env!.version,
+                }),
+            action: d.action,
+            nodeVersion: d.nodeVersion || undefined,
+            packageVersion: [
+              "UPDATE_NPM",
+              "INSTALL_PNPM",
+              "UPDATE_PNPM",
+            ].includes(d.action)
+              ? d.packageVersion
+              : undefined,
+            source: ["CONNECT_TERMINAL", "SET_NPM_REGISTRY"].includes(d.action) ? undefined : source(),
+            registryId: d.registryId,
+            expectedRegistryVersion: d.expectedRegistryVersion,
+            deleteData: d.deleteData,
+            confirmationName: d.confirmationName,
+          },
+        );
       }
-      if (checked.update && checked.update.status !== "CURRENT")
-        throw new ApiError(
-          "接入组件需要核对，请查看主机安装准备",
-          checked.update.code || "EXECUTOR_UPGRADE_REQUIRED",
-          "",
-          new Date().toISOString(),
+      if (token === revision && !disposed) plan.value = result;
+    } catch (cause) {
+      if (token !== revision || disposed) return;
+      if (allowAutomaticUpdate && currentHost.value.kind === "SSH" && cause instanceof ApiError && ["NODE_CAPABILITY_REQUIRED", "NODE_TERMINAL_CAPABILITY_REQUIRED", "NODE_REGISTRY_CAPABILITY_REQUIRED", "EXECUTOR_UPGRADE_REQUIRED"].includes(cause.code)) {
+        const checked = await request<PreparationUpdateCheck>(
+          `/hosts/${currentHost.value.id}/preparation?checkUpdate=1`,
         );
+        if (token !== revision || disposed) return;
+        if (
+          checked.hostId !== currentHost.value.id ||
+          checked.expectedHostVersion !== currentHost.value.version
+        )
+          throw new ApiError(
+            "主机配置已变化，请重新选择主机",
+            "VERSION_CONFLICT",
+            "",
+            new Date().toISOString(),
+          );
+        if (checked.update?.status === "AVAILABLE") {
+          const update = automaticPreparationUpdate(checked);
+          if (!update) throw new Error("组件更新信息不完整，请重新预检");
+          automaticUpdate.value = update;
+          preparationOpen.value = true;
+          return;
+        }
+        if (checked.update && checked.update.status !== "CURRENT")
+          throw new ApiError(
+            "接入组件需要核对，请查看主机安装准备",
+            checked.update.code || "EXECUTOR_UPGRADE_REQUIRED",
+            "",
+            new Date().toISOString(),
+          );
+      }
+      throw cause;
     }
-    let result: NodePlan;
-    if (d.action === "INSTALL_NODE") {
-      if (!env || !recipe.value)
-        throw new Error("请先选择已准备好的 Node 环境");
-      const r = recipe.value;
-      result = await request<NodePlan>(
-        "/hosts/" + currentHost.value.id + "/software-install-plans",
-        "POST",
-        {
-          expectedHostVersion: currentHost.value.version,
-          recipeKey: r.key,
-          recipeVersion: r.version,
-          recipeRevision: r.revision,
-          config: {
-            name: "Node.js " + r.version,
-            runtimeMode: "NATIVE",
-            memoryMiB: 512,
-          },
-          source: source(),
-          node: {
-            environmentId: env.id,
-            environmentVersion: env.version,
-            makeDefault: d.makeDefault,
-            connectTerminal: true,
-          },
-        },
-      );
-    } else {
-      result = await request<NodePlan>(
-        "/hosts/" + currentHost.value.id + "/node-environment-plans",
-        "POST",
-        {
-          expectedHostVersion: currentHost.value.version,
-          ...(d.action === "INITIALIZE"
-            ? { name: d.name.trim(), account: d.account.trim() }
-            : {
-                environmentId: env!.id,
-                expectedEnvironmentVersion: env!.version,
-              }),
-          action: d.action,
-          nodeVersion: d.nodeVersion || undefined,
-          packageVersion: [
-            "UPDATE_NPM",
-            "INSTALL_PNPM",
-            "UPDATE_PNPM",
-          ].includes(d.action)
-            ? d.packageVersion
-            : undefined,
-          source: ["CONNECT_TERMINAL", "SET_NPM_REGISTRY"].includes(d.action) ? undefined : source(),
-          registryId: d.registryId,
-          expectedRegistryVersion: d.expectedRegistryVersion,
-          deleteData: d.deleteData,
-          confirmationName: d.confirmationName,
-        },
-      );
-    }
-    if (token === revision && !disposed) plan.value = result;
   });
 }
 async function submit() {

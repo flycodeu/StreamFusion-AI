@@ -4,17 +4,25 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/streamfusion-ai/operations/internal/deploy"
+	"golang.org/x/crypto/ssh"
 )
+
+const preparationTimeout = 6 * time.Minute
+const preparationResponseTimeout = preparationTimeout + 30*time.Second
+const preparationUploadIdleTimeout = 45 * time.Second
 
 type preparationInput struct {
 	UpdateOnly            bool   `json:"updateOnly,omitempty"`
@@ -50,7 +58,12 @@ var preparationMessages = map[string]string{
 	"PREPARATION_READY":                      "主机接入完成，可以继续安装软件。",
 	"PREPARATION_CONNECT_FAILED":             "SSH 连接失败，请核对网络、账号、凭据和主机指纹。",
 	"PREPARATION_PLATFORM_UNSUPPORTED":       "此安装包仅支持 Linux amd64（x86_64），请核对服务器架构。",
-	"PREPARATION_UPLOAD_FAILED":              "安装材料上传未完成，请检查目标临时目录空间和写入权限后重试。",
+	"PREPARATION_UPLOAD_FAILED":              "组件上传未完成，请查看传输进度和错误详情。",
+	"PREPARATION_UPLOAD_TIMEOUT":             "组件上传超时，安装尚未开始。请检查到目标服务器的网络速度。",
+	"PREPARATION_UPLOAD_STALLED":             "组件上传连续45秒无进度，已停止，安装尚未开始。请检查网络连接。",
+	"PREPARATION_UPLOAD_INTERRUPTED":         "组件上传连接已中断，安装尚未开始。请检查网络后重试。",
+	"PREPARATION_UPLOAD_NO_SPACE":            "目标服务器临时目录空间或配额不足，安装尚未开始。",
+	"PREPARATION_UPLOAD_DENIED":              "目标服务器拒绝写入临时目录，安装尚未开始。请检查写入权限。",
 	"PREPARATION_SUDO_REQUIRED":              "服务器需要 sudo 验证，请输入当前 SSH 账号的系统登录密码。",
 	"PREPARATION_RESULT_UNKNOWN":             "接入状态待确认，请检查服务器。",
 	"PREPARATION_REPAIR_UNCONFIRMED":         "权限修复结果尚未确认，原目录和作业仍受保护，请重新检查安装结果。",
@@ -83,11 +96,19 @@ func preparationScriptFailure(stderr string) string {
 }
 
 func (h *HTTP) latestPreparationJob(id string) any {
-	var job, status, phase, code, trace, created, updated string
-	if h.store.DB.QueryRow("SELECT id,status,phase,error_code,trace_id,created_at,updated_at FROM jobs WHERE target_id=? AND kind='HOST_PREPARE' ORDER BY created_at DESC,id DESC LIMIT 1", id).Scan(&job, &status, &phase, &code, &trace, &created, &updated) != nil {
+	var job, status, phase, code, trace, created, updated, raw string
+	if h.store.DB.QueryRow("SELECT id,status,phase,error_code,trace_id,created_at,updated_at,result_json FROM jobs WHERE target_id=? AND kind='HOST_PREPARE' ORDER BY created_at DESC,id DESC LIMIT 1", id).Scan(&job, &status, &phase, &code, &trace, &created, &updated, &raw) != nil {
 		return nil
 	}
-	return map[string]string{"id": job, "status": status, "phase": phase, "errorCode": code, "message": preparationMessage(code), "traceId": trace, "createdAt": created, "updatedAt": updated}
+	response := map[string]any{"id": job, "status": status, "phase": phase, "errorCode": code, "message": preparationMessage(code), "traceId": trace, "createdAt": created, "updatedAt": updated}
+	var result struct {
+		Message  string               `json:"message,omitempty"`
+		Transfer *preparationTransfer `json:"transfer,omitempty"`
+	}
+	if json.Unmarshal([]byte(raw), &result) == nil {
+		response["result"] = result
+	}
+	return response
 }
 
 func (h *HTTP) preparationRepairSHA(t target) string {
@@ -177,7 +198,7 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 		h.getJob(w, r, job)
 		return
 	}
-	if err = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(210 * time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+	if err = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(preparationResponseTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		if err = h.finishPreparation(job, "FAILED", "PREPARATION_CONNECT_FAILED"); err != nil {
 			h.internal(w, r, err)
 			return
@@ -185,7 +206,7 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 		h.getJob(w, r, job)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), preparationTimeout)
 	defer cancel()
 	code, uncertain := h.runHostPreparation(ctx, actor, job, t, archive, material.Binary.Hash, in.SudoPassword, false, snapshot)
 	in.SudoPassword = ""
@@ -282,7 +303,7 @@ func (h *HTTP) finishPreparationTx(tx *sql.Tx, job, status, code string) error {
 	// Keep the last confirmed execution phase. The terminal status and error code
 	// already describe the outcome; replacing the phase with a generic result
 	// marker would erase the only durable progress evidence after a disconnect.
-	_, err := tx.Exec("UPDATE jobs SET status=?,error_code=?,result_json=?,updated_at=? WHERE id=? AND kind='HOST_PREPARE'", status, code, jsonText(map[string]string{"message": preparationMessage(code)}), Now(), job)
+	_, err := tx.Exec("UPDATE jobs SET status=?,error_code=?,result_json=json_set(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.message',?),updated_at=? WHERE id=? AND kind='HOST_PREPARE'", status, code, preparationMessage(code), Now(), job)
 	if err == nil && status != "UNKNOWN" {
 		_, err = tx.Exec("DELETE FROM operation_locks WHERE job_id=?", job)
 	}
@@ -388,8 +409,26 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 		return "PREPARATION_UPLOAD_FAILED", false
 	}
 	command := "umask 077; mkdir -m 700 -- " + shellQuote(stage) + " && cat > " + shellQuote(stage+"/bundle.tar.gz")
-	if runSSHCommand(client, "/bin/sh -c "+shellQuote(command), archive, io.Discard, stderr) != nil || ctx.Err() != nil {
+	info, err := archive.Stat()
+	if err != nil {
 		return "PREPARATION_UPLOAD_FAILED", false
+	}
+	progress := newPreparationTransferReader(archive, info.Size(), func(value preparationTransfer) {
+		_, _ = h.store.DB.Exec("UPDATE jobs SET result_json=json_set(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.transfer',json(?)) WHERE id=? AND kind='HOST_PREPARE' AND status IN ('RUNNING','UNKNOWN')", jsonText(value), job)
+	})
+	stderr.Reset()
+	watchdog := newPreparationUploadWatchdog(preparationUploadIdleTimeout, func() { _ = client.Close() })
+	progress.activity = watchdog.touch
+	err = runSSHCommand(client, "/bin/sh -c "+shellQuote(command), progress, io.Discard, stderr)
+	stalled := watchdog.stop()
+	progress.publish(true)
+	if err != nil || ctx.Err() != nil || stalled {
+		code := preparationUploadFailure(ctx, err, stderr.String())
+		if stalled && ctx.Err() == nil {
+			code = "PREPARATION_UPLOAD_STALLED"
+		}
+		h.logPreparationFailure(job, "UPLOADING_EXECUTOR", code)
+		return code, false
 	}
 	if update != nil {
 		if code := h.verifyPreparationUpdate(ctx, t, job, *update); code != "" {
@@ -457,6 +496,120 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 		return code, true
 	}
 	return "PREPARATION_READY", false
+}
+
+// This counts bytes handed to SSH, not a claim that the target verified them.
+// The archive digest is still checked by the privileged installation step.
+type preparationTransfer struct {
+	SentBytes  int64  `json:"sentBytes"`
+	TotalBytes int64  `json:"totalBytes"`
+	StartedAt  string `json:"startedAt"`
+	UpdatedAt  string `json:"updatedAt"`
+}
+
+type preparationTransferReader struct {
+	io.Reader
+	value    preparationTransfer
+	last     time.Time
+	report   func(preparationTransfer)
+	activity func()
+}
+
+func newPreparationTransferReader(reader io.Reader, total int64, report func(preparationTransfer)) *preparationTransferReader {
+	p := &preparationTransferReader{Reader: reader, value: preparationTransfer{TotalBytes: total, StartedAt: Now()}, report: report}
+	p.publish(true)
+	return p
+}
+
+func (p *preparationTransferReader) Read(buf []byte) (int, error) {
+	n, err := p.Reader.Read(buf)
+	p.value.SentBytes += int64(n)
+	if n > 0 && p.activity != nil {
+		p.activity()
+	}
+	p.publish(false)
+	return n, err
+}
+
+// The watchdog only covers streaming. It is stopped before privilege elevation,
+// so a late timer cannot interrupt installation or misclassify its outcome.
+type preparationUploadWatchdog struct {
+	mu               sync.Mutex
+	timer            *time.Timer
+	last             time.Time
+	limit            time.Duration
+	stopped, stalled bool
+	interrupt        func()
+}
+
+func newPreparationUploadWatchdog(limit time.Duration, interrupt func()) *preparationUploadWatchdog {
+	w := &preparationUploadWatchdog{last: time.Now(), limit: limit, interrupt: interrupt}
+	w.timer = time.AfterFunc(limit, func() {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		if w.stopped {
+			return
+		}
+		if remaining := w.limit - time.Since(w.last); remaining > 0 {
+			w.timer.Reset(remaining)
+			return
+		}
+		w.stalled = true
+		w.interrupt()
+	})
+	return w
+}
+
+func (w *preparationUploadWatchdog) touch() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.stopped && !w.stalled {
+		w.last = time.Now()
+		w.timer.Reset(w.limit)
+	}
+}
+
+func (w *preparationUploadWatchdog) stop() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.stopped = true
+	w.timer.Stop()
+	return w.stalled
+}
+
+func (p *preparationTransferReader) publish(force bool) {
+	now := time.Now()
+	if !force && now.Sub(p.last) < time.Second {
+		return
+	}
+	p.last = now
+	p.value.UpdatedAt = now.UTC().Format(time.RFC3339Nano)
+	p.report(p.value)
+}
+
+func preparationUploadFailure(ctx context.Context, err error, stderr string) string {
+	var network net.Error
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.As(err, &network) && network.Timeout() {
+		return "PREPARATION_UPLOAD_TIMEOUT"
+	}
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return "PREPARATION_UPLOAD_INTERRUPTED"
+	}
+	var exit *ssh.ExitError
+	if errors.As(err, &exit) {
+		diagnostic := strings.ToLower(stderr)
+		if strings.Contains(diagnostic, "no space left on device") || strings.Contains(diagnostic, "disk quota exceeded") {
+			return "PREPARATION_UPLOAD_NO_SPACE"
+		}
+		if strings.Contains(diagnostic, "permission denied") || strings.Contains(diagnostic, "read-only file system") {
+			return "PREPARATION_UPLOAD_DENIED"
+		}
+	}
+	var missing *ssh.ExitMissingError
+	if errors.As(err, &network) || errors.As(err, &missing) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return "PREPARATION_UPLOAD_INTERRUPTED"
+	}
+	return "PREPARATION_UPLOAD_FAILED"
 }
 
 func (h *HTTP) logPreparationFailure(job, phase, code string) {
@@ -551,7 +704,7 @@ func (h *HTTP) repairHostPreparation(w http.ResponseWriter, r *http.Request, act
 		return
 	}
 	defer release()
-	if err = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(210 * time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+	if err = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(preparationResponseTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		h.internal(w, r, err)
 		return
 	}
@@ -559,7 +712,7 @@ func (h *HTTP) repairHostPreparation(w http.ResponseWriter, r *http.Request, act
 		h.opsError(w, r, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(r.Context(), preparationTimeout)
 	defer cancel()
 	code, _ := h.runHostPreparation(ctx, actor, in.JobID, t, archive, material.Binary.Hash, in.SudoPassword, true)
 	in.SudoPassword = ""
