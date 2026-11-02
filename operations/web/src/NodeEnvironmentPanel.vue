@@ -1243,6 +1243,7 @@ poll();
     </ElDialog>
     <ElDialog
       v-model="preparationOpen"
+      append-to-body
       :title="automaticUpdate ? '正在准备安装环境' : '更新接入组件'"
       width="min(720px,94vw)"
       align-center

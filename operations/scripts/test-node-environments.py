@@ -106,6 +106,7 @@ def main():
                 node_version = catalog['node'][0]['version']
                 initialized = True
                 delay_registry = False
+                update_required = False
                 pending_registry_request = None
                 def route_api(route):
                     nonlocal initialized, delay_registry, pending_registry_request
@@ -116,7 +117,9 @@ def main():
                     def reply(value,status=200): route.fulfill(status=status,json={'data':value})
                     if path.startswith('/auth/'): route.continue_()
                     elif path == '/hosts': reply([fixture_host])
-                    elif path == f"/hosts/{host['id']}/preparation" and urlsplit(req.url).query == 'checkUpdate=1': reply({'hostId':host['id'],'expectedHostVersion':fixture_host['version'],'update':{'status':'CURRENT'}})
+                    elif path == f"/hosts/{host['id']}/preparation" and urlsplit(req.url).query == 'checkUpdate=1': reply({'hostId':host['id'],'expectedHostVersion':fixture_host['version'],'update':{'status':'AVAILABLE' if update_required else 'CURRENT','currentSHA256':'a'*64,'packageSHA256':'b'*64}})
+                    elif path == f"/hosts/{host['id']}/preparation":
+                        reply({'hostId':host['id'],'expectedHostVersion':fixture_host['version'],'account':'ubuntu','package':{'available':True,'sha256':'b'*64},'remoteJob':{'id':'update-fixture','status':'FAILED','phase':'CONNECTING','errorCode':'PREPARATION_SUDO_REQUIRED','updatedAt':stamp}})
                     elif path == '/node-registries' and req.method == 'GET': reply(registries)
                     elif path == '/node-registries' and req.method == 'POST':
                         entry={'id':'custom-registry','version':'1','builtIn':False,**data};registries.append(entry);reply(entry,201)
@@ -308,6 +311,24 @@ def main():
                 pending_registry_request.fulfill(status=503,json={'code':'UI_FIXTURE_RETRY','msg':'夹具预检稍后重试'})
                 expect(switch.get_by_role('button',name='检查安装条件',exact=True)).to_be_enabled()
                 checks.append('busy-child-mask-cannot-close-either-drawer')
+                update_required=True
+                switch.get_by_role('button',name='检查安装条件',exact=True).click()
+                preparation=dialog('正在准备安装环境')
+                password=preparation.get_by_label('ubuntu 的登录密码',exact=True)
+                for width in (1440,390):
+                    page.set_viewport_size({'width':width,'height':1000})
+                    password.click()
+                    expect(password).to_be_focused()
+                    # Visibility alone misses a dialog covered by another drawer.
+                    assert password.evaluate('(el) => { const r=el.getBoundingClientRect(); return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===el; }')
+                    page.screenshot(path=str(output/f'registry-update-dialog-{width}.png'))
+                preparation.get_by_role('button',name='Close this dialog',exact=True).click()
+                preparation.wait_for(state='hidden')
+                page.set_viewport_size({'width':1440,'height':1000})
+                expect(switch).to_be_visible()
+                assert env['observation']['registry']['status']=='DEFAULT'
+                update_required=False
+                checks.append('registry-update-dialog-on-top-at-wide-and-narrow-widths-preserves-draft')
                 switch.get_by_role('button',name='检查安装条件',exact=True).click()
                 expect(switch.get_by_text('http://192.0.2.50:4873/npm-v2/',exact=True)).to_be_visible()
                 assert env['observation']['registry']['status']=='DEFAULT'
