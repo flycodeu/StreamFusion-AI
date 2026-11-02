@@ -34,6 +34,9 @@ func (h *HTTP) softwareRoute(w http.ResponseWriter, r *http.Request, s *session,
 	}
 	if len(p) == 3 {
 		switch r.Method + " " + p[2] {
+		case "GET docker-access":
+			h.dockerAccess(w, r, p[1])
+			return true
 		case "POST observe":
 			h.observeSoftware(w, r, s, p[1])
 			return true

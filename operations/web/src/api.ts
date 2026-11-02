@@ -11,6 +11,7 @@ export class ApiError extends Error {
     readonly code: string,
     readonly traceId: string,
     readonly timestamp: string,
+    readonly status?: number,
   ) {
     super(message);
   }
@@ -31,6 +32,7 @@ export async function request<T>(
       body.code,
       body.traceId,
       body.timestamp,
+      response.status,
     );
   return body.data as T;
 }

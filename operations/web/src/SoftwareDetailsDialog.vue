@@ -4,6 +4,8 @@ import { ElDrawer, ElTabs, ElTabPane } from "element-plus";
 import { hostTime, type Host } from "./hosts";
 import ServiceConfigurationPanel from "./ServiceConfigurationPanel.vue";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
+import DockerAccessPanel from "./DockerAccessPanel.vue";
+import { managedDockerAccess } from "./dockerAccess";
 import type { ServiceInstallReceipt } from "./serviceInstallation";
 import {
   softwareDesiredLabels,
@@ -51,6 +53,7 @@ const emit = defineEmits<{
   cancel: [];
   configurationSubmitted: [ServiceInstallReceipt];
   preparation: [string];
+  changed: [];
 }>();
 const detailTab = ref("overview");
 watch(
@@ -227,6 +230,9 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
             @submitted="emit('configurationSubmitted', $event)"
             @preparation="emit('preparation', $event)"
         /></ElTabPane>
+        <ElTabPane v-if="managedDockerAccess(detail)" label="账号权限" name="docker-access">
+          <DockerAccessPanel :detail="detail" :host="host" :active="detailTab === 'docker-access'" :disabled="busy || pendingJob || !canChange" @changed="emit('changed')" />
+        </ElTabPane>
         <ElTabPane label="执行记录" name="job">
           <div v-if="job" class="software-job">
             <header>

@@ -9,6 +9,12 @@ export interface ErrorReferenceEntry {
 }
 
 export const errorReference: ErrorReferenceEntry[] = [
+  { code: "EXECUTOR_DOCKER_ACCESS_UNSUPPORTED", name: "组件不支持 Docker 账号权限", category: "Docker", meaning: "已接入组件不具备本次账号权限检查和变更能力。", steps: ["在账号权限页更新接入组件，完成后重新检查。", "核对账号与当前组成员状态，再明确确认授权；组件更新不会自动授权。"] },
+  { code: "DOCKER_ACCESS_STATE_CHANGED", name: "Docker 账号状态已变化", category: "Docker", meaning: "账号、Docker 组或引擎身份与确认时不同，本次变更未受理。", steps: ["重新检查权限，核对所选账号、组成员与引擎状态。", "按新检查结果重新确认操作，不要覆盖其他管理员的变更。"] },
+  { code: "DOCKER_ACCESS_SOCKET_NOT_READY", name: "Docker 连接入口未就绪", category: "Docker", meaning: "标准 Docker socket 未通过属主、组和权限检查，不能授予新权限。", steps: ["检查 Docker Engine 状态以及 /run/docker.sock 是否为 root:docker、0660。", "由管理员核对原服务配置，不要改为 0666。收回已有补充组权限不要求 socket 存在。"] },
+  { code: "DOCKER_ACCESS_PRIMARY_GROUP", name: "docker 是账号主组", category: "Docker", meaning: "本功能仅管理 docker 补充组，不能更改账号主组。", steps: ["核对账号的主组和其他服务依赖。", "如需调整主组，请由服务器管理员单独处理，再返回检查。"] },
+  { code: "DOCKER_ACCESS_ACCOUNT_INELIGIBLE", name: "账号不可分配权限", category: "Docker", meaning: "所选账号不符合现有本地普通登录账号条件。", steps: ["选择列表中可分配的普通账号。", "核对账号 UID 和登录 shell；本功能不创建账号或启用被禁止登录的账号。"] },
+  { code: "DOCKER_ACCESS_ALREADY_SET", name: "账号权限无需变更", category: "Docker", meaning: "账号已经处于所选 docker 组成员状态。", steps: ["重新检查权限，无需重复授权或收回。", "刚授权后需重新登录；现有会话不会立即获得新组成员身份。"] },
   { code: "SOFTWARE_IDENTITY_DRIFT", name: "软件身份已变化", category: "软件管理", meaning: "当前程序或服务与 Ops 登记的身份不一致，无法安全读取该实例日志或继续操作。", steps: ["核对这台主机是否通过平台外方式替换、升级或重建了该软件。", "在软件详情重新检查状态并核对实际程序路径；保留原作业和数据，不要重复安装覆盖。"] },
   { code: "SOFTWARE_OWNERSHIP_MISMATCH", name: "软件归属不匹配", category: "软件管理", meaning: "目标上的软件归属记录与当前主机或实例不匹配，操作已停止。", steps: ["核对主机、安装目录与软件实例，检查是否复制或移动过受管目录。", "查看原安装作业和诊断信息，由管理员核对归属后再操作；不要手动修改归属记录绕过检查。"] },
   { code: "SOFTWARE_LOG_READ_DENIED", name: "软件日志不可读取", category: "软件管理", meaning: "执行器未能通过受支持的日志入口读取该软件日志；不能仅凭此码认定是 sudo 密码问题。", steps: ["检查软件详情中的运行方式和服务标识，核对 systemd 或 Docker 服务是否存在、可访问。", "记录发生时间、主机和 traceId，检查对应服务日志读取权限及目标执行器日志。"] },

@@ -44,7 +44,7 @@ func TestNodeSchemaFifteenPreservesHistoryAndLocks(t *testing.T) {
 		}
 	}
 	var version, relationships int
-	if err = s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 15 {
+	if err = s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != SchemaVersion {
 		t.Fatal(version, err)
 	}
 	if err = s.DB.QueryRow("SELECT count(*) FROM software_instances WHERE node_environment_id IS NOT NULL").Scan(&relationships); err != nil || relationships != 0 {

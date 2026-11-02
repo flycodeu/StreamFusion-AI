@@ -93,7 +93,7 @@ cd web && pnpm build
 python scripts/test-browser.py --binary ./streamfusion-ops.exe --output "$env:TEMP/sfops-browser-$(New-Guid)"
 ```
 
-看进程日志及状态目录下 `logs/controller.log`。目录锁冲突返回STATE_LOCKED；端口冲突返回LISTEN_FAILED；高版本数据库返回SCHEMA_TOO_NEW；缺少已有凭据密钥返回KEY_MISSING。现行Schema为15，增量维护安装/配置、防火墙、主机接入、软件卸载及Node环境作业；原主机ID、凭据、实例、观察、作业和历史发布关系保留。每次增量升级前生成对应 `before-schema-N` 一致性归档，再事务升级，旧迁移摘要保持不变。旧程序拒绝打开高版本数据库；代码回退须用原密钥与对应升级前备份恢复到新目录。备份不包含大镜像归档，恢复后文件缺失会阻断新安装，不能把数据库恢复当作材料齐备。
+看进程日志及状态目录下 `logs/controller.log`。目录锁冲突返回STATE_LOCKED；端口冲突返回LISTEN_FAILED；高版本数据库返回SCHEMA_TOO_NEW；缺少已有凭据密钥返回KEY_MISSING。现行Schema为16，增量维护安装/配置、防火墙、主机接入、软件卸载、Node环境及Docker账号权限作业；原主机ID、凭据、实例、观察、作业和历史发布关系保留。每次增量升级前生成对应 `before-schema-N` 一致性归档，再事务升级，旧迁移摘要保持不变。旧程序拒绝打开高版本数据库；代码回退需保留当前Schema兼容性；若使用旧版程序，只能另行评估后用原密钥与升级前备份恢复到新目录，恢复后的数据库不包含备份之后的操作。备份不包含大镜像归档，恢复后文件缺失会阻断新安装，不能把数据库恢复当作材料齐备。
 
 `STATE_LOCKED` 表示该目录仍被进程持有，锁文件存在本身不表示故障，不能通过删除它关闭服务。优先用 `stop --state`；旧版后台实例未提供本地关闭记录时返回 `STOP_UNAVAILABLE`，需核实监听端口、可执行文件和启动参数后关闭对应进程，随后使用新二进制。
 

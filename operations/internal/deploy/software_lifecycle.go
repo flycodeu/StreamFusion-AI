@@ -26,6 +26,9 @@ func (x *executor) boundSoftware(s SoftwareRequest) error {
 }
 
 func (x *executor) applySoftware(req Request, dir string) (Result, error) {
+	if req.DockerAccess != nil {
+		return x.changeDockerAccess(req, dir)
+	}
 	if req.NodeEnvironment != nil {
 		return x.applyNodeEnvironment(req, dir)
 	}
@@ -156,6 +159,9 @@ func (x *executor) adoptSoftware(req Request) error {
 }
 
 func (x *executor) verifySoftwareResult(req Request, result Result) error {
+	if req.DockerAccess != nil {
+		return x.verifyDockerAccessResult(req, result)
+	}
 	if req.NodeEnvironment != nil {
 		if result.NodeEnvironment == nil || result.NodeEnvironment.EnvironmentID != req.NodeEnvironment.Context.EnvironmentID {
 			return errors.New("NODE_RECEIPT_MISMATCH")
@@ -203,6 +209,9 @@ func (x *executor) verifySoftwareResult(req Request, result Result) error {
 }
 
 func (x *executor) reconcileSoftware(req Request, dir string) Result {
+	if req.DockerAccess != nil {
+		return x.reconcileDockerAccess(req, dir)
+	}
 	if req.NodeEnvironment != nil {
 		return x.reconcileNodeEnvironment(req, dir)
 	}

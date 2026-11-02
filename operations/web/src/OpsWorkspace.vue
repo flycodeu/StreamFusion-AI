@@ -286,6 +286,7 @@ const jobKindLabels: Record<string, string> = {
   SOFTWARE_START: "启动软件",
   SOFTWARE_STOP: "停止软件",
   SOFTWARE_UNMANAGE: "解除管理",
+  SOFTWARE_DOCKER_ACCESS: "Docker 账号权限",
   SOFTWARE_INSTALL: "安装软件",
   SOFTWARE_UNINSTALL: "卸载软件",
   SOFTWARE_CONFIGURE: "修改软件配置",

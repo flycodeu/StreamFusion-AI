@@ -721,6 +721,7 @@ onUnmounted(() => {
     @reconcile="reconcile"
     @cancel="cancel"
     @configuration-submitted="configurationSubmitted"
+    @changed="act(refresh)"
     @preparation="emit('preparation', $event)"
   />
   <SoftwareUninstallDialog :open="uninstallOpen" :item="uninstallItem"

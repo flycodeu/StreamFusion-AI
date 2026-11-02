@@ -83,6 +83,11 @@ func classifyExecutorInvocation(err error, stderr string) error {
 		}
 	}
 	text := strings.ToLower(stderr)
+	// Account checks return fixed classifications only. A diagnostic containing
+	// another line (including command output or secrets) must not pass through.
+	if fixed := strings.TrimSpace(stderr); dockerAccessMessages[fixed] != "" {
+		return errors.New(fixed)
+	}
 	switch {
 	case strings.TrimSpace(text) == "software_identity_drift":
 		return errors.New("SOFTWARE_IDENTITY_DRIFT")

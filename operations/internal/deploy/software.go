@@ -55,7 +55,7 @@ func (x *executor) softwareRunner(ctx context.Context, command string, args ...s
 		commandPath = "/usr/sbin:/usr/bin:/sbin:/bin"
 	}
 	cmd.Env = []string{"PATH=" + commandPath, "HOME=/root", "LC_ALL=C", "SYSTEMD_COLORS=0", "SYSTEMD_PAGER="}
-	if command == "/usr/sbin/runuser" {
+	if command == "/usr/sbin/runuser" || command == "/usr/bin/gpasswd" {
 		boundPackageCommand(cmd)
 	}
 	if command == "/usr/bin/apt-get" || command == "/usr/bin/dpkg" {
@@ -76,7 +76,13 @@ func validateSoftwareInput(req Request) error {
 	if !ID.MatchString(req.JobID) || !Hex.MatchString(req.InputHash) || !softwareMutation(req.SoftwareOperation) {
 		return errors.New("SOFTWARE_JOB_IDENTITY_INVALID")
 	}
-	if req.NodeEnvironment != nil {
+	if req.DockerAccess != nil {
+		if err := validateDockerAccessInput(req); err != nil {
+			return err
+		}
+	} else if req.SoftwareOperation == "SOFTWARE_DOCKER_ACCESS" {
+		return errors.New("DOCKER_ACCESS_INPUT_REQUIRED")
+	} else if req.NodeEnvironment != nil {
 		if req.SoftwareOperation != "NODE_ENVIRONMENT_CHANGE" || req.NodeEnvironment.Validate() != nil || req.Software != nil || req.Installation != nil || req.Uninstallation != nil || req.Reconfiguration != nil {
 			return errors.New("NODE_ENVIRONMENT_INPUT_INVALID")
 		}
@@ -114,6 +120,9 @@ func softwareResult(req Request) Result {
 }
 
 func (x *executor) executeSoftware(req Request, output io.Writer) error {
+	if req.Action == "SOFTWARE_DOCKER_ACCESS_CHECK" {
+		return x.readDockerAccess(req, output)
+	}
 	if req.Action == "NODE_ENVIRONMENT_CHECK" || req.Action == "NODE_ENVIRONMENT_OBSERVE" || req.Action == "NODE_ENVIRONMENT_DISCOVER" {
 		return x.executeNodeRead(req, output)
 	}
@@ -306,7 +315,7 @@ func (x *executor) ackSoftware(req, intent Request, result Result, dir string, o
 }
 
 func (x *executor) softwareNotStarted(req Request, dir string, output io.Writer) error {
-	for _, name := range []string{"intent.json", "progress.json", "result.json", "ack.json", "software-command.json", "software-detach.json", "software-uninstall.json", "software-uninstalled.json", "node-change.json", "node-before.json", "node-install.json", "node-uninstall.json"} {
+	for _, name := range []string{"intent.json", "progress.json", "result.json", "ack.json", "software-command.json", "software-detach.json", "software-uninstall.json", "software-uninstalled.json", "node-change.json", "node-before.json", "node-install.json", "node-uninstall.json", "docker-access-command.json"} {
 		if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
 			return errors.New("TARGET_EVIDENCE_PRESENT_OR_DAMAGED")
 		}

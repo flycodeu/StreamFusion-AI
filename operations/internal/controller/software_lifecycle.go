@@ -15,14 +15,16 @@ import (
 
 func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session, id, operation string) {
 	var in struct {
-		ExpectedVersion  string `json:"expectedVersion"`
-		IdentityHash     string `json:"identityHash"`
-		Confirmed        bool   `json:"confirmed"`
-		Key              string `json:"idempotencyKey"`
-		Action           string `json:"action"`
-		DeleteData       bool   `json:"deleteData"`
-		ClearNodeDefault bool   `json:"clearNodeDefault"`
-		ConfirmationName string `json:"confirmationName"`
+		ExpectedHostVersion string             `json:"expectedHostVersion,omitempty"`
+		DockerAccess        *dockerAccessInput `json:"dockerAccess,omitempty"`
+		ExpectedVersion     string             `json:"expectedVersion"`
+		IdentityHash        string             `json:"identityHash"`
+		Confirmed           bool               `json:"confirmed"`
+		Key                 string             `json:"idempotencyKey"`
+		Action              string             `json:"action"`
+		DeleteData          bool               `json:"deleteData"`
+		ClearNodeDefault    bool               `json:"clearNodeDefault"`
+		ConfirmationName    string             `json:"confirmationName"`
 	}
 	if e := decode(w, r, &in); e != nil {
 		h.fail(w, r, 400, "INVALID_INPUT", e.Error())
@@ -30,6 +32,18 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	}
 	if _, e := strconv.ParseUint(in.ExpectedVersion, 10, 64); e != nil || len(strings.TrimSpace(in.Key)) < 8 || len(in.Key) > 80 {
 		h.fail(w, r, 400, "VERSION_AND_IDEMPOTENCY_REQUIRED", "请携带当前版本与8–80字节提交标识")
+		return
+	}
+	if operation == "actions" && in.Action == "DOCKER_ACCESS" {
+		if in.DeleteData || in.ClearNodeDefault || in.ConfirmationName != "" || in.IdentityHash != "" {
+			h.fail(w, r, 400, "DOCKER_ACCESS_INPUT_INVALID", "账号权限操作不接受删除或接管参数")
+			return
+		}
+		h.changeDockerAccess(w, r, s, id, in.ExpectedVersion, in.ExpectedHostVersion, in.Key, in.Confirmed, in.DockerAccess)
+		return
+	}
+	if in.DockerAccess != nil || in.ExpectedHostVersion != "" {
+		h.fail(w, r, 400, "DOCKER_ACCESS_INPUT_INVALID", "账号权限参数仅适用于Docker权限操作")
 		return
 	}
 	action := "SOFTWARE_" + strings.ToUpper(operation)

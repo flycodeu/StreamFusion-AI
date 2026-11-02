@@ -16,6 +16,10 @@ func (h *HTTP) processSoftware(ctx context.Context, id, raw string) {
 		h.jobUnknown(id, "INPUT_DAMAGED")
 		return
 	}
+	if (req.Action == "SOFTWARE_DOCKER_ACCESS" || req.SoftwareOperation == "SOFTWARE_DOCKER_ACCESS" || req.DockerAccess != nil) && (req.Action != "SOFTWARE_DOCKER_ACCESS" || req.SoftwareOperation != "SOFTWARE_DOCKER_ACCESS" || req.DockerAccess == nil || req.DockerAccess.Validate() != nil || req.Reconfiguration != nil || req.Installation != nil || req.Uninstallation != nil || req.NodeEnvironment != nil) {
+		h.jobUnknown(id, "INPUT_DAMAGED")
+		return
+	}
 	if req.Reconfiguration != nil {
 		h.processSoftwareConfiguration(ctx, id, req)
 		return
@@ -33,14 +37,20 @@ func (h *HTTP) processSoftware(ctx context.Context, id, raw string) {
 		h.jobUnknown(id, "TARGET_MISSING")
 		return
 	}
-	h.store.mu.Lock()
-	res, e := h.store.DB.Exec("UPDATE jobs SET status='RUNNING',phase='TARGET_EXECUTION',updated_at=? WHERE id=? AND status='QUEUED' AND EXISTS(SELECT 1 FROM targets WHERE id=? AND maintenance=0)", Now(), id, req.TargetID)
-	h.store.mu.Unlock()
-	if e != nil {
-		return
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return
+	if req.DockerAccess != nil {
+		if !h.startDockerAccessJob(id, req) {
+			return
+		}
+	} else {
+		h.store.mu.Lock()
+		res, e := h.store.DB.Exec("UPDATE jobs SET status='RUNNING',phase='TARGET_EXECUTION',updated_at=? WHERE id=? AND status='QUEUED' AND EXISTS(SELECT 1 FROM targets WHERE id=? AND maintenance=0)", Now(), id, req.TargetID)
+		h.store.mu.Unlock()
+		if e != nil {
+			return
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			return
+		}
 	}
 	execCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
@@ -51,6 +61,9 @@ func (h *HTTP) processSoftware(ctx context.Context, id, raw string) {
 	}
 	if result.Status == "UNKNOWN" && result.ControllerID == req.ControllerID && result.TargetID == req.TargetID && result.JobID == id && result.InputHash == req.InputHash {
 		code := "SOFTWARE_COMMAND_UNCONFIRMED"
+		if req.DockerAccess != nil {
+			code = "DOCKER_ACCESS_UNCONFIRMED"
+		}
 		if req.Uninstallation != nil {
 			code = "SOFTWARE_UNINSTALL_UNCONFIRMED"
 			if result.ErrorCode != "" && len(result.ErrorCode) <= 96 {
@@ -82,6 +95,11 @@ func (h *HTTP) commitSoftwareResult(id string, req deploy.Request, result deploy
 	}
 	if result.Status != "SUCCEEDED" && result.Status != "FAILED" {
 		return errors.New("RESULT_NOT_FINAL")
+	}
+	if result.Status == "SUCCEEDED" && req.DockerAccess != nil {
+		if err := verifyDockerAccessResult(req, result); err != nil {
+			return err
+		}
 	}
 	if result.Status == "SUCCEEDED" && req.Action == "SOFTWARE_UNINSTALL" {
 		e := result.Uninstallation
