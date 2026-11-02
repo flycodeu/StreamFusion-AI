@@ -122,3 +122,61 @@ func TestTargetUpgradeRejectsWrongOwnerHashPendingAndBusy(t *testing.T) {
 		t.Fatal("rejected upgrade mutated executor")
 	}
 }
+
+func TestTargetUpgradeChecksFrozenCurrentHashUnderLock(t *testing.T) {
+	root, owner := targetUpgradeFixture(t)
+	source := filepath.Join(root, "new-binary")
+	candidate := upgradeELFFixture('C')
+	if err := os.WriteFile(source, candidate, 0600); err != nil {
+		t.Fatal(err)
+	}
+	frozen := upgradeDigest(upgradeELFFixture('A'))
+	// A separate maintenance operation wins the target lock after the
+	// controller observed A. The later request must not overwrite its B.
+	lock, err := targetLock(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := upgradeELFFixture('B')
+	if err = os.WriteFile(filepath.Join(root, "executor"), current, 0755); err != nil {
+		lock.Close()
+		t.Fatal(err)
+	}
+	backup := filepath.Join(root, "executor.previous")
+	if err = os.WriteFile(backup, upgradeELFFixture('A'), 0755); err != nil {
+		lock.Close()
+		t.Fatal(err)
+	}
+	lock.Close()
+	if _, err = UpgradeTarget(root, source, upgradeDigest(candidate), owner.ControllerID, owner.TargetID, frozen); err == nil || err.Error() != "TARGET_UPGRADE_CURRENT_HASH_MISMATCH" {
+		t.Fatal("stale observed hash was accepted", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(root, "executor"))
+	previous, _ := os.ReadFile(backup)
+	if !bytes.Equal(got, current) || !bytes.Equal(previous, upgradeELFFixture('A')) {
+		t.Fatal("hash rejection changed current binary or rollback point")
+	}
+	state, _ := os.ReadFile(filepath.Join(root, "preserved-state"))
+	if string(state) != "business and jobs remain" {
+		t.Fatal("hash rejection changed business state")
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(root, ".executor-*"))
+	if len(leftovers) != 0 {
+		t.Fatal("hash rejection left staged files", leftovers)
+	}
+	if _, err = UpgradeTarget(root, source, upgradeDigest(candidate), owner.ControllerID, owner.TargetID, upgradeDigest(current)); err != nil {
+		t.Fatal("matching frozen hash rejected", err)
+	}
+	got, _ = os.ReadFile(filepath.Join(root, "executor"))
+	previous, _ = os.ReadFile(backup)
+	if !bytes.Equal(got, candidate) || !bytes.Equal(previous, current) {
+		t.Fatal("guarded upgrade did not preserve actual previous binary")
+	}
+	// CLI passes an empty optional value for legacy invocations.
+	if _, err = UpgradeTarget(root, source, upgradeDigest(candidate), owner.ControllerID, owner.TargetID, ""); err != nil {
+		t.Fatal("legacy invocation changed", err)
+	}
+	if _, err = UpgradeTarget(root, source, upgradeDigest(candidate), owner.ControllerID, owner.TargetID, "not-a-sha"); err == nil || err.Error() != "TARGET_UPGRADE_INPUT_INVALID" {
+		t.Fatal("malformed current hash accepted", err)
+	}
+}

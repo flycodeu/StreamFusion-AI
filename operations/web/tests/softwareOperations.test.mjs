@@ -18,6 +18,7 @@ const installationSource = await readFile(new URL("../src/serviceInstallation.ts
 const installation = moduleFrom(installationSource);
 const software = moduleFrom(await readFile(new URL("../src/software.ts", import.meta.url), "utf8"));
 const useSource = await readFile(new URL("../src/useServiceInstallation.ts", import.meta.url), "utf8");
+const preparationUpdate = moduleFrom(await readFile(new URL("../src/preparationUpdate.ts", import.meta.url), "utf8"));
 const uninstallComponent = await readFile(new URL("../src/SoftwareUninstallDialog.vue", import.meta.url), "utf8");
 const uninstallScript = uninstallComponent.split('<script setup lang="ts">')[1].split("</script>")[0];
 const catalogComponent = await readFile(new URL("../src/SoftwareRecipes.vue", import.meta.url), "utf8");
@@ -33,7 +34,7 @@ const material = (id, mode, origin = "UPLOADED", available = true) => ({
 async function flush() { for (let i = 0; i < 10; i++) { await Promise.resolve(); await vue.nextTick(); } }
 function installationHarness(materials, options = {}) {
   const calls = [], scopes = [];
-  const props = vue.reactive({ open: true, recipe: options.recipe || recipe, method: options.method, host: { id: "host-a", version: "1", address: "10.1.2.3" } });
+  const props = vue.reactive({ open: true, recipe: options.recipe || recipe, method: options.method, host: { id: "host-a", version: "1", address: "10.1.2.3", kind: options.hostKind } });
   const request = async (path, method, data) => {
     calls.push({ path, method, data });
     if (options.request) return options.request(path, method, data);
@@ -45,6 +46,7 @@ function installationHarness(materials, options = {}) {
   const composable = moduleFrom(useSource, {
     vue: { ...vue, onUnmounted: (fn) => scopes.push(fn) },
     "./api": { ApiError: Error, request }, "./serviceInstallation": installation,
+    "./preparationUpdate": preparationUpdate,
   });
   const scope = vue.effectScope();
   const flow = scope.run(() => composable.useServiceInstallation(props, () => {}, () => {}));
@@ -331,4 +333,58 @@ test("missing official receipt paths cannot reuse offline installation paths for
   h.panel.confirmationName.value = "MySQL 业务库";
   assert.equal(h.panel.canSubmit.value, false);
   h.dispose();
+});
+
+test("SSH preflight updates only a known component then preserves the draft and never submits software", async () => {
+  let current = false;
+  const h = installationHarness([], { method: "OFFICIAL", recipe: officialRecipe(), hostKind: "SSH", request: async (path, method, data) => {
+    if (path.includes("?checkUpdate=1")) return {hostId:"host-a",expectedHostVersion:"1",update: current ? {status:"CURRENT"} : {status:"AVAILABLE",currentSHA256:"a".repeat(64),packageSHA256:"b".repeat(64)}};
+    if (path === "/hosts") return [{id:"host-a",version:"1",capabilities:{mutation:{status:"AVAILABLE"}}}];
+    if (path.endsWith("/software-install-plans")) return {id:"after-update-plan",expiresAt:"2099-01-01T00:00:00Z",config:data.config};
+    throw new Error(`Unexpected request ${path}`);
+  }});
+  await flush();h.flow.configuration.value.name="保留配置";
+  await h.flow.next();
+  assert.equal(h.flow.preparationOpen.value,true);
+  assert.equal(h.flow.automaticUpdate.value.hostId,"host-a");
+  assert.equal(h.calls.some(x=>x.path.endsWith("/software-install-plans")),false);
+  current=true;await h.flow.preparationChecked();
+  assert.equal(h.flow.preparationOpen.value,false);
+  assert.equal(h.flow.configuration.value.name,"保留配置");
+  assert.equal(h.flow.plan.value.id,"after-update-plan");
+  assert.equal(h.calls.some(x=>x.path.includes("/submit")),false);
+  h.dispose();
+});
+
+test("unknown components, blocked jobs and stale hosts cannot trigger automatic updates or install plans", async () => {
+  for (const state of ["MANUAL_REQUIRED","BLOCKED","stale-host"]) {
+    const h=installationHarness([], {method:"OFFICIAL",recipe:officialRecipe(),hostKind:"SSH",request:async()=>({hostId:"host-a",expectedHostVersion:state==="stale-host"?"2":"1",update:{status:state==="stale-host"?"CURRENT":state,code:"HOST_BUSY"}})});
+    await flush();await h.flow.next();
+    assert.equal(h.flow.preparationOpen.value,false,state);
+    assert.equal(h.flow.automaticUpdate.value,undefined,state);
+    assert.equal(h.flow.plan.value,undefined,state);
+    assert.equal(h.calls.length,1,state);
+    h.dispose();
+  }
+});
+
+test("an update completion cannot start another automatic update in the same continuation", async () => {
+  const h=installationHarness([], {method:"OFFICIAL",recipe:officialRecipe(),hostKind:"SSH",request:async(path)=>path==="/hosts" ? [{id:"host-a",version:"1",capabilities:{mutation:{status:"AVAILABLE"}}}] : {hostId:"host-a",expectedHostVersion:"1",update:{status:"AVAILABLE",currentSHA256:"a".repeat(64),packageSHA256:"b".repeat(64)}}});
+  await flush();await h.flow.next();assert.equal(h.flow.preparationOpen.value,true);
+  await h.flow.preparationChecked();
+  assert.equal(h.flow.preparationOpen.value,false);
+  assert.equal(h.flow.plan.value,undefined);
+  assert.ok(h.flow.actionError.value);
+  assert.equal(h.calls.some(x=>x.path.endsWith("/software-install-plans")),false);
+  h.dispose();
+});
+
+test("closing the install drawer clears automatic update intent before any reopen", async () => {
+ const h=installationHarness([], {method:"OFFICIAL",recipe:officialRecipe(),hostKind:"SSH",request:async()=>({hostId:"host-a",expectedHostVersion:"1",update:{status:"AVAILABLE",currentSHA256:"a".repeat(64),packageSHA256:"b".repeat(64)}})});
+ await flush();await h.flow.next();assert.equal(h.flow.preparationOpen.value,true);
+ h.props.open=false;await flush();
+ assert.equal(h.flow.preparationOpen.value,false);assert.equal(h.flow.automaticUpdate.value,undefined);
+ h.props.open=true;await flush();
+ assert.equal(h.flow.preparationOpen.value,false);assert.equal(h.calls.length,1);
+ h.dispose();
 });

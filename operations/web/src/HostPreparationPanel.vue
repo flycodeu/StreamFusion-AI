@@ -3,6 +3,7 @@ import { computed, onUnmounted, ref, watch } from "vue";
 import { ApiError, request } from "./api";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
 import { type Host } from "./hosts";
+import type { AutomaticPreparationUpdate } from "./preparationUpdate";
 interface PreparationJob {
   id: string; status: string; phase: string; errorCode: string;
   message?: string; traceId: string; createdAt?: string; updatedAt: string;
@@ -17,7 +18,7 @@ interface HostPreparation {
   steps: { key: string; label: string; status: string; code: string; message: string }[];
   remoteJob?: PreparationJob;
 }
-const props = defineProps<{ host: Host; updateOnly?: boolean }>();
+const props = defineProps<{ host: Host; updateOnly?: boolean; automaticUpdate?: AutomaticPreparationUpdate }>();
 const emit = defineEmits<{ checked: []; updated: [] }>();
 const data = ref<HostPreparation>();
 const busy = ref(false);
@@ -27,6 +28,7 @@ const needsSudoPassword = ref(false);
 const installing = ref(false);
 const updateRequested = ref(false);
 let explicitUpdate = false;
+let automaticStarted = false;
 const repairing = ref(false);
 const error = ref<{ message: string; source?: "poll"; code?: string; traceId?: string; timestamp?: string }>();
 const checkResult = ref<{ ready: boolean; title: string; message: string; code: string }>();
@@ -41,12 +43,18 @@ const phaseLabels: Record<string, string> = {
   INSTALLING_EXECUTOR: "安装接入组件", VERIFYING_EXECUTOR: "验证接入结果",
 };
 const phaseOrder = ["CONNECTING", "UPLOADING_EXECUTOR", "INSTALLING_EXECUTOR", "VERIFYING_EXECUTOR"];
-const visibleStatus = computed(() => job.value?.status || (installing.value ? "RUNNING" : ""));
+const visibleStatus = computed(() => installing.value && !installationIntent?.jobId ? "RUNNING" : job.value?.status || (installing.value ? "RUNNING" : ""));
 const statusTone = computed(() => ({ RUNNING: "running", UNKNOWN: "unknown", SUCCEEDED: "success", FAILED: "failed" }[visibleStatus.value] || "running"));
 const statusLabel = computed(() => ({ RUNNING: "执行中", UNKNOWN: "待确认", SUCCEEDED: "已完成", FAILED: "未完成" }[visibleStatus.value] || "执行中"));
-const currentPhaseIndex = computed(() => phaseOrder.indexOf(job.value?.phase || ""));
+const currentPhaseIndex = computed(() => installing.value && !installationIntent?.jobId ? 0 : phaseOrder.indexOf(job.value?.phase || ""));
 const showPhaseTrack = computed(() => Boolean(visibleStatus.value));
 const statusTitle = computed(() => {
+  if (props.updateOnly || updateRequested.value) {
+    if (visibleStatus.value === "RUNNING") return installing.value && !installationIntent?.jobId ? "准备更新接入组件" : phaseLabels[job.value?.phase || ""] || "正在更新接入组件";
+    if (visibleStatus.value === "UNKNOWN") return "更新结果待确认";
+    if (visibleStatus.value === "SUCCEEDED") return "接入组件已就绪";
+    return "组件更新未完成";
+  }
   if (!job.value) return "正在创建安装任务";
   if (job.value.status === "RUNNING") return phaseLabels[job.value.phase] || "正在处理安装任务";
   if (job.value.status === "UNKNOWN") return "安装结果待确认";
@@ -151,11 +159,22 @@ watch([() => props.host.id, () => props.host.version], () => {
   hostGeneration++; generation++; operation++;
   installAbort?.abort(); clearTimeout(polling); data.value = undefined;
   busy.value = false; installing.value = false; repairing.value = false; pollFailures = 0; installationIntent = undefined;
-  updateRequested.value = !!props.updateOnly; explicitUpdate = false;
+  updateRequested.value = !!props.updateOnly; explicitUpdate = false; automaticStarted = false;
   checkResult.value = undefined; copied.value = "";
   sudoPassword.value = ""; needsSudoPassword.value = false; error.value = undefined;
   mode.value = props.host.kind === "SSH" ? "online" : "offline";
-  void load();
+  const revision = hostGeneration;
+  void load().then(async () => {
+    if (revision !== hostGeneration || automaticStarted || !props.automaticUpdate || error.value || !data.value) return;
+    automaticStarted = true;
+    const expected = props.automaticUpdate;
+    if (expected.hostId !== props.host.id || data.value.hostId !== expected.hostId || data.value.expectedHostVersion !== expected.expectedHostVersion || data.value.package.sha256 !== expected.packageSHA256) {
+      report(new Error("主机或更新材料已变化，请重新预检"));
+      return;
+    }
+    if (blocked.value || props.host.maintenance || needsSudoPassword.value) return;
+    await install();
+  });
 }, { immediate: true });
 onUnmounted(() => { generation++; hostGeneration++; clearTimeout(polling); installAbort?.abort(); sudoPassword.value = ""; });
 async function refreshHostStatus(revision = hostGeneration) {
@@ -203,7 +222,8 @@ async function install() {
   installing.value = true; pollFailures = 0; checkResult.value = undefined;
   installAbort = new AbortController();
   installationIntent ??= { key: crypto.randomUUID(), previousJobId: job.value?.id };
-  const input = { expectedVersion: data.value.expectedHostVersion, idempotencyKey: installationIntent.key, confirmed: true, sudoPassword: sudoPassword.value };
+  const input = { expectedVersion: data.value.expectedHostVersion, idempotencyKey: installationIntent.key, confirmed: true, sudoPassword: sudoPassword.value,
+    ...(props.automaticUpdate ? { updateOnly: true, expectedCurrentSHA256: props.automaticUpdate.currentSHA256, expectedPackageSHA256: props.automaticUpdate.packageSHA256 } : {}) };
   sudoPassword.value = ""; schedulePoll(1000);
   try {
     const result = await request<PreparationJob>(`/hosts/${hostId}/preparation/install`, "POST", input, installAbort.signal);
@@ -238,6 +258,11 @@ async function reconcile() {
     if (data.value) data.value.remoteJob = result;
     checkResult.value = undefined;
     await refreshHostStatus(active.host); await load(true);
+    if (result.id === input.jobId && result.status === "SUCCEEDED" && explicitUpdate && currentOperation(active)) {
+      updateRequested.value = false;
+      explicitUpdate = false;
+      emit("updated");
+    }
   } catch (cause) {
     if (!currentOperation(active)) return;
     if (cause instanceof ApiError) {
@@ -316,7 +341,7 @@ async function check() {
     checkResult.value = { ready, title: ready ? "服务器已接入" : "服务器尚未接入", message: ready ? "现在可以继续安装和管理软件。" : unready?.message || "暂时无法确认接入状态，请重新检查。",
       code: unready?.code || "" };
     emit("checked");
-    if (ready && props.updateOnly) emit("updated");
+    if (ready && props.updateOnly && !props.automaticUpdate) emit("updated");
     await load(true);
   } catch (cause) { if (currentOperation(active)) report(cause); }
   finally { if (currentOperation(active)) busy.value = false; }
@@ -325,22 +350,22 @@ async function check() {
 
 <template>
   <div class="host-preparation">
-    <header class="preparation-heading"><h3>{{ updateOnly ? '更新接入组件' : '服务器接入' }}</h3><button class="quiet" :disabled="busy" @click="load()">重新加载</button></header>
+    <header v-if="!automaticUpdate" class="preparation-heading"><h3>{{ updateOnly ? '更新接入组件' : '服务器接入' }}</h3><button class="quiet" :disabled="busy" @click="load()">重新加载</button></header>
     <div v-if="error" class="preparation-error" role="alert"><strong>页面暂时未更新</strong><p>{{ error.message }}</p><details v-if="error.code"><summary>错误详情</summary><code>{{ error.code }} · {{ error.timestamp }}</code><code v-if="error.traceId">traceId={{ error.traceId }}</code><ErrorHelpLink :code="error.code" /></details><button class="secondary" :disabled="busy" @click="load()">重新加载</button></div>
     <p v-if="!data && busy">读取安装信息…</p>
     <template v-if="data">
-      <section class="target-overview" aria-label="安装信息">
+      <section v-if="!automaticUpdate" class="target-overview" aria-label="安装信息">
         <div class="install-location"><span>安装位置</span><code>{{ data.installRoot }}</code></div>
         <div class="target-meta"><span><small>服务器</small>{{ host.address || '控制器本机' }}<template v-if="host.sshPort">:{{ host.sshPort }}</template></span><span><small>安装权限</small>{{ data.account === 'root' ? 'root' : `${data.account} + sudo` }}</span></div>
       </section>
       <section v-if="visibleStatus" class="operation-status" :class="`status-${statusTone}`" aria-live="polite">
         <div class="status-heading"><h3>{{ statusTitle }}</h3><span class="state-tag" :class="`state-${statusTone === 'success' ? 'success' : statusTone === 'failed' ? 'error' : 'muted'}`">{{ statusLabel }}</span></div>
-        <p class="status-summary">{{ statusSummary }}</p>
+        <p v-if="visibleStatus === 'UNKNOWN' || visibleStatus === 'FAILED'" class="status-summary">{{ statusSummary }}</p>
         <div v-if="showPhaseTrack" class="phase-track" aria-label="接入进度">
           <div v-for="(phase, index) in phaseOrder" :key="phase" class="phase-item" :class="`phase-${phaseState(index)}`"><span class="phase-dot">{{ phaseState(index) === 'done' ? '✓' : index + 1 }}</span><span>{{ phaseLabels[phase] }}</span></div>
         </div>
         <p v-if="phaseNote && ['UNKNOWN', 'FAILED'].includes(visibleStatus)" class="phase-note">{{ phaseNote }}</p>
-        <div class="status-actions">
+        <div v-if="!automaticUpdate || visibleStatus === 'UNKNOWN' || visibleStatus === 'FAILED'" class="status-actions">
           <button v-if="job?.status === 'UNKNOWN'" class="primary" :disabled="busy" @click="reconcile">{{ busy ? '正在检查…' : '检查安装结果' }}</button>
           <button v-if="job?.status === 'SUCCEEDED'" class="secondary" :disabled="busy" @click="check">重新检查</button>
           <button v-if="job?.status === 'SUCCEEDED' && !updateRequested" class="secondary" :disabled="busy || !data.package.available || host.maintenance" @click="openUpdate">更新接入组件</button>
@@ -357,11 +382,11 @@ async function check() {
         <button v-if="!checkResult.ready && job?.status === 'UNKNOWN' && !canRecover" class="secondary" :disabled="busy" @click="reconcile">重新检查</button>
       </section>
       <section v-if="!blocked && (job?.status !== 'SUCCEEDED' || updateRequested)" class="install-workspace">
-        <header class="install-heading"><div><span class="section-kicker">{{ updateRequested ? '接入组件更新' : mode === 'online' ? '在线安装' : '离线安装' }}</span><h3>{{ updateRequested ? '更新此服务器的接入组件' : mode === 'online' ? '一键安装到服务器' : '下载后运行一条命令' }}</h3><p>{{ updateRequested ? '更新接入组件，保留业务软件与数据。' : mode === 'online' ? 'Ops 会连接服务器、上传材料、安装并自动检查结果。' : '适合服务器无法由 Ops 直接连接的情况。' }}</p></div><div class="method-switch"><button :class="{ active: mode === 'online' }" :disabled="busy || host.kind !== 'SSH'" @click="mode = 'online'">在线</button><button :class="{ active: mode === 'offline' }" :disabled="busy" @click="mode = 'offline'">离线</button></div></header>
+        <header class="install-heading"><div><h3>{{ updateRequested ? '更新接入组件' : mode === 'online' ? '安装接入组件' : '离线安装' }}</h3></div><div v-if="!automaticUpdate" class="method-switch"><button :class="{ active: mode === 'online' }" :disabled="busy || host.kind !== 'SSH'" @click="mode = 'online'">在线</button><button :class="{ active: mode === 'offline' }" :disabled="busy" @click="mode = 'offline'">离线</button></div></header>
         <div v-if="mode === 'online'" class="install-card">
           <form @submit.prevent="install">
             <label v-if="data.account !== 'root' && needsSudoPassword" class="password-field">{{ data.account }} 的登录密码 <span>用于 sudo 提权，仅本次使用</span><input v-model="sudoPassword" type="password" autocomplete="off" maxlength="1024" :disabled="busy" :aria-label="`${data.account} 的登录密码`" placeholder="请输入该账号的系统密码" /></label>
-            <div class="install-action"><button class="primary" type="submit" :disabled="busy || !data.package.available || host.maintenance">{{ busy ? '正在处理…' : updateRequested ? '确认更新接入组件' : '开始安装' }}</button><button v-if="updateRequested && !updateOnly" class="quiet" type="button" :disabled="busy" @click="updateRequested = false">取消更新</button></div>
+            <div class="install-action"><button class="primary" type="submit" :disabled="busy || !data.package.available || host.maintenance">{{ busy ? '正在处理…' : automaticUpdate && needsSudoPassword ? '验证并继续' : updateRequested ? '更新并继续' : '开始安装' }}</button><button v-if="updateRequested && !updateOnly" class="quiet" type="button" :disabled="busy" @click="updateRequested = false">取消更新</button></div>
           </form><p v-if="host.maintenance" class="maintenance-note">主机正在维护，请先退出维护模式。</p>
         </div>
         <div v-else class="install-card offline-card">

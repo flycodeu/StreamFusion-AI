@@ -17,10 +17,13 @@ import (
 )
 
 type preparationInput struct {
-	ExpectedVersion string `json:"expectedVersion"`
-	Key             string `json:"idempotencyKey"`
-	Confirmed       bool   `json:"confirmed"`
-	SudoPassword    string `json:"sudoPassword,omitempty"`
+	UpdateOnly            bool   `json:"updateOnly,omitempty"`
+	ExpectedCurrentSHA256 string `json:"expectedCurrentSHA256,omitempty"`
+	ExpectedPackageSHA256 string `json:"expectedPackageSHA256,omitempty"`
+	ExpectedVersion       string `json:"expectedVersion"`
+	Key                   string `json:"idempotencyKey"`
+	Confirmed             bool   `json:"confirmed"`
+	SudoPassword          string `json:"sudoPassword,omitempty"`
 }
 
 type preparationRepairInput struct {
@@ -31,6 +34,7 @@ type preparationRepairInput struct {
 }
 
 type preparationSnapshot struct {
+	UpdateFromSHA     string `json:"updateFromSHA256,omitempty"`
 	Host              target `json:"host"`
 	BinarySHA         string `json:"binarySha256"`
 	ScriptSHA         string `json:"scriptSha256"`
@@ -39,6 +43,10 @@ type preparationSnapshot struct {
 }
 
 var preparationMessages = map[string]string{
+	"PREPARATION_SUDO_DENIED":                "当前 SSH 账号无权执行组件更新，请联系服务器管理员核对授权；输入密码不会增加权限。",
+	"PREPARATION_UPDATE_UNKNOWN_BINARY":      "当前接入组件没有匹配的成功安装记录，请核对后手动更新。",
+	"PREPARATION_UPDATE_CHANGED":             "接入组件状态已变化，请重新检查后继续。",
+	"PREPARATION_UPDATE_ONLY":                "仅更新已有接入组件；目录或摘要已变化，已停止且未初始化或修复授权。",
 	"PREPARATION_READY":                      "主机接入完成，可以继续安装软件。",
 	"PREPARATION_CONNECT_FAILED":             "SSH 连接失败，请核对网络、账号、凭据和主机指纹。",
 	"PREPARATION_PLATFORM_UNSUPPORTED":       "此安装包仅支持 Linux amd64（x86_64），请核对服务器架构。",
@@ -67,7 +75,7 @@ func preparationScriptFailure(stderr string) string {
 	for _, line := range strings.Split(stderr, "\n") {
 		code := strings.TrimPrefix(strings.TrimSpace(line), "SFOPS_ERROR=")
 		switch code {
-		case "PREPARATION_INSTALL_FAILED", "PREPARATION_AUTHORIZATION_CONFLICT", "PREPARATION_RECOVERY_IDENTITY_MISMATCH":
+		case "PREPARATION_INSTALL_FAILED", "PREPARATION_AUTHORIZATION_CONFLICT", "PREPARATION_RECOVERY_IDENTITY_MISMATCH", "PREPARATION_UPDATE_ONLY":
 			return code
 		}
 	}
@@ -104,6 +112,10 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 		return
 	}
 	defer func() { in.SudoPassword = "" }()
+	if in.UpdateOnly && (!validSHA256(in.ExpectedCurrentSHA256) || !validSHA256(in.ExpectedPackageSHA256)) || !in.UpdateOnly && (in.ExpectedCurrentSHA256 != "" || in.ExpectedPackageSHA256 != "") {
+		h.fail(w, r, 400, "INVALID_INPUT", "自动更新需要已核对的当前与目标组件摘要")
+		return
+	}
 	if !in.Confirmed || !deploy.ID.MatchString(in.Key) || len(in.SudoPassword) > 1024 || strings.ContainsAny(in.SudoPassword, "\r\n\x00") {
 		h.fail(w, r, 400, "INVALID_INPUT", "请确认目标、安装目录和管理员权限后开始安装")
 		return
@@ -126,6 +138,13 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 		h.fail(w, r, 409, p.Package.Code, p.Package.Message)
 		return
 	}
+	if in.UpdateOnly {
+		if material.Binary.Hash != in.ExpectedPackageSHA256 {
+			h.fail(w, r, 409, "PREPARATION_MATERIAL_CHANGED", preparationMessage("PREPARATION_MATERIAL_CHANGED"))
+			return
+		}
+		p.UpdateFromSHA = in.ExpectedCurrentSHA256
+	}
 	archive, err := createTargetPreparationArchive(p, material)
 	if err != nil {
 		h.fail(w, r, 409, "TARGET_PACKAGE_CHANGED", "安装材料已变化，请刷新后重试")
@@ -140,6 +159,10 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 	snapshot := preparationSnapshot{Host: t, BinarySHA: material.Binary.Hash, ScriptSHA: material.Script.Hash}
 	// Observation timestamps are not part of the user's repeat-submit identity.
 	requestHash := deploy.Digest([]string{t.ID, t.Version, material.Binary.Hash, material.Script.Hash})
+	if in.UpdateOnly {
+		snapshot.UpdateFromSHA = in.ExpectedCurrentSHA256
+		requestHash = deploy.Digest([]string{t.ID, t.Version, material.Binary.Hash, material.Script.Hash, "UPDATE_ONLY", in.ExpectedCurrentSHA256})
+	}
 	job, reused, err := h.acceptPreparation(actor, in.Key, requestHash, snapshot, r.Context().Value(traceKey{}).(string))
 	if err != nil {
 		switch err.Error() {
@@ -164,7 +187,7 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	code, uncertain := h.runHostPreparation(ctx, actor, job, t, archive, material.Binary.Hash, in.SudoPassword, false)
+	code, uncertain := h.runHostPreparation(ctx, actor, job, t, archive, material.Binary.Hash, in.SudoPassword, false, snapshot)
 	in.SudoPassword = ""
 	status := "FAILED"
 	if code == "PREPARATION_READY" {
@@ -309,7 +332,14 @@ func (h *HTTP) finishReconciledPreparation(actor *session, observed target, job 
 	return tx.Commit()
 }
 
-func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job string, t target, archive *os.File, binarySHA, password string, repair bool) (string, bool) {
+func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job string, t target, archive *os.File, binarySHA, password string, repair bool, snapshots ...preparationSnapshot) (string, bool) {
+	var update *preparationSnapshot
+	if len(snapshots) > 0 && snapshots[0].UpdateFromSHA != "" {
+		update = &snapshots[0]
+		if code := h.verifyPreparationUpdate(ctx, t, job, *update); code != "" {
+			return code, false
+		}
+	}
 	client, closeClient, err := h.store.connectSSH(ctx, t)
 	if err != nil {
 		return "PREPARATION_CONNECT_FAILED", false
@@ -361,6 +391,11 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 	if runSSHCommand(client, "/bin/sh -c "+shellQuote(command), archive, io.Discard, stderr) != nil || ctx.Err() != nil {
 		return "PREPARATION_UPLOAD_FAILED", false
 	}
+	if update != nil {
+		if code := h.verifyPreparationUpdate(ctx, t, job, *update); code != "" {
+			return code, false
+		}
+	}
 	// Revalidate the actor immediately before privilege elevation.
 	h.store.mu.Lock()
 	tx, authErr := h.beginAuthorized(actor)
@@ -403,6 +438,10 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 			code := preparationScriptFailure(stderr.String())
 			h.logPreparationFailure(job, "INSTALLING_EXECUTOR", code)
 			return code, true
+		}
+		sudoDiagnostic := strings.ToLower(stderr.String())
+		if t.User != "root" && (strings.Contains(sudoDiagnostic, "not in the sudoers") || strings.Contains(sudoDiagnostic, "not allowed to execute") || strings.Contains(sudoDiagnostic, "may not run sudo")) {
+			return "PREPARATION_SUDO_DENIED", false
 		}
 		if t.User != "root" && (strings.Contains(strings.ToLower(stderr.String()), "sudo") || strings.Contains(strings.ToLower(stderr.String()), "password")) {
 			return "PREPARATION_SUDO_REQUIRED", false

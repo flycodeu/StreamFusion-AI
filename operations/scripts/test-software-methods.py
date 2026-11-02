@@ -112,6 +112,8 @@ def main():
                 rows, preflights, updates = [], [], []
                 update_job = {"id": "old-connection", "status": "SUCCEEDED", "phase": "VERIFYING_EXECUTOR", "errorCode": "", "updatedAt": stamp}
                 upgraded = False
+                update_scenario = "auto"
+                update_attempts = {}
 
                 def route_api(route):
                     nonlocal upgraded, update_job
@@ -127,14 +129,23 @@ def main():
                     elif path == f"/hosts/{host['id']}/checks":
                         route.fulfill(json={"data": fixture_host})
                     elif path == f"/hosts/{host['id']}/preparation":
-                        route.fulfill(json={"data": {"hostId": host["id"], "expectedHostVersion": fixture_host["version"], "account": "root",
-                                                      "installRoot": fixture_host["installRoot"], "remoteJob": update_job,
-                                                      "package": {"available": True, "fileName": "ui-fixture.tar.gz"}}})
+                        data = {"hostId": host["id"], "expectedHostVersion": fixture_host["version"], "account": "ubuntu",
+                                "installRoot": fixture_host["installRoot"], "remoteJob": update_job,
+                                "package": {"available": True, "fileName": "ui-fixture.tar.gz", "sha256": "b" * 64}}
+                        if "checkUpdate=1" in urlsplit(request.url).query:
+                            data["update"] = {"status": "CURRENT" if upgraded or update_scenario == "manual" else "AVAILABLE",
+                                              "currentSHA256": ("b" if upgraded else "a") * 64, "packageSHA256": "b" * 64}
+                        route.fulfill(json={"data": data})
                     elif path == f"/hosts/{host['id']}/preparation/install":
-                        updates.append({"path": path, "encrypted": bool(request.post_data_json.get("envelope"))})
-                        upgraded = True
-                        fixture_host["version"] = "2"
-                        update_job = {**update_job, "id": "explicit-update"}
+                        updates.append({"path": path, "scenario": update_scenario, "encrypted": all(request.post_data_json.get(key) for key in ("challengeId", "clientPublicKey", "iv", "ciphertext"))})
+                        update_attempts[update_scenario] = update_attempts.get(update_scenario, 0) + 1
+                        assert updates[-1]["encrypted"] and "ui-only-not-a-server-password" not in request.post_data
+                        if update_scenario == "sudo" and update_attempts[update_scenario] == 1:
+                            update_job = {**update_job, "id": "sudo-challenge", "status": "FAILED", "phase": "INSTALLING_EXECUTOR", "errorCode": "PREPARATION_SUDO_REQUIRED"}
+                        else:
+                            upgraded = True
+                            fixture_host["version"] = str(int(fixture_host["version"]) + 1)
+                            update_job = {**update_job, "id": update_scenario + "-updated", "status": "SUCCEEDED", "phase": "VERIFYING_EXECUTOR", "errorCode": ""}
                         route.fulfill(json={"data": update_job})
                     elif path == f"/hosts/{host['id']}/software-install-plans":
                         data = request.post_data_json
@@ -196,29 +207,67 @@ def main():
                 drawer.get_by_label("实例名称", exact=True).fill("更新后保留的官方实例")
                 layout(drawer, "official-default")
                 drawer.get_by_role("button", name="检查官方安装条件", exact=True).click()
-                expect(drawer.get_by_role("button", name="更新接入组件", exact=True)).to_be_visible()
-                assert not updates
-                drawer.get_by_role("button", name="更新接入组件", exact=True).click()
-                update = page.get_by_role("dialog", name="更新接入组件", exact=True)
-                expect(update.get_by_role("button", name="确认更新接入组件", exact=True)).to_be_enabled()
-                assert not updates
-                layout(update, "inline-update-confirmation")
-                update.get_by_role("button", name="确认更新接入组件", exact=True).click()
-                update.wait_for(state="hidden")
                 expect(drawer.get_by_text("预检完成", exact=True)).to_be_visible()
-                assert len(updates) == 1 and len(preflights) == 2
+                assert len(updates) == 1 and len(preflights) == 1
                 assert preflights[-1]["expectedHostVersion"] == "2" and preflights[-1]["config"]["name"] == "更新后保留的官方实例"
+                assert update_attempts["auto"] == 1
                 details = drawer.get_by_label("官方安装详情", exact=True)
-                expect(details.get_by_text("nginx", exact=True)).to_be_visible()
-                expect(details.get_by_text("libfixture-one", exact=True)).not_to_be_visible()
+                expect(details.get_by_label("安装软件包", exact=True).get_by_text("nginx", exact=True)).to_be_visible()
+                expect(details.locator(".package-dependencies").get_by_text("libfixture-one", exact=True)).not_to_be_visible()
                 expect(details.locator("pre").filter(has_text="/usr/bin/apt-get install")).to_be_visible()
-                details.get_by_text("查看 2 项依赖", exact=True).click()
-                expect(details.get_by_text("libfixture-one", exact=True)).to_be_visible()
-                details.get_by_text("查看 2 项依赖", exact=True).click()
+                details.locator(".package-dependencies summary").click()
+                expect(details.locator(".package-dependencies").get_by_text("libfixture-one", exact=True)).to_be_visible()
+                details.locator(".package-dependencies summary").click()
                 layout(drawer, "official-preflight")
                 assert not any(call["path"].endswith("/submit") for call in calls)
-                checks.extend(["official-default-without-material-or-credential-request", "explicit-inline-update-keeps-name-repreflights-new-host-version-no-auto-submit",
+                checks.extend(["official-default-without-material-or-credential-request", "automatic-passwordless-update-keeps-name-preflights-new-host-version-no-auto-submit",
                                "official-plan-displays-main-package-version-origin-commands-system-paths-dependencies-collapsed"])
+                close(drawer)
+
+                # An explicit sudo challenge pauses the same installation draft;
+                # the password below is a browser-fixture value, never a server credential.
+                update_scenario, upgraded = "sudo", False
+                fixture_host["version"] = "3"
+                update_job = {**update_job, "id": "sudo-old-connection", "status": "SUCCEEDED", "errorCode": ""}
+                software_page()
+                drawer = open_install("nginx")
+                drawer.get_by_label("实例名称", exact=True).fill("sudo后保留的官方实例")
+                drawer.get_by_role("button", name="检查官方安装条件", exact=True).click()
+                update = page.get_by_role("dialog", name="正在准备安装环境", exact=True)
+                password_input = update.get_by_label("ubuntu 的登录密码", exact=True)
+                expect(password_input).to_be_enabled()
+                assert update_attempts["sudo"] == 1 and len(preflights) == 1
+                layout(update, "inline-update-sudo-challenge")
+                password_input.fill("ui-only-not-a-server-password")
+                update.get_by_role("button", name="验证并继续", exact=True).click()
+                update.wait_for(state="hidden")
+                expect(drawer.get_by_text("预检完成", exact=True)).to_be_visible()
+                assert update_attempts["sudo"] == 2 and len(preflights) == 2
+                assert preflights[-1]["expectedHostVersion"] == "4" and preflights[-1]["config"]["name"] == "sudo后保留的官方实例"
+                assert not any(call["path"].endswith("/submit") for call in calls)
+                checks.append("automatic-sudo-challenge-pauses-and-encrypted-password-retry-keeps-draft-without-software-submit")
+                close(drawer)
+
+                # Preserve the manual fallback when the selected recipe is
+                # rejected even though the component digest check is current.
+                update_scenario, upgraded = "manual", False
+                fixture_host["version"] = "5"
+                update_job = {**update_job, "id": "manual-old-connection", "status": "SUCCEEDED", "errorCode": ""}
+                software_page()
+                drawer = open_install("nginx")
+                drawer.get_by_label("实例名称", exact=True).fill("手工兜底保留的官方实例")
+                drawer.get_by_role("button", name="检查官方安装条件", exact=True).click()
+                drawer.get_by_role("button", name="更新并继续", exact=True).click()
+                update = page.get_by_role("dialog", name="更新接入组件", exact=True)
+                expect(update.get_by_role("button", name="更新并继续", exact=True)).to_be_enabled()
+                assert update_attempts.get("manual", 0) == 0
+                update.get_by_role("button", name="更新并继续", exact=True).click()
+                update.wait_for(state="hidden")
+                expect(drawer.get_by_text("预检完成", exact=True)).to_be_visible()
+                assert update_attempts["manual"] == 1 and len(preflights) == 4
+                assert preflights[-1]["expectedHostVersion"] == "6" and preflights[-1]["config"]["name"] == "手工兜底保留的官方实例"
+                assert not any(call["path"].endswith("/submit") for call in calls)
+                checks.append("manual-compatibility-fallback-keeps-draft-and-rechecks-without-software-submit")
                 close(drawer)
 
                 drawer = open_install("nginx")
@@ -244,7 +293,7 @@ def main():
                 discovery.get_by_role("button", name="开始识别", exact=True).click()
                 expect(discovery.get_by_text("未发现受支持的软件", exact=True)).to_be_visible()
                 discovery.get_by_role("button", name="Close this dialog", exact=True).click()
-                assert len(preflights) == 2
+                assert len(preflights) == 4
                 checks.append("self-java-opens-existing-readonly-discovery-without-software-install-post")
                 software_page()
                 for key in ("maven", "codex", "claude"):

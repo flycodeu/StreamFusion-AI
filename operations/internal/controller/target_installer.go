@@ -8,6 +8,9 @@ import (
 // The host-specific wrapper reuses the existing installer and executor commands.
 // No credentials are packaged. Identifiers and paths have already been validated.
 func targetInstaller(p hostPreparation, helper string) string {
+	if p.UpdateFromSHA != "" {
+		return targetUpdateInstaller(p)
+	}
 	marker := "SFOPS_TARGET_INSTALLER_" + p.Package.SHA256
 	return strings.NewReplacer(
 		"@ROOT@", p.InstallRoot, "@CONTROLLER@", p.ControllerID,
@@ -83,6 +86,29 @@ fi
 ./streamfusion-ops target-verify --root '@ROOT@' --controller-id '@CONTROLLER@' --target-id '@TARGET@'
 printf '\n安装完成。请回到 Ops 点击“检查接入结果”，然后选择软件进行安装。\n'
 echo 'SFOPS_SETUP_READY'
+`)
+}
+
+// Automatic maintenance never initializes missing directories or edits sudo
+// policy. The shipped binary verifies ownership and takes the target lock.
+func targetUpdateInstaller(p hostPreparation) string {
+	return strings.NewReplacer("@ROOT@", p.InstallRoot, "@CONTROLLER@", p.ControllerID, "@TARGET@", p.TargetID, "@OLD@", p.UpdateFromSHA, "@NEW@", p.Package.SHA256).Replace(`#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+fail(){ printf 'SFOPS_ERROR=PREPARATION_UPDATE_ONLY\n' >&2; exit 1; }
+[[ $# == 1 && $1 == --non-interactive && $EUID == 0 ]] || fail
+[[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || fail
+sha256sum -c SHA256SUMS --status || fail
+[[ $(sha256sum ./streamfusion-ops | cut -d' ' -f1) == '@NEW@' ]] || fail
+[[ -d '@ROOT@' && ! -L '@ROOT@' && -f '@ROOT@/executor' && ! -L '@ROOT@/executor' ]] || fail
+chmod 0755 ./streamfusion-ops
+./streamfusion-ops target-verify --root '@ROOT@' --controller-id '@CONTROLLER@' --target-id '@TARGET@' || fail
+[[ $(sha256sum '@ROOT@/executor' | cut -d' ' -f1) == '@OLD@' ]] || fail
+./streamfusion-ops target-upgrade --binary "$PWD/streamfusion-ops" --sha256 '@NEW@' --expected-current-sha256 '@OLD@' --root '@ROOT@' --controller-id '@CONTROLLER@' --target-id '@TARGET@' || fail
+./streamfusion-ops target-verify --root '@ROOT@' --controller-id '@CONTROLLER@' --target-id '@TARGET@' || fail
+[[ $(sha256sum '@ROOT@/executor' | cut -d' ' -f1) == '@NEW@' ]] || fail
+printf 'SFOPS_SETUP_READY\n'
 `)
 }
 

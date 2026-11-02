@@ -9,6 +9,10 @@ export interface ErrorReferenceEntry {
 }
 
 export const errorReference: ErrorReferenceEntry[] = [
+  { code: "PREPARATION_UPDATE_UNKNOWN_BINARY", name: "组件来源未确认", category: "主机接入", meaning: "服务器组件摘要没有匹配的成功接入记录，已停止自动更新。", steps: ["核对当前主机、接入目录及原安装来源。", "在主机安装准备中核对后手动更新，再继续预检。"] },
+  { code: "PREPARATION_UPDATE_CHANGED", name: "组件状态已变化", category: "主机接入", meaning: "检查后组件或更新资格发生变化，本次自动更新停止。", steps: ["查看该主机是否有其他操作或人工更新。", "待原操作完成后重新预检，未知结果先在原作业核对。"] },
+  { code: "PREPARATION_UPDATE_ONLY", name: "自动更新条件不满足", category: "主机接入", meaning: "接入目录、身份或摘要发生变化，自动更新不会转为首次安装或权限修复。", steps: ["查看原更新作业的结果与错误详情。", "在主机安装准备中核对目录和身份后处理，保留原作业记录。"] },
+  { code: "PREPARATION_SUDO_DENIED", name: "账号无组件更新权限", category: "主机接入", meaning: "当前 SSH 账号不具备本次提权权限，输入密码不会增加权限。", steps: ["核对主机配置的 SSH 账号及 sudo 拒绝原因。", "请管理员确认组件维护权限后再继续，不要扩大已有软件操作授权。"] },
   {
     code: "PORT_OBSERVATION_DENIED", name: "监听端口读取受限", category: "端口与防火墙",
     meaning: "当前执行器收到 ss 查询的明确权限拒绝。旧版曾将其他查询失败合并为此码，需结合组件版本和查询结果核对；不能认定是 sudo 权限问题。",

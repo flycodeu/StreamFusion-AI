@@ -112,6 +112,7 @@ def main():
                     def reply(value,status=200): route.fulfill(status=status,json={'data':value})
                     if path.startswith('/auth/'): route.continue_()
                     elif path == '/hosts': reply([fixture_host])
+                    elif path == f"/hosts/{host['id']}/preparation" and urlsplit(req.url).query == 'checkUpdate=1': reply({'hostId':host['id'],'expectedHostVersion':fixture_host['version'],'update':{'status':'CURRENT'}})
                     elif path == '/software-instances': reply(env['versions'])
                     elif path == '/installation-materials': reply([material])
                     elif path == f"/hosts/{host['id']}/node-environments": reply(envs)

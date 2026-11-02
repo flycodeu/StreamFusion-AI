@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { ElDialog } from "element-plus";
 import { ApiError, request } from "./api";
+import { automaticPreparationUpdate, type AutomaticPreparationUpdate, type PreparationUpdateCheck } from "./preparationUpdate";
 import { hostTime, type Host } from "./hosts";
 import type {
   InstallationMaterial,
@@ -67,6 +68,7 @@ const discoveryPath = ref("");
 const discovery = ref<NodeDiscovery>();
 const terminalOpen = ref(false);
 const preparationOpen = ref(false);
+const automaticUpdate = ref<AutomaticPreparationUpdate>();
 const currentHost = ref(props.host);
 let revision = 0;
 let disposed = false;
@@ -408,11 +410,29 @@ function validateDraft() {
     throw new Error("请选择此版本已核验的离线材料");
 }
 async function preflight() {
+  await runPreflight(true);
+}
+async function runPreflight(allowAutomaticUpdate: boolean) {
   await act(async () => {
     validateDraft();
     const token = revision,
       d = draft.value!,
       env = environment.value;
+    if (currentHost.value.kind === "SSH") {
+      const checked = await request<PreparationUpdateCheck>(`/hosts/${currentHost.value.id}/preparation?checkUpdate=1`);
+      if (token !== revision || disposed) return;
+      if (checked.hostId !== currentHost.value.id || checked.expectedHostVersion !== currentHost.value.version)
+        throw new ApiError("主机配置已变化，请重新选择主机", "VERSION_CONFLICT", "", new Date().toISOString());
+      if (checked.update?.status === "AVAILABLE" && allowAutomaticUpdate) {
+        const update = automaticPreparationUpdate(checked);
+        if (!update) throw new Error("组件更新信息不完整，请重新预检");
+        automaticUpdate.value = update;
+        preparationOpen.value = true;
+        return;
+      }
+      if (checked.update && checked.update.status !== "CURRENT")
+        throw new ApiError("接入组件需要核对，请查看主机安装准备", checked.update.code || "EXECUTOR_UPGRADE_REQUIRED", "", new Date().toISOString());
+    }
     let result: NodePlan;
     if (d.action === "INSTALL_NODE") {
       if (!env || !recipe.value)
@@ -653,14 +673,20 @@ async function showJob(item: SoftwareJob) {
   });
 }
 async function updatedPreparation() {
-  preparationOpen.value = false;
+  const token = revision, hostId = currentHost.value.id;
+  let ready = false;
   await act(async () => {
     const hosts = await request<Host[]>("/hosts");
-    currentHost.value =
-      hosts.find((h) => h.id === currentHost.value.id) || currentHost.value;
+    if (token !== revision || disposed) return;
+    const host = hosts.find((h) => h.id === hostId);
+    if (!host || host.capabilities?.mutation.status !== "AVAILABLE") return;
+    currentHost.value = host;
     await refresh();
+    if (token !== revision || disposed) return;
+    preparationOpen.value = false;
+    ready = true;
   });
-  if (draft.value && !attempted.value) await preflight();
+  if (ready && draft.value && !attempted.value) await runPreflight(false);
 }
 function poll() {
   timer = setTimeout(async () => {
@@ -686,6 +712,8 @@ watch(
   () => props.host.id,
   () => {
     revision++;
+    automaticUpdate.value = undefined;
+    preparationOpen.value = false;
     initialIntent.value = undefined;
     continuationRetry.value = undefined;
     currentHost.value = props.host;
@@ -746,7 +774,7 @@ poll();
           )
         "
         class="quiet"
-        @click="preparationOpen = true"
+        @click="automaticUpdate = undefined; preparationOpen = true"
       >
         更新接入组件
       </button>
@@ -1063,7 +1091,7 @@ poll();
       @change="changedDraft"
       @preflight="preflight"
       @submit="submit"
-      @prepare="preparationOpen = true"
+      @prepare="automaticUpdate = undefined; preparationOpen = true"
       @material="materialReady"
       @initial-material="initialMaterialReady"
       @material-busy="busy = $event"
@@ -1135,12 +1163,15 @@ poll();
     </ElDialog>
     <ElDialog
       v-model="preparationOpen"
-      title="更新接入组件"
+      :title="automaticUpdate ? '正在准备安装环境' : '更新接入组件'"
       width="min(720px,94vw)"
       align-center
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
       ><HostPreparationPanel
         v-if="preparationOpen"
         :host="currentHost"
+        :automatic-update="automaticUpdate"
         update-only
         @updated="updatedPreparation"
     /></ElDialog>

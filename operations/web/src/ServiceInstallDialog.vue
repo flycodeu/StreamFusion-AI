@@ -49,6 +49,7 @@ const {
   configuration,
   sourceType,
   preparationOpen,
+  automaticUpdate,
   readinessHost,
   preparationChecked,
   materials,
@@ -108,7 +109,7 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
   <ElDrawer
     :model-value="open"
     :title="`安装 ${recipe?.name || '服务'}`"
-    size="min(780px,100vw)"
+    size="min(960px,100vw)"
     destroy-on-close
     :close-on-click-modal="!busy"
     :close-on-press-escape="!busy"
@@ -153,11 +154,10 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
         ><code v-if="actionError.traceId"
           >traceId={{ actionError.traceId }}</code
         >
-        <p v-if="actionError.code === 'EXECUTOR_UPGRADE_REQUIRED'" class="install-note">主机已接入；当前组件尚不支持本次安装能力。请在此更新接入组件，已有授权、业务软件和数据保留。</p>
-        <button v-if="actionError.code === 'EXECUTOR_UPGRADE_REQUIRED'" class="secondary" :disabled="busy" @click="preparationOpen = true">更新接入组件</button>
+        <button v-if="actionError.code === 'EXECUTOR_UPGRADE_REQUIRED'" class="secondary" :disabled="busy" @click="automaticUpdate = undefined; preparationOpen = true">更新并继续</button>
         <button
           v-else-if="
-            /EXECUTOR|SUDO|DOCKER|AUTHORIZATION|TARGET_PACKAGE/.test(
+            /EXECUTOR|SUDO|DOCKER|AUTHORIZATION|TARGET_PACKAGE|PREPARATION|HOST_BUSY|HOST_MAINTENANCE/.test(
               actionError.code,
             )
           "
@@ -181,7 +181,6 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
       </section>
       <section v-else-if="method === 'OFFICIAL' && step === 0" class="install-panel" aria-label="官方安装配置">
         <template v-if="officialRecipe">
-          <p class="install-note">目标服务器联网，Ops 执行固定官方命令，使用系统目录与软件包管理器。预检会列出实际软件包版本、来源和影响范围。</p>
           <label v-if="(props.officialRecipes?.length || 0) > 1">官方配方<select v-model="officialVersion" aria-label="官方配方" :disabled="busy"><option v-for="item in props.officialRecipes" :key="item.version" :value="item.version">{{ item.name }}</option></select></label>
           <label>实例名称<input v-model="configuration.name" aria-label="实例名称" :disabled="busy" maxlength="120" /></label>
           <a :href="officialRecipe.officialUrl" target="_blank" rel="noopener noreferrer">官方安装说明 ↗</a>
@@ -795,8 +794,8 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
       </div></template
     >
   </ElDrawer>
-  <ElDialog v-model="preparationOpen" title="更新接入组件" width="min(680px,96vw)" destroy-on-close>
-    <HostPreparationPanel v-if="preparationOpen && props.host" :host="readinessHost || props.host" update-only @updated="preparationChecked" />
+  <ElDialog v-model="preparationOpen" :title="automaticUpdate ? '正在准备安装环境' : '更新接入组件'" width="min(680px,96vw)" :close-on-click-modal="false" :close-on-press-escape="false" destroy-on-close>
+    <HostPreparationPanel v-if="props.open && preparationOpen && props.host" :host="readinessHost || props.host" :automatic-update="automaticUpdate" update-only @updated="preparationChecked" />
   </ElDialog>
 </template>
 

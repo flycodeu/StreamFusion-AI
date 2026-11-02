@@ -42,12 +42,12 @@ async function flush() {
 function preparation(id = "host-a", remoteJob) {
   return {
     hostId: id, expectedHostVersion: "1", account: "ubuntu", installRoot: "/opt/streamfusion-ops-target", remoteJob,
-    package: { available: true, fileName: `${id}.tar.gz`, downloadUrl: `/ops/api/v1/hosts/${id}/preparation/download?expectedVersion=1` },
+    package: { available: true, sha256: "b".repeat(64), fileName: `${id}.tar.gz`, downloadUrl: `/ops/api/v1/hosts/${id}/preparation/download?expectedVersion=1` },
   };
 }
 
 function harness(request, fetch = async () => Response.json({}), options = {}) {
-  const props = { host: { id: "host-a", version: "1", kind: "SSH" }, updateOnly: options.updateOnly };
+  const props = { host: { id: "host-a", version: "1", kind: "SSH" }, updateOnly: options.updateOnly, automaticUpdate: options.automaticUpdate };
   const timers = new Map();
   const clicks = [];
   const emitted = [];
@@ -427,4 +427,86 @@ test("successful reconciliation clears the previous failure and refreshes host r
   assert.equal(h.panel.checkResult.value, undefined);
   assert.equal(h.panel.data.value.remoteJob.status, "SUCCEEDED");
   assert.equal(checks, 1);
+});
+
+const automaticUpdate = { hostId: "host-a", expectedHostVersion: "1", currentSHA256: "a".repeat(64), packageSHA256: "b".repeat(64) };
+
+test("approved automatic update sends frozen hashes once and resumes only its completed job", async () => {
+  let latest = { id: "old", status: "SUCCEEDED" };
+  const installs = [];
+  const h = harness(async (path, method, input) => {
+    if (path.endsWith("/checks")) return {};
+    if (path.endsWith("/install")) { installs.push({ ...input }); return latest = { id: "auto", status: "SUCCEEDED" }; }
+    return preparation("host-a", latest);
+  }, undefined, { updateOnly: true, automaticUpdate });
+  await flush(); await flush();
+  assert.equal(installs.length, 1);
+  assert.equal(installs[0].updateOnly, true);
+  assert.equal(installs[0].expectedCurrentSHA256, automaticUpdate.currentSHA256);
+  assert.equal(installs[0].expectedPackageSHA256, automaticUpdate.packageSHA256);
+  assert.equal(installs[0].sudoPassword, "");
+  assert.equal(h.emitted.filter((name) => name === "updated").length, 1);
+  await h.panel.load(); await flush();
+  assert.equal(installs.length, 1);
+  h.unmount();
+});
+
+test("automatic update stops for sudo and uses a fresh key only after explicit password input", async () => {
+  let latest = { id: "old", status: "SUCCEEDED" };
+  const installs = [];
+  const h = harness(async (path, method, input) => {
+    if (path.endsWith("/checks")) return {};
+    if (path.endsWith("/install")) {
+      installs.push({ ...input });
+      return latest = input.sudoPassword ? { id: "done", status: "SUCCEEDED" } : { id: "sudo", status: "FAILED", errorCode: "PREPARATION_SUDO_REQUIRED" };
+    }
+    return preparation("host-a", latest);
+  }, undefined, { updateOnly: true, automaticUpdate });
+  await flush(); await flush();
+  assert.equal(installs.length, 1);
+  assert.equal(h.panel.needsSudoPassword.value, true);
+  assert.equal(h.emitted.includes("updated"), false);
+  await h.panel.load(); assert.equal(installs.length, 1);
+  h.panel.sudoPassword.value = "transient-password";
+  await h.panel.install();
+  assert.equal(installs.length, 2);
+  assert.notEqual(installs[0].idempotencyKey, installs[1].idempotencyKey);
+  assert.equal(h.panel.sudoPassword.value, "");
+  assert.equal(h.emitted.filter((name) => name === "updated").length, 1);
+  h.unmount();
+});
+
+test("automatic update refuses changed materials, another host and unresolved jobs", async () => {
+  for (const mode of ["material", "host", "unknown"]) {
+    const calls = [];
+    const h = harness(async (path, method) => {
+      calls.push({path,method});
+      const value = preparation("host-a", { id: "old", status: mode === "unknown" ? "UNKNOWN" : "SUCCEEDED" });
+      if (mode === "material") value.package.sha256 = "c".repeat(64);
+      if (mode === "host") value.hostId = "host-b";
+      return value;
+    }, undefined, { updateOnly: true, automaticUpdate });
+    await flush(); await flush();
+    assert.equal(calls.some((item) => item.path.endsWith("/install")), false, mode);
+    assert.equal(h.emitted.includes("updated"), false, mode);
+    h.unmount();
+  }
+});
+
+test("confirming an unknown automatic update resumes once without replaying installation", async () => {
+ let latest={id:"old",status:"SUCCEEDED"};let installs=0,reconciles=0;
+ const h=harness(async(path)=>{
+  if(path.endsWith("/checks"))return {};
+  if(path.endsWith("/install")){installs++;return latest={id:"unknown-auto",status:"UNKNOWN"};}
+  if(path.endsWith("/reconcile")){reconciles++;return latest={id:"unknown-auto",status:"SUCCEEDED"};}
+  return preparation("host-a",latest);
+ },undefined,{updateOnly:true,automaticUpdate});
+ await flush();await flush();
+ assert.equal(installs,1);assert.equal(h.emitted.includes("updated"),false);
+ await h.panel.reconcile();
+ assert.equal(installs,1);assert.equal(reconciles,1);
+ assert.equal(h.panel.updateRequested.value,false);
+ assert.equal(h.emitted.filter(x=>x==="updated").length,1);
+ await h.panel.load();assert.equal(installs,1);
+ h.unmount();
 });

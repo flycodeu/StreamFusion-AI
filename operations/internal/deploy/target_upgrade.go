@@ -13,11 +13,14 @@ import (
 // UpgradeTarget is an explicit local root maintenance command. It changes only
 // the protected executor binary, preserves one previous binary, and never adds
 // sudo permissions or modifies software/job/data ownership.
-func UpgradeTarget(root, sourceBinary, expectedSHA, controllerID, targetID string) (string, error) {
+func UpgradeTarget(root, sourceBinary, expectedSHA, controllerID, targetID string, expectedCurrentSHA ...string) (string, error) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || os.Geteuid() != 0 {
 		return "", errors.New("LINUX_ROOT_REQUIRED")
 	}
 	if !ValidRoot(root) || !Hex.MatchString(expectedSHA) || !ID.MatchString(controllerID) || !ID.MatchString(targetID) || !filepath.IsAbs(sourceBinary) || filepath.Clean(sourceBinary) != sourceBinary {
+		return "", errors.New("TARGET_UPGRADE_INPUT_INVALID")
+	}
+	if len(expectedCurrentSHA) > 1 || len(expectedCurrentSHA) == 1 && expectedCurrentSHA[0] != "" && !Hex.MatchString(expectedCurrentSHA[0]) {
 		return "", errors.New("TARGET_UPGRADE_INPUT_INVALID")
 	}
 	if err := secureAncestors(filepath.Join(root, "executor")); err != nil {
@@ -91,7 +94,13 @@ func UpgradeTarget(root, sourceBinary, expectedSHA, controllerID, targetID strin
 	if err != nil || currentSize > 256<<20 {
 		return "", errors.New("TARGET_UPGRADE_CURRENT_BINARY_INVALID")
 	}
-	if hex.EncodeToString(currentHash.Sum(nil)) == expectedSHA {
+	currentSHA := hex.EncodeToString(currentHash.Sum(nil))
+	// Compare under the same target lock as the replacement. An administrator
+	// may have upgraded the binary since the controller's read-only check.
+	if len(expectedCurrentSHA) == 1 && expectedCurrentSHA[0] != "" && currentSHA != expectedCurrentSHA[0] {
+		return "", errors.New("TARGET_UPGRADE_CURRENT_HASH_MISMATCH")
+	}
+	if currentSHA == expectedSHA {
 		// A repeated maintenance command must preserve the actual rollback
 		// point, rather than replacing it with another copy of the new binary.
 		if _, err = os.Lstat(backup); err == nil {

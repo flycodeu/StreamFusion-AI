@@ -37,6 +37,7 @@ function load(s, imports = {}, props = {}) {
 const model = load(
   await readFile(new URL("../src/nodeEnvironment.ts", import.meta.url), "utf8"),
 );
+const preparationUpdate = load(await readFile(new URL("../src/preparationUpdate.ts", import.meta.url), "utf8"));
 const source = (
   await readFile(
     new URL("../src/NodeEnvironmentPanel.vue", import.meta.url),
@@ -74,7 +75,7 @@ function harness(options = {}) {
   const calls = [],
     stops = [],
     props = vue.reactive({
-      host: { id: "host", version: "2", sshUser: "ubuntu" },
+      host: { id: "host", version: "2", sshUser: "ubuntu", kind: options.hostKind },
     });
   const env = structuredClone({ ...base, ...options.env });
   const request = async (path, method = "GET", data) => {
@@ -106,11 +107,12 @@ function harness(options = {}) {
     () =>
       load(
         source +
-          "\nexport const flow={draft,plan,environment,error,attempted,openAction,preflight,submit,source,matchingMaterials,job,initialIntent,continuationRetry,continueInitialInstallation};",
+          "\nexport const flow={draft,plan,environment,error,attempted,openAction,preflight,submit,source,matchingMaterials,job,initialIntent,continuationRetry,continueInitialInstallation,automaticUpdate,preparationOpen,updatedPreparation};",
         {
           vue: { ...vue, onUnmounted: (fn) => stops.push(fn) },
           "./api": { request, ApiError: class extends Error {} },
           "./nodeEnvironment": model,
+          "./preparationUpdate": preparationUpdate,
           "./hosts": {},
         },
         props,
@@ -485,5 +487,22 @@ test("cancelled first initialization stops the continuation without submitting N
     h.calls.some((c) => c.method === "POST"),
     false,
   );
+  h.dispose();
+});
+
+test("Node preflight resumes after component update without submitting its operation", async () => {
+  let updated=false;
+  const h=harness({hostKind:"SSH",request:(path)=>{
+    if(path.includes("?checkUpdate=1")) return {hostId:"host",expectedHostVersion:"2",update:updated?{status:"CURRENT"}:{status:"AVAILABLE",currentSHA256:"a".repeat(64),packageSHA256:"b".repeat(64)}};
+    if(path==="/hosts")return [{id:"host",version:"2",kind:"SSH",capabilities:{mutation:{status:"AVAILABLE"}}}];
+  }});
+  await flush();h.flow.openAction("INSTALL_NODE");await h.flow.preflight();
+  assert.equal(h.flow.preparationOpen.value,true);
+  assert.equal(h.flow.plan.value,undefined);
+  const version=h.flow.draft.value.nodeVersion;
+  updated=true;await h.flow.updatedPreparation();
+  assert.equal(h.flow.draft.value.nodeVersion,version);
+  assert.equal(h.flow.plan.value.id,"plan");
+  assert.equal(h.calls.some(c=>c.path.endsWith("/submit")),false);
   h.dispose();
 });

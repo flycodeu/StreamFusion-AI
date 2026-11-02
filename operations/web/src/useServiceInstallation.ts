@@ -1,5 +1,6 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { ApiError, request, upload } from "./api";
+import { automaticPreparationUpdate, type AutomaticPreparationUpdate, type PreparationUpdateCheck } from "./preparationUpdate";
 import type { Host, SSHCredential } from "./hosts";
 import {
   initialServiceConfiguration,
@@ -41,6 +42,7 @@ export function useServiceInstallation(
   const sourceType = ref<InstallationSource["type"]>("ARCHIVE");
   const official = computed(() => props.method === "OFFICIAL");
   const preparationOpen = ref(false);
+  const automaticUpdate = ref<AutomaticPreparationUpdate>();
   const readinessHost = ref<Host>();
   const materials = ref<InstallationMaterial[]>([]);
   const materialId = ref("");
@@ -217,12 +219,13 @@ export function useServiceInstallation(
       uploadController.value?.abort();
       credentialSecret.value = "";
       credentialRole.value = undefined;
+      preparationOpen.value = false;
+      automaticUpdate.value = undefined;
       if (!props.open || !props.recipe || !props.host) return;
       const revision = generation;
       configuration.value = official.value ? initialOfficialConfiguration(props.recipe) :
         initialServiceConfiguration(props.recipe, props.host.address);
       readinessHost.value = undefined;
-      preparationOpen.value = false;
       step.value = 0;
       plan.value = undefined;
       receipt.value = undefined;
@@ -696,6 +699,9 @@ export function useServiceInstallation(
     await preflight();
   }
   async function preflight() {
+    await runPreflight(true);
+  }
+  async function runPreflight(allowAutomaticUpdate: boolean) {
     if (!props.host || !props.recipe || !configuration.value || props.method === "SELF") return;
     if (official.value) {
       fieldError.value = validateStep();
@@ -703,6 +709,23 @@ export function useServiceInstallation(
     }
     await act(async () => {
       const revision = generation;
+      if (props.host!.kind === "SSH") {
+        const checked = await request<PreparationUpdateCheck>(`/hosts/${props.host!.id}/preparation?checkUpdate=1`);
+        if (!current(revision)) return;
+        if (checked.hostId !== props.host!.id || checked.expectedHostVersion !== (readinessHost.value?.version || props.host!.version)) {
+          throw new ApiError("主机配置已变化，请重新选择主机", "VERSION_CONFLICT", "", new Date().toISOString());
+        }
+        if (checked.update?.status === "AVAILABLE" && allowAutomaticUpdate) {
+          const update = automaticPreparationUpdate(checked);
+          if (!update) throw new Error("组件更新信息不完整，请重新预检");
+          automaticUpdate.value = update;
+          preparationOpen.value = true;
+          return;
+        }
+        if (checked.update && checked.update.status !== "CURRENT") {
+          throw new ApiError("接入组件需要核对，请查看主机安装准备", checked.update.code || "EXECUTOR_UPGRADE_REQUIRED", "", new Date().toISOString());
+        }
+      }
       const result = await request<ServiceInstallPlan>(
         `/hosts/${props.host!.id}/software-install-plans`,
         "POST",
@@ -773,7 +796,7 @@ export function useServiceInstallation(
       plan.value = undefined;
       refreshed = true;
     });
-    if (refreshed && !receipt.value) await preflight();
+    if (refreshed && !receipt.value) await runPreflight(false);
   }
   async function jobAction(action: "reconcile" | "cancel") {
     if (!receipt.value) return;
@@ -808,6 +831,7 @@ export function useServiceInstallation(
     sourceType,
     official,
     preparationOpen,
+    automaticUpdate,
     readinessHost,
     preparationChecked,
     materials,

@@ -3,6 +3,7 @@ package controller
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -54,6 +55,8 @@ type targetPreparationStep struct {
 }
 
 type hostPreparation struct {
+	Update              *preparationUpdate             `json:"update,omitempty"`
+	UpdateFromSHA       string                         `json:"-"`
 	HostID              string                         `json:"hostId"`
 	ExpectedHostVersion string                         `json:"expectedHostVersion"`
 	ControllerID        string                         `json:"controllerId"`
@@ -271,6 +274,16 @@ func (h *HTTP) hostPreparation(w http.ResponseWriter, r *http.Request, id string
 	p, _ := preparationForHost(t, h.store.controllerID(), h.targetPackageDir)
 	p.RepairSHA = h.preparationRepairSHA(t)
 	p.RemoteJob = h.latestPreparationJob(id)
+	if r.URL.Query().Get("checkUpdate") == "1" {
+		if !h.acquireHostCheck(w, r) {
+			return
+		}
+		defer func() { <-h.hostCheckSlots }()
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		update := h.checkPreparationUpdate(ctx, t, "")
+		p.Update = &update
+	}
 	h.success(w, r, p)
 }
 

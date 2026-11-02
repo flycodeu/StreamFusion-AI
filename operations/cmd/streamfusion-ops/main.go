@@ -121,6 +121,7 @@ func run(args []string) error {
 		root := f.String("root", "", "已有受管目标目录")
 		binary := f.String("binary", "", "新的Linux执行器二进制")
 		sha256 := f.String("sha256", "", "新二进制的可信SHA-256")
+		expectedCurrent := f.String("expected-current-sha256", "", "可选：锁内核对现有执行器SHA-256，变化时停止更新")
 		cid := f.String("controller-id", "", "已有控制器ID")
 		tid := f.String("target-id", "", "已有目标ID")
 		if err := f.Parse(args[1:]); err != nil {
@@ -129,7 +130,7 @@ func run(args []string) error {
 		if f.NArg() != 0 {
 			return errors.New("NO_POSITIONAL_ARGUMENTS")
 		}
-		backup, err := deploy.UpgradeTarget(*root, *binary, *sha256, *cid, *tid)
+		backup, err := deploy.UpgradeTarget(*root, *binary, *sha256, *cid, *tid, *expectedCurrent)
 		if err != nil {
 			return err
 		}
