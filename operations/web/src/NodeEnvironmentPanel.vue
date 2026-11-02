@@ -80,6 +80,7 @@ const discoveryPath = ref("");
 const discovery = ref<NodeDiscovery>();
 const terminalOpen = ref(false);
 const preparationOpen = ref(false);
+const preparationBusy = ref(false);
 const automaticUpdate = ref<AutomaticPreparationUpdate>();
 const currentHost = ref(props.host);
 let revision = 0;
@@ -1162,7 +1163,10 @@ poll();
           : ''
       "
       :host="currentHost"
-      @close="draft = undefined"
+      :preparing="preparationOpen"
+      :preparation-busy="preparationBusy"
+      @close="preparationOpen = false; draft = undefined"
+      @back="preparationOpen = false"
       @change="changedDraft"
       @preflight="preflight"
       @submit="submit"
@@ -1173,7 +1177,18 @@ poll();
       @material="materialReady"
       @initial-material="initialMaterialReady"
       @material-busy="busy = $event"
-    />
+    >
+      <template #preparation>
+        <HostPreparationPanel
+          v-if="preparationOpen"
+          :host="currentHost"
+          :automatic-update="automaticUpdate"
+          update-only
+          @close-blocked="preparationBusy = $event"
+          @updated="updatedPreparation"
+        />
+      </template>
+    </NodeVersionDialog>
     <ElDialog
       v-model="discoveryOpen"
       title="检测已有 Node 安装"
@@ -1242,6 +1257,7 @@ poll();
       </details>
     </ElDialog>
     <ElDialog
+      v-if="!draft"
       v-model="preparationOpen"
       append-to-body
       :title="automaticUpdate ? '正在准备安装环境' : '更新接入组件'"

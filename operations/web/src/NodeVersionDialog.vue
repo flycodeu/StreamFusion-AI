@@ -32,6 +32,8 @@ const props = defineProps<{
   errorCode?: string;
   diagnostic?: string;
   host: Host;
+  preparing?: boolean;
+  preparationBusy?: boolean;
 }>();
 const emit = defineEmits<{
   close: [];
@@ -39,13 +41,14 @@ const emit = defineEmits<{
   preflight: [];
   submit: [];
   prepare: [];
+  back: [];
   material: [InstallationMaterial];
   initialMaterial: [InstallationMaterial];
   materialBusy: [boolean];
 }>();
 const initialDraft = JSON.stringify(props.draft);
 async function confirmClose(done?: () => void) {
-  if (props.busy || props.attempted) return;
+  if (props.busy || props.attempted || props.preparationBusy) return;
   if (JSON.stringify(props.draft) !== initialDraft) {
     try { await ElMessageBox.confirm("放弃本次修改？", "关闭安装窗口", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); } catch { return; }
   }
@@ -107,14 +110,19 @@ const canSubmit = computed(
     :title="nodeActionLabels[draft.action]"
     size="min(960px, 100vw)"
     append-to-body
+    modal-class="node-action-overlay"
     class="node-action-drawer"
-    :close-on-click-modal="!busy && !attempted"
+    :close-on-click-modal="!busy && !attempted && !preparationBusy"
     :before-close="confirmClose"
-    :close-on-press-escape="!busy && !attempted"
-    :show-close="!busy && !attempted"
+    :close-on-press-escape="!busy && !attempted && !preparationBusy"
+    :show-close="!busy && !attempted && !preparationBusy"
     @close="emit('close')"
   >
+    <section v-if="preparing" aria-label="接入组件更新">
+      <slot name="preparation" />
+    </section>
     <form
+      v-else
       id="node-action-form"
       class="node-form"
       :class="{ 'has-plan': plan }"
@@ -423,7 +431,10 @@ const canSubmit = computed(
       <p v-if="attempted" class="hint">提交结果未确认，可核对原请求。</p>
     </form>
     <template #footer>
-      <footer>
+      <footer v-if="preparing">
+        <button class="secondary" :disabled="busy || preparationBusy" @click="emit('back')">返回</button>
+      </footer>
+      <footer v-else>
         <button
           type="button"
           class="secondary"
@@ -456,6 +467,9 @@ const canSubmit = computed(
 </template>
 
 <style scoped>
+:global(.node-action-overlay) {
+  background: transparent;
+}
 .node-form,
 fieldset,
 .initial-version {
