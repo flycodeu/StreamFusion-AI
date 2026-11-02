@@ -108,10 +108,11 @@ def main():
                 delay_registry = False
                 update_required = False
                 pending_update_request = None
+                reject_registry_submission = False
                 update_job = {'id':'update-fixture','status':'FAILED','phase':'CONNECTING','errorCode':'PREPARATION_SUDO_REQUIRED','updatedAt':stamp}
                 pending_registry_request = None
                 def route_api(route):
-                    nonlocal initialized, delay_registry, pending_registry_request, pending_update_request
+                    nonlocal initialized, delay_registry, pending_registry_request, pending_update_request, reject_registry_submission
                     req = route.request
                     path = urlsplit(req.url).path.removeprefix('/ops/api/v1')
                     data = req.post_data_json if req.method == 'POST' else None
@@ -156,7 +157,11 @@ def main():
                         plans[plan_id]=data
                         reply({'id':plan_id,'environmentId':env['id'],'expiresAt':expiry,'checks':[{'key':'FIXTURE','status':'PASSED','message':'界面夹具预检，无目标执行'}],'commands':([{'executable':'install','args':['-m','600','nvm.sh',root+'/nvm/nvm.sh']},{'executable':'install','args':['-m','700','nvm-exec',root+'/nvm/nvm-exec']}] if data.get('action') in ('INITIALIZE','UPDATE_NVM') else []),'removedPaths':[root] if data.get('deleteData') else [],'registry':next((x for x in registries if x['id']==data.get('registryId')),None),'change':{'context':context},'definition':next((r for r in catalog['node'] if r['version']==data.get('recipeVersion')),None),'source':data.get('source'),'config':data.get('config'),'node':{**context,'environmentVersion':env['version'],'makeDefault':data.get('node',{}).get('makeDefault',False),'connectTerminal':data.get('node',{}).get('connectTerminal',False)},'paths':{'root':root+'/nvm/versions/node/'+data['recipeVersion']} if data.get('recipeVersion') else None})
                     elif path.endswith('/submit'):
-                        intent=plans[path.split('/')[-2]];submissions.append({'intent':intent,'submit':data})
+                        intent=plans[path.split('/')[-2]]
+                        if intent.get('action')=='SET_NPM_REGISTRY' and reject_registry_submission:
+                            reject_registry_submission=False
+                            route.fulfill(status=409,json={'code':'NODE_REGISTRY_CHANGED','msg':'镜像已变化，请重新预检'});return
+                        submissions.append({'intent':intent,'submit':data})
                         if '/software-install-plans/' in path:
                             assert intent['node']['connectTerminal'] is True
                             env['observation']['terminal']={'status':'CONNECTED','profiles':[]}
@@ -358,6 +363,14 @@ def main():
                 assert len(submissions)==submitted_before_update
                 checks.append('inline-update-blocks-close-and-resumes-preflight-without-submitting-registry')
                 assert env['observation']['registry']['status']=='DEFAULT'
+                reject_registry_submission=True
+                switch.get_by_role('button',name='确认执行',exact=True).click()
+                expect(switch.get_by_role('button',name='检查安装条件',exact=True)).to_be_enabled()
+                expect(switch.get_by_text('镜像已变化，请重新预检',exact=False)).to_be_visible()
+                assert len(submissions)==submitted_before_update
+                switch.get_by_role('button',name='检查安装条件',exact=True).click()
+                expect(switch.get_by_text('http://192.0.2.50:4873/npm-v2/',exact=True)).to_be_visible()
+                checks.append('registry-rejected-before-queue-preserves-choice-and-allows-new-preflight')
                 switch.get_by_role('button',name='确认执行',exact=True).click();switch.wait_for(state='hidden')
                 expect(custom.get_by_text('当前',exact=True)).to_be_visible()
                 layout(registry,'npm-registry')

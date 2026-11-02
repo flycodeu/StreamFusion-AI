@@ -600,8 +600,11 @@ export function useServiceInstallation(
             ) ||
             Date.now() >= deadline
           )
-            throw new Error(
-              `${material.errorCode || material.status}：官方材料尚未就绪，请重试核对原记录`,
+            throw new ApiError(
+              "官方材料未就绪，请查看错误详情",
+              material.errorCode || material.status,
+              "",
+              new Date().toISOString(),
             );
           officialProgress.value = "等待原材料下载与校验结果";
           material = await pollMaterial(material.id, controller.signal);

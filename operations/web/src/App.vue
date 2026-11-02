@@ -219,7 +219,63 @@ const actionLabels: Record<string, string> = {
   DEPENDENCY_CHECKED: "检测依赖连通",
   DEPLOYMENT_CREATED: "创建发布作业",
   JOB_CANCELLED: "取消发布作业",
+  EXTERNAL_BINDING_REGISTERED: "登记外部依赖",
+  INSTANCE_DRAFT_SAVED: "保存应用草稿",
+  ARTIFACT_IMPORTED: "导入版本制品",
+  JAR_PACKAGED: "打包 Java 制品",
+  PUBLISH_ACCEPTED: "提交发布",
+  PUBLISH_RESULT: "发布结果",
+  MONITORING_CHANGED: "修改自动检测",
+  OBSERVATION_BATCH_ACCEPTED: "提交批量检测",
+  OBSERVATION_BATCH_CANCELLED: "取消批量检测",
+  INSTALL_MATERIAL_CREATED: "登记安装材料",
+  INSTALL_MATERIAL_VERIFIED: "校验安装材料",
+  INSTALL_MATERIAL_DELETED: "删除安装材料",
+  INSTALL_MATERIAL_LIBRARY_IMPORTED: "导入内置安装材料",
+  OFFICIAL_MATERIAL_PREPARED: "获取官方安装材料",
+  SOFTWARE_INSTALL_PLAN_CREATED: "预检软件安装",
+  SOFTWARE_UNINSTALL_ACCEPTED: "提交软件卸载",
+  SOFTWARE_UNINSTALL_RESULT: "软件卸载结果",
+  SOFTWARE_CONFIGURATION_PLAN_CREATED: "预检软件配置",
+  SOFTWARE_CONFIGURATION_ACCEPTED: "提交软件配置",
+  SOFTWARE_CONFIGURATION_RESULT: "软件配置结果",
+  SOFTWARE_DOCKER_ACCESS_GRANT_ACCEPTED: "提交 Docker 账号授权",
+  SOFTWARE_DOCKER_ACCESS_REVOKE_ACCEPTED: "提交撤销 Docker 账号授权",
+  SOFTWARE_DOCKER_ACCESS_RESULT: "Docker 账号权限结果",
+  SOFTWARE_DOCKER_ACCESS_NOT_STARTED: "Docker 账号授权未执行",
+  NODE_ENVIRONMENT_OBSERVED: "检测 Node 环境",
+  NODE_ENVIRONMENT_REGISTERED: "登记 Node 环境",
+  NODE_ENVIRONMENT_RELEASED: "解除 Node 环境登记",
+  NODE_ENVIRONMENT_PLAN_CREATED: "预检 Node 操作",
+  NODE_ENVIRONMENT_CHANGE_ACCEPTED: "提交 Node 操作",
+  NODE_ENVIRONMENT_CHANGE_RESULT: "Node 操作结果",
+  NODE_REGISTRY_CREATED: "添加 npm 镜像地址",
+  NODE_REGISTRY_UPDATED: "修改 npm 镜像地址",
+  NODE_REGISTRY_DELETED: "删除 npm 镜像地址",
+  NODE_REGISTRY_NOT_STARTED: "npm 镜像切换未执行",
+  PLUGIN_PLAN_CREATED: "预检工具安装",
+  PLUGIN_INSTALL_ACCEPTED: "提交工具安装",
+  PLUGIN_INSTALL_RESULT: "工具安装结果",
+  PLUGIN_REMOVE_ACCEPTED: "提交工具卸载",
+  PLUGIN_REMOVE_RESULT: "工具卸载结果",
+  PLUGIN_VERIFIED: "校验工具环境",
+  PLUGIN_JOB_CANCELLED: "取消工具作业",
+  PREVIEW_HANDOFF: "登记预览服务",
+  ZLM_HANDOFF: "登记媒体服务",
 };
+function auditResult(action: string, result: string) {
+  if (["SUCCESS", "SUCCEEDED", "READY"].includes(result) || (action === "HOST_PORTS_OBSERVED" && !result))
+    return { label: "成功", tone: "state-success" };
+  if (action === "HOST_SOFTWARE_DISCOVERED") {
+    const discovery = /^SUCCESS candidates=\d+ unavailable=(\d+) limited=(true|false)$/.exec(result);
+    if (discovery) return Number(discovery[1]) || discovery[2] === "true"
+      ? { label: "部分未确认", tone: "state-muted" }
+      : { label: "成功", tone: "state-success" };
+  }
+  if (["FAILED", "AUTH_FAILED"].includes(result)) return { label: "失败", tone: "state-error" };
+  const labels: Record<string, string> = { UNKNOWN: "待确认", QUEUED: "排队中", RUNNING: "执行中", CANCELLED: "已取消" };
+  return { label: labels[result] || "待核对", tone: "state-muted" };
+}
 function report(e: unknown) {
   if (e instanceof ApiError) {
     diagnostic.value = e;
@@ -911,17 +967,13 @@ onUnmounted(() => {
                 <tr v-for="item in audits" :key="item.id">
                   <td>{{ displayTime(item.createdAt) }}</td>
                   <td>{{ item.actor }}</td>
-                  <td>{{ actionLabels[item.action] || item.action }}</td>
+                  <td>{{ actionLabels[item.action] || "其他操作" }}</td>
                   <td>
                     <span
                       class="state-tag"
-                      :class="
-                        item.result === 'SUCCESS'
-                          ? 'state-success'
-                          : 'state-error'
-                      "
+                      :class="auditResult(item.action, item.result).tone"
                     >
-                      {{ item.result === "SUCCESS" ? "成功" : "失败" }}
+                      {{ auditResult(item.action, item.result).label }}
                     </span>
                   </td>
                   <td>
@@ -1088,11 +1140,15 @@ onUnmounted(() => {
         <dt>时间</dt>
         <dd>{{ displayTime(auditDetail.createdAt) }}</dd>
         <dt>动作</dt>
-        <dd>{{ actionLabels[auditDetail.action] || auditDetail.action }}</dd>
+        <dd>{{ actionLabels[auditDetail.action] || "其他操作" }}</dd>
+        <dt>结果</dt>
+        <dd>{{ auditResult(auditDetail.action, auditDetail.result).label }}</dd>
         <dt>对象</dt>
         <dd>{{ auditDetail.objectId || "—" }}</dd>
         <dt>请求标识</dt>
         <dd>{{ auditDetail.traceId || "本机操作" }}</dd>
+        <dt>诊断信息</dt>
+        <dd><details><summary>原始标识</summary><code>{{ auditDetail.action }}</code><br /><code>{{ auditDetail.result || "—" }}</code></details></dd>
       </dl></ElDialog
     >
   </div>

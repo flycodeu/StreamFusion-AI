@@ -425,8 +425,9 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
             v-if="selectedMaterial && !selectedMaterial.available"
             class="install-error"
           >
-            {{ selectedMaterial.errorCode || "材料尚未校验通过" }}
+            材料尚未校验通过
           </p>
+          <details v-if="selectedMaterial?.errorCode"><summary>材料错误详情</summary><code>{{ selectedMaterial.errorCode }}</code><ErrorHelpLink :code="selectedMaterial.errorCode" /></details>
           <details
             v-if="
               configuration.runtimeMode === 'NATIVE' &&
@@ -632,7 +633,7 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
             :class="{ warning: check.status === 'WARNING' }"
           >
             <b>{{ check.status === "WARNING" ? "!" : "✓" }}</b
-            ><span>{{ check.message || check.key }}</span>
+            ><span>{{ check.message || "检查结果未提供说明" }}</span>
           </li>
         </ul>
         <OfficialInstallationDetails v-if="plan.official" :installation="plan.official" commands />

@@ -118,11 +118,21 @@ def main():
                     page.locator("article").filter(has=heading).get_by_role("button", name="安装", exact=True).click()
                     drawer = page.locator(".el-drawer:visible").last
                     drawer.wait_for()
+                    drawer = page.locator(".el-drawer").filter(has=page.locator(".service-install"))
                     drawer.get_by_role("button", name="Ops 离线安装", exact=True).click()
                     return drawer
 
                 def close_install(drawer):
+                    title = drawer.get_attribute("aria-label")
                     drawer.get_by_role("button", name="取消", exact=True).click()
+                    page.wait_for_function("""title => {
+                        const drawer = [...document.querySelectorAll('[role="dialog"]')].find(el => el.getAttribute('aria-label') === title);
+                        return !drawer || !drawer.getClientRects().length || !!document.querySelector('.el-message-box');
+                    }""", arg=title)
+                    confirmation = page.get_by_role("dialog", name="关闭窗口", exact=True)
+                    if confirmation.is_visible():
+                        confirmation.get_by_role("button", name="放弃修改", exact=True).click()
+                        confirmation.wait_for(state="hidden")
                     drawer.wait_for(state="hidden")
 
                 for name in ("MySQL", "Redis", "Nginx", "SeaweedFS", "MediaMTX", "ZLMediaKit", "Java", "Maven", "Python", "FFmpeg", "Codex CLI", "Claude Code", "Docker Engine (Ubuntu 24.04)"):

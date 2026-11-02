@@ -61,7 +61,7 @@ const toolLabels: Record<string, string> = {
         <span v-if="source.version">{{ source.version }}</span>
         <small>{{ source.role === "DEPENDENCY" ? "依赖组件" : runtimeMode === "DOCKER" ? "容器镜像" : "软件主件" }}</small>
       </div>
-      <p>发布方：{{ source.publisher || recipe.publisher || "以下载来源说明为准" }}</p>
+      <p v-if="source.publisher || recipe.publisher">发布方：{{ source.publisher || recipe.publisher }}</p>
       <a :href="source.url" target="_blank" rel="noopener noreferrer">
         {{ sourceHost(source.url) }} · {{ source.displayName || source.name }} 下载来源 ↗
       </a>

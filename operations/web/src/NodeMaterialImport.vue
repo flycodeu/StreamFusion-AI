@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onUnmounted, ref } from "vue";
-import { request, upload } from "./api";
+import { ApiError, request, upload } from "./api";
+import ErrorHelpLink from "./ErrorHelpLink.vue";
 import {
   materialNextAction,
   type InstallationMaterial,
@@ -15,6 +16,7 @@ const busy = ref(false);
 const attempted = ref(false);
 const progress = ref("");
 const error = ref("");
+const errorCode = ref("");
 const reimport = ref(false);
 let key = crypto.randomUUID();
 let mode: "download" | "upload" | undefined;
@@ -42,6 +44,7 @@ async function prepare(selectedMode: "download" | "upload") {
   busy.value = true;
   emit("busy", true);
   error.value = "";
+  errorCode.value = "";
   controller = new AbortController();
   const signal = controller.signal;
   const recipe = props.recipe;
@@ -126,16 +129,17 @@ async function prepare(selectedMode: "download" | "upload") {
         if (!found) throw new Error("原材料记录不可读取，请刷新后核对");
         material = found;
       } else {
-        throw new Error(
-          `${material.errorCode || material.status}：材料未就绪，请核对原记录`,
-        );
+        errorCode.value = material.errorCode || material.status;
+        throw new Error("材料未就绪，请查看错误详情");
       }
     }
     progress.value = "材料已核验，后续安装可直接复用";
     emit("ready", material);
   } catch (e) {
-    if (!signal.aborted)
+    if (!signal.aborted) {
       error.value = e instanceof Error ? e.message : "材料处理未完成";
+      if (e instanceof ApiError) errorCode.value = e.code;
+    }
   } finally {
     busy.value = false;
     emit("busy", false);
@@ -196,6 +200,7 @@ onUnmounted(() => controller?.abort());
     </button>
     <p v-if="progress" role="status">{{ progress }}</p>
     <p v-if="error" role="alert" class="error">{{ error }}</p>
+    <details v-if="error && errorCode"><summary>错误详情</summary><code>{{ errorCode }}</code><ErrorHelpLink :code="errorCode" /></details>
   </details>
 </template>
 

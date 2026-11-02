@@ -4,7 +4,7 @@ import { test } from "node:test";
 import * as vue from "vue";
 import ts from "typescript";
 class ApiError extends Error {
-  constructor(message, code) { super(message); this.code = code; }
+  constructor(message, code, status) { super(message); this.code = code; this.status = status; }
 }
 const compile = (s) =>
   ts.transpileModule(s, {
@@ -175,6 +175,51 @@ test("lost Node software submission retries original body and idempotency key", 
   assert.deepEqual(posts[0], posts[1]);
   assert.deepEqual(Object.keys(posts[0].data), ["idempotencyKey"]);
   assert.equal(h.flow.attempted.value, true);
+  h.dispose();
+});
+test("confirmed Node plan conflicts release the pending state and preserve the draft", async () => {
+  for (const code of ["NODE_REGISTRY_CHANGED", "NODE_PLAN_STALE", "HOST_CHANGED", "NODE_ENVIRONMENT_DRIFT"]) {
+    const h = harness({request: path => {
+      if (path.endsWith("/submit")) throw new ApiError("请重新预检", code, 409);
+    }});
+    await flush();
+    h.flow.selectRegistry({id: "mirror", version: "1"});
+    const draft = JSON.parse(JSON.stringify(h.flow.draft.value));
+    await h.flow.preflight(); await h.flow.submit();
+    assert.equal(h.flow.attempted.value, false);
+    assert.equal(h.flow.plan.value, undefined);
+    assert.deepEqual(h.flow.draft.value, draft);
+    assert.equal(h.flow.error.value.code, code);
+    await h.flow.preflight();
+    assert.equal(h.flow.plan.value.id, "plan");
+    assert.equal(h.calls.filter(c => c.path.endsWith("/submit")).length, 1);
+    await h.flow.submit();
+    const posts = h.calls.filter(c => c.path.endsWith("/submit"));
+    assert.notEqual(posts[0].data.idempotencyKey, posts[1].data.idempotencyKey);
+    h.dispose();
+  }
+});
+test("uncertain registry submissions retain their exact original request", async () => {
+  for (const failure of [new Error("response lost"), new ApiError("server failure", "NODE_REGISTRY_CHANGED", 500), new ApiError("unknown conflict", "NODE_RESULT_UNCONFIRMED", 409)]) {
+    const h = harness({request: path => {
+      if (path.endsWith("/submit")) throw failure;
+    }});
+    await flush();h.flow.selectRegistry({id: "mirror", version: "1"});
+    await h.flow.preflight();await h.flow.submit();await h.flow.submit();
+    const posts = h.calls.filter(c => c.path.endsWith("/submit"));
+    assert.equal(posts.length, 2);
+    assert.deepEqual(posts[0], posts[1]);
+    assert.equal(h.flow.attempted.value, true);
+    h.dispose();
+  }
+});
+test("Node software installation conflicts do not reuse environment-plan rejection rules", async () => {
+  const h = harness({request: path => {
+    if (path.endsWith("/submit")) throw new ApiError("conflict", "HOST_CHANGED", 409);
+  }});
+  await flush();h.flow.openAction("INSTALL_NODE");await h.flow.preflight();await h.flow.submit();await h.flow.submit();
+  const posts = h.calls.filter(c => c.path.endsWith("/submit"));
+  assert.deepEqual(posts[0], posts[1]);assert.equal(h.flow.attempted.value, true);
   h.dispose();
 });
 test("default change requires explicit submit and never installs Node implicitly", async () => {

@@ -102,6 +102,45 @@ try:
         page.get_by_role("dialog", name="记录详情", exact=True).wait_for()
         page.get_by_role("dialog", name="记录详情", exact=True).get_by_role("button", name="Close this dialog").click()
         checks.append("audit-detail")
+        audit_route = "**/ops/api/v1/audit?*"
+        audit_items = [
+            {"id":"audit-success","action":"SOFTWARE_INSTALL_RESULT","result":"SUCCEEDED","actor":"worker","objectId":"software-fixture","traceId":"audit-success-trace","createdAt":"2026-11-02T00:00:00Z"},
+            {"id":"audit-unknown","action":"NODE_ENVIRONMENT_CHANGE_RESULT","result":"UNKNOWN","actor":"worker","objectId":"node-fixture","traceId":"audit-unknown-trace","createdAt":"2026-11-02T00:00:01Z"},
+            {"id":"audit-registry","action":"NODE_REGISTRY_UPDATED","result":"SUCCESS","actor":"admin","objectId":"registry-fixture","traceId":"audit-registry-trace","createdAt":"2026-11-02T00:00:02Z"},
+        ]
+        def audit_fixture(route):
+            assert route.request.method == "GET", "audit fixture only permits reads"
+            route.fulfill(status=200, json={"data":{"items":audit_items,"nextCursor":""}})
+        page.route(audit_route, audit_fixture)
+        page.get_by_role("button", name="最新记录", exact=True).click()
+        success_row = page.locator("tbody tr").filter(has=page.get_by_text("服务安装结果", exact=True))
+        success_row.get_by_text("成功", exact=True).wait_for()
+        assert success_row.get_by_text("失败", exact=True).count() == 0
+        unknown_row = page.locator("tbody tr").filter(has=page.get_by_text("Node 操作结果", exact=True))
+        unknown_row.get_by_text("待确认", exact=True).wait_for()
+        registry_row = page.locator("tbody tr").filter(has=page.get_by_text("修改 npm 镜像地址", exact=True))
+        registry_row.get_by_text("成功", exact=True).wait_for()
+        for width in (1440, 390):
+            page.set_viewport_size({"width":width,"height":900})
+            screenshot_ready()
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            page.screenshot(path=str(output / f"audit-status-{width}.png"), full_page=True, animations="disabled")
+            unknown_row.get_by_role("button", name="详情", exact=True).click()
+            audit_dialog = page.get_by_role("dialog", name="记录详情", exact=True)
+            audit_dialog.get_by_text("待确认", exact=True).wait_for()
+            audit_dialog.get_by_text("原始标识", exact=True).click()
+            audit_dialog.get_by_text("NODE_ENVIRONMENT_CHANGE_RESULT", exact=True).wait_for()
+            audit_dialog.get_by_text("UNKNOWN", exact=True).wait_for()
+            audit_dialog.get_by_text("audit-unknown-trace", exact=True).wait_for()
+            screenshot_ready(audit_dialog)
+            audit_dialog.screenshot(path=str(output / f"audit-detail-{width}.png"), animations="disabled")
+            audit_dialog.get_by_role("button", name="Close this dialog", exact=True).click()
+            audit_dialog.wait_for(state="hidden")
+        page.set_viewport_size({"width":1440,"height":900})
+        page.unroute(audit_route, audit_fixture)
+        page.get_by_role("button", name="最新记录", exact=True).click()
+        page.get_by_text("创建备份", exact=True).wait_for()
+        checks.extend(["audit-worker-success-not-failure", "audit-unknown-not-failure", "audit-registry-action-chinese", "audit-raw-identifiers-retained", "audit-wide-and-narrow-no-overflow"])
         page.get_by_role("button", name="主机管理", exact=True).click()
         page.get_by_role("button", name="新增主机", exact=True).first.click()
         dialog = page.get_by_role("dialog", name="新增主机", exact=True)
@@ -359,6 +398,7 @@ try:
             detail.get_by_text("观测有效", exact=False).wait_for()
         else:
             detail.get_by_text("当前无法确认", exact=False).wait_for()
+            detail.locator("details.software-diagnostics > summary").click()
             detail.get_by_text(observed["latestAttempt"]["code"], exact=True).first.wait_for()
         detail.get_by_role("button", name="Close this dialog").click()
         assert page.locator(".software-card-head .state-tag").count() == 1
@@ -383,12 +423,16 @@ try:
         checks.extend(["F02-software-default-management", "F02-register-readonly-tool", "F02-tool-no-lifecycle-controls", "F02-tool-observe-no-running-claim", "F02-card-status-first", "F02-controls-aligned", "F02-software-filter", "F02-unmanage-keeps-history"])
         page.get_by_role("tab", name="软件目录", exact=True).click()
         page.locator(".software-recipes").wait_for()
-        page.wait_for_function("() => document.querySelectorAll('.plugin-card').length === 12")
+        catalog = page.request.get(url + "/ops/api/v1/software-recipes").json()["data"]
+        catalog_keys = {entry["key"] for entry in catalog if entry["key"] != "node"}
+        expected_cards = len(catalog_keys) + 1  # Node has one version-management entry.
+        page.wait_for_function("count => document.querySelectorAll('.plugin-card').length === count", arg=expected_cards)
+        page.get_by_role("heading", name="Node.js", exact=True).wait_for()
         assert page.get_by_label("目标主机", exact=True).input_value()
         assert page.get_by_role("heading", name="Maven", exact=True).count() == 1
-        assert page.get_by_role("button", name="安装", exact=True).count() == 12
+        assert page.get_by_role("button", name="安装", exact=True).count() == len(catalog_keys)
         java_version = page.get_by_label("Java版本", exact=True)
-        assert java_version.locator("option").count() == 2
+        assert java_version.locator("option").count() == len([entry for entry in catalog if entry["key"] == "java"])
         java_version.select_option("17")
         assert java_version.input_value() == "17"
         page.get_by_role("button", name="构建工具", exact=True).click()
@@ -409,7 +453,7 @@ try:
         page.wait_for_function("() => document.querySelectorAll('.el-message').length === 0")
         screenshot_ready()
         page.screenshot(path=str(output / "plugins-wide.png"), full_page=True, animations="disabled")
-        checks.extend(["I02-P1-catalog-seven-tool-versions-and-six-services", "I02-P1-tools-can-open-install-preflight-with-diagnostics", "I02-P1-service-port-form-only-inside-installation-drawer"])
+        checks.extend(["I02-P1-catalog-matches-recipes-and-Node-entry", "I02-P1-tools-can-open-install-preflight-with-diagnostics", "I02-P1-service-port-form-only-inside-installation-drawer"])
         page.get_by_role("button", name="应用实例", exact=True).click()
         page.locator(".dependency-section > summary").click()
         page.get_by_role("button", name="绑定已有服务", exact=True).click()
@@ -509,7 +553,7 @@ try:
                 checks.append("software-detail-internal-tabs-within-390px")
                 page.get_by_role("tab", name="软件目录", exact=True).click()
                 page.locator(".software-recipes").wait_for()
-                page.wait_for_function("() => document.querySelectorAll('.plugin-card').length === 12")
+                page.wait_for_function("count => document.querySelectorAll('.plugin-card').length === count", arg=expected_cards)
                 page.wait_for_function("() => document.querySelectorAll('.el-message').length === 0")
                 screenshot_ready()
                 page.screenshot(path=str(output / "plugins-narrow.png"), full_page=True, animations="disabled")
@@ -525,9 +569,14 @@ try:
         checks.append("logout")
         browser.close()
     assert not errors, errors
-    result = {"passed": checks, "pageErrors": errors, "backend": "real binary / isolated state", "browserUIFixtures": ["software-discovery candidate responses only; registration and unmanage use the real API"], "productionAcceptance": False}
+    result = {"passed": checks, "pageErrors": errors, "backend": "real binary / isolated state", "browserUIFixtures": ["software-discovery candidate responses only; registration and unmanage use the real API", "read-only audit list responses for translated results and raw identifiers"], "productionAcceptance": False}
     (output / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False))
     print(json.dumps(result, ensure_ascii=False))
+except Exception:
+    if "page" in locals() and not page.is_closed():
+        page.screenshot(path=str(output / "failure.png"), full_page=True, animations="disabled")
+        (output / "failure.html").write_text(page.content(), encoding="utf8")
+    raise
 finally:
     process.terminate()
     try:

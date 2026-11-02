@@ -58,7 +58,7 @@ onUnmounted(() => { generation++; emit("closeState", { busy: false, dirty: false
     <div class="current-registry">
       <strong>账号 {{ environment.account }} · ~/.npmrc</strong>
       <span>{{ registryStatus }}</span><code v-if="currentURL">{{ currentURL }}</code>
-      <details><summary>配置范围</summary><code v-if="observed">{{ observed.status }}</code><p>同一账号的 Node 版本共用此配置；项目、环境变量及命令参数可覆盖它。未设置时仍可能使用全局配置。仅修改 registry，保留其他配置与认证。</p><code v-if="observed?.configPath">{{ observed.configPath }}</code></details>
+      <details><summary>配置范围</summary><p>修改此账号的 registry，保留其他配置。项目、环境变量和命令参数可覆盖此值。</p><code v-if="observed?.configPath">{{ observed.configPath }}</code></details>
     </div>
     <div class="registry-heading"><strong>平台地址</strong><button class="quiet" :disabled="busy" @click="act(refresh)">刷新列表</button></div>
     <article v-for="entry in entries" :key="entry.id" class="registry-row">

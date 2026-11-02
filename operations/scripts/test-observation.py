@@ -80,7 +80,7 @@ try:
         assert len(batch["items"]) == 1 and batch["items"][0]["objectId"] == software["id"]
         assert batch["status"] in ("SUCCEEDED", "PARTIAL")
         checks.extend(["real-oneclick-batch", "background-progress-without-manual-probe"])
-        page.locator(".observation-batch summary").click()
+        page.locator(".observation-batch > summary").click()
         page.locator(".batch-item").wait_for()
         assert "测试 Java" in page.locator(".batch-item").inner_text()
         page.get_by_role("button", name="运行总览", exact=True).click()

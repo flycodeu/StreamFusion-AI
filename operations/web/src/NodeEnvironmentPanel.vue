@@ -624,10 +624,30 @@ async function submit() {
       );
     }
     attempted.value = true;
-    const result = await request<{
+    let result: {
       jobId?: string;
       environmentId?: string;
-    } | null>(submission.value.path, "POST", submission.value.body);
+    } | null;
+    try {
+      result = await request<typeof result>(submission.value.path, "POST", submission.value.body);
+    } catch (cause) {
+      // This endpoint returns these conflicts before creating a job. Transport
+      // errors and other endpoints retain the original request for reconciliation.
+      if (token === revision && !disposed &&
+          submission.value.path.startsWith("/node-environment-plans/") &&
+          cause instanceof ApiError && cause.status === 409 &&
+          ["NODE_PLAN_STALE", "HOST_CHANGED", "NODE_ENVIRONMENT_CHANGED",
+           "NODE_ENVIRONMENT_DRIFT", "NODE_REGISTRY_CHANGED", "NODE_REGISTRY_ACTOR_CHANGED",
+           "NODE_MATERIAL_MISSING", "NODE_MATERIAL_MISMATCH", "OPERATION_LOCKED", "QUEUE_FULL",
+           "NODE_VERSION_EXISTS", "NODE_VERSION_NOT_MANAGED", "NODE_ENVIRONMENT_NOT_EMPTY"].includes(cause.code)) {
+        attempted.value = false;
+        submission.value = undefined;
+        plan.value = undefined;
+        initialIntent.value = undefined;
+        submitKey.value = crypto.randomUUID();
+      }
+      throw cause;
+    }
     if (token !== revision || disposed) return;
     if (initialIntent.value && result?.jobId)
       initialIntent.value.initializationJobId = result.jobId;

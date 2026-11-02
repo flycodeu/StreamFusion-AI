@@ -2,6 +2,8 @@
 import { computed } from "vue";
 import { hostTime } from "./hosts";
 import { observationPending, type ObservationBatch } from "./observation";
+import { findErrorReference } from "./errorReference";
+import ErrorHelpLink from "./ErrorHelpLink.vue";
 const props = defineProps<{ batch?: ObservationBatch; busy: boolean }>();
 const emit = defineEmits<{ cancel: [] }>();
 const completed = computed(
@@ -49,8 +51,8 @@ const labels: Record<string, string> = {
     <div class="batch-items">
       <div v-for="item in batch.items" :key="item.objectId" class="batch-item">
         <strong>{{ item.name }}</strong>
-        <span>{{ labels[item.status] || item.status }}</span>
-        <code v-if="item.errorCode">{{ item.errorCode }}</code>
+        <span>{{ labels[item.status] || "状态待确认" }}</span>
+        <details v-if="item.errorCode"><summary>{{ findErrorReference(item.errorCode)?.name || "检测未完成" }}</summary><code>{{ item.errorCode }}</code><ErrorHelpLink :code="item.errorCode" /></details>
         <small v-if="item.observedAt">{{ hostTime(item.observedAt) }}</small>
       </div>
     </div>
@@ -100,6 +102,7 @@ summary strong {
 .batch-item code {
   overflow-wrap: anywhere;
 }
+.batch-item summary { padding: 0; font-size: 12px; }
 .batch-item small {
   color: #788599;
 }
