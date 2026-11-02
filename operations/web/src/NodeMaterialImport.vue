@@ -152,10 +152,7 @@ onUnmounted(() => controller?.abort());
 <template>
   <details class="material-import">
     <summary>补充离线材料</summary>
-    <p>
-      Ops
-      可联网获取固定版本文件并保存，目标服务器无需联网。已有归档也可上传一次后复用。
-    </p>
+    <p>下载入库或上传归档，后续可直接复用。</p>
     <button
       type="button"
       class="secondary"

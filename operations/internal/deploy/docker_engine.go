@@ -63,12 +63,26 @@ func dockerRecipePackages(d serviceinstall.Definition) ([]dockerPackage, error) 
 	return packages, nil
 }
 
+// A desktop host can exceed the general 64 KiB command limit with an entirely
+// healthy dpkg database. Keep the full inventory bounded separately.
+const packageInventoryLimit = 4 << 20
+
 func (x *executor) installedDockerPackages(ctx context.Context) (map[string]string, error) {
 	// Query once, including packages in incomplete install states. A truncated
 	// list cannot establish absence and fails closed.
 	out, err := x.softwareRunner(ctx, "/usr/bin/dpkg-query", "--show", "--showformat=${binary:Package}\t${db:Status-Abbrev}\t${Version}\n")
-	if err != nil || len(out) >= 64<<10 {
+	if ctx.Err() != nil {
+		return nil, errors.New("DOCKER_PACKAGE_STATE_TIMEOUT")
+	}
+	if err != nil {
 		return nil, errors.New("DOCKER_PACKAGE_STATE_UNAVAILABLE")
+	}
+	return parseInstalledPackages(out)
+}
+
+func parseInstalledPackages(out []byte) (map[string]string, error) {
+	if len(out) >= packageInventoryLimit {
+		return nil, errors.New("DOCKER_PACKAGE_STATE_TOO_LARGE")
 	}
 	result := map[string]string{}
 	for _, line := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
@@ -77,12 +91,14 @@ func (x *executor) installedDockerPackages(ctx context.Context) (map[string]stri
 		}
 		fields := strings.Split(line, "\t")
 		if len(fields) != 3 || len(fields[1]) != 3 {
-			return nil, errors.New("DOCKER_PACKAGE_STATE_UNAVAILABLE")
+			return nil, errors.New("DOCKER_PACKAGE_STATE_INVALID")
 		}
 		name := strings.TrimSuffix(fields[0], ":amd64")
-		if fields[1] == "ii " {
+		// Desired state (including hold) is independent of current installed
+		// state. A held, fully installed package is not a broken transaction.
+		if fields[1][1] == 'i' && fields[1][2] == ' ' {
 			result[name] = fields[2]
-		} else if fields[1][1] != 'n' && fields[1][1] != 'c' {
+		} else if fields[1][2] != ' ' || fields[1][1] != 'n' && fields[1][1] != 'c' {
 			// Incomplete package transactions must be repaired by the host admin.
 			return nil, errors.New("DOCKER_PACKAGE_TRANSACTION_PENDING")
 		}
@@ -134,7 +150,31 @@ func dockerPreflightMessage(err error) string {
 	if err.Error() == "DOCKER_EXISTING_CONFIGURATION_OR_DATA" {
 		return "发现既有 Docker/containerd 配置或数据，已保留；请管理员核对原安装或决定如何恢复，平台不会覆盖"
 	}
-	return "无法确认 Docker 包管理状态，请管理员先检查未完成的软件包操作；未更改主机软件"
+	return packageStateMessage(err.Error())
+}
+
+func packageStateMessage(code string) string {
+	switch strings.TrimPrefix(strings.TrimPrefix(code, "DOCKER_"), "OFFICIAL_") {
+	case "PACKAGE_TRANSACTION_PENDING":
+		return "发现未完成的软件包状态，请先运行 dpkg --audit 核对具体包"
+	case "PACKAGE_STATE_TOO_LARGE":
+		return "软件包清单超出读取上限，请更新接入组件或检查清单大小"
+	case "PACKAGE_STATE_INVALID":
+		return "软件包清单格式无法识别，请检查 dpkg-query 输出"
+	case "PACKAGE_STATE_TIMEOUT":
+		return "读取软件包清单超时，请检查主机负载后重试"
+	default:
+		return "无法读取软件包清单，请检查 dpkg-query 是否可执行；尚未确认存在包事务异常"
+	}
+}
+
+func officialPackageStateCode(err error) string {
+	switch err.Error() {
+	case "DOCKER_PACKAGE_TRANSACTION_PENDING", "DOCKER_PACKAGE_STATE_TOO_LARGE", "DOCKER_PACKAGE_STATE_INVALID", "DOCKER_PACKAGE_STATE_TIMEOUT":
+		return "OFFICIAL_" + strings.TrimPrefix(err.Error(), "DOCKER_")
+	default:
+		return "OFFICIAL_PACKAGE_STATE_UNAVAILABLE"
+	}
 }
 
 var aptInstallLine = regexp.MustCompile(`^Inst ([a-z0-9][a-z0-9+.-]*)(?::amd64)? \(([^ ]+)(?: |\))`)

@@ -2,6 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElDialog, ElTabs, ElTabPane, ElMessage } from "element-plus";
 import { request, ApiError } from "./api";
+import ErrorHelpLink from "./ErrorHelpLink.vue";
+import { findErrorReference } from "./errorReference";
 import { hostTime, type Host } from "./hosts";
 
 type Rule = {
@@ -370,7 +372,7 @@ onUnmounted(() => {
               ? "防火墙读取需要当前受管执行器；仍可查看可读的监听端口"
               : view.code === "UFW_NOT_INSTALLED"
                 ? "目标未安装 UFW"
-                : view.code
+                : findErrorReference(view.code)?.name || view.code
         }}</span
         ><button
           v-if="view.code.includes('EXECUTOR')"
@@ -382,6 +384,7 @@ onUnmounted(() => {
         <details>
           <summary>技术详情</summary>
           <code>{{ view.code }}</code>
+          <ErrorHelpLink :code="view.code" />
           <code v-if="view.traceId">traceId={{ view.traceId }}</code>
         </details>
       </div>

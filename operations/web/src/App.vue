@@ -7,6 +7,9 @@ import SoftwareManagement from "./SoftwareManagement.vue";
 import HostManagement from "./HostManagement.vue";
 import PortManagement from "./PortManagement.vue";
 import HostOverview from "./HostOverview.vue";
+import ErrorReference from "./ErrorReference.vue";
+import ErrorHelpLink from "./ErrorHelpLink.vue";
+import { errorHelp } from "./errorHelp";
 
 interface Status {
   status: string;
@@ -777,6 +780,7 @@ onUnmounted(() => {
             {{ diagnostic.code }} · {{ displayTime(diagnostic.timestamp) }}
           </div>
           <code>traceId: {{ diagnostic.traceId }}</code>
+          <ErrorHelpLink :code="diagnostic.code" />
         </details>
         <HostManagement
           v-if="active === 'hosts'"
@@ -983,9 +987,14 @@ onUnmounted(() => {
               修改密码
             </button>
           </div>
+          <div class="section-head"><h2>错误说明</h2></div>
+          <ErrorReference />
         </section>
       </template>
     </main>
+    <ElDialog v-model="errorHelp.open" title="错误说明" width="min(820px, 94vw)" align-center destroy-on-close>
+      <div style="max-height: 70dvh; overflow: auto"><ErrorReference :initial-code="errorHelp.code" /></div>
+    </ElDialog>
     <ElDialog
       v-model="credentialDialog"
       :title="selected ? '创建新修订' : '新增凭据'"

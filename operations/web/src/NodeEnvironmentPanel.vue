@@ -8,6 +8,7 @@ import type {
   ServiceRecipe,
 } from "./serviceInstallation";
 import type { SoftwareJob } from "./software";
+import ErrorHelpLink from "./ErrorHelpLink.vue";
 import HostPreparationPanel from "./HostPreparationPanel.vue";
 import NodeVersionDialog from "./NodeVersionDialog.vue";
 import {
@@ -724,11 +725,6 @@ poll();
 <template>
   <section class="node-environments" aria-label="Node.js 环境管理">
     <header class="node-header">
-      <div>
-        <span class="eyebrow">运行环境</span>
-        <h2>Node.js</h2>
-        <p>按账号管理版本，npm 与 pnpm 随各自的 Node 环境使用。</p>
-      </div>
       <div class="actions">
         <button class="secondary" :disabled="busy" @click="openDiscovery">
           检测已有安装</button
@@ -757,6 +753,7 @@ poll();
     </p>
     <details v-if="error && !draft && !discoveryOpen">
       <summary>诊断信息</summary>
+      <ErrorHelpLink :code="error.code" />
       <code
         >{{ error.code }} · {{ hostTime(error.at) }} · {{ error.traceId }} ·
         {{ currentHost.id }}</code
@@ -780,11 +777,7 @@ poll();
       </button>
     </div>
     <p v-else class="empty">
-      {{
-        loading
-          ? "正在读取环境…"
-          : "此主机还没有登记 Node 环境。可在线安装、使用平台离线材料，或检测自行安装的版本。"
-      }}
+      {{ loading ? "正在读取环境…" : "暂无 Node 环境" }}
     </p>
     <p v-if="continuationRetry" class="hint">
       Node 提交结果尚未确认。<button
@@ -820,7 +813,7 @@ poll();
         </div>
       </div>
       <p v-if="environment.errorCode" class="hint">
-        最近检测未完成，下面保留上次确认结果。请重新检测后操作。
+        检测未完成，显示上次结果。
       </p>
       <div class="node-tabs" role="tablist" aria-label="Node 环境详情">
         <button
@@ -840,7 +833,6 @@ poll();
       </div>
       <section v-if="tab === 'versions'" class="version-list">
         <div class="list-actions">
-          <p>设置默认版本只影响后续采用默认值的任务。</p>
           <button
             class="primary"
             :disabled="busy || !writable"
@@ -925,8 +917,8 @@ poll();
         <p v-if="!versions.length" class="empty">
           {{
             environment.managementMode === "MANAGED"
-              ? "环境已准备，可安装第一个 Node 版本。"
-              : "暂未检测到可用版本，请重新检查。"
+              ? "尚未安装 Node 版本。"
+              : "未检测到可用版本。"
           }}
         </p>
       </section>
@@ -1038,6 +1030,7 @@ poll();
         </button>
         <details>
           <summary>诊断信息</summary>
+          <ErrorHelpLink v-if="job.errorCode" :code="job.errorCode" />
           <p>{{ job.errorCode }} · {{ hostTime(job.updatedAt) }}</p>
           <code>{{ job.id }} · {{ job.traceId }}</code>
         </details>
@@ -1101,7 +1094,9 @@ poll();
         >
           {{ busy ? "检测中…" : "开始检测" }}
         </button>
-        <p v-if="error" role="alert" class="error">{{ error.message }}</p>
+        <p v-if="error" role="alert" class="error">
+          {{ error.message }} <ErrorHelpLink :code="error.code" />
+        </p>
         <article
           v-for="candidate in discovery?.candidates"
           :key="candidate.rootPath"

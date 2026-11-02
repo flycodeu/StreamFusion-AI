@@ -438,9 +438,9 @@ onUnmounted(() => {
     <div v-else class="plugin-grid">
       <article v-if="showNode" class="plugin-card node-catalog-card">
         <div class="plugin-heading"><SoftwareIcon type="NODE" /><div class="plugin-title"><h3>Node.js</h3><span>多版本运行环境</span></div></div>
-        <p class="plugin-description">使用 nvm 管理 Node.js 版本、配套 npm 和 pnpm，按账号切换环境默认值。</p>
+        <p class="plugin-description">安装 Node.js，管理 npm、pnpm 和默认版本。</p>
         <div class="plugin-meta"><span>官方在线 / Ops 离线 / 自行安装</span></div>
-        <footer><span class="recipe-kind">独立账号环境 · 多版本共存</span><button class="primary" :disabled="!currentTarget" @click="emit('node', targetId)">管理 Node 环境</button></footer>
+        <footer><span class="recipe-kind">nvm · 多版本</span><button class="primary" :disabled="!currentTarget" @click="emit('node', targetId)">安装与管理</button></footer>
       </article>
       <article
         v-for="{ definition, versions } in catalogEntries"

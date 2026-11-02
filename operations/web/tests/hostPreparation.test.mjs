@@ -344,7 +344,10 @@ test("operator-facing preparation is a single concise install flow", () => {
   assert.match(component, /开始安装/);
   assert.match(component, /检查安装结果/);
   assert.match(component, /bash install\.sh/);
-  assert.equal(component.includes("{{ error.code }}"), false);
+  const ordinaryContent = component.replace(/<details[\s\S]*?<\/details>/g, "");
+  assert.equal(ordinaryContent.includes("{{ error.code }}"), false);
+  assert.match(component, /<details v-if="error.code"><summary>错误详情<\/summary>/);
+  assert.match(component, /<ErrorHelpLink :code="error.code"/);
   assert.equal(component.includes("{{ checkResult.code }}"), false);
   assert.equal(hostManagement.includes("<code>{{ detail.capabilities?.[key]?.code }}</code>"), false);
   assert.equal(hostOverview.includes("<code>{{ current.latestAttempt.code }}</code>"), false);

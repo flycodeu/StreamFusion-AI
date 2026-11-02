@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
 import { ApiError, request } from "./api";
+import ErrorHelpLink from "./ErrorHelpLink.vue";
 import { type Host } from "./hosts";
 interface PreparationJob {
   id: string; status: string; phase: string; errorCode: string;
@@ -27,7 +28,7 @@ const installing = ref(false);
 const updateRequested = ref(false);
 let explicitUpdate = false;
 const repairing = ref(false);
-const error = ref<{ message: string; source?: "poll" }>();
+const error = ref<{ message: string; source?: "poll"; code?: string; traceId?: string; timestamp?: string }>();
 const checkResult = ref<{ ready: boolean; title: string; message: string; code: string }>();
 const copied = ref("");
 const job = computed(() => data.value?.remoteJob);
@@ -88,7 +89,7 @@ let installationIntent: { key: string; previousJobId?: string; jobId?: string } 
 let polling: ReturnType<typeof setTimeout> | undefined;
 let installAbort: AbortController | undefined;
 function report(cause: unknown, source?: "poll") {
-  error.value = { message: cause instanceof Error ? cause.message : "操作未完成，请重新加载", source };
+  error.value = { message: cause instanceof Error ? cause.message : "操作未完成，请重新加载", source, ...(cause instanceof ApiError ? {code:cause.code,traceId:cause.traceId,timestamp:cause.timestamp} : {}) };
 }
 function beginOperation() {
   busy.value = true;
@@ -325,7 +326,7 @@ async function check() {
 <template>
   <div class="host-preparation">
     <header class="preparation-heading"><h3>{{ updateOnly ? '更新接入组件' : '服务器接入' }}</h3><button class="quiet" :disabled="busy" @click="load()">重新加载</button></header>
-    <div v-if="error" class="preparation-error" role="alert"><strong>页面暂时未更新</strong><p>{{ error.message }}</p><button class="secondary" :disabled="busy" @click="load()">重新加载</button></div>
+    <div v-if="error" class="preparation-error" role="alert"><strong>页面暂时未更新</strong><p>{{ error.message }}</p><details v-if="error.code"><summary>错误详情</summary><code>{{ error.code }} · {{ error.timestamp }}</code><code v-if="error.traceId">traceId={{ error.traceId }}</code><ErrorHelpLink :code="error.code" /></details><button class="secondary" :disabled="busy" @click="load()">重新加载</button></div>
     <p v-if="!data && busy">读取安装信息…</p>
     <template v-if="data">
       <section class="target-overview" aria-label="安装信息">
@@ -356,7 +357,7 @@ async function check() {
         <button v-if="!checkResult.ready && job?.status === 'UNKNOWN' && !canRecover" class="secondary" :disabled="busy" @click="reconcile">重新检查</button>
       </section>
       <section v-if="!blocked && (job?.status !== 'SUCCEEDED' || updateRequested)" class="install-workspace">
-        <header class="install-heading"><div><span class="section-kicker">{{ updateRequested ? '接入组件更新' : mode === 'online' ? '在线安装' : '离线安装' }}</span><h3>{{ updateRequested ? '更新此服务器的接入组件' : mode === 'online' ? '一键安装到服务器' : '下载后运行一条命令' }}</h3><p>{{ updateRequested ? '新软件配方和卸载功能需要匹配的接入组件。确认后会传输当前版本并检查结果；业务软件和数据保留。' : mode === 'online' ? 'Ops 会连接服务器、上传材料、安装并自动检查结果。' : '适合服务器无法由 Ops 直接连接的情况。' }}</p></div><div class="method-switch"><button :class="{ active: mode === 'online' }" :disabled="busy || host.kind !== 'SSH'" @click="mode = 'online'">在线</button><button :class="{ active: mode === 'offline' }" :disabled="busy" @click="mode = 'offline'">离线</button></div></header>
+        <header class="install-heading"><div><span class="section-kicker">{{ updateRequested ? '接入组件更新' : mode === 'online' ? '在线安装' : '离线安装' }}</span><h3>{{ updateRequested ? '更新此服务器的接入组件' : mode === 'online' ? '一键安装到服务器' : '下载后运行一条命令' }}</h3><p>{{ updateRequested ? '更新接入组件，保留业务软件与数据。' : mode === 'online' ? 'Ops 会连接服务器、上传材料、安装并自动检查结果。' : '适合服务器无法由 Ops 直接连接的情况。' }}</p></div><div class="method-switch"><button :class="{ active: mode === 'online' }" :disabled="busy || host.kind !== 'SSH'" @click="mode = 'online'">在线</button><button :class="{ active: mode === 'offline' }" :disabled="busy" @click="mode = 'offline'">离线</button></div></header>
         <div v-if="mode === 'online'" class="install-card">
           <form @submit.prevent="install">
             <label v-if="data.account !== 'root' && needsSudoPassword" class="password-field">{{ data.account }} 的登录密码 <span>用于 sudo 提权，仅本次使用</span><input v-model="sudoPassword" type="password" autocomplete="off" maxlength="1024" :disabled="busy" :aria-label="`${data.account} 的登录密码`" placeholder="请输入该账号的系统密码" /></label>
@@ -370,6 +371,7 @@ async function check() {
           <button class="secondary check-button" :disabled="busy" @click="check">检查安装结果</button>
         </div>
       </section>
+      <details v-if="job?.errorCode || checkResult && !checkResult.ready" class="preparation-diagnostic"><summary>错误详情</summary><code>{{ checkResult && !checkResult.ready ? checkResult.code : job?.errorCode }}</code><code v-if="job?.traceId">traceId={{ job.traceId }}</code><ErrorHelpLink :code="(checkResult && !checkResult.ready ? checkResult.code : job?.errorCode) || ''" /></details>
       <p v-if="!data.package.available" class="material-error" role="alert">{{ data.package.message }}</p>
     </template>
   </div>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElDrawer, ElMessage, ElMessageBox } from "element-plus";
 import { request } from "./api";
 import { hostTime, type Host } from "./hosts";
 import ObservationBatchPanel from "./ObservationBatchPanel.vue";
@@ -33,12 +33,24 @@ import {
 
 const emit = defineEmits<{ error: [unknown]; preparation: [string] }>();
 const props = defineProps<{ dockerHostId?: string }>();
-const tab = ref<"instances" | "recipes" | "node">("instances");
+const tab = ref<"instances" | "recipes">("instances");
 const rows = ref<SoftwareInstance[]>([]);
 const hosts = ref<Host[]>([]);
 const hostId = ref("");
 const nodeEnvironmentId = ref("");
-const nodeHost = computed(() => hosts.value.find((host) => host.id === hostId.value) || hosts.value[0]);
+const nodeHostId = ref("");
+const nodeOpen = ref(false);
+const nodeHost = computed(() => hosts.value.find((host) => host.id === nodeHostId.value));
+async function openNode(targetId: string, environmentId = "") {
+  await act(async () => {
+    const latestHosts = await request<Host[]>("/hosts");
+    if (disposed) return;
+    hosts.value = latestHosts;
+    nodeHostId.value = targetId;
+    nodeEnvironmentId.value = environmentId;
+    nodeOpen.value = true;
+  });
+}
 async function discoverInstalled(targetId: string) {
   await act(async () => {
     const latestHosts = await request<Host[]>("/hosts");
@@ -191,7 +203,7 @@ function update(item: SoftwareInstance) {
     : [...rows.value, item];
 }
 async function showDetails(item: SoftwareInstance) {
-  if(item.softwareType === "NODE") { hostId.value=item.hostId; nodeEnvironmentId.value=item.nodeEnvironmentId||""; tab.value="node"; return; }
+  if(item.softwareType === "NODE") { await openNode(item.hostId, item.nodeEnvironmentId || ""); return; }
   const revision = selectDetail(item.id);
   if (item.lastJobId)
     await act(async () => {
@@ -456,7 +468,6 @@ onUnmounted(() => {
       >
         软件目录
       </button>
-      <button role="tab" :aria-selected="tab === 'node'" :class="{ active: tab === 'node' }" @click="tab = 'node'">Node.js 环境</button>
     </div>
     <SoftwareRecipes
       v-if="tab === 'recipes'"
@@ -466,13 +477,8 @@ onUnmounted(() => {
       @error="emit('error', $event)"
       @preparation="emit('preparation', $event)"
       @register="discoverInstalled"
-      @node="(id) => { hostId = id; tab = 'node'; }"
+      @node="openNode"
     />
-    <div v-else-if="tab === 'node'" role="tabpanel" aria-label="Node.js 环境">
-      <div class="software-toolbar"><label>目标主机 <select v-model="hostId" aria-label="Node 环境主机"><option v-if="!hostId" value="">{{ hosts[0]?.name || '请选择主机' }}</option><option v-for="host in hosts" :key="host.id" :value="host.id">{{ host.name }} · {{ host.address || '本机' }}</option></select></label></div>
-      <NodeEnvironmentPanel v-if="nodeHost" :host="nodeHost" :initial-environment-id="nodeEnvironmentId" @changed="act(refresh)" />
-      <p v-else class="empty">请先在主机管理中添加目标服务器。</p>
-    </div>
     <div v-else role="tabpanel" aria-label="软件中心">
       <div class="software-toolbar">
         <div class="software-filters">
@@ -671,6 +677,11 @@ onUnmounted(() => {
       </div>
     </div>
   </section>
+  <ElDrawer v-model="nodeOpen" title="Node.js" size="min(1080px, 100vw)" append-to-body :destroy-on-close="false" :close-on-click-modal="false">
+    <p v-if="nodeHost" class="node-host-label">{{nodeHost.name}} · {{nodeHost.address || '本机'}}</p>
+    <NodeEnvironmentPanel v-if="nodeHost" :host="nodeHost" :initial-environment-id="nodeEnvironmentId" @changed="act(refresh)" />
+    <p v-else class="empty">此主机已不可用，请重新选择。</p>
+  </ElDrawer>
   <SoftwareRegistrationDialog
     :open="registration"
     :hosts="hosts"
@@ -718,6 +729,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.node-host-label{margin:0 0 20px;color:var(--muted);font-size:12px;}
 .software-management {
   background: var(--surface);
   border: 1px solid var(--border);

@@ -127,14 +127,14 @@ def main():
                     elif path.endswith('-plans'):
                         plan_id='plan-'+str(len(plans)+1)
                         plans[plan_id]=data
-                        reply({'id':plan_id,'environmentId':env['id'],'expiresAt':expiry,'checks':[{'key':'FIXTURE','status':'PASSED','message':'界面夹具预检，无目标执行'}],'commands':[{'executable':'nvm','args':['install','--binary',data.get('recipeVersion') or data.get('nodeVersion') or '0.40.8']}],'removedPaths':[root] if data.get('deleteData') else [],'change':{'context':context},'definition':next((r for r in catalog['node'] if r['version']==data.get('recipeVersion')),None),'source':data.get('source'),'config':data.get('config'),'node':{**context,'environmentVersion':env['version'],'makeDefault':data.get('node',{}).get('makeDefault',False)},'paths':{'root':root+'/nvm/versions/node/'+data.get('recipeVersion','')}})
+                        reply({'id':plan_id,'environmentId':env['id'],'expiresAt':expiry,'checks':[{'key':'FIXTURE','status':'PASSED','message':'界面夹具预检，无目标执行'}],'commands':([{'executable':'install','args':['-m','600','nvm.sh',root+'/nvm/nvm.sh']},{'executable':'install','args':['-m','700','nvm-exec',root+'/nvm/nvm-exec']}] if data.get('action') in ('INITIALIZE','UPDATE_NVM') else []),'removedPaths':[root] if data.get('deleteData') else [],'change':{'context':context},'definition':next((r for r in catalog['node'] if r['version']==data.get('recipeVersion')),None),'source':data.get('source'),'config':data.get('config'),'node':{**context,'environmentVersion':env['version'],'makeDefault':data.get('node',{}).get('makeDefault',False)},'paths':{'root':root+'/nvm/versions/node/'+data.get('recipeVersion','')}})
                     elif path.endswith('/submit'):
                         intent=plans[path.split('/')[-2]];submissions.append({'intent':intent,'submit':data})
                         if '/software-install-plans/' in path:
                             v=intent['recipeVersion']
                             env['observation']['versions'].append({'version':v,'npmVersion':'11.6.2','pnpmVersion':'','binaryPath':root+'/nvm/versions/node/'+v+'/bin/node','globalPackages':[]})
                             env['versions'].append({'id':'node-'+v,'name':'Node.js '+v,'hostId':host['id'],'softwareType':'NODE','softwareVersion':v,'version':'1','runtimeKind':'TOOL','managementMode':'MANAGED','installationStatus':'READY','nodeDataPaths':[root+'/cache/'+v,root+'/backups/'+v,root+'/nvm/.cache/bin/node-'+v+'-linux-x64'],'installationPaths':{'root':root+'/nvm/versions/node/'+v,'data':root+'/cache/'+v,'logs':root+'/backups/'+v},'locator':root+'/nvm/versions/node/'+v+'/bin/node'})
-                            if intent['node']['makeDefault']: env['observedDefaultVersion']=v
+                            if intent['node']['makeDefault']: env['observedDefaultVersion']=v;env['desiredDefaultSoftwareId']='node-'+v
                         elif intent['action']=='INITIALIZE': envs.append(env)
                         elif intent['action']=='SET_DEFAULT': env['observedDefaultVersion']=intent['nodeVersion']
                         elif intent['action']=='INSTALL_PNPM': env['observation']['versions'][0]['pnpmVersion']=intent['packageVersion']
@@ -151,7 +151,7 @@ def main():
                         submissions.append({'uninstall':data})
                         assert data['action']=='UNINSTALL' and data['clearNodeDefault']
                         assert data['confirmationName']==env['versions'][0]['name']
-                        env['versions'].clear();env['observation']['versions'].clear();env['observedDefaultVersion']=''
+                        env['versions'].clear();env['observation']['versions'].clear();env['observedDefaultVersion']='';env['desiredDefaultSoftwareId']=''
                         reply({'jobId':env['lastJobId']})
                     elif req.method not in ('GET','HEAD','OPTIONS'):
                         blocked.append({'path':path,'method':req.method});route.fulfill(status=409,json={'code':'TEST_MUTATION_BLOCKED','msg':'No real target execution'})
@@ -160,8 +160,11 @@ def main():
                 def enter():
                     page.goto(base)
                     page.get_by_role('button',name='软件管理',exact=True).click()
-                    page.get_by_role('tab',name='Node.js 环境',exact=True).click()
-                    page.get_by_role('heading',name='Node.js',exact=True).wait_for()
+                    expect(page.get_by_role('tablist',name='软件管理视图',exact=True).get_by_role('tab')).to_have_count(2)
+                    assert not page.get_by_role('tab',name='Node.js 环境',exact=True).count()
+                    page.get_by_role('tab',name='软件目录',exact=True).click()
+                    page.locator('article.node-catalog-card').get_by_role('button',name='安装与管理',exact=True).click()
+                    page.get_by_role('dialog',name='Node.js',exact=True).wait_for()
                 def dialog(title): return page.get_by_role('dialog',name=title,exact=True)
                 def layout(subject,name):
                     for width in (1440,390):
@@ -175,6 +178,10 @@ def main():
                 page.get_by_role('button',name='新建 Node 环境',exact=True).click()
                 first=dialog('准备 Node 环境')
                 expect(first.get_by_label('首次 Node 版本',exact=True)).to_have_value(node_version)
+                first.get_by_label('Node 环境名称',exact=True).fill('保留的草稿')
+                page.wait_for_timeout(4500)
+                expect(first.get_by_label('Node 环境名称',exact=True)).to_have_value('保留的草稿')
+                checks.append('node-draft-survives-catalog-refresh-without-separate-tab')
                 first.get_by_role('button',name='检查安装条件',exact=True).click()
                 expect(first.get_by_text('预检完成',exact=True)).to_be_visible()
                 layout(first,'node-first-confirmation')
@@ -184,7 +191,7 @@ def main():
                 assert len(submissions)==2 and submissions[0]['intent']['action']=='INITIALIZE'
                 assert submissions[1]['intent']['recipeVersion']==node_version
                 checks.append('single-confirmation-initializes-and-installs-exact-frozen-node-with-two-jobs')
-                env['versions'].clear();env['observation']['versions'].clear();env['observedDefaultVersion']='';env['lastJobId']='';history.clear();submissions.clear()
+                env['versions'].clear();env['observation']['versions'].clear();env['observedDefaultVersion']='';env['desiredDefaultSoftwareId']='';env['lastJobId']='';history.clear();submissions.clear()
                 enter()
                 layout(page.locator('.node-environments'),'node-empty')
                 page.get_by_role('button',name='安装 Node 版本',exact=True).click()
@@ -203,6 +210,20 @@ def main():
                 assert set(submissions[-1]['submit'])=={'idempotencyKey'}
                 checks.append('online-explicit-submit-and-reload-installed-version')
                 layout(page.locator('.node-environments'),'node-installed')
+                manager=dialog('Node.js')
+                manager.get_by_role('tab',name='来源与目录',exact=True).click()
+                manager.get_by_role('button',name='Close this dialog',exact=True).click()
+                manager.wait_for(state='hidden')
+                page.locator('article.node-catalog-card').get_by_role('button',name='安装与管理',exact=True).click()
+                manager.wait_for()
+                expect(manager.get_by_role('tab',name='来源与目录',exact=True)).to_have_attribute('aria-selected','true')
+                manager.get_by_role('button',name='Close this dialog',exact=True).click()
+                manager.wait_for(state='hidden')
+                page.get_by_role('tab',name='软件中心',exact=True).click()
+                page.locator('article.software-card').filter(has=page.get_by_role('heading',name='Node.js '+node_version,exact=True)).get_by_role('button',name='详情',exact=True).click()
+                manager.wait_for()
+                manager.get_by_role('tab',name='版本列表',exact=True).click()
+                checks.append('catalog-and-instance-open-same-preserved-node-drawer')
                 page.get_by_role('button',name='安装 pnpm',exact=True).click()
                 tool=dialog('安装 pnpm');tool.get_by_role('button',name='检查安装条件',exact=True).click();tool.get_by_role('button',name='确认执行',exact=True).click();tool.wait_for(state='hidden')
                 expect(page.get_by_role('button',name='更新 pnpm',exact=True)).to_be_visible()

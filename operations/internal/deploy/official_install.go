@@ -61,7 +61,7 @@ func (x *executor) installOfficialSoftware(req Request, dir string) (Result, err
 	}
 	installed, err := x.installedDockerPackages(ctx)
 	if err != nil {
-		return unknown("OFFICIAL_PACKAGE_STATE_UNAVAILABLE")
+		return unknown(officialPackageStateCode(err))
 	}
 	spec, _ := serviceinstall.OfficialRecipeSpec(i.Definition)
 	if err = officialInstallAbsent(spec, installed); err != nil {

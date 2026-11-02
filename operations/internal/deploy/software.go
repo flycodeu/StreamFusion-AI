@@ -56,7 +56,11 @@ func (x *executor) softwareRunner(ctx context.Context, command string, args ...s
 		cmd.Env = append(cmd.Env, "DEBIAN_FRONTEND=noninteractive")
 		boundPackageCommand(cmd)
 	}
-	buffer := &cappedBuffer{limit: 64 << 10}
+	limit := 64 << 10
+	if command == "/usr/bin/dpkg-query" {
+		limit = packageInventoryLimit
+	}
+	buffer := &cappedBuffer{limit: limit}
 	cmd.Stdout, cmd.Stderr = buffer, buffer
 	err = cmd.Run()
 	return buffer.Bytes(), err

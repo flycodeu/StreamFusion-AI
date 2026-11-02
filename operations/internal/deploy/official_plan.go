@@ -58,7 +58,8 @@ func (x *executor) officialInstallPreflight(i serviceinstall.Request) serviceins
 	defer cancel()
 	installed, err := x.installedDockerPackages(ctx)
 	if err != nil {
-		check("PACKAGES", "OFFICIAL_PACKAGE_STATE_UNAVAILABLE", "无法完整确认软件包状态，请管理员先修复未完成的包事务")
+		code := officialPackageStateCode(err)
+		check("PACKAGES", code, packageStateMessage(code))
 		return p
 	}
 	if err = officialInstallAbsent(spec, installed); err != nil {

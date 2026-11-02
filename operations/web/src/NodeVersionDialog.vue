@@ -5,6 +5,7 @@ import type {
   InstallationMaterial,
   ServiceRecipe,
 } from "./serviceInstallation";
+import ErrorHelpLink from "./ErrorHelpLink.vue";
 import NodeMaterialImport from "./NodeMaterialImport.vue";
 import type { Host } from "./hosts";
 import {
@@ -132,9 +133,7 @@ const canSubmit = computed(
               placeholder="如 ubuntu"
               required
           /></label>
-          <p class="hint">
-            选择服务器已有的非 root 账号。环境目录将根据账号自动生成。
-          </p>
+          <p class="hint">使用服务器已有的非 root 账号。</p>
         </template>
         <section v-if="draft.action === 'INITIALIZE'" class="plan">
           <strong>同时安装 Node.js</strong>
@@ -152,10 +151,7 @@ const canSubmit = computed(
               </option>
             </select></label
           >
-          <p>
-            本次确认包含准备 nvm
-            和安装此版本。初始化成功后核对账号与计划；内容变化或结果不确定时停止。
-          </p>
+          <p>自动安装 nvm 和所选 Node 版本。</p>
           <template v-if="draft.source === 'ARCHIVE'">
             <label
               >Node 离线材料<select
@@ -264,7 +260,7 @@ const canSubmit = computed(
               </select></label
             >
             <p v-if="!materials.length" class="hint">
-              此版本暂无匹配材料。可展开下方“补充离线材料”，已有文件无需重复上传。
+              暂无匹配材料，可在下方补充。
             </p>
             <NodeMaterialImport
               v-if="recipe"
@@ -295,12 +291,6 @@ const canSubmit = computed(
             type="checkbox"
           />安装后设为此环境默认版本</label
         >
-        <p
-          v-if="draft.action === 'SET_DEFAULT' || draft.makeDefault"
-          class="hint"
-        >
-          仅影响此环境后续采用默认值的任务。已运行程序及已打开终端保持当前版本。
-        </p>
         <template v-if="draft.action === 'UNINSTALL_NODE'">
           <p class="remove-note">
             将卸载此 Node 版本及其 npm、pnpm 和全局工具。
@@ -391,11 +381,10 @@ const canSubmit = computed(
       </p>
       <details v-if="error && diagnostic">
         <summary>诊断信息</summary>
+        <ErrorHelpLink :code="errorCode || ''" />
         <code>{{ diagnostic }}</code>
       </details>
-      <p v-if="attempted" class="hint">
-        请求已发出。结果未确认时，重试会沿用同一个操作标识。
-      </p>
+      <p v-if="attempted" class="hint">提交结果未确认，可核对原请求。</p>
       <footer>
         <button
           type="button"

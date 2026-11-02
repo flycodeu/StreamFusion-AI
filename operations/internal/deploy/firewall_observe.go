@@ -192,7 +192,7 @@ func (x *executor) firewallSnapshot() FirewallSnapshot {
 		}
 	}
 	if err != nil {
-		s.Code = "PORT_OBSERVATION_DENIED"
+		s.Code = err.Error()
 	}
 	return s
 }

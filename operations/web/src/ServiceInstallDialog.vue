@@ -2,6 +2,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { ElDialog, ElDrawer } from "element-plus";
 import HostPreparationPanel from "./HostPreparationPanel.vue";
+import ErrorHelpLink from "./ErrorHelpLink.vue";
 import OfficialInstallationDetails from "./OfficialInstallationDetails.vue";
 import { hostTime } from "./hosts";
 import SoftwareIcon from "./SoftwareIcon.vue";
@@ -146,6 +147,7 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
         {{ fieldError }}
       </div>
       <div v-if="actionError" class="install-error" role="alert">
+        <ErrorHelpLink :code="actionError.code" />
         <strong>{{ actionError.message }}</strong
         ><small>{{ actionError.code }} · {{ hostTime(actionError.at) }}</small
         ><code v-if="actionError.traceId"
@@ -721,7 +723,7 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
           </dd>
           <dt v-if="job?.errorCode">错误码</dt>
           <dd v-if="job?.errorCode">
-            <code>{{ job.errorCode }}</code>
+            <code>{{ job.errorCode }}</code><ErrorHelpLink :code="job.errorCode" />
           </dd>
           <dt v-if="job?.traceId">追踪标识</dt>
           <dd v-if="job?.traceId">

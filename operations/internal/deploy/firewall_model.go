@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"os"
+	"os/exec"
 	"regexp"
 	"slices"
 	"strconv"
@@ -90,7 +92,7 @@ func firewallArguments(r FirewallRule, tag string, remove bool) []string {
 var portProcess = regexp.MustCompile(`\(\("([a-zA-Z0-9_.-]+)"`)
 
 func ParseHostPorts(raw string) ([]HostPort, error) {
-	if len(raw) > 64<<10 {
+	if len(raw) >= 64<<10 {
 		return nil, errors.New("PORT_SNAPSHOT_TOO_LARGE")
 	}
 	rows := []HostPort{}
@@ -121,7 +123,7 @@ func ParseHostPorts(raw string) ([]HostPort, error) {
 func ObserveHostPorts(ctx context.Context, run SoftwareCommandRunner) ([]HostPort, string, string, error) {
 	out, err := softwareCommand(ctx, run, "/usr/bin/ss", "-H", "-lntup")
 	if err != nil {
-		return nil, "", "", errors.New("PORT_OBSERVATION_DENIED")
+		return nil, "", "", errors.New(portObservationError(out, err))
 	}
 	ports, err := ParseHostPorts(string(out))
 	if err != nil {
@@ -134,6 +136,32 @@ func ObserveHostPorts(ctx context.Context, run SoftwareCommandRunner) ([]HostPor
 		docker = nil
 	}
 	return ports, string(docker), code, nil
+}
+
+// Only fixed diagnostic codes leave the executor. A nonzero exit without
+// permission evidence is a failed probe, not proof of missing authorization.
+func portObservationError(out []byte, err error) string {
+	var timeout net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || err.Error() == "SOFTWARE_OBSERVATION_TIMEOUT" || errors.As(err, &timeout) && timeout.Timeout() {
+		return "PORT_OBSERVATION_TIMEOUT"
+	}
+	if len(out) >= 64<<10 || err.Error() == "SOFTWARE_OBSERVATION_TOO_LARGE" {
+		return "PORT_SNAPSHOT_TOO_LARGE"
+	}
+	diagnostic := strings.ToLower(err.Error() + "\n" + string(out))
+	if errors.Is(err, os.ErrPermission) || strings.Contains(diagnostic, "permission denied") || strings.Contains(diagnostic, "operation not permitted") {
+		return "PORT_OBSERVATION_DENIED"
+	}
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, exec.ErrNotFound) || err.Error() == "SOFTWARE_OBSERVER_UNAVAILABLE" || err.Error() == "EXECUTOR_PATH_NOT_PROTECTED" {
+		return "PORT_COMMAND_UNAVAILABLE"
+	}
+	// The SSH transport reports shell exit status; local execution uses ExitCode.
+	var remoteExit interface{ ExitStatus() int }
+	var localExit interface{ ExitCode() int }
+	if errors.As(err, &remoteExit) && (remoteExit.ExitStatus() == 126 || remoteExit.ExitStatus() == 127) || errors.As(err, &localExit) && (localExit.ExitCode() == 126 || localExit.ExitCode() == 127) {
+		return "PORT_COMMAND_UNAVAILABLE"
+	}
+	return "PORT_OBSERVATION_FAILED"
 }
 
 func validateFirewallEffect(c FirewallChange, s FirewallSnapshot) error {
