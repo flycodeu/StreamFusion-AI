@@ -33,6 +33,22 @@ test("error guidance distinguishes observation failures from confirmed package t
   assert.ok(packages.steps.some((step) => step.includes("traceId")));
 });
 
+test("official path guidance distinguishes standard system links from existing packages and files", () => {
+  const paths = reference.findErrorReference("OFFICIAL_PATH_NOT_PROTECTED");
+  const packages = reference.findErrorReference("OFFICIAL_PACKAGE_ALREADY_INSTALLED");
+  const existing = reference.findErrorReference("OFFICIAL_EXISTING_CONFIGURATION_OR_DATA");
+  assert.ok(reference.searchErrorReference("标准 /lib").includes(paths));
+  assert.match(paths.meaning, /旧版执行器会误拒绝/);
+  assert.ok(paths.steps.some((step) => step.includes("namei -l")));
+  assert.ok(paths.steps.some((step) => step.includes("root 所有") && step.includes("精确为 usr/lib 或 /usr/lib") && step.includes("实际目标目录仍须通过保护检查")));
+  assert.match(packages.meaning, /不代表整套服务已经安装完成或正在运行/);
+  assert.match(existing.meaning, /无法确认该位置不存在/);
+  assert.ok(existing.steps.some((step) => step.includes("具体路径") && step.includes("traceId")));
+  for (const entry of [paths, packages, existing]) {
+    assert.doesNotMatch(entry.steps.join(" "), /\b(?:chmod|chown|rm|unlink)\b/);
+  }
+});
+
 test("error help opens a local reference without navigating or changing page data", () => {
   help.showErrorHelp(" OFFICIAL_PACKAGE_STATE_UNAVAILABLE ");
   assert.deepEqual({ ...help.errorHelp }, { open: true, code: "OFFICIAL_PACKAGE_STATE_UNAVAILABLE" });

@@ -13,6 +13,18 @@ import (
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
+func TestOfficialPathFailureNamesPathWithoutClaimingExistingSoftware(t *testing.T) {
+	err := &officialPathCheckError{"OFFICIAL_PATH_NOT_PROTECTED", "/lib/systemd/system/docker.service"}
+	message := officialExistingMessage(err)
+	if !strings.Contains(message, err.path) || !strings.Contains(message, "父目录") || strings.Contains(message, "已有") || strings.Contains(message, "检测登记") {
+		t.Fatal(message)
+	}
+	err.code = "OFFICIAL_EXISTING_CONFIGURATION_OR_DATA"
+	if message = officialExistingMessage(err); !strings.Contains(message, err.path) || !strings.Contains(message, "已存在") {
+		t.Fatal(message)
+	}
+}
+
 func TestOfficialAptPlanRejectsUpgradesRemovalsAndUntrustedOrigin(t *testing.T) {
 	good := "Inst redis-tools (5:7.0.15-1ubuntu0.24.04.5 Ubuntu:24.04/noble-updates, Ubuntu:24.04/noble-security [amd64])\nInst redis-server (5:7.0.15-1ubuntu0.24.04.5 Ubuntu:24.04/noble-updates [amd64])\nInst helper (1.0 Ubuntu:24.04/noble [all])\n"
 	packages, err := parseOfficialAptPlan([]byte(good), []string{"redis-server", "redis-tools"}, map[string]string{})

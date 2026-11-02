@@ -27,8 +27,21 @@ export const errorReference: ErrorReferenceEntry[] = [
   },
   { code: "OFFICIAL_TOOL_UNAVAILABLE", name: "系统安装工具不可用", category: "官方安装", meaning: "apt、dpkg、systemctl 等所需工具缺失，或实际路径未通过受保护路径检查。", steps: ["查看预检中标出的工具路径，用 command -v 和 readlink -f 核对。", "由管理员检查该工具及其父目录的属主、权限和系统包来源，再重新预检。"] },
   { code: "OFFICIAL_PLATFORM_UNSUPPORTED", name: "系统不符合官方安装条件", category: "官方安装", meaning: "当前官方系统包配方要求 Ubuntu 24.04、amd64 架构及受控 root 执行器。", steps: ["执行 cat /etc/os-release 与 uname -m，核对系统版本和架构。", "若系统符合条件，检查主机接入状态；其他系统请选择明确支持的离线配方或自行安装后登记。"] },
-  { code: "OFFICIAL_PACKAGE_ALREADY_INSTALLED", name: "系统已有目标软件包", category: "官方安装", meaning: "发现计划安装的软件包已存在，平台不会覆盖安装。", steps: ["用 dpkg-query -W 核对预检列出的包及版本。", "若要管理现有软件，选择自行安装后的检测登记。"] },
-  { code: "OFFICIAL_EXISTING_CONFIGURATION_OR_DATA", name: "目标位置已有程序或数据", category: "官方安装", meaning: "计划使用的程序、服务单元、配置或数据目录已存在，平台停止安装以避免覆盖。", steps: ["按预检路径核对现有程序、配置和数据归属。", "已有可用服务请检测登记；不要为通过预检直接删除现有目录。"] },
+  {
+    code: "OFFICIAL_PATH_NOT_PROTECTED", name: "安装路径保护检查未通过", category: "官方安装",
+    meaning: "计划位置或其父路径未通过保护检查。旧版执行器会误拒绝系统标准的 /lib → /usr/lib 链接；此码本身不能证明属主或权限配置错误。",
+    steps: ["先记录预检指出的具体路径与 traceId，使用 namei -l 核对该路径的各级目录、属主、权限和链接目标。", "涉及 /lib 时，执行 ls -ld /lib /usr /usr/lib 和 readlink /lib。若 /lib 由 root 所有且链接目标精确为 usr/lib 或 /usr/lib，更新接入组件后重新预检；实际目标目录仍须通过保护检查。", "其他路径失败时，保留上述只读结果交由管理员核对路径归属及系统布局。"],
+  },
+  {
+    code: "OFFICIAL_PACKAGE_ALREADY_INSTALLED", name: "系统已有目标软件包", category: "官方安装",
+    meaning: "配方需要的至少一个软件包已经安装，平台停止覆盖安装；这不代表整套服务已经安装完成或正在运行。",
+    steps: ["对预检列出的具体包使用 dpkg-query -W 查询版本；结合 dpkg --audit 核对软件包状态。", "核对页面列出的服务单元及现有配置、数据路径。已有可用软件请选择自行安装后的检测登记；只有部分包时，先由管理员确认现有安装用途。"],
+  },
+  {
+    code: "OFFICIAL_EXISTING_CONFIGURATION_OR_DATA", name: "目标位置已有内容或状态未确认", category: "官方安装",
+    meaning: "计划使用的程序、服务单元、配置或数据位置已存在，或平台无法确认该位置不存在；这与软件包是否已经安装是两项独立检查。",
+    steps: ["按预检列出的具体路径使用 ls -ld 和 namei -l，只读核对内容是否存在、路径归属及查询错误。服务单元和其覆盖目录也在检查范围内。", "确认是已有服务时选择检测登记；目录残留或查询失败时，保留具体路径、错误输出和 traceId，由管理员核对来源与用途。"],
+  },
   { code: "OFFICIAL_PORT_UNAVAILABLE", name: "官方默认端口不可用", category: "官方安装", meaning: "配方默认端口不能使用，可能已被现有服务占用。", steps: ["进入端口管理检测该主机，查找预检列出的端口和进程。", "确认现有服务用途并处理冲突后重新预检。"] },
   { code: "OFFICIAL_APT_PLAN_UNAVAILABLE", name: "APT 安装模拟失败", category: "官方安装", meaning: "APT 无法生成安装计划；本机索引、依赖约束或软件源状态需要进一步检查。", steps: ["执行 apt-cache policy，检查当前索引和候选来源。", "对计划列出的包运行 apt-get --simulate --no-remove --no-install-recommends install <包名>，查看具体依赖错误；此处只做模拟。", "处理已确认的软件源或依赖问题后重新预检。"] },
   { code: "OFFICIAL_PACKAGE_ORIGIN_UNAVAILABLE", name: "软件包来源未确认", category: "官方安装", meaning: "读取 apt-cache policy 失败，或候选版本与软件源索引无法对应。", steps: ["执行 apt-cache policy <包名> 和 apt-cache policy，核对预检列出的版本、来源和索引。", "检查软件源是否可用；保留查询输出和 traceId 后重新预检。"] },

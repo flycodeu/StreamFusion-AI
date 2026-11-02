@@ -63,7 +63,11 @@ func (x *executor) officialInstallPreflight(i serviceinstall.Request) serviceins
 		return p
 	}
 	if err = officialInstallAbsent(spec, installed); err != nil {
-		check("EXISTING", err.Error(), "发现已有软件、服务或专属目录；请使用自行安装后的检测登记")
+		key := "EXISTING"
+		if err.Error() == "OFFICIAL_PATH_NOT_PROTECTED" {
+			key = "PATH"
+		}
+		check(key, err.Error(), officialExistingMessage(err))
 		return p
 	}
 	for _, mapping := range p.PortMappings {
@@ -101,14 +105,53 @@ func officialInstallAbsent(spec serviceinstall.OfficialSpec, installed map[strin
 		}
 	}
 	for _, name := range paths {
-		if _, err := os.Lstat(name); !os.IsNotExist(err) {
-			return errors.New("OFFICIAL_EXISTING_CONFIGURATION_OR_DATA")
+		if _, err := os.Lstat(name); err == nil {
+			return &officialPathCheckError{"OFFICIAL_EXISTING_CONFIGURATION_OR_DATA", name}
+		} else if !os.IsNotExist(err) {
+			return &officialPathCheckError{"OFFICIAL_PATH_NOT_PROTECTED", name}
 		}
-		if secureAncestors(existingServiceParent(filepath.Dir(name))) != nil {
-			return errors.New("OFFICIAL_PATH_NOT_PROTECTED")
+		if protectedOfficialParent(name) != nil {
+			return &officialPathCheckError{"OFFICIAL_PATH_NOT_PROTECTED", name}
 		}
 	}
 	return nil
+}
+
+type officialPathCheckError struct{ code, path string }
+
+func (e *officialPathCheckError) Error() string { return e.code }
+
+func officialExistingMessage(err error) string {
+	var pathError *officialPathCheckError
+	if errors.As(err, &pathError) {
+		if pathError.code == "OFFICIAL_PATH_NOT_PROTECTED" {
+			return "安装路径的父目录未通过保护检查：" + pathError.path + "；请核对目录所有者、写权限和符号链接"
+		}
+		return "路径已存在：" + pathError.path + "；请先核对现有程序或数据，平台不会覆盖"
+	}
+	return "软件包已安装；请使用自行安装后的检测登记"
+}
+
+// Ubuntu's merged-/usr layout uses a root-owned /lib -> usr/lib link.
+// Accept only that exact system alias; all canonical ancestors must still be
+// root-owned and non-writable by other accounts. Other links stay forbidden.
+func protectedOfficialParent(name string) error {
+	parent := existingServiceParent(filepath.Dir(name))
+	if parent == "/lib" || strings.HasPrefix(parent, "/lib/") {
+		info, err := os.Lstat("/lib")
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			uid, _ := nativeFileOwner(info)
+			link, err := os.Readlink("/lib")
+			if err != nil || uid != 0 || (link != "usr/lib" && link != "/usr/lib") {
+				return errors.New("OFFICIAL_PATH_NOT_PROTECTED")
+			}
+			parent = "/usr/lib" + strings.TrimPrefix(parent, "/lib")
+		}
+	}
+	return secureAncestors(parent)
 }
 
 func (x *executor) officialCandidatePlan(ctx context.Context, d serviceinstall.Definition, installed map[string]string) (*serviceinstall.OfficialPlan, error) {
