@@ -26,6 +26,9 @@ func (x *executor) boundSoftware(s SoftwareRequest) error {
 }
 
 func (x *executor) applySoftware(req Request, dir string) (Result, error) {
+	if req.NodeEnvironment != nil {
+		return x.applyNodeEnvironment(req, dir)
+	}
 	if req.Uninstallation != nil {
 		return x.uninstallSoftware(req, dir)
 	}
@@ -153,6 +156,18 @@ func (x *executor) adoptSoftware(req Request) error {
 }
 
 func (x *executor) verifySoftwareResult(req Request, result Result) error {
+	if req.NodeEnvironment != nil {
+		if result.NodeEnvironment == nil || result.NodeEnvironment.EnvironmentID != req.NodeEnvironment.Context.EnvironmentID {
+			return errors.New("NODE_RECEIPT_MISMATCH")
+		}
+		return nil
+	}
+	if req.NodeEnvironment != nil {
+		if result.NodeEnvironment == nil || result.NodeEnvironment.EnvironmentID != req.NodeEnvironment.Context.EnvironmentID {
+			return errors.New("NODE_RECEIPT_MISMATCH")
+		}
+		return nil
+	}
 	if req.Uninstallation != nil {
 		return x.verifySoftwareUninstall(req, result)
 	}
@@ -188,6 +203,12 @@ func (x *executor) verifySoftwareResult(req Request, result Result) error {
 }
 
 func (x *executor) reconcileSoftware(req Request, dir string) Result {
+	if req.NodeEnvironment != nil {
+		return x.reconcileNodeEnvironment(req, dir)
+	}
+	if req.NodeEnvironment != nil {
+		return x.reconcileNodeEnvironment(req, dir)
+	}
 	if req.Uninstallation != nil {
 		return x.reconcileSoftwareUninstall(req, dir)
 	}

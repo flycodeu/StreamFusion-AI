@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -37,18 +38,20 @@ type installPortMapping struct {
 	Key           string `json:"key,omitempty"`
 }
 type softwareInstallPlan struct {
-	ID             string                    `json:"id"`
-	TargetID       string                    `json:"targetId"`
-	TargetSnapshot string                    `json:"-"`
-	HostVersion    string                    `json:"-"`
-	SoftwareID     string                    `json:"-"`
-	Definition     serviceinstall.Definition `json:"definition"`
-	Config         serviceinstall.Config     `json:"config"`
-	Source         installSource             `json:"source"`
-	ExpiresAt      string                    `json:"expiresAt"`
-	Checks         []installCheck            `json:"checks"`
-	Paths          installPaths              `json:"paths"`
-	PortMappings   []installPortMapping      `json:"portMappings"`
+	Node           *serviceinstall.NodeContext  `json:"node,omitempty"`
+	Official       *serviceinstall.OfficialPlan `json:"official,omitempty"`
+	ID             string                       `json:"id"`
+	TargetID       string                       `json:"targetId"`
+	TargetSnapshot string                       `json:"-"`
+	HostVersion    string                       `json:"-"`
+	SoftwareID     string                       `json:"-"`
+	Definition     serviceinstall.Definition    `json:"definition"`
+	Config         serviceinstall.Config        `json:"config"`
+	Source         installSource                `json:"source"`
+	ExpiresAt      string                       `json:"expiresAt"`
+	Checks         []installCheck               `json:"checks"`
+	Paths          installPaths                 `json:"paths"`
+	PortMappings   []installPortMapping         `json:"portMappings"`
 }
 
 // Plan-private identity is part of the persisted snapshot, never a browser
@@ -61,7 +64,7 @@ type storedInstallPlan struct {
 }
 
 func (p softwareInstallPlan) request() *serviceinstall.Request {
-	return &serviceinstall.Request{SoftwareID: p.SoftwareID, BindingRevision: 1, Definition: p.Definition, Config: p.Config, Source: p.Source.Source}
+	return &serviceinstall.Request{SoftwareID: p.SoftwareID, BindingRevision: 1, Definition: p.Definition, Config: p.Config, Source: p.Source.Source, Official: p.Official, Node: p.Node}
 }
 func (p softwareInstallPlan) snapshot() string {
 	return jsonText(storedInstallPlan{softwareInstallPlan: p, Snapshot: p.TargetSnapshot, Version: p.HostVersion, Software: p.SoftwareID})
@@ -83,6 +86,10 @@ func (h *HTTP) softwareInstallRoute(w http.ResponseWriter, r *http.Request, s *s
 	}
 	if path == "/software-recipes" && r.Method == "GET" {
 		h.success(w, r, serviceinstall.Catalog())
+		return true
+	}
+	if path == "/software-official-recipes" && r.Method == "GET" {
+		h.success(w, r, serviceinstall.OfficialCatalog())
 		return true
 	}
 	p := strings.Split(strings.Trim(path, "/"), "/")
@@ -136,28 +143,57 @@ func checkInstallCredentialTx(tx *sql.Tx, c serviceinstall.Config) error {
 	return nil
 }
 
-func (h *HTTP) installTargetReady(ctx context.Context, t target, config serviceinstall.Config) error {
+type installCompatibilityError struct{ message string }
+
+func (e *installCompatibilityError) Error() string { return "EXECUTOR_UPGRADE_REQUIRED" }
+
+func (h *HTTP) installTargetReady(ctx context.Context, t target, config serviceinstall.Config, selected ...serviceinstall.Definition) error {
 	var capability executorCapabilities
 	if err := h.store.callTarget(ctx, t, deploy.Request{Action: "CAPABILITIES"}, "", &capability); err != nil {
 		return err
 	}
-	if capability.Owner.ControllerID != h.store.controllerID() || capability.Owner.TargetID != t.ID || capability.Owner.ExecutorVersion != deploy.Version {
+	if capability.Owner.ControllerID != h.store.controllerID() || capability.Owner.TargetID != t.ID {
 		return errors.New("EXECUTOR_IDENTITY_MISMATCH")
+	}
+	if capability.Owner.ProtocolVersion != 1 {
+		return &installCompatibilityError{message: fmt.Sprintf("目标执行器协议版本不匹配（需要1，实际%d），请在主机安装准备中升级该受管目录的执行器，再重新预检", capability.Owner.ProtocolVersion)}
+	}
+	if capability.Owner.ExecutorVersion != deploy.Version {
+		return &installCompatibilityError{message: "目标执行器程序版本与当前控制器不匹配，请在主机安装准备中升级该受管目录的执行器，再重新预检"}
+	}
+	if capability.InstallVersion != serviceinstall.CapabilityVersion {
+		return &installCompatibilityError{message: fmt.Sprintf("目标执行器软件安装能力版本不匹配（需要%d，实际%d），请在主机安装准备中升级该受管目录的执行器，再重新预检", serviceinstall.CapabilityVersion, capability.InstallVersion)}
 	}
 	if capability.Platform != "linux/amd64" {
 		return errors.New("INSTALL_PLATFORM_UNSUPPORTED")
 	}
-	if config.Mode() == "DOCKER" && !capability.DockerEngine {
-		return errors.New("DOCKER_ENGINE_UNAVAILABLE")
+	if len(selected) > 0 && serviceinstall.IsNode(selected[0]) && capability.NodeEnvironmentVersion != deploy.NodeEnvironmentCapabilityVersion {
+		return errors.New("NODE_CAPABILITY_REQUIRED")
 	}
-	if capability.InstallVersion != serviceinstall.CapabilityVersion || capability.CatalogHash != serviceinstall.CatalogHash() {
-		return errors.New("EXECUTOR_UPGRADE_REQUIRED")
+	if len(selected) > 0 && serviceinstall.IsOfficial(selected[0]) && capability.OfficialInstallVersion != 1 {
+		return &installCompatibilityError{message: "主机已接入；当前组件尚不支持官方命令安装，请在此更新接入组件后重新预检，已有授权与业务数据保留"}
 	}
+	switch config.Mode() {
+	case "DOCKER":
+		if !capability.DockerEngine {
+			return errors.New("DOCKER_ENGINE_UNAVAILABLE")
+		}
+	case "NATIVE":
+		if capability.NativeInstallVersion != 1 {
+			return errors.New("NATIVE_INSTALL_UPGRADE_REQUIRED")
+		}
+	default:
+		return errors.New("INSTALL_RUNTIME_UNSUPPORTED")
+	}
+	// A catalog can grow without changing any existing recipe. The following
+	// SOFTWARE_INSTALL_CHECK validates the exact selected Definition on target;
+	// a global catalog digest must not block recipes that executor still trusts.
 	return nil
 }
 
 func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request, s *session, targetID string) {
 	var in struct {
+		Node        *nodeInstallInput     `json:"node,omitempty"`
 		HostVersion string                `json:"expectedHostVersion"`
 		Key         string                `json:"recipeKey"`
 		Version     string                `json:"recipeVersion"`
@@ -173,6 +209,15 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	d, err := serviceinstall.Find(in.Key, in.Version)
+	if in.Key == "nvm" || in.Key == "npm" || in.Key == "pnpm" {
+		h.nodeError(w, r, errors.New("NODE_ENVIRONMENT_ACTION_REQUIRED"))
+		return
+	}
+	if in.Source.Type == "OFFICIAL" && in.Key != "node" {
+		d, err = serviceinstall.FindOfficial(in.Key, in.Version)
+	} else if serviceinstall.IsOfficial(d) {
+		err = errors.New("INSTALL_SOURCE_INVALID")
+	}
 	if err != nil || d.Revision != in.Revision {
 		h.fail(w, r, 400, "INSTALL_RECIPE_INVALID", "请选择当前内置配方版本")
 		return
@@ -225,11 +270,17 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	if err = h.installTargetReady(ctx, t, in.Config); err != nil {
-		h.fail(w, r, 409, executorFailureCode(err), "请打开主机安装准备，按运行方式核对执行器、授权和依赖")
+	if err = h.installTargetReady(ctx, t, in.Config, d); err != nil {
+		code, message := installTargetError(err)
+		h.fail(w, r, 409, code, message)
 		return
 	}
-	p := softwareInstallPlan{ID: uuid.NewString(), TargetID: t.ID, TargetSnapshot: pluginTargetSnapshot(t), HostVersion: t.Version, SoftwareID: uuid.NewString(), Definition: d, Config: in.Config, Source: source, ExpiresAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)}
+	node, err := h.resolveNodeInstall(targetID, d, in.Node)
+	if err != nil {
+		h.nodeError(w, r, err)
+		return
+	}
+	p := softwareInstallPlan{Node: node, ID: uuid.NewString(), TargetID: t.ID, TargetSnapshot: pluginTargetSnapshot(t), HostVersion: t.Version, SoftwareID: uuid.NewString(), Definition: d, Config: in.Config, Source: source, ExpiresAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)}
 	var preflight serviceinstall.Preflight
 	if err = h.store.callTarget(ctx, t, deploy.Request{Action: "SOFTWARE_INSTALL_CHECK", Installation: p.request()}, "", &preflight); err != nil {
 		code, message := installPreflightError(err)
@@ -241,8 +292,7 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		h.fail(w, r, 409, code, message)
 		return
 	}
-	root := serviceinstall.InstallRoot(t.InstallRoot, p.SoftwareID, p.Config)
-	if preflight.Root != root || preflight.DataDirectory != root+"/data" || preflight.ConfigDirectory != root+"/config" {
+	if err = validateInstallPreflightPaths(t.InstallRoot, &p, preflight); err != nil {
 		h.fail(w, r, 409, "INSTALL_PREFLIGHT_MISMATCH", "执行器返回的目标路径不匹配，请升级并核对执行器")
 		return
 	}
@@ -272,6 +322,10 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 	}
 	if pluginTargetSnapshot(current) != p.TargetSnapshot || current.Maintenance {
 		h.fail(w, r, 409, "HOST_CHANGED", "预检期间主机变化，请重新检查")
+		return
+	}
+	if err = checkNodeInstallTx(tx, p); err != nil {
+		h.nodeError(w, r, err)
 		return
 	}
 	if err = checkInstallCredentialTx(tx, in.Config); err != nil {
@@ -387,8 +441,9 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	if err = h.installTargetReady(ctx, t, p.Config); err != nil {
-		h.fail(w, r, 409, executorFailureCode(err), "目标安装能力不可用，请打开主机安装准备")
+	if err = h.installTargetReady(ctx, t, p.Config, p.Definition); err != nil {
+		code, message := installTargetError(err)
+		h.fail(w, r, 409, code, message)
 		return
 	}
 	var checked serviceinstall.Preflight
@@ -398,6 +453,14 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 			code, message = h.installPreflightRejection(checked, p.Config)
 		}
 		h.fail(w, r, 409, code, message)
+		return
+	}
+	if serviceinstall.IsOfficial(p.Definition) && (checked.Official == nil || checked.Official.Validate(p.Definition) != nil || deploy.Digest(checked.Official) != deploy.Digest(p.Official)) {
+		h.fail(w, r, 409, "OFFICIAL_PLAN_CHANGED", "官方仓库的软件版本或依赖已变化，请重新预检并确认安装命令")
+		return
+	}
+	if err = validateInstallPreflightPaths(t.InstallRoot, &p, checked); err != nil {
+		h.fail(w, r, 409, "INSTALL_PREFLIGHT_MISMATCH", "执行器返回的目标路径不匹配，请重新预检")
 		return
 	}
 	h.store.mu.Lock()
@@ -442,6 +505,10 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 	}
 	if planRaw != raw || planStatus != "DRAFT" || planExpiry != p.ExpiresAt || time.Now().After(expires) {
 		h.fail(w, r, 409, "INSTALL_PLAN_STALE", "计划已变化、提交或过期")
+		return
+	}
+	if err = checkNodeInstallTx(tx, p); err != nil {
+		h.nodeError(w, r, err)
 		return
 	}
 	if err = checkInstallCredentialTx(tx, p.Config); err != nil {
@@ -490,6 +557,12 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 	if err == nil {
 		_, err = tx.Exec("INSERT INTO software_instances(id,name,host_id,software_type,software_version,runtime_kind,locator,management_mode,desired_state,actual_state,binding_revision,last_job_id,data_ownership,install_plan_id,installation_json,installation_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'OBSERVE',?,'UNKNOWN',1,?,'OPS',?,?,'INSTALLING',?,?)", p.SoftwareID, p.Config.Name, p.TargetID, strings.ToUpper(p.Definition.Key), p.Definition.Version, installationRuntimeKind(p.Definition, p.Config), "pending:"+p.SoftwareID, installationDesiredState(p.Definition), job, id, jsonText(req.Installation), now, now)
 	}
+	if err == nil && p.Node != nil {
+		_, err = tx.Exec("UPDATE software_instances SET node_environment_id=? WHERE id=?", p.Node.EnvironmentID, p.SoftwareID)
+		if err == nil {
+			_, err = tx.Exec("UPDATE node_environments SET last_job_id=?,updated_at=? WHERE id=?", job, now, p.Node.EnvironmentID)
+		}
+	}
 	if err == nil {
 		_, err = tx.Exec("UPDATE software_install_plans SET status='SUBMITTED' WHERE id=?", id)
 	}
@@ -524,7 +597,40 @@ func installPreflightError(err error) (string, string) {
 	if err != nil && strings.Contains(err.Error(), "SERVICE_SECRET_INVALID") {
 		return "SERVICE_SECRET_INVALID", "目标配方拒绝凭据内容，请检查凭据类型、长度和字符；不要把SSH凭据当服务密码"
 	}
+	if err != nil {
+		code, message := installTargetError(err)
+		if code != "EXECUTOR_CALL_FAILED" {
+			return code, message
+		}
+	}
 	return "INSTALL_PREFLIGHT_FAILED", "目标检查未完成，请核对主机连接、监听地址、执行器版本与Docker权限"
+}
+
+func installTargetError(err error) (string, string) {
+	if err != nil && err.Error() == "NODE_CAPABILITY_REQUIRED" {
+		return "NODE_CAPABILITY_REQUIRED", "主机已接入，需更新接入组件以管理 Node；更新后重新检查即可"
+	}
+	var compatibility *installCompatibilityError
+	if errors.As(err, &compatibility) {
+		return compatibility.Error(), compatibility.message
+	}
+	code := executorFailureCode(err)
+	if code == "EXECUTOR_UPGRADE_REQUIRED" {
+		return code, "目标执行器的协议或软件安装能力版本与当前控制器不兼容，请在主机安装准备中升级该受管目录的执行器，再重新预检"
+	}
+	if message, ok := executorFailureMessages[code]; ok {
+		return code, message
+	}
+	if strings.HasPrefix(code, "SSH_") || strings.HasPrefix(code, "CREDENTIAL_") {
+		return hostSSHError(err)
+	}
+	if code == "LINUX_TARGET_REQUIRED" {
+		return code, "当前目标不是可执行安装的Linux主机，请选择远程Linux连接"
+	}
+	if code == "TARGET_PATH_INVALID" {
+		return code, "受管目录格式不正确，请编辑主机项目目录"
+	}
+	return "EXECUTOR_CALL_FAILED", executorFailureMessages["EXECUTOR_CALL_FAILED"]
 }
 
 func (h *HTTP) installPreflightRejection(p serviceinstall.Preflight, c serviceinstall.Config) (string, string) {
@@ -534,7 +640,7 @@ func (h *HTTP) installPreflightRejection(p serviceinstall.Preflight, c servicein
 		if check.Status == "PASS" {
 			continue
 		}
-		if strings.HasPrefix(check.Code, "SERVICE_") && len(check.Code) < 90 && !strings.ContainsAny(check.Code, " \r\n\t:") {
+		if (strings.HasPrefix(check.Code, "SERVICE_") || strings.HasPrefix(check.Code, "OFFICIAL_") || strings.HasPrefix(check.Code, "NATIVE_") || strings.HasPrefix(check.Code, "DOCKER_")) && len(check.Code) < 90 && !strings.ContainsAny(check.Code, " \r\n\t:") {
 			code = check.Code
 		}
 		text := check.Key + ": " + check.Message

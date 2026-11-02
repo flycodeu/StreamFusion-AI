@@ -61,6 +61,12 @@ func (x *executor) installOwnership(req Request) *SoftwareOwnership {
 }
 
 func (x *executor) serviceInstallPreflight(i serviceinstall.Request) serviceinstall.Preflight {
+	if serviceinstall.IsNode(i.Definition) {
+		return x.nodeInstallPreflight(i)
+	}
+	if serviceinstall.IsOfficial(i.Definition) {
+		return x.officialInstallPreflight(i)
+	}
 	if i.Config.Mode() == "NATIVE" {
 		return x.nativeInstallPreflight(i)
 	}
@@ -323,10 +329,16 @@ func (x *executor) serviceImage(req Request) error {
 }
 
 func (x *executor) installService(req Request, dir string) (Result, error) {
+	if serviceinstall.IsNode(req.Installation.Definition) {
+		return x.installNodeVersion(req, dir)
+	}
 	// Custom storage can live outside the target root. Its metadata binding
 	// still belongs to the protected executor, rather than the data directory.
 	if err := os.MkdirAll(filepath.Dir(x.softwareFile(req.Installation.SoftwareID)), 0700); err != nil {
 		return softwareResult(req), err
+	}
+	if serviceinstall.IsOfficial(req.Installation.Definition) {
+		return x.installOfficialSoftware(req, dir)
 	}
 	if req.Installation.Config.Mode() == "NATIVE" {
 		return x.installNative(req, dir)
@@ -430,7 +442,13 @@ func (x *executor) serviceInstallResult(req Request, s SoftwareRequest, version,
 }
 
 func (x *executor) reconcileServiceInstallation(req Request, dir string) Result {
+	if serviceinstall.IsNode(req.Installation.Definition) {
+		return x.reconcileNodeInstall(req, dir)
+	}
 	if req.Installation.Config.Mode() == "NATIVE" {
+		if serviceinstall.IsOfficial(req.Installation.Definition) {
+			return x.reconcileOfficialSoftware(req, dir)
+		}
 		return x.reconcileNative(req, dir)
 	}
 	if req.Installation.Definition.Kind == "TOOL" {

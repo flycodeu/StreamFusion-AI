@@ -46,7 +46,7 @@ func installSSHFixture(t *testing.T, s *Store, b *browser, extensions ...func(de
 			if fixture.OldExecutor.Load() {
 				version = 0
 			}
-			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerAvailable": false, "dockerEngineAvailable": !fixture.NoDocker.Load(), "softwareLifecycleVersion": 1, "serviceInstallVersion": version, "serviceCatalogHash": serviceinstall.CatalogHash()})
+			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerAvailable": false, "dockerEngineAvailable": !fixture.NoDocker.Load(), "softwareLifecycleVersion": 1, "serviceInstallVersion": version, "nativeInstallVersion": 1, "serviceCatalogHash": serviceinstall.CatalogHash()})
 		}
 		if req.Reconfiguration != nil {
 			fixture.mu.Lock()

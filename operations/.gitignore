@@ -24,6 +24,8 @@
 *.pem
 *.tar.gz
 /materials/*.tar
+/materials/*.tar.xz
+/materials/*.tgz
 /materials/*.deb
 /materials/library.json
 *.exe

@@ -21,6 +21,7 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 		Key              string `json:"idempotencyKey"`
 		Action           string `json:"action"`
 		DeleteData       bool   `json:"deleteData"`
+		ClearNodeDefault bool   `json:"clearNodeDefault"`
 		ConfirmationName string `json:"confirmationName"`
 	}
 	if e := decode(w, r, &in); e != nil {
@@ -39,7 +40,7 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 		}
 		action = "SOFTWARE_" + in.Action
 	}
-	if action != "SOFTWARE_UNINSTALL" && (in.DeleteData || in.ConfirmationName != "") {
+	if action != "SOFTWARE_UNINSTALL" && (in.DeleteData || in.ClearNodeDefault || in.ConfirmationName != "") {
 		h.fail(w, r, 400, "SOFTWARE_DELETE_DATA_ACTION_INVALID", "数据删除选项仅适用于卸载")
 		return
 	}
@@ -53,6 +54,9 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 			DeleteData       bool
 			ConfirmationName string
 		}{hash, in.DeleteData, in.ConfirmationName})
+	}
+	if in.ClearNodeDefault {
+		hash = deploy.Digest([]string{hash, "clearNodeDefault"})
 	}
 	// Detect already-accepted requests before network preflight. A replay must
 	// still return its original receipt when the host is now unavailable.
@@ -150,6 +154,10 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	i, e := scanSoftware(tx.QueryRow("SELECT "+softwareColumns+" FROM software_instances s JOIN targets t ON t.id=s.host_id WHERE s.id=?", id))
 	if e != nil {
 		h.opsError(w, r, e)
+		return
+	}
+	if i.NodeEnvironmentID != "" && action != "SOFTWARE_UNINSTALL" {
+		h.nodeError(w, r, errors.New("NODE_ENVIRONMENT_ACTION_REQUIRED"))
 		return
 	}
 	if i.Version != in.ExpectedVersion {
@@ -272,10 +280,23 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 		h.fail(w, r, 409, "QUEUE_FULL", "未结束作业达到20个")
 		return
 	}
+	if e = checkNodeSoftwareActionTx(tx, i, action, in.ClearNodeDefault); e != nil {
+		h.nodeError(w, r, e)
+		return
+	}
 	job, now := uuid.NewString(), Now()
 	req := deploy.Request{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: h.storeIDTx(tx), TargetID: i.HostID, JobID: job, TraceID: r.Context().Value(traceKey{}).(string), Action: action, SoftwareOperation: action, Software: softwareRequest(i), DeadlineAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)}
 	if action == "SOFTWARE_UNINSTALL" {
-		req.Uninstallation = &deploy.SoftwareUninstallRequest{Installation: *i.Installation, DeleteData: in.DeleteData}
+		req.Uninstallation = &deploy.SoftwareUninstallRequest{Installation: *i.Installation, DeleteData: in.DeleteData, ClearNodeDefault: in.ClearNodeDefault}
+	}
+	if req.Uninstallation != nil && i.NodeEnvironmentID != "" {
+		env, e := scanNodeEnvironment(tx.QueryRow("SELECT "+nodeEnvironmentColumns+" FROM node_environments WHERE id=?", i.NodeEnvironmentID))
+		if e != nil {
+			h.nodeError(w, r, e)
+			return
+		}
+		n := env.context()
+		req.Uninstallation.Installation.Node = &n
 	}
 	req.InputHash = deploy.Digest(req)
 	desired := i.DesiredState
@@ -294,6 +315,9 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	}
 	if e == nil {
 		_, e = tx.Exec("UPDATE software_instances SET locator=?,identity_hash=?,desired_state=?,binding_revision=?,last_job_id=?,error_code='',version=version+1,updated_at=? WHERE id=?", i.Locator, i.IdentityHash, desired, i.BindingRevision, job, now, id)
+	}
+	if e == nil && i.NodeEnvironmentID != "" {
+		_, e = tx.Exec("UPDATE node_environments SET last_job_id=?,updated_at=? WHERE id=?", job, now, i.NodeEnvironmentID)
 	}
 	if e == nil {
 		e = auditTx(tx, s.Username, action+"_ACCEPTED", id, "SUCCESS", req.TraceID)

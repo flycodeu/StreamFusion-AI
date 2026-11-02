@@ -116,6 +116,9 @@ func (x *executor) reconcileDockerTool(req Request, dir string) Result {
 }
 
 func observeInstalledTool(ctx context.Context, s SoftwareRequest, run SoftwareCommandRunner) (*SoftwareObservation, error) {
+	if s.Ownership != nil && s.Ownership.Node != nil {
+		return observeNodeTool(ctx, s, run)
+	}
 	o := s.Ownership
 	command, args, err := installedToolCommand(s.SoftwareKey)
 	if err != nil {
@@ -126,7 +129,11 @@ func observeInstalledTool(ctx context.Context, s SoftwareRequest, run SoftwareCo
 		if err = verifyNativeBinary(ctx, o, run); err != nil {
 			return nil, err
 		}
-		out, err = nativeToolCommand(ctx, s, run, args...)
+		if o.Official != nil {
+			out, err = softwareCommand(ctx, run, o.BinaryPath, officialVersionArguments(strings.ToLower(s.SoftwareKey))...)
+		} else {
+			out, err = nativeToolCommand(ctx, s, run, args...)
+		}
 	} else {
 		inspected, checkErr := softwareCommand(ctx, run, "/usr/bin/docker", "image", "inspect", "--format", `{"id":{{json .Id}},"os":{{json .Os}},"arch":{{json .Architecture}}}`, o.ImageID)
 		var actual struct{ ID, OS, Arch string }

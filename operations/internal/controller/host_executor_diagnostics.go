@@ -52,6 +52,10 @@ var executorFailureMessages = map[string]string{
 	"SUDO_AUTHORIZATION_REQUIRED":      "连接账号未获受限免交互授权，请按安装准备中的固定策略授权",
 	"EXECUTOR_IDENTITY_MISMATCH":       "执行器归属不匹配，请核对控制器、主机ID和受管目录",
 	"EXECUTOR_UPGRADE_REQUIRED":        "执行器版本或协议不匹配，请按安装准备升级后重新检查",
+	"NATIVE_INSTALL_UPGRADE_REQUIRED":  "目标执行器尚未提供当前原生安装能力，请在主机安装准备中升级执行器后重新预检",
+	"INSTALL_RUNTIME_UNSUPPORTED":      "所选运行方式不受支持，请从当前配方支持的Docker或原生方式中选择",
+	"SERVICE_RECIPE_UNTRUSTED":         "目标执行器未收录所选配方的固定定义，请在主机安装准备中升级执行器，或改选该执行器支持的配方",
+	"SERVICE_INSTALL_INPUT_INVALID":    "目标执行器不接受所选配方的固定定义或安装参数格式，请在主机安装准备中升级执行器，或改选该执行器支持的配方后重新预检",
 	"EXECUTOR_RESPONSE_INVALID":        "执行器响应格式不正确，请升级匹配版本并检查SSH登录输出",
 	"EXECUTOR_CALL_FAILED":             "执行器调用失败，请在安装准备中核对文件、受限授权和版本",
 	"EXECUTOR_CHECK_TIMEOUT":           "执行器检查超时，请检查目标负载、连接及受管程序",
@@ -77,6 +81,10 @@ func classifyExecutorInvocation(err error, stderr string) error {
 	}
 	text := strings.ToLower(stderr)
 	switch {
+	case strings.TrimSpace(text) == "service_recipe_untrusted":
+		return errors.New("SERVICE_RECIPE_UNTRUSTED")
+	case strings.TrimSpace(text) == "service_install_input_invalid":
+		return errors.New("SERVICE_INSTALL_INPUT_INVALID")
 	case strings.Contains(text, "linux_executor_required") || strings.Contains(text, "linux_root_required"):
 		return errors.New("EXECUTOR_PRIVILEGE_REQUIRED")
 	case strings.Contains(text, "executor_install_required") || strings.Contains(text, "owner.json") && (strings.Contains(text, "not found") || strings.Contains(text, "no such file")):

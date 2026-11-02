@@ -3,6 +3,7 @@ import { ApiError, request, upload } from "./api";
 import type { Host, SSHCredential } from "./hosts";
 import {
   initialServiceConfiguration,
+  initialOfficialConfiguration,
   explicitIPv4,
   materialSize,
   materialNextAction,
@@ -13,6 +14,7 @@ import {
   storageDirectoryValid,
   type InstallationMaterial,
   type InstallationSource,
+  type InstallationMethod,
   type ServiceConfiguration,
   type ServiceInstallJob,
   type ServiceInstallPlan,
@@ -24,6 +26,7 @@ export interface ServiceInstallationProps {
   open: boolean;
   recipe?: ServiceRecipe;
   host?: Host;
+  method?: InstallationMethod;
 }
 
 export function useServiceInstallation(
@@ -36,6 +39,9 @@ export function useServiceInstallation(
   const busy = ref(false);
   const configuration = ref<ServiceConfiguration>();
   const sourceType = ref<InstallationSource["type"]>("ARCHIVE");
+  const official = computed(() => props.method === "OFFICIAL");
+  const preparationOpen = ref(false);
+  const readinessHost = ref<Host>();
   const materials = ref<InstallationMaterial[]>([]);
   const materialId = ref("");
   const credentials = ref<SSHCredential[]>([]);
@@ -72,7 +78,7 @@ export function useServiceInstallation(
   let disposed = false;
 
   const credentialRoles = computed<CredentialRole[]>(() => {
-    if (!props.recipe || isTool(props.recipe) || isDockerEngine(props.recipe) || props.recipe.key === "nginx")
+    if (official.value || !props.recipe || isTool(props.recipe) || isDockerEngine(props.recipe) || props.recipe.key === "nginx")
       return [];
     if (props.recipe?.key === "seaweedfs") return ["access", "primary"];
     return props.recipe?.key === "mysql" && configuration.value?.username
@@ -203,7 +209,7 @@ export function useServiceInstallation(
       () => props.recipe?.version,
       () => props.recipe?.revision,
       () => props.host?.id,
-      () => props.host?.version,
+      () => props.method,
     ],
     async () => {
       generation += 1;
@@ -213,10 +219,10 @@ export function useServiceInstallation(
       credentialRole.value = undefined;
       if (!props.open || !props.recipe || !props.host) return;
       const revision = generation;
-      configuration.value = initialServiceConfiguration(
-        props.recipe,
-        props.host.address,
-      );
+      configuration.value = official.value ? initialOfficialConfiguration(props.recipe) :
+        initialServiceConfiguration(props.recipe, props.host.address);
+      readinessHost.value = undefined;
+      preparationOpen.value = false;
       step.value = 0;
       plan.value = undefined;
       receipt.value = undefined;
@@ -232,13 +238,13 @@ export function useServiceInstallation(
       officialNeedsImport.value = false;
       materialProgress.value = "";
       materialNeedsImport.value = false;
-      sourceType.value = "ARCHIVE";
+      sourceType.value = official.value ? "OFFICIAL" : "ARCHIVE";
       credentialChoices.value = { primary: "", access: "", user: "" };
       clearError();
       try {
         const [items] = await Promise.all([
-          request<SSHCredential[]>("/credentials"),
-          loadMaterials(),
+          official.value || props.method === "SELF" ? Promise.resolve([]) : request<SSHCredential[]>("/credentials"),
+          official.value || props.method === "SELF" ? Promise.resolve() : loadMaterials(),
         ]);
         if (current(revision)) credentials.value = items;
       } catch (error) {
@@ -251,7 +257,7 @@ export function useServiceInstallation(
   watch(
     () => configuration.value?.runtimeMode,
     (mode, previous) => {
-      if (!mode || !previous || mode === previous || !props.recipe) return;
+      if (official.value || !mode || !previous || mode === previous || !props.recipe) return;
       sourceType.value = "ARCHIVE";
       materialId.value = "";
       selectedFile.value = undefined;
@@ -274,7 +280,7 @@ export function useServiceInstallation(
       if (submitted.value) return;
       plan.value = undefined;
       submitKey.value = "";
-      if (step.value === 3) step.value = 2;
+      if (step.value === 3) step.value = official.value ? 0 : 2;
     },
     { deep: true },
   );
@@ -587,6 +593,7 @@ export function useServiceInstallation(
     const config = configuration.value;
     if (!config || !props.host || !props.recipe) return "请选择软件和目标主机";
     if (props.host.maintenance) return "主机维护中，请恢复后再安装";
+    if (official.value) return !config.name.trim() || new TextEncoder().encode(config.name).length > 120 ? "实例名称须为1–120字节" : "";
     if (
       step.value === 0 &&
       sourceType.value === "ARCHIVE" &&
@@ -677,6 +684,7 @@ export function useServiceInstallation(
     clearError();
     fieldError.value = validateStep();
     if (fieldError.value) return;
+    if (official.value) { await preflight(); return; }
     if (step.value < 2) {
       if (step.value === 1) {
         credentialSecret.value = "";
@@ -688,22 +696,32 @@ export function useServiceInstallation(
     await preflight();
   }
   async function preflight() {
-    if (!props.host || !props.recipe || !configuration.value) return;
+    if (!props.host || !props.recipe || !configuration.value || props.method === "SELF") return;
+    if (official.value) {
+      fieldError.value = validateStep();
+      if (fieldError.value) return;
+    }
     await act(async () => {
       const revision = generation;
       const result = await request<ServiceInstallPlan>(
         `/hosts/${props.host!.id}/software-install-plans`,
         "POST",
         {
-          expectedHostVersion: props.host!.version,
+          expectedHostVersion: readinessHost.value?.version || props.host!.version,
           recipeKey: props.recipe!.key,
           recipeVersion: props.recipe!.version,
           recipeRevision: props.recipe!.revision,
-          config: {
+          config: official.value ? {
+            name: configuration.value!.name.trim(),
+            runtimeMode: "NATIVE",
+            bindAddress: configuration.value!.bindAddress,
+            hostPort: configuration.value!.hostPort,
+            memoryMiB: 512,
+          } : {
             ...configuration.value,
             name: configuration.value!.name.trim(),
           },
-          source:
+          source: official.value ? { type: "OFFICIAL" } :
             sourceType.value === "REGISTRY"
               ? { type: "REGISTRY" }
               : { type: sourceType.value, materialId: materialId.value },
@@ -740,6 +758,23 @@ export function useServiceInstallation(
       await refreshJob();
     });
   }
+
+  async function preparationChecked() {
+    if (!props.host) return;
+    let refreshed = false;
+    await act(async () => {
+      const revision = generation;
+      const hosts = await request<Host[]>("/hosts");
+      if (!current(revision)) return;
+      const updated = hosts.find((host) => host.id === props.host!.id);
+      if (!updated || updated.capabilities?.mutation.status !== "AVAILABLE") return;
+      readinessHost.value = updated;
+      preparationOpen.value = false;
+      plan.value = undefined;
+      refreshed = true;
+    });
+    if (refreshed && !receipt.value) await preflight();
+  }
   async function jobAction(action: "reconcile" | "cancel") {
     if (!receipt.value) return;
     await act(async () => {
@@ -771,6 +806,10 @@ export function useServiceInstallation(
     busy,
     configuration,
     sourceType,
+    official,
+    preparationOpen,
+    readinessHost,
+    preparationChecked,
     materials,
     materialId,
     credentialChoices,

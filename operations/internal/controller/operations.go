@@ -105,6 +105,9 @@ func (h *HTTP) operationsRoute(w http.ResponseWriter, r *http.Request, s *sessio
 	if h.firewallRoute(w, r, s, path) {
 		return true
 	}
+	if h.nodeEnvironmentRoute(w, r, s, path) {
+		return true
+	}
 	if h.softwareInstallRoute(w, r, s, path) {
 		return true
 	}

@@ -1,0 +1,178 @@
+package controller
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/streamfusion-ai/operations/internal/deploy"
+	"github.com/streamfusion-ai/operations/internal/serviceinstall"
+)
+
+func installCompatibilityCapabilities(req deploy.Request) executorCapabilities {
+	return executorCapabilities{Owner: deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, Platform: "linux/amd64", DockerEngine: true, InstallVersion: serviceinstall.CapabilityVersion, NativeInstallVersion: 1, CatalogHash: "a-historical-catalog-hash"}
+}
+
+func TestServiceInstallHistoricalCatalogStillChecksSelectedRecipeAndPreservesIntent(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	var checks atomic.Int32
+	selected, _ := serviceinstall.Find("nginx", "1.30.6")
+	host, fixture := installSSHFixture(t, s, b, func(req deploy.Request) ([]byte, bool) {
+		if req.Action == "CAPABILITIES" {
+			raw, _ := json.Marshal(installCompatibilityCapabilities(req))
+			return raw, true
+		}
+		if req.Action == "SOFTWARE_INSTALL_CHECK" {
+			checks.Add(1)
+			if req.Installation == nil || serviceinstall.ValidateDefinition(req.Installation.Definition) != nil || serviceinstall.Digest(req.Installation.Definition) != serviceinstall.Digest(selected) {
+				t.Error("selected definition changed before target validation")
+			}
+		}
+		return nil, false
+	})
+	plan := nginxPlan(t, b, host, 18210)
+	accepted := dataOf(t, b.call("POST", "/software-install-plans/"+plan["id"].(string)+"/submit", map[string]string{"idempotencyKey": "historical-catalog-compatible"}, 202))
+	if checks.Load() != 2 || fixture.InstallCount.Load() != 0 {
+		t.Fatal("create and submit must both validate without executing installation", checks.Load(), fixture.InstallCount.Load())
+	}
+	var raw string
+	if err := s.DB.QueryRow("SELECT input_json FROM jobs WHERE id=?", accepted["jobId"]).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var intent deploy.Request
+	if err := deploy.StrictJSON([]byte(raw), &intent); err != nil || intent.Installation == nil {
+		t.Fatal(err)
+	}
+	if serviceinstall.Digest(intent.Installation.Definition) != serviceinstall.Digest(selected) {
+		t.Fatal("compatibility check normalized the frozen recipe")
+	}
+	hash := intent.InputHash
+	intent.InputHash = ""
+	if deploy.Digest(intent) != hash {
+		t.Fatal("compatibility check changed the existing intent digest contract")
+	}
+}
+
+func TestServiceInstallUnsupportedSelectedRecipeFailsWithActionableCode(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	var checks atomic.Int32
+	var mutations atomic.Int32
+	f := hostSSHServer(t, s, b, true, true)
+	respond := func(command string) *hostSSHResponse {
+		if command != executorSSHCommand(target{sshTarget: sshTarget{User: "ops"}, InstallRoot: "/opt/streamfusion-ops-target"}) {
+			return nil
+		}
+		response := &hostSSHResponse{}
+		response.Input = func(input []byte) {
+			var req deploy.Request
+			if deploy.StrictJSON(input, &req) != nil {
+				t.Error("invalid target request")
+				response.Exit = 1
+				return
+			}
+			switch req.Action {
+			case "CAPABILITIES":
+				raw, _ := json.Marshal(installCompatibilityCapabilities(req))
+				response.Stdout = string(raw)
+			case "SOFTWARE_INSTALL_CHECK":
+				checks.Add(1)
+				if req.Installation == nil || req.Installation.Definition.Key != "java" {
+					t.Error("target did not receive selected recipe")
+				}
+				// Old executors reject untrusted selected definitions with this
+				// fixed stderr code and a nonzero exit, before writing an intent.
+				response.Exit, response.Stderr = 1, "SERVICE_INSTALL_INPUT_INVALID\n"
+			default:
+				mutations.Add(1)
+				response.Exit = 1
+			}
+		}
+		return response
+	}
+	f.Responses.Store(&respond)
+	host := f.create(t, b, "old-catalog-selected-recipe")["id"].(string)
+	d, _ := serviceinstall.Find("java", "21")
+	in := map[string]any{"expectedHostVersion": "1", "recipeKey": d.Key, "recipeVersion": d.Version, "recipeRevision": d.Revision, "config": serviceinstall.Config{Name: "unsupported java", MemoryMiB: 512}, "source": map[string]string{"type": "REGISTRY"}}
+	response := b.call("POST", "/hosts/"+host+"/software-install-plans", in, 409)
+	if !strings.Contains(response.Body.String(), "SERVICE_INSTALL_INPUT_INVALID") || !strings.Contains(response.Body.String(), "升级执行器") || checks.Load() != 1 || mutations.Load() != 0 {
+		t.Fatal(response.Body.String(), checks.Load(), mutations.Load())
+	}
+	var plans, jobs int
+	s.DB.QueryRow("SELECT count(*) FROM software_install_plans").Scan(&plans)
+	s.DB.QueryRow("SELECT count(*) FROM jobs WHERE kind='SOFTWARE_INSTALL'").Scan(&jobs)
+	if plans != 0 || jobs != 0 {
+		t.Fatal("unsupported recipe created installation intent", plans, jobs)
+	}
+}
+
+func TestServiceInstallReadinessRejectsIncompatibleVersionsAndRuntime(t *testing.T) {
+	for _, test := range []struct {
+		name, mode, code string
+		edit             func(*executorCapabilities)
+	}{
+		{"docker-old-catalog-no-compose", "DOCKER", "", func(*executorCapabilities) {}},
+		{"native-no-docker", "NATIVE", "", func(c *executorCapabilities) { c.DockerEngine = false }},
+		{"old-install-version", "DOCKER", "EXECUTOR_UPGRADE_REQUIRED", func(c *executorCapabilities) { c.InstallVersion = 1 }},
+		{"wrong-protocol", "DOCKER", "EXECUTOR_UPGRADE_REQUIRED", func(c *executorCapabilities) { c.Owner.ProtocolVersion = 2 }},
+		{"missing-protocol", "DOCKER", "EXECUTOR_UPGRADE_REQUIRED", func(c *executorCapabilities) { c.Owner.ProtocolVersion = 0 }},
+		{"wrong-executor-version", "DOCKER", "EXECUTOR_UPGRADE_REQUIRED", func(c *executorCapabilities) { c.Owner.ExecutorVersion = "0.1.0" }},
+		{"wrong-owner", "DOCKER", "EXECUTOR_IDENTITY_MISMATCH", func(c *executorCapabilities) { c.Owner.ControllerID = uuid.NewString() }},
+		{"wrong-platform", "DOCKER", "INSTALL_PLATFORM_UNSUPPORTED", func(c *executorCapabilities) { c.Platform = "linux/arm64" }},
+		{"missing-engine", "DOCKER", "DOCKER_ENGINE_UNAVAILABLE", func(c *executorCapabilities) { c.DockerEngine = false }},
+		{"missing-native-version", "NATIVE", "NATIVE_INSTALL_UPGRADE_REQUIRED", func(c *executorCapabilities) { c.NativeInstallVersion = 0 }},
+		{"unsupported-runtime", "OTHER", "INSTALL_RUNTIME_UNSUPPORTED", func(*executorCapabilities) {}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s, b := setup(t)
+			b.login()
+			host, _ := installSSHFixture(t, s, b, func(req deploy.Request) ([]byte, bool) {
+				if req.Action != "CAPABILITIES" {
+					return nil, false
+				}
+				capability := installCompatibilityCapabilities(req)
+				test.edit(&capability)
+				raw, _ := json.Marshal(capability)
+				return raw, true
+			})
+			target, err := s.readTarget(host)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = b.h.installTargetReady(context.Background(), target, serviceinstall.Config{RuntimeMode: test.mode})
+			if test.code == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || err.Error() != test.code {
+				t.Fatal(err, "expected", test.code)
+			}
+			code, message := installTargetError(err)
+			if code != test.code || message == "" || strings.Contains(message, "核对执行器、授权和依赖") {
+				t.Fatal("lost specific compatibility diagnostic", code, message)
+			}
+		})
+	}
+}
+
+func TestServiceInstallRecipeInvocationErrorsRemainSpecificAndSanitized(t *testing.T) {
+	for _, expected := range []string{"SERVICE_RECIPE_UNTRUSTED", "SERVICE_INSTALL_INPUT_INVALID"} {
+		err := classifyExecutorInvocation(errors.New("ssh exit 1"), expected+"\n")
+		code, message := installPreflightError(err)
+		if code != expected || !strings.Contains(message, "所选配方") || !strings.Contains(message, "升级执行器") {
+			t.Fatal(code, message)
+		}
+	}
+	err := classifyExecutorInvocation(errors.New("ssh exit 1"), "SERVICE_RECIPE_UNTRUSTED password=opaque-secret")
+	code, message := installPreflightError(err)
+	if code != "INSTALL_PREFLIGHT_FAILED" || strings.Contains(message, "opaque-secret") {
+		t.Fatal("untrusted stderr escaped fixed-code classification", code, message)
+	}
+}

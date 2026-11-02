@@ -44,6 +44,7 @@ func (h *HTTP) RunOperations(ctx context.Context) {
 	_, _ = h.store.DB.Exec("UPDATE plugin_installations SET status='UNKNOWN',error_code='CONTROLLER_RESTARTED' WHERE last_job_id IN (SELECT id FROM jobs WHERE status='UNKNOWN')")
 	_, _ = h.store.DB.Exec("UPDATE software_instances SET actual_state='UNKNOWN',error_code='CONTROLLER_RESTARTED' WHERE last_job_id IN (SELECT id FROM jobs WHERE status='UNKNOWN')")
 	_, _ = h.store.DB.Exec("UPDATE software_instances SET installation_status='UNKNOWN' WHERE installation_status='INSTALLING' AND last_job_id IN (SELECT id FROM jobs WHERE status='UNKNOWN')")
+	_, _ = h.store.DB.Exec("UPDATE node_environments SET error_code='CONTROLLER_RESTARTED' WHERE last_job_id IN (SELECT id FROM jobs WHERE status='UNKNOWN')")
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -59,6 +60,8 @@ func (h *HTTP) RunOperations(ctx context.Context) {
 					h.processImport(id, raw)
 				} else if kind == "PLUGIN_INSTALL" || kind == "PLUGIN_REMOVE" {
 					h.processPlugin(ctx, id, raw)
+				} else if kind == "NODE_ENVIRONMENT_CHANGE" {
+					h.processNodeEnvironment(ctx, id, raw)
 				} else if kind == "FIREWALL_CHANGE" {
 					h.processFirewall(ctx, id, raw)
 				} else if len(kind) > 9 && kind[:9] == "SOFTWARE_" {
@@ -96,6 +99,7 @@ func (h *HTTP) jobUnknown(id, code string) {
 	if n, _ := res.RowsAffected(); n != 1 {
 		return
 	}
+	_, _ = h.store.DB.Exec("UPDATE node_environments SET error_code=?,updated_at=? WHERE last_job_id=?", code, Now(), id)
 	_, _ = h.store.DB.Exec("UPDATE plugin_installations SET status='UNKNOWN',error_code=?,updated_at=? WHERE last_job_id=?", code, Now(), id)
 	_, _ = h.store.DB.Exec("UPDATE software_instances SET actual_state='UNKNOWN',error_code=?,updated_at=? WHERE last_job_id=?", code, Now(), id)
 	_, _ = h.store.DB.Exec("UPDATE software_instances SET installation_status='UNKNOWN' WHERE installation_status='INSTALLING' AND last_job_id=?", id)

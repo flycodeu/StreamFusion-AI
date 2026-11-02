@@ -183,6 +183,11 @@ func PortMappings(d Definition, c Config) []PortMapping {
 }
 
 func Find(key, version string) (Definition, error) {
+	for _, d := range append(NodeCatalog(), NodeEnvironmentRecipes()...) {
+		if d.Key == key && d.Version == version {
+			return d, nil
+		}
+	}
 	for _, d := range Catalog() {
 		if d.Key == key && d.Version == version {
 			return d, nil

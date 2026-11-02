@@ -4,6 +4,8 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+
+	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
 // SoftwareRequest freezes a concrete lifecycle object. Locator is never a shell
@@ -20,15 +22,17 @@ type SoftwareRequest struct {
 }
 
 type SoftwareOwnership struct {
-	RuntimeMode  string `json:"runtimeMode,omitempty"`
-	BinaryPath   string `json:"binaryPath,omitempty"`
-	BinaryHash   string `json:"binaryHash,omitempty"`
-	ControllerID string `json:"controllerId"`
-	TargetID     string `json:"targetId"`
-	SoftwareID   string `json:"softwareId"`
-	JobID        string `json:"jobId"`
-	ConfigHash   string `json:"configHash"`
-	ImageID      string `json:"imageId"`
+	Node         *serviceinstall.NodeContext  `json:"node,omitempty"`
+	Official     *serviceinstall.OfficialPlan `json:"official,omitempty"`
+	RuntimeMode  string                       `json:"runtimeMode,omitempty"`
+	BinaryPath   string                       `json:"binaryPath,omitempty"`
+	BinaryHash   string                       `json:"binaryHash,omitempty"`
+	ControllerID string                       `json:"controllerId"`
+	TargetID     string                       `json:"targetId"`
+	SoftwareID   string                       `json:"softwareId"`
+	JobID        string                       `json:"jobId"`
+	ConfigHash   string                       `json:"configHash"`
+	ImageID      string                       `json:"imageId"`
 }
 
 type SoftwareObservation struct {
@@ -62,12 +66,18 @@ func (s SoftwareRequest) Validate(observation bool) error {
 			return errors.New("SOFTWARE_OWNERSHIP_INVALID")
 		}
 		if o.RuntimeMode == "NATIVE" {
-			if (s.Kind != "SYSTEMD" && s.Kind != "TOOL") || !Hex.MatchString(o.BinaryHash) || !validNativeBinaryPath(o.BinaryPath) && !(s.SoftwareKey == "DOCKER" && s.Kind == "SYSTEMD" && s.Locator == "docker.service" && o.BinaryPath == "/usr/bin/dockerd") {
+			if (s.Kind != "SYSTEMD" && s.Kind != "TOOL") || !Hex.MatchString(o.BinaryHash) || !validNativeBinaryPath(o.BinaryPath) && !validNodeOwnership(s) && !validOfficialOwnership(s) && !(s.SoftwareKey == "DOCKER" && s.Kind == "SYSTEMD" && s.Locator == "docker.service" && o.BinaryPath == "/usr/bin/dockerd") {
 				return errors.New("SOFTWARE_NATIVE_OWNERSHIP_INVALID")
 			}
 		} else if (s.Kind != "DOCKER" && s.Kind != "TOOL") || !strings.HasPrefix(o.ImageID, "sha256:") || !Hex.MatchString(strings.TrimPrefix(o.ImageID, "sha256:")) {
 			return errors.New("SOFTWARE_OWNERSHIP_INVALID")
 		}
+	}
+	if s.Ownership != nil && s.Ownership.Node != nil && !validNodeOwnership(s) {
+		return errors.New("NODE_OWNERSHIP_INVALID")
+	}
+	if s.Ownership != nil && s.Ownership.Official != nil && !validOfficialOwnership(s) {
+		return errors.New("OFFICIAL_OWNERSHIP_INVALID")
 	}
 	switch s.Kind {
 	case "SYSTEMD":
@@ -101,6 +111,9 @@ func (s SoftwareRequest) Validate(observation bool) error {
 }
 
 func softwareMutation(action string) bool {
+	if action == "NODE_ENVIRONMENT_CHANGE" {
+		return true
+	}
 	return action == "SOFTWARE_UNINSTALL" || action == "SOFTWARE_CONFIGURE" || action == "SOFTWARE_INSTALL" || action == "SOFTWARE_ADOPT" || action == "SOFTWARE_START" || action == "SOFTWARE_STOP" || action == "SOFTWARE_UNMANAGE"
 }
 

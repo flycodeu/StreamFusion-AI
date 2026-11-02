@@ -101,6 +101,9 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
             </dd>
             <dt>软件类型</dt>
             <dd>{{ softwareTypes[detail.softwareType] }}</dd>
+            <template v-if="detail.installation?.official">
+              <dt>安装方式</dt><dd>官方系统软件包</dd>
+            </template>
             <dt>生命周期对象</dt>
             <dd>
               {{ softwareRuntimeLabels[detail.runtimeKind] }}
@@ -207,7 +210,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
             </template>
           </dl>
         </ElTabPane>
-        <ElTabPane label="服务配置" name="configuration"
+        <ElTabPane :label="detail.installation?.official ? '安装详情' : '服务配置'" name="configuration"
           ><ServiceConfigurationPanel
             :detail="detail"
             :host="host"

@@ -1,10 +1,12 @@
 import type { ObservationAttempt } from "./observation";
 import type {
   InstallationPaths,
+  OfficialInstallation,
   ServiceConfiguration,
   ServiceRecipe,
 } from "./serviceInstallation";
 export type SoftwareType =
+  | "NODE"
   | "JAVA"
   | "DOCKER"
   | "MAVEN"
@@ -66,6 +68,8 @@ export interface SoftwareInstance {
   installationStatus?:
     "" | "INSTALLING" | "READY" | "FAILED" | "UNKNOWN" | "CANCELLED" | "UNINSTALLED";
   installationJobId?: string;
+  nodeEnvironmentId?: string;
+  nodeDataPaths?: string[];
   installationPaths?: InstallationPaths;
   installationEvidence?: {
     observedVersion: string;
@@ -75,8 +79,10 @@ export interface SoftwareInstance {
     binaryPath?: string;
   };
   installation?: {
+    source?: {type:string;sha256?:string;byteSize?:number};
     definition?: ServiceRecipe;
     config?: ServiceConfiguration;
+    official?: OfficialInstallation;
   };
 }
 
@@ -136,6 +142,7 @@ export interface SoftwareDiscoveryReport {
 }
 
 export const softwareTypes: Record<SoftwareType, string> = {
+  NODE: "Node.js",
   DOCKER: "Docker Engine",
   JAVA: "Java",
   MAVEN: "Maven",

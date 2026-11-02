@@ -16,8 +16,8 @@ interface HostPreparation {
   steps: { key: string; label: string; status: string; code: string; message: string }[];
   remoteJob?: PreparationJob;
 }
-const props = defineProps<{ host: Host }>();
-const emit = defineEmits<{ checked: [] }>();
+const props = defineProps<{ host: Host; updateOnly?: boolean }>();
+const emit = defineEmits<{ checked: []; updated: [] }>();
 const data = ref<HostPreparation>();
 const busy = ref(false);
 const mode = ref<"online" | "offline">("online");
@@ -25,6 +25,7 @@ const sudoPassword = ref("");
 const needsSudoPassword = ref(false);
 const installing = ref(false);
 const updateRequested = ref(false);
+let explicitUpdate = false;
 const repairing = ref(false);
 const error = ref<{ message: string; source?: "poll" }>();
 const checkResult = ref<{ ready: boolean; title: string; message: string; code: string }>();
@@ -125,7 +126,10 @@ async function load(quiet = false) {
     pollFailures = 0;
     if (error.value?.source === "poll") error.value = undefined;
     schedulePoll();
-    if (refreshStatus) await refreshHostStatus(hostRevision);
+    if (refreshStatus) {
+      await refreshHostStatus(hostRevision);
+      if (explicitUpdate && hostRevision === hostGeneration) { explicitUpdate = false; emit("updated"); }
+    }
   } catch (cause) {
     if (revision !== generation || hostRevision !== hostGeneration) return;
     if (quiet && (job.value?.status === "RUNNING" || installing.value)) {
@@ -146,7 +150,7 @@ watch([() => props.host.id, () => props.host.version], () => {
   hostGeneration++; generation++; operation++;
   installAbort?.abort(); clearTimeout(polling); data.value = undefined;
   busy.value = false; installing.value = false; repairing.value = false; pollFailures = 0; installationIntent = undefined;
-  updateRequested.value = false;
+  updateRequested.value = !!props.updateOnly; explicitUpdate = false;
   checkResult.value = undefined; copied.value = "";
   sudoPassword.value = ""; needsSudoPassword.value = false; error.value = undefined;
   mode.value = props.host.kind === "SSH" ? "online" : "offline";
@@ -193,6 +197,7 @@ function openUpdate() {
 async function install() {
   if (!data.value || busy.value || blocked.value) return;
   const hostId = props.host.id;
+  explicitUpdate = updateRequested.value;
   const active = beginOperation();
   installing.value = true; pollFailures = 0; checkResult.value = undefined;
   installAbort = new AbortController();
@@ -208,6 +213,7 @@ async function install() {
       needsSudoPassword.value = false;
       updateRequested.value = false;
       await refreshHostStatus(active.host);
+      if (explicitUpdate && currentOperation(active)) { explicitUpdate = false; emit("updated"); }
     }
   } catch (cause) { if (currentOperation(active)) report(cause); }
   finally {
@@ -308,7 +314,9 @@ async function check() {
     const ready = facts.every((fact) => fact?.status === "AVAILABLE");
     checkResult.value = { ready, title: ready ? "服务器已接入" : "服务器尚未接入", message: ready ? "现在可以继续安装和管理软件。" : unready?.message || "暂时无法确认接入状态，请重新检查。",
       code: unready?.code || "" };
-    emit("checked"); await load(true);
+    emit("checked");
+    if (ready && props.updateOnly) emit("updated");
+    await load(true);
   } catch (cause) { if (currentOperation(active)) report(cause); }
   finally { if (currentOperation(active)) busy.value = false; }
 }
@@ -316,7 +324,7 @@ async function check() {
 
 <template>
   <div class="host-preparation">
-    <header class="preparation-heading"><h3>服务器接入</h3><button class="quiet" :disabled="busy" @click="load()">重新加载</button></header>
+    <header class="preparation-heading"><h3>{{ updateOnly ? '更新接入组件' : '服务器接入' }}</h3><button class="quiet" :disabled="busy" @click="load()">重新加载</button></header>
     <div v-if="error" class="preparation-error" role="alert"><strong>页面暂时未更新</strong><p>{{ error.message }}</p><button class="secondary" :disabled="busy" @click="load()">重新加载</button></div>
     <p v-if="!data && busy">读取安装信息…</p>
     <template v-if="data">
@@ -352,7 +360,7 @@ async function check() {
         <div v-if="mode === 'online'" class="install-card">
           <form @submit.prevent="install">
             <label v-if="data.account !== 'root' && needsSudoPassword" class="password-field">{{ data.account }} 的登录密码 <span>用于 sudo 提权，仅本次使用</span><input v-model="sudoPassword" type="password" autocomplete="off" maxlength="1024" :disabled="busy" :aria-label="`${data.account} 的登录密码`" placeholder="请输入该账号的系统密码" /></label>
-            <div class="install-action"><button class="primary" type="submit" :disabled="busy || !data.package.available || host.maintenance">{{ busy ? '正在处理…' : updateRequested ? '确认更新接入组件' : '开始安装' }}</button><button v-if="updateRequested" class="quiet" type="button" :disabled="busy" @click="updateRequested = false">取消更新</button></div>
+            <div class="install-action"><button class="primary" type="submit" :disabled="busy || !data.package.available || host.maintenance">{{ busy ? '正在处理…' : updateRequested ? '确认更新接入组件' : '开始安装' }}</button><button v-if="updateRequested && !updateOnly" class="quiet" type="button" :disabled="busy" @click="updateRequested = false">取消更新</button></div>
           </form><p v-if="host.maintenance" class="maintenance-note">主机正在维护，请先退出维护模式。</p>
         </div>
         <div v-else class="install-card offline-card">

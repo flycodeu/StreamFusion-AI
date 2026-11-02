@@ -179,8 +179,9 @@ def main():
 
                 def open_install(recipe):
                     card_for(recipe["name"]).get_by_role("button", name="安装", exact=True).click()
-                    drawer = page.get_by_role("dialog", name="安装 " + recipe["name"], exact=True)
+                    drawer = page.locator(".el-drawer:visible").last
                     drawer.wait_for()
+                    drawer.get_by_role("button", name="Ops 离线安装", exact=True).click()
                     return drawer
 
                 def close_dialog(dialog):
@@ -348,7 +349,7 @@ def main():
                 uninstall = page.get_by_role("dialog", name="卸载软件", exact=True)
                 expect(uninstall.get_by_role("checkbox", name="同时删除此实例的数据", exact=True)).not_to_be_checked()
                 expect(uninstall.get_by_role("button", name="卸载，保留数据", exact=True)).to_be_enabled()
-                assert "默认保留此实例的数据、配置和日志目录" in uninstall.inner_text()
+                assert "默认保留数据、配置和日志" in uninstall.inner_text()
                 check_paths(uninstall, owned, "保留的实例目录")
                 screenshot_layout(uninstall, "uninstall-preserve-fixture")
                 uninstall.get_by_role("checkbox", name="同时删除此实例的数据", exact=True).check()
@@ -394,13 +395,13 @@ def main():
                 uninstall = page.get_by_role("dialog", name="卸载软件", exact=True)
                 expect(uninstall.get_by_role("alert")).to_contain_text("未取得完整安装目录")
                 expect(uninstall.get_by_role("button", name="卸载，保留数据", exact=True)).to_be_enabled()
-                uninstall.get_by_role("checkbox", name="同时删除此实例的数据", exact=True).check()
-                uninstall.get_by_label("确认删除的实例名称", exact=True).fill(missing_paths["name"])
-                expect(uninstall.get_by_role("button", name="卸载并删除数据", exact=True)).to_be_disabled()
+                expect(uninstall.get_by_role("checkbox", name="同时删除此实例的数据", exact=True)).to_be_disabled()
+                expect(uninstall.get_by_role("checkbox", name="同时删除此实例的数据", exact=True)).not_to_be_checked()
+                assert uninstall.get_by_role("button", name="卸载并删除数据", exact=True).count() == 0
                 screenshot_layout(uninstall, "uninstall-missing-paths-blocked-fixture")
                 close_dialog(uninstall)
                 close_details(drawer)
-                checks.append("fixture-missing-installation-paths-block-delete-even-with-exact-name-preserve-remains-available")
+                checks.append("fixture-missing-installation-paths-disable-delete-option-preserve-remains-available")
 
                 catalog()
                 engine_bar.get_by_role("button", name="查看与启停", exact=True).click()

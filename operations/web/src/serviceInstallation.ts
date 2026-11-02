@@ -46,6 +46,16 @@ export interface MaterialSource {
 }
 
 export type RuntimeMode = "DOCKER" | "NATIVE";
+export type InstallationMethod = "OFFICIAL" | "OFFLINE" | "SELF";
+
+export interface OfficialInstallation {
+  manager: string;
+  os: string;
+  architecture: string;
+  packages: { name: string; version: string; origin: string; direct: boolean }[];
+  commands: { executable: string; args: string[] }[];
+  paths: { root: string; binary: string; config: string; data: string; logs: string; unit: string; ownedPaths: string[] };
+}
 
 export interface ServicePort {
   key: string;
@@ -102,7 +112,7 @@ export interface InstallationMaterial {
 }
 
 export interface InstallationSource {
-  type: "REGISTRY" | "ONLINE" | "ARCHIVE";
+  type: "REGISTRY" | "ONLINE" | "ARCHIVE" | "OFFICIAL";
   materialId?: string;
   sha256?: string;
   byteSize?: number;
@@ -117,6 +127,7 @@ export interface ServiceInstallPlan {
   expiresAt: string;
   checks: { key: string; status: "PASSED" | "WARNING"; message: string }[];
   paths: InstallationPaths;
+  official?: OfficialInstallation;
   portMappings: {
     key?: string;
     address: string;
@@ -174,6 +185,14 @@ export function isTool(recipe: ServiceRecipe) {
 
 export function isDockerEngine(recipe: ServiceRecipe) {
   return recipe.key === "docker";
+}
+
+export function initialOfficialConfiguration(recipe: ServiceRecipe): ServiceConfiguration {
+  const service = !isTool(recipe) && !isDockerEngine(recipe);
+  return { name: recipe.name, runtimeMode: "NATIVE", storageRoot: "", ports: {},
+    bindAddress: service ? recipe.key === "nginx" ? "0.0.0.0" : "127.0.0.1" : "", hostPort: service ? recipe.port : 0, memoryMiB: 512,
+    credentialId: "", credentialRevision: "", accessKeyCredentialId: "", accessKeyCredentialRevision: "",
+    database: "", username: "", userCredentialId: "", userCredentialRevision: "" };
 }
 
 export function preferredInstallationMaterial(items: InstallationMaterial[]) {

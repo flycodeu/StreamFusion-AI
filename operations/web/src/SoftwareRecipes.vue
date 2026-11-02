@@ -38,9 +38,10 @@ interface Job {
 }
 
 const props = defineProps<{ hostId: string; initialRecipeKey?: string }>();
-const emit = defineEmits<{ error: [unknown]; preparation: [string]; openInstance: [string] }>();
+const emit = defineEmits<{ error: [unknown]; preparation: [string]; openInstance: [string]; register: [hostId: string, softwareType: string]; node: [hostId: string] }>();
 const targets = ref<Host[]>([]);
 const serviceDefinitions = ref<ServiceRecipe[]>([]);
+const officialDefinitions = ref<ServiceRecipe[]>([]);
 const serviceRecipe = ref<ServiceRecipe>();
 const installations = ref<Installation[]>([]);
 const softwareInstances = ref<SoftwareInstance[]>([]);
@@ -78,6 +79,7 @@ const catalogEntries = computed(() => {
   const term = search.value.trim().toLowerCase();
   const groups = new Map<string, ServiceRecipe[]>();
   for (const definition of serviceDefinitions.value) {
+    if (definition.key === "node") continue;
     if (category.value === "ENGINE" && definition.key !== "docker") continue;
     if (category.value === "SERVICES" && definition.key === "docker") continue;
     if (category.value === "SERVICES" && isTool(definition)) continue;
@@ -111,6 +113,7 @@ const catalogEntries = computed(() => {
     versions,
   }));
 });
+const showNode = computed(() => ["ALL", "JAVA_RUNTIME"].includes(category.value) && (!search.value.trim() || /node|npm|pnpm|nvm|运行环境/i.test(search.value)));
 const legacyInstallations = computed(() =>
   installations.value.filter((item) => item.targetId === targetId.value),
 );
@@ -175,18 +178,20 @@ async function refresh() {
   if (loading.value) return;
   loading.value = true;
   try {
-    const [ts, rows, services, software, materials] = await Promise.all([
+    const [ts, rows, services, software, materials, official] = await Promise.all([
       request<Host[]>("/hosts"),
       request<Installation[]>("/plugin-installations"),
       request<ServiceRecipe[]>("/software-recipes"),
       request<SoftwareInstance[]>("/software-instances"),
       request<InstallationMaterial[]>("/installation-materials"),
+      request<ServiceRecipe[]>("/software-official-recipes"),
     ]);
     if (disposed) return;
     targets.value = ts;
     installations.value = rows;
     serviceDefinitions.value = services;
     softwareInstances.value = software;
+    officialDefinitions.value = official;
     for (const material of materials) {
       if (selectedVersions.value[material.recipeKey] !== undefined ||
         !material.available || material.origin?.kind !== "BUNDLED") continue;
@@ -427,10 +432,16 @@ onUnmounted(() => {
             : "安装前请检查主机能力。"
       }}
     </p>
-    <div v-if="!catalogEntries.length && !loading" class="empty">
+    <div v-if="!catalogEntries.length && !showNode && !loading" class="empty">
       没有匹配的软件
     </div>
     <div v-else class="plugin-grid">
+      <article v-if="showNode" class="plugin-card node-catalog-card">
+        <div class="plugin-heading"><SoftwareIcon type="NODE" /><div class="plugin-title"><h3>Node.js</h3><span>多版本运行环境</span></div></div>
+        <p class="plugin-description">使用 nvm 管理 Node.js 版本、配套 npm 和 pnpm，按账号切换环境默认值。</p>
+        <div class="plugin-meta"><span>官方在线 / Ops 离线 / 自行安装</span></div>
+        <footer><span class="recipe-kind">独立账号环境 · 多版本共存</span><button class="primary" :disabled="!currentTarget" @click="emit('node', targetId)">管理 Node 环境</button></footer>
+      </article>
       <article
         v-for="{ definition, versions } in catalogEntries"
         :key="definition.key"
@@ -447,7 +458,7 @@ onUnmounted(() => {
           {{ serviceDescriptions[definition.key] || definition.name }}
         </p>
         <div class="plugin-meta">
-          <select
+          <small v-if="versions.length > 1">离线版本</small><select
             v-if="versions.length > 1"
             :value="definition.version"
             :aria-label="`${definition.name}版本`"
@@ -475,7 +486,7 @@ onUnmounted(() => {
                 .map((mode) => (mode === "NATIVE" ? "原生" : "Docker"))
                 .join(" / ")
             }}
-            · 在线 / 离线</span
+            · {{ officialDefinitions.some((item) => item.key === definition.key) ? '官方 / Ops 离线 / 自行安装' : 'Ops 离线 / 自行安装' }}</span
           >
           <div class="recipe-actions">
             <a
@@ -527,11 +538,13 @@ onUnmounted(() => {
   <ServiceInstallDialog
     :open="!!serviceRecipe"
     :recipe="serviceRecipe"
+    :official-recipes="officialDefinitions.filter((item) => item.key === serviceRecipe?.key)"
     :host="currentTarget"
     @close="serviceRecipe = undefined"
     @submitted="act(refresh)"
     @error="emit('error', $event)"
     @preparation="emit('preparation', $event)"
+    @register="(hostId, softwareType) => { serviceRecipe = undefined; emit('register', hostId, softwareType); }"
   />
   <ElDialog
     v-model="dialog"

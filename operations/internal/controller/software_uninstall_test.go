@@ -200,7 +200,7 @@ func TestSchemaThirteenUpgradePreservesUnknownJobsLocksAndReceipts(t *testing.T)
 	}
 	var version int
 	s.DB.QueryRow("PRAGMA user_version").Scan(&version)
-	if version != 14 {
+	if version != SchemaVersion {
 		t.Fatal(version)
 	}
 	backups, err := filepath.Glob(filepath.Join(f.dir, "before-schema-14-*.tar.gz"))

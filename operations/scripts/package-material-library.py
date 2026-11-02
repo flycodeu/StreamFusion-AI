@@ -27,6 +27,11 @@ DEFAULT_RECIPES = (
     "nginx@1.24.0-2ubuntu7.19",
     "java@8",
     "docker@29.9.2-ubuntu24.04",
+    "nvm@0.40.8",
+    "node@v22.23.4",
+    "node@v24.22.2",
+    "npm@11.6.2",
+    "pnpm@10.20.0",
 )
 
 

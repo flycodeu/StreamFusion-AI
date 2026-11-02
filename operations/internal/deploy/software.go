@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
 type softwareBinding struct {
@@ -47,6 +49,9 @@ func (x *executor) softwareRunner(ctx context.Context, command string, args ...s
 		commandPath = "/usr/sbin:/usr/bin:/sbin:/bin"
 	}
 	cmd.Env = []string{"PATH=" + commandPath, "HOME=/root", "LC_ALL=C", "SYSTEMD_COLORS=0", "SYSTEMD_PAGER="}
+	if command == "/usr/sbin/runuser" {
+		boundPackageCommand(cmd)
+	}
 	if command == "/usr/bin/apt-get" || command == "/usr/bin/dpkg" {
 		cmd.Env = append(cmd.Env, "DEBIAN_FRONTEND=noninteractive")
 		boundPackageCommand(cmd)
@@ -61,7 +66,11 @@ func validateSoftwareInput(req Request) error {
 	if !ID.MatchString(req.JobID) || !Hex.MatchString(req.InputHash) || !softwareMutation(req.SoftwareOperation) {
 		return errors.New("SOFTWARE_JOB_IDENTITY_INVALID")
 	}
-	if req.Uninstallation != nil {
+	if req.NodeEnvironment != nil {
+		if req.SoftwareOperation != "NODE_ENVIRONMENT_CHANGE" || req.NodeEnvironment.Validate() != nil || req.Software != nil || req.Installation != nil || req.Uninstallation != nil || req.Reconfiguration != nil {
+			return errors.New("NODE_ENVIRONMENT_INPUT_INVALID")
+		}
+	} else if req.Uninstallation != nil {
 		if err := validateSoftwareUninstall(req); err != nil {
 			return err
 		}
@@ -72,6 +81,9 @@ func validateSoftwareInput(req Request) error {
 	} else if req.Installation != nil {
 		if req.Software != nil || req.SoftwareOperation != "SOFTWARE_INSTALL" || req.Installation.Validate() != nil {
 			return errors.New("SERVICE_INSTALL_INPUT_INVALID")
+		}
+		if serviceinstall.IsOfficial(req.Installation.Definition) && req.Installation.Official.Validate(req.Installation.Definition) != nil {
+			return errors.New("OFFICIAL_PLAN_REQUIRED")
 		}
 	} else if req.Software == nil || req.Software.Validate(false) != nil || req.SoftwareOperation == "SOFTWARE_INSTALL" || req.SoftwareOperation == "SOFTWARE_UNINSTALL" {
 		return errors.New("SOFTWARE_JOB_IDENTITY_INVALID")
@@ -92,7 +104,10 @@ func softwareResult(req Request) Result {
 }
 
 func (x *executor) executeSoftware(req Request, output io.Writer) error {
-	if (req.Installation != nil || req.Reconfiguration != nil) && (req.Action == "PROGRESS" || req.Action == "SOFTWARE_INSTALL_LOGS") {
+	if req.Action == "NODE_ENVIRONMENT_CHECK" || req.Action == "NODE_ENVIRONMENT_OBSERVE" || req.Action == "NODE_ENVIRONMENT_DISCOVER" {
+		return x.executeNodeRead(req, output)
+	}
+	if (req.Installation != nil || req.Reconfiguration != nil || req.NodeEnvironment != nil || req.Uninstallation != nil) && (req.Action == "PROGRESS" || req.Action == "SOFTWARE_INSTALL_LOGS") {
 		return x.readServiceInstallation(req, output)
 	}
 	if req.Action == "SOFTWARE_CONFIGURE_CHECK" {
@@ -107,7 +122,7 @@ func (x *executor) executeSoftware(req Request, output io.Writer) error {
 		}
 		return json.NewEncoder(output).Encode(x.serviceInstallPreflight(*req.Installation))
 	}
-	if req.Software == nil && req.Installation == nil {
+	if req.Software == nil && req.Installation == nil && req.NodeEnvironment == nil {
 		return errors.New("SOFTWARE_REQUEST_REQUIRED")
 	}
 	if req.Action == "SOFTWARE_OBSERVE" || req.Action == "SOFTWARE_LOGS" {
@@ -281,7 +296,7 @@ func (x *executor) ackSoftware(req, intent Request, result Result, dir string, o
 }
 
 func (x *executor) softwareNotStarted(req Request, dir string, output io.Writer) error {
-	for _, name := range []string{"intent.json", "progress.json", "result.json", "ack.json", "software-command.json", "software-detach.json", "software-uninstall.json", "software-uninstalled.json"} {
+	for _, name := range []string{"intent.json", "progress.json", "result.json", "ack.json", "software-command.json", "software-detach.json", "software-uninstall.json", "software-uninstalled.json", "node-change.json", "node-before.json", "node-install.json", "node-uninstall.json"} {
 		if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
 			return errors.New("TARGET_EVIDENCE_PRESENT_OR_DAMAGED")
 		}

@@ -50,11 +50,13 @@ type Source struct {
 }
 
 type Request struct {
-	SoftwareID      string     `json:"softwareId"`
-	BindingRevision int64      `json:"bindingRevision"`
-	Definition      Definition `json:"definition"`
-	Config          Config     `json:"config"`
-	Source          Source     `json:"source"`
+	Node            *NodeContext  `json:"node,omitempty"`
+	Official        *OfficialPlan `json:"official,omitempty"`
+	SoftwareID      string        `json:"softwareId"`
+	BindingRevision int64         `json:"bindingRevision"`
+	Definition      Definition    `json:"definition"`
+	Config          Config        `json:"config"`
+	Source          Source        `json:"source"`
 }
 
 type Evidence struct {
@@ -91,6 +93,7 @@ type PortMapping struct {
 }
 
 type Preflight struct {
+	Official        *OfficialPlan `json:"official,omitempty"`
 	BinaryDirectory string        `json:"binaryDirectory"`
 	LogsDirectory   string        `json:"logsDirectory"`
 	Ready           bool          `json:"ready"`
@@ -111,6 +114,9 @@ func Digest(value any) string {
 func CatalogHash() string { return Digest(Catalog()) }
 
 func ValidateDefinition(d Definition) error {
+	if IsOfficial(d) {
+		return nil
+	}
 	expected, err := Find(d.Key, d.Version)
 	if err == nil && reflect.DeepEqual(expected, d) {
 		return nil
@@ -164,7 +170,7 @@ func (c ChangeRequest) Validate() error {
 	if err := c.Previous.Validate(); err != nil {
 		return err
 	}
-	if c.ExpectedBindingRevision != c.Previous.BindingRevision || c.Config.StorageRoot != c.Previous.Config.StorageRoot || c.Config.Mode() != c.Previous.Config.Mode() || c.Previous.Definition.Kind == "TOOL" || c.Previous.Definition.Key == "docker" {
+	if IsOfficial(c.Previous.Definition) || c.ExpectedBindingRevision != c.Previous.BindingRevision || c.Config.StorageRoot != c.Previous.Config.StorageRoot || c.Config.Mode() != c.Previous.Config.Mode() || c.Previous.Definition.Kind == "TOOL" || c.Previous.Definition.Key == "docker" {
 		return errors.New("SERVICE_CONFIGURATION_BOUNDARY_INVALID")
 	}
 	if c.Previous.Definition.Key == "mysql" {
@@ -179,6 +185,9 @@ func (c ChangeRequest) Validate() error {
 func credential(id, rev string) bool { return uuid.MatchString(id) && revision.MatchString(rev) }
 
 func (c Config) Validate(d Definition) error {
+	if IsOfficial(d) {
+		return c.validateOfficial(d)
+	}
 	ip := net.ParseIP(c.BindAddress)
 	if strings.TrimSpace(c.Name) != c.Name || len(c.Name) < 1 || len(c.Name) > 120 || strings.ContainsAny(c.Name, "\r\n\x00") || !ValidStorageRoot(c.StorageRoot) || (c.Mode() != "NATIVE" && c.Mode() != "DOCKER") || c.MemoryMiB < 128 || c.MemoryMiB > 16384 {
 		return errors.New("SERVICE_CONFIG_INVALID")
@@ -261,6 +270,24 @@ func (c Config) Validate(d Definition) error {
 }
 
 func (s Source) ValidateFor(d Definition, c Config) error {
+	if d.Key == "node" || d.Key == "nvm" || d.Key == "npm" || d.Key == "pnpm" {
+		if c.Mode() != "NATIVE" {
+			return errors.New("NODE_RUNTIME_INVALID")
+		}
+		if s.Type == "OFFICIAL" && s.SHA256 == "" && s.ByteSize == 0 {
+			return nil
+		}
+		if s.Type == "ARCHIVE" && sha.MatchString(s.SHA256) && s.ByteSize > 0 && s.ByteSize <= ArchiveLimit {
+			return nil
+		}
+		return errors.New("NODE_SOURCE_INVALID")
+	}
+	if IsOfficial(d) {
+		if c.Mode() == "NATIVE" && s.Type == "OFFICIAL" && s.SHA256 == "" && s.ByteSize == 0 {
+			return nil
+		}
+		return errors.New("OFFICIAL_SOURCE_INVALID")
+	}
 	if c.Mode() == "NATIVE" {
 		if d.Native == nil {
 			return errors.New("NATIVE_RECIPE_UNAVAILABLE")
@@ -287,6 +314,13 @@ func (s Source) Validate() error {
 }
 
 func (r Request) Validate() error {
+	if IsNode(r.Definition) {
+		if r.Node == nil || r.Node.Validate() != nil {
+			return errors.New("NODE_ENVIRONMENT_REQUIRED")
+		}
+	} else if r.Node != nil {
+		return errors.New("NODE_CONTEXT_UNEXPECTED")
+	}
 	if !uuid.MatchString(r.SoftwareID) || r.BindingRevision < 1 {
 		return errors.New("SERVICE_INSTALL_IDENTITY_INVALID")
 	}
@@ -296,6 +330,11 @@ func (r Request) Validate() error {
 	if err := r.Config.Validate(r.Definition); err != nil {
 		return err
 	}
+	if r.Official != nil {
+		if err := r.Official.Validate(r.Definition); err != nil {
+			return err
+		}
+	}
 	return r.Source.ValidateFor(r.Definition, r.Config)
 }
 
@@ -304,6 +343,12 @@ func SecretKey(id, rev string) string { return id + ":" + rev }
 // ValidateSecrets is shared by HTTP preflight and the target executor. Values
 // remain transport-only; callers must never serialize this map into a plan.
 func ValidateSecrets(d Definition, c Config, values map[string]string) error {
+	if IsOfficial(d) {
+		if len(values) != 0 {
+			return errors.New("OFFICIAL_SECRET_UNEXPECTED")
+		}
+		return nil
+	}
 	secret := values[SecretKey(c.CredentialID, c.CredentialRevision)]
 	userSecret := values[SecretKey(c.UserCredentialID, c.UserCredentialRevision)]
 	accessKey := values[SecretKey(c.AccessKeyCredentialID, c.AccessKeyCredentialRevision)]
@@ -345,9 +390,23 @@ func (e Evidence) ValidateFor(r Request) error {
 		if !sha.MatchString(e.BinaryHash) || e.ImageID != "" || e.ContainerID != "" {
 			return errors.New("NATIVE_RECEIPT_INVALID")
 		}
+		if IsNode(r.Definition) && (r.Node == nil || e.BinaryPath != NodeVersionRoot(*r.Node, r.Definition.Version)+"/bin/node" || locator != e.BinaryPath) {
+			return errors.New("NODE_RECEIPT_INVALID")
+		}
+		if IsOfficial(r.Definition) {
+			spec, _ := OfficialRecipeSpec(r.Definition)
+			if e.BinaryPath != spec.Paths.Binary || r.Definition.Kind == "TOOL" && locator != spec.Paths.Binary {
+				return errors.New("OFFICIAL_RECEIPT_INVALID")
+			}
+		}
 		if r.Definition.Kind == "TOOL" {
 			if kind != "TOOL" || !path.IsAbs(locator) || strings.ContainsAny(locator, "\r\n\x00") {
 				return errors.New("TOOL_RECEIPT_INVALID")
+			}
+		} else if IsOfficial(r.Definition) {
+			spec, _ := OfficialRecipeSpec(r.Definition)
+			if kind != "SYSTEMD" || locator != spec.Paths.Unit || e.BinaryPath != spec.Paths.Binary {
+				return errors.New("OFFICIAL_RECEIPT_INVALID")
 			}
 		} else if kind != "SYSTEMD" || locator != "sfops-service-"+r.SoftwareID+".service" && !(r.Definition.Key == "docker" && locator == "docker.service") {
 			return errors.New("NATIVE_RECEIPT_INVALID")

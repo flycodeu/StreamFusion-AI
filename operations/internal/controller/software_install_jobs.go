@@ -143,6 +143,9 @@ func (h *HTTP) commitSoftwareInstallResult(id string, req deploy.Request, result
 				err = errors.New("INSTALL_INSTANCE_REVISION_CONFLICT")
 			}
 		}
+		if err == nil && req.Installation.Official != nil && result.Status == "SUCCEEDED" {
+			_, err = tx.Exec("UPDATE software_instances SET software_version=? WHERE id=? AND last_job_id=?", result.Installation.ObservedVersion, req.Installation.SoftwareID, id)
+		}
 	} else {
 		var changed sql.Result
 		changed, err = tx.Exec("UPDATE software_instances SET actual_state='UNKNOWN',installation_status='FAILED',error_code=?,version=version+1,updated_at=? WHERE id=? AND last_job_id=?", result.ErrorCode, Now(), req.Installation.SoftwareID, id)
@@ -153,6 +156,9 @@ func (h *HTTP) commitSoftwareInstallResult(id string, req deploy.Request, result
 				err = errors.New("INSTALL_INSTANCE_REVISION_CONFLICT")
 			}
 		}
+	}
+	if err == nil && req.Installation.Node != nil {
+		err = commitNodeSoftwareObservation(tx, id, req.Installation.Node, result, req.Installation.SoftwareID, req.Installation.Definition.Version, false)
 	}
 	if err == nil && result.Status == "SUCCEEDED" {
 		err = bridgeInstalledTool(tx, req, *result.Installation)

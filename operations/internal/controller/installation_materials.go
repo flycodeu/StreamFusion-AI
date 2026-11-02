@@ -450,7 +450,12 @@ func (h *HTTP) deleteInstallationMaterial(w http.ResponseWriter, r *http.Request
 		h.internal(w, r, err)
 		return
 	}
-	if count > 0 {
+	var nodeCount int
+	if err = tx.QueryRow(`SELECT count(*) FROM node_environment_plans p WHERE json_extract(p.snapshot_json,'$.materialId')=? AND ((p.status='DRAFT' AND p.expires_at>?) OR EXISTS(SELECT 1 FROM jobs j WHERE j.node_environment_plan_id=p.id AND (j.status IN ('QUEUED','RUNNING','UNKNOWN') OR j.target_ack_pending=1)) OR EXISTS(SELECT 1 FROM node_environments n WHERE n.id=p.environment_id AND n.management_mode='MANAGED'))`, id, Now()).Scan(&nodeCount); err != nil {
+		h.internal(w, r, err)
+		return
+	}
+	if count+nodeCount > 0 {
 		h.fail(w, r, 409, "INSTALL_MATERIAL_IN_USE", "安装计划、未决作业或当前安装仍引用材料")
 		return
 	}

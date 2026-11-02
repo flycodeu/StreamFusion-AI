@@ -41,8 +41,8 @@ const tools: Partial<Record<SoftwareType, string>> = {
 const availableTypes = computed(() =>
   Object.entries(softwareTypes).filter(
     ([key]) =>
-      draft.value.runtimeKind !== "TOOL" ||
-      toolTypes.includes(key as SoftwareType),
+      key !== "NODE" && (draft.value.runtimeKind !== "TOOL" ||
+      toolTypes.includes(key as SoftwareType)),
   ),
 );
 const selectedHost = computed(() =>

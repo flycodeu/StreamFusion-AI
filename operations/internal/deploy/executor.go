@@ -419,7 +419,7 @@ func Execute(input io.Reader, output io.Writer) error {
 	if req.Firewall != nil || strings.HasPrefix(req.Action, "FIREWALL_") {
 		return x.executeFirewall(req, output)
 	}
-	if req.Software != nil || req.Installation != nil || strings.HasPrefix(req.Action, "SOFTWARE_") {
+	if req.NodeEnvironment != nil || strings.HasPrefix(req.Action, "NODE_ENVIRONMENT_") || req.Software != nil || req.Installation != nil || strings.HasPrefix(req.Action, "SOFTWARE_") {
 		return x.executeSoftware(req, output)
 	}
 	if req.Action == "TOOL_PROBE" {

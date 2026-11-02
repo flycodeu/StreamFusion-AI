@@ -91,6 +91,22 @@ func (x *executor) installedDockerPackages(ctx context.Context) (map[string]stri
 }
 
 func (x *executor) dockerEnginePreflight(ctx context.Context) error {
+	if err := x.dockerEngineAbsent(ctx); err != nil {
+		return err
+	}
+	packages, err := x.installedDockerPackages(ctx)
+	if err != nil {
+		return err
+	}
+	for _, name := range []string{"iptables", "nftables", "libc6", "libseccomp2", "libsystemd0"} {
+		if packages[name] == "" {
+			return errors.New("DOCKER_OS_DEPENDENCY_MISSING_" + name)
+		}
+	}
+	return nil
+}
+
+func (x *executor) dockerEngineAbsent(ctx context.Context) error {
 	packages, err := x.installedDockerPackages(ctx)
 	if err != nil {
 		return err
@@ -103,11 +119,6 @@ func (x *executor) dockerEnginePreflight(ctx context.Context) error {
 	for _, file := range []string{"/usr/bin/docker", "/usr/bin/dockerd", "/usr/bin/containerd", "/usr/bin/runc", "/run/docker.sock", "/etc/docker/daemon.json", "/etc/containerd/config.toml", "/var/lib/docker", "/var/lib/containerd", "/etc/systemd/system/docker.service", "/etc/systemd/system/docker.socket", "/etc/systemd/system/containerd.service", "/etc/systemd/system/docker.service.d", "/etc/systemd/system/containerd.service.d", "/usr/lib/systemd/system/docker.service", "/usr/lib/systemd/system/containerd.service"} {
 		if _, err := os.Lstat(file); !os.IsNotExist(err) {
 			return errors.New("DOCKER_EXISTING_CONFIGURATION_OR_DATA")
-		}
-	}
-	for _, name := range []string{"iptables", "nftables", "libc6", "libseccomp2", "libsystemd0"} {
-		if packages[name] == "" {
-			return errors.New("DOCKER_OS_DEPENDENCY_MISSING_" + name)
 		}
 	}
 	return nil

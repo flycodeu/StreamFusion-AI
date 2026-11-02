@@ -15,21 +15,23 @@ import (
 // Uninstallation freezes the installation and exact bound object. Empty fields
 // are omitted so existing job input hashes and durable receipts stay unchanged.
 type SoftwareUninstallRequest struct {
-	Installation serviceinstall.Request `json:"installation"`
-	DeleteData   bool                   `json:"deleteData,omitempty"`
+	ClearNodeDefault bool                   `json:"clearNodeDefault,omitempty"`
+	Installation     serviceinstall.Request `json:"installation"`
+	DeleteData       bool                   `json:"deleteData,omitempty"`
 }
 
 type SoftwareUninstallEvidence struct {
-	SoftwareID            string `json:"softwareId"`
-	Kind                  string `json:"kind"`
-	Locator               string `json:"locator"`
-	IdentityHash          string `json:"identityHash"`
-	ProgramRemoved        bool   `json:"programRemoved"`
-	SharedProgramRetained bool   `json:"sharedProgramRetained,omitempty"`
-	DeleteData            bool   `json:"deleteData"`
-	DataRemoved           bool   `json:"dataRemoved"`
-	DataRoot              string `json:"dataRoot"`
-	ObservedAt            string `json:"observedAt"`
+	SoftwareID            string   `json:"softwareId"`
+	Kind                  string   `json:"kind"`
+	Locator               string   `json:"locator"`
+	IdentityHash          string   `json:"identityHash"`
+	ProgramRemoved        bool     `json:"programRemoved"`
+	SharedProgramRetained bool     `json:"sharedProgramRetained,omitempty"`
+	DeleteData            bool     `json:"deleteData"`
+	DataRemoved           bool     `json:"dataRemoved"`
+	DataRoot              string   `json:"dataRoot"`
+	RemovedPaths          []string `json:"removedPaths,omitempty"`
+	ObservedAt            string   `json:"observedAt"`
 }
 
 type softwareUninstallMarker struct {
@@ -44,8 +46,20 @@ func validateSoftwareUninstall(req Request) error {
 		return errors.New("SOFTWARE_UNINSTALL_INPUT_INVALID")
 	}
 	i, o := u.Installation, s.Ownership
+	if i.Node != nil || o.Node != nil {
+		if !serviceinstall.IsNode(i.Definition) || !sameNodeOwner(i.Node, o.Node) {
+			return errors.New("NODE_UNINSTALL_IDENTITY_MISMATCH")
+		}
+	} else if u.ClearNodeDefault {
+		return errors.New("NODE_DEFAULT_CLEAR_INVALID")
+	}
 	if i.SoftwareID != s.ID || i.BindingRevision != s.Version || o.ControllerID != req.ControllerID || o.TargetID != req.TargetID || o.ConfigHash != Digest(i.Config) || s.SoftwareKey != strings.ToUpper(i.Definition.Key) || (i.Config.Mode() == "NATIVE") != (o.RuntimeMode == "NATIVE") {
 		return errors.New("SOFTWARE_UNINSTALL_OWNERSHIP_MISMATCH")
+	}
+	if i.Official != nil || o.Official != nil || serviceinstall.IsOfficial(i.Definition) {
+		if !serviceinstall.IsOfficial(i.Definition) || i.Official == nil || i.Official.Validate(i.Definition) != nil || !reflect.DeepEqual(i.Official, o.Official) {
+			return errors.New("OFFICIAL_UNINSTALL_OWNERSHIP_MISMATCH")
+		}
 	}
 	return nil
 }
@@ -69,6 +83,12 @@ func (x *executor) uninstallSoftware(req Request, dir string) (Result, error) {
 	}
 	if err := x.boundSoftware(*req.Software); err != nil {
 		return result, err
+	}
+	if req.Software.Ownership.Node != nil {
+		return x.uninstallNodeVersion(req, dir)
+	}
+	if req.Software.Ownership.Official != nil {
+		return x.uninstallOfficialSoftware(req, dir)
 	}
 	root, err := x.uninstallRoot(req)
 	if err != nil {
@@ -192,6 +212,9 @@ func (x *executor) softwareProgramAbsent(req Request) bool {
 	s := req.Software
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if s.Ownership != nil && s.Ownership.Official != nil {
+		return x.officialProgramAbsent(ctx, req)
+	}
 	if req.Uninstallation.Installation.Definition.Key == "docker" {
 		return x.dockerEngineUninstalled(ctx, req)
 	}
@@ -292,6 +315,12 @@ func (x *executor) finishSoftwareUninstall(req Request, dir, root string) (Resul
 }
 
 func (x *executor) reconcileSoftwareUninstall(req Request, dir string) Result {
+	if req.Software.Ownership.Node != nil {
+		return x.reconcileNodeUninstall(req, dir)
+	}
+	if req.Software != nil && req.Software.Ownership != nil && req.Software.Ownership.Official != nil {
+		return x.reconcileOfficialUninstall(req, dir)
+	}
 	result := softwareResult(req)
 	result.ErrorCode = "SOFTWARE_UNINSTALL_UNCONFIRMED"
 	root, err := x.uninstallRoot(req)
@@ -304,6 +333,12 @@ func (x *executor) reconcileSoftwareUninstall(req Request, dir string) Result {
 }
 
 func (x *executor) verifySoftwareUninstall(req Request, result Result) error {
+	if req.Software.Ownership.Node != nil {
+		return x.verifyNodeUninstall(req, result)
+	}
+	if req.Software != nil && req.Software.Ownership != nil && req.Software.Ownership.Official != nil {
+		return x.verifyOfficialUninstall(req, result)
+	}
 	e, s := result.Uninstallation, req.Software
 	root, err := x.uninstallRoot(req)
 	if err != nil || e == nil || e.SoftwareID != s.ID || e.Kind != s.Kind || e.Locator != s.Locator || e.IdentityHash != s.IdentityHash || !e.ProgramRemoved && !(s.Kind == "TOOL" && s.Ownership != nil && s.Ownership.RuntimeMode != "NATIVE" && e.SharedProgramRetained) || e.ProgramRemoved && e.SharedProgramRetained || e.DeleteData != req.Uninstallation.DeleteData || e.DataRemoved != e.DeleteData || e.DataRoot != root {

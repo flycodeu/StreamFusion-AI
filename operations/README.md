@@ -1,6 +1,6 @@
 # StreamFusion Ops
 
-独立的 Linux 运维控制器，包含主机连接、已有软件管理、UFW端口管理、六种服务和Java/Maven/Python/FFmpeg/编程工具安装、配置维护及单实例发布链。支持固定配方的Docker和Ubuntu24.04原生安装；工程实现、Linux实机和负责人验收分别记录。运行时只需一个Go二进制；应用Compose发布需Engine和Compose，普通Docker安装只需Engine，原生安装检查各自依赖。
+独立的 Linux 运维控制器，包含主机连接、已有软件管理、UFW端口管理、服务与工具安装、Node环境管理、配置维护及单实例发布链。软件安装区分官方联网、Ops离线材料和自行安装后检测登记；工程实现、Linux实机和负责人验收分别记录。运行时只需一个Go二进制；应用Compose发布需Engine和Compose，普通Docker安装只需Engine，原生安装检查各自依赖。
 
 ## 构建与运行
 
@@ -93,7 +93,7 @@ cd web && pnpm build
 python scripts/test-browser.py --binary ./streamfusion-ops.exe --output "$env:TEMP/sfops-browser-$(New-Guid)"
 ```
 
-看进程日志及状态目录下 `logs/controller.log`。目录锁冲突返回STATE_LOCKED；端口冲突返回LISTEN_FAILED；高版本数据库返回SCHEMA_TOO_NEW；缺少已有凭据密钥返回KEY_MISSING。现行Schema为14，增量维护安装/配置、防火墙、主机接入及软件卸载作业；原主机ID、凭据、实例、观察、作业和历史发布关系保留。每次增量升级前生成对应 `before-schema-N` 一致性归档，再事务升级，旧迁移摘要保持不变。旧程序拒绝打开高版本数据库；代码回退须用原密钥与对应升级前备份恢复到新目录。备份不包含大镜像归档，恢复后文件缺失会阻断新安装，不能把数据库恢复当作材料齐备。
+看进程日志及状态目录下 `logs/controller.log`。目录锁冲突返回STATE_LOCKED；端口冲突返回LISTEN_FAILED；高版本数据库返回SCHEMA_TOO_NEW；缺少已有凭据密钥返回KEY_MISSING。现行Schema为15，增量维护安装/配置、防火墙、主机接入、软件卸载及Node环境作业；原主机ID、凭据、实例、观察、作业和历史发布关系保留。每次增量升级前生成对应 `before-schema-N` 一致性归档，再事务升级，旧迁移摘要保持不变。旧程序拒绝打开高版本数据库；代码回退须用原密钥与对应升级前备份恢复到新目录。备份不包含大镜像归档，恢复后文件缺失会阻断新安装，不能把数据库恢复当作材料齐备。
 
 `STATE_LOCKED` 表示该目录仍被进程持有，锁文件存在本身不表示故障，不能通过删除它关闭服务。优先用 `stop --state`；旧版后台实例未提供本地关闭记录时返回 `STOP_UNAVAILABLE`，需核实监听端口、可执行文件和启动参数后关闭对应进程，随后使用新二进制。
 
@@ -149,7 +149,15 @@ I02 当前实现本机/SSH Linux目标登记、固定 Java Compose 制品发布�
 
 ## 软件安装与配置
 
-材料库制作、启动导入及发行打包见[材料库说明](materials/README.md)。当前固定随包材料面向 Ubuntu24.04/amd64；其他容器离线包可将固定配方的 Docker-save 导入同一库。五个 Docker 包仍要求主机已有 iptables、nftables、libc6、libseccomp2、libsystemd0，不在线补装系统依赖。
+材料库制作、启动导入及发行打包见[材料库说明](materials/README.md)。当前固定随包材料面向 Linux amd64，Ubuntu DEB 配方面向 Ubuntu24.04；其他容器离线包可将固定配方的 Docker-save 导入同一库。Docker离线安装要求系统依赖已就绪；官方联网安装由APT解析并安装缺失依赖，完整包清单在确认前展示。
+
+安装入口提供三种方式：
+
+- **官方安装**：目标服务器联网，展示实际包版本、来源、系统路径和固定命令，再执行安装。Ubuntu24.04仓库提供Redis、Nginx、MySQL、OpenJDK17/21、Maven、Python和FFmpeg；Docker使用官方固定DEB及APT依赖安装。已有同类包或目录时拒绝覆盖，引导检测登记。预检只读；确认后刷新索引，计划变化时停止并要求重新预检。
+- **Ops离线安装**：选择平台材料库中已校验的文件，也可补充材料或上传固定配方对应的文件；目标无需为取得材料联网。系统依赖仍须满足对应配方要求。
+- **自行安装**：用户在服务器安装后检测登记，不执行安装脚本。检测入口仅覆盖实际支持的软件，未提供探针的工具不宣称自动发现。
+
+能力检查按所选操作和配方判断，不因目录新增软件就要求所有主机升级。新增能力确实缺失时，可在安装界面显式更新接入组件，保留当前安装草稿，再重新预检；更新组件不会自动提交软件安装。
 
 “卸载软件”独立于“解除管理”：仅支持 Ops 安装且归属已确认的对象，默认保留配置、数据、日志与备份；勾选“同时删除数据”后显示精确实例路径，并要求输入软件名称。历史软件记录、安装计划、作业与审计仍保留。Docker有容器或受管依赖时拒绝卸载；停止包含 service/socket，已停止引擎需先启动核对依赖。`/var/lib/containerd` 始终保留。保留目录后的再次安装不会覆盖原数据，恢复复用需管理员另行评估。新增卸载要求目标执行器 `softwareUninstallVersion=1`；已接入主机可显式点击“更新接入组件”，打开页面不会自动升级。
 
@@ -201,6 +209,18 @@ MySQL管理员为root，业务库/账号可选，新空目录才初始化且默�
 安装/配置计划有效5分钟，提交返回原持久Job。安装确认后进入软件中心，支持检测、启停及有界日志；超时和丢回执先核对原Job，不重复初始化。解除管理保留远端程序、配置和数据。Ops退出不停止既有服务；数据库和对象数据不随代码回退降级。
 
 API以`/ops/api/v1`为前缀：目录`GET /software-recipes`；安装`POST /hosts/{id}/software-install-plans`、`POST /software-install-plans/{id}/submit`；材料`POST/GET /installation-materials`、`PUT /{id}/content`、`POST /{id}/confirm`、`DELETE /{id}`，原生在线准备`POST /installation-materials/official`；配置`POST /software-instances/{id}/configuration-plans`、`POST /software-configuration-plans/{id}/submit`。新安装要求执行器`serviceInstallVersion=2`且目录摘要相符。
+
+### Node环境
+
+“软件管理 → Node环境”按主机和Linux账号管理nvm、Node.js、npm、pnpm。当前安装配方面向Linux amd64，提供固定Node22/24版本及校验摘要；已安装版本保留原配方，新配方不会修改历史记录。nvm使用用户目录下的专属环境，固定命令以所选非root账号运行，不修改系统Node或用户的Shell启动文件。
+
+新建环境时选择账号、Node版本和来源。官方安装由目标联网取得固定官方材料；离线安装复用平台材料库，初始化nvm也使用库中材料；自行安装只检测并登记已有用户nvm或系统Node，不自动接管。外部环境可查看、重新检测和解除登记，不能通过此入口修改其版本或全局包。
+
+每个Node版本显示自己的npm、pnpm、程序路径及全局包清单。npm随Node安装，也可明确更新到支持配方；pnpm可明确安装、更新或卸载。不自动迁移全局包，不自动更新nvm或包管理器。设置默认版本只影响后续选择，已启动进程和既有应用发布配置保持原状；Node应用发布尚不在本功能范围内。
+
+卸载版本会检查默认引用和运行进程；默认版本须先切换，最后一个版本可明确确认清除默认。默认保留缓存、备份，勾选删除时展示对应路径；项目目录不属于清理范围。环境内仍有版本时不能移除环境。操作沿用现有作业、主机锁、日志和幂等核对；结果不明确时保留UNKNOWN并核对原作业，不重发命令。
+
+代码按三个现有模块维护：`internal/serviceinstall/node.go`定义固定配方，`internal/deploy/node_*.go`与`node.sh`负责目标执行，`internal/controller/node_environment*.go`负责环境记录和现有作业衔接。前端入口为`NodeEnvironmentPanel.vue`、版本操作为`NodeVersionDialog.vue`，数据类型在`nodeEnvironment.ts`；没有新增运行服务或生产依赖。
 
 ### 主机安装准备
 

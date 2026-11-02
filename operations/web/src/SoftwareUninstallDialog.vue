@@ -14,14 +14,18 @@ const attempted = ref(false);
 const key = ref("");
 const expectedVersion = ref("");
 const error = ref<{ message: string; code: string; at: string; traceId: string }>();
-const directoryRows = computed(() => [
+const official = computed(() => props.item?.installation?.official);
+const officialInstallation = computed(() => !!official.value || props.item?.installation?.definition?.sourceModes?.includes("OFFICIAL"));
+const directoryRows = computed(() => officialInstallation.value ? (official.value?.paths.ownedPaths || []).map((path) => ({
+  label: path === official.value?.paths.data ? "数据目录" : path === official.value?.paths.config ? "配置目录" : path === official.value?.paths.logs ? "实例日志目录" : "专属目录", path,
+})) : [
   { label: "实例根目录", path: props.item?.installationPaths?.root },
   { label: "数据目录", path: props.item?.installationPaths?.data },
   { label: "配置目录", path: props.item?.installationPaths?.config },
   { label: "实例日志目录", path: props.item?.installationPaths?.logs },
 ]);
-const pathsReady = computed(() => directoryRows.value.every((row) =>
-  !!row.path && row.path.startsWith("/") && row.path !== "/"));
+const pathsReady = computed(() => directoryRows.value.length > 0 && directoryRows.value.every((row) =>
+  !!row.path && row.path.startsWith("/") && row.path !== "/" && !row.path.split("/").some((part) => part === "." || part === "..")));
 watch(() => props.item?.id, () => {
   deleteData.value = false;
   confirmationName.value = "";
@@ -70,16 +74,17 @@ async function submit() {
         <p v-if="dependentContainers.length">此主机已登记 {{ dependentContainers.length }} 个容器：{{ dependentContainers.join("、") }}。请先处理依赖；服务器上未登记的容器也可能受影响。</p>
         <p>Docker Engine 的容器数据使用下方数据目录。</p>
       </div>
-      <label class="delete-choice"><input v-model="deleteData" type="checkbox" :disabled="busy || attempted" />同时删除此实例的数据</label>
-      <p class="data-summary">{{ deleteData ? "会删除此实例专属的数据、配置和日志目录，无法通过界面恢复。" : "默认保留此实例的数据、配置和日志目录。" }}</p>
+      <label class="delete-choice"><input v-model="deleteData" type="checkbox" :disabled="busy || attempted || !pathsReady" />同时删除此实例的数据</label>
+      <p class="data-summary">{{ deleteData ? "会删除下列专属目录，无法通过界面恢复。" : "默认保留数据、配置和日志。" }}</p>
       <section v-if="pathsReady" class="uninstall-paths" aria-label="卸载目录范围">
         <h3>{{ deleteData ? "将删除的实例目录" : "保留的实例目录" }}</h3>
         <dl><template v-for="directory in directoryRows" :key="directory.label">
           <dt>{{ directory.label }}</dt><dd><code>{{ directory.path }}</code></dd>
         </template></dl>
       </section>
+      <p v-else-if="official && !directoryRows.length" class="data-summary">此官方安装没有可删除的专属数据目录，共享系统目录保留。</p>
       <p v-else class="uninstall-warning" role="alert">未取得完整安装目录，暂不能删除数据。请取消并刷新软件详情，重新检查后再操作；仍可选择卸载并保留数据。</p>
-      <section v-if="softwareIsDockerEngine(item)" class="uninstall-paths" aria-label="Docker 系统目录处理">
+      <section v-if="softwareIsDockerEngine(item) && !officialInstallation" class="uninstall-paths" aria-label="Docker 系统目录处理">
         <h3>Docker 系统目录</h3>
         <dl>
           <dt>主机配置</dt><dd><code>/etc/docker/daemon.json</code><span>{{ deleteData ? "仅在内容仍与本实例安装回执一致时删除；不一致时报告错误。" : "保留。" }}</span></dd>

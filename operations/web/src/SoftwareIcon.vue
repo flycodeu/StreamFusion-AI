@@ -4,6 +4,7 @@ import { computed } from "vue";
 const props = defineProps<{ type: string }>();
 const kind = computed(() => props.type.toUpperCase());
 const initials: Record<string, string> = {
+  NODE: "Js",
   DOCKER: "Dk",
   MINIO: "Mio",
   CODEX: "Cx",

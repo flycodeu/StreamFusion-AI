@@ -46,8 +46,8 @@ function preparation(id = "host-a", remoteJob) {
   };
 }
 
-function harness(request, fetch = async () => Response.json({})) {
-  const props = { host: { id: "host-a", version: "1", kind: "SSH" } };
+function harness(request, fetch = async () => Response.json({}), options = {}) {
+  const props = { host: { id: "host-a", version: "1", kind: "SSH" }, updateOnly: options.updateOnly };
   const timers = new Map();
   const clicks = [];
   const emitted = [];
@@ -191,6 +191,49 @@ test("a successful historical connection offers an explicit update without auto 
   assert.equal(mutations.length, 1);
   assert.equal(mutations[0].path, "/hosts/host-a/preparation/install");
   assert.equal(h.panel.updateRequested.value, false);
+});
+
+test("inline update requires confirmation and emits completion only for the explicitly updated component", async () => {
+  let latest = { id: "old-success", status: "SUCCEEDED" };
+  const installs = [];
+  const h = harness(async (path, method, input) => {
+    if (path.endsWith("/checks")) return { capabilities: {} };
+    if (path.endsWith("/preparation/install")) {
+      installs.push({ ...input });
+      latest = { id: "new-update", status: "SUCCEEDED" };
+      return latest;
+    }
+    return preparation("host-a", latest);
+  }, undefined, { updateOnly: true });
+  await flush();
+  assert.equal(h.panel.updateRequested.value, true);
+  assert.equal(installs.length, 0);
+  assert.equal(h.emitted.includes("updated"), false);
+  await h.panel.install();
+  assert.equal(installs.length, 1);
+  assert.equal(h.emitted.filter((event) => event === "updated").length, 1);
+  await h.panel.load();
+  assert.equal(h.emitted.filter((event) => event === "updated").length, 1);
+  h.unmount();
+});
+
+test("an update completion from a previous host cannot close the current inline flow", async () => {
+  const check = deferred();
+  let latest = { id: "old-success", status: "SUCCEEDED" }, checks = 0;
+  const h = harness(async (path) => {
+    if (path.endsWith("/checks")) return ++checks === 1 ? {} : check.promise;
+    if (path.endsWith("/preparation/install")) return latest = { id: "new-update", status: "SUCCEEDED" };
+    return preparation(path.includes("host-b") ? "host-b" : "host-a", latest);
+  }, undefined, { updateOnly: true });
+  await flush();
+  const pending = h.panel.install();
+  await flush();
+  h.changeHost("host-b");
+  check.resolve({});
+  await pending;
+  await flush();
+  assert.equal(h.emitted.includes("updated"), false);
+  h.unmount();
 });
 
 test("download uses its initial file name and ignores completion after a host switch", async () => {

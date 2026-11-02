@@ -10,6 +10,8 @@ import (
 )
 
 type softwareInstance struct {
+	NodeDataPaths        []string                 `json:"nodeDataPaths,omitempty"`
+	NodeEnvironmentID    string                   `json:"nodeEnvironmentId,omitempty"`
 	InstallationPaths    *installPaths            `json:"installationPaths,omitempty"`
 	ConfigurationJobID   string                   `json:"configurationJobId,omitempty"`
 	Installation         *serviceinstall.Request  `json:"installation,omitempty"`
@@ -49,7 +51,7 @@ type softwareObservation struct {
 	Source    string `json:"source"`
 }
 
-const softwareColumns = `s.id,s.name,s.host_id,t.name,s.software_type,s.software_version,s.runtime_kind,s.locator,s.management_mode,s.desired_state,s.actual_state,s.observation_json,CAST(s.version AS TEXT),s.last_job_id,s.error_code,s.data_ownership,s.created_at,s.updated_at,s.identity_hash,s.binding_revision,s.observed_at,s.attempt_json,s.observation_revision,s.observation_identity,t.kind,t.address,t.ssh_port,t.ssh_user,t.host_fingerprint,coalesce(t.credential_id,''),coalesce(CAST(t.credential_revision AS TEXT),''),s.installation_json,s.installation_status,CASE WHEN s.configuration_job_id<>'' THEN s.configuration_job_id ELSE coalesce((SELECT j.id FROM jobs j WHERE j.software_plan_id=s.install_plan_id),'') END,(SELECT controller_id FROM controller_state WHERE id=1),coalesce((SELECT j.result_json FROM jobs j WHERE j.software_plan_id=s.install_plan_id),'{}'),s.installation_evidence_json,s.configuration_job_id,t.install_root`
+const softwareColumns = `s.id,s.name,s.host_id,t.name,s.software_type,s.software_version,s.runtime_kind,s.locator,s.management_mode,s.desired_state,s.actual_state,s.observation_json,CAST(s.version AS TEXT),s.last_job_id,s.error_code,s.data_ownership,s.created_at,s.updated_at,s.identity_hash,s.binding_revision,s.observed_at,s.attempt_json,s.observation_revision,s.observation_identity,t.kind,t.address,t.ssh_port,t.ssh_user,t.host_fingerprint,coalesce(t.credential_id,''),coalesce(CAST(t.credential_revision AS TEXT),''),s.installation_json,s.installation_status,CASE WHEN s.configuration_job_id<>'' THEN s.configuration_job_id ELSE coalesce((SELECT j.id FROM jobs j WHERE j.software_plan_id=s.install_plan_id),'') END,(SELECT controller_id FROM controller_state WHERE id=1),coalesce((SELECT j.result_json FROM jobs j WHERE j.software_plan_id=s.install_plan_id),'{}'),s.installation_evidence_json,s.configuration_job_id,t.install_root,coalesce(s.node_environment_id,'')`
 
 func scanSoftware(row interface{ Scan(...any) error }) (softwareInstance, error) {
 	var s softwareInstance
@@ -59,7 +61,7 @@ func scanSoftware(row interface{ Scan(...any) error }) (softwareInstance, error)
 	var installReceipt, evidenceRaw string
 	var installRoot string
 	var host target
-	err := row.Scan(&s.ID, &s.Name, &s.HostID, &s.HostName, &s.SoftwareType, &s.SoftwareVersion, &s.RuntimeKind, &s.Locator, &s.ManagementMode, &s.DesiredState, &s.ActualState, &raw, &s.Version, &s.LastJobID, &s.ErrorCode, &s.DataOwnership, &s.CreatedAt, &s.UpdatedAt, &s.IdentityHash, &s.BindingRevision, &observed, &attempt, &s.ObservationRevision, &identity, &host.Kind, &host.Address, &host.Port, &host.User, &host.Fingerprint, &host.CredentialID, &host.Revision, &installation, &s.InstallationStatus, &s.InstallationJobID, &s.ControllerID, &installReceipt, &evidenceRaw, &s.ConfigurationJobID, &installRoot)
+	err := row.Scan(&s.ID, &s.Name, &s.HostID, &s.HostName, &s.SoftwareType, &s.SoftwareVersion, &s.RuntimeKind, &s.Locator, &s.ManagementMode, &s.DesiredState, &s.ActualState, &raw, &s.Version, &s.LastJobID, &s.ErrorCode, &s.DataOwnership, &s.CreatedAt, &s.UpdatedAt, &s.IdentityHash, &s.BindingRevision, &observed, &attempt, &s.ObservationRevision, &identity, &host.Kind, &host.Address, &host.Port, &host.User, &host.Fingerprint, &host.CredentialID, &host.Revision, &installation, &s.InstallationStatus, &s.InstallationJobID, &s.ControllerID, &installReceipt, &evidenceRaw, &s.ConfigurationJobID, &installRoot, &s.NodeEnvironmentID)
 	if err != nil {
 		return s, err
 	}
@@ -76,6 +78,17 @@ func scanSoftware(row interface{ Scan(...any) error }) (softwareInstance, error)
 			if installed.Definition.Key == "docker" {
 				s.InstallationPaths.Bin = "/usr/bin"
 			}
+		}
+		if installed.Node != nil {
+			n := installed.Node
+			s.NodeDataPaths = nodeVersionDataPaths(*n, installed.Definition.Version)
+			root := serviceinstall.NodeVersionRoot(*n, installed.Definition.Version)
+			s.InstallationPaths = &installPaths{Root: root, Bin: root + "/bin", Data: n.RootPath + "/cache/" + installed.Definition.Version, Config: n.RootPath + "/nvm/alias", Logs: n.RootPath + "/backups/" + installed.Definition.Version}
+		}
+		if installed.Official != nil {
+			// Official packages use explicit system locations. Never construct an
+			// uninstall tree from their display-only root "/".
+			s.InstallationPaths = nil
 		}
 		var receipt deploy.Result
 		if err = json.Unmarshal([]byte(installReceipt), &receipt); err != nil {
@@ -128,6 +141,8 @@ func softwareRequest(s softwareInstance) *deploy.SoftwareRequest {
 		if s.Installation.Config.Mode() == "NATIVE" {
 			req.Ownership.RuntimeMode = "NATIVE"
 			req.Ownership.ImageID = ""
+			req.Ownership.Official = s.Installation.Official
+			req.Ownership.Node = s.Installation.Node
 			if s.InstallationEvidence != nil {
 				req.Ownership.BinaryPath = s.InstallationEvidence.BinaryPath
 				req.Ownership.BinaryHash = s.InstallationEvidence.BinaryHash

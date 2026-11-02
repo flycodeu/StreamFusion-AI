@@ -116,8 +116,9 @@ def main():
                     heading = page.get_by_role("heading", name=name, exact=True)
                     heading.wait_for()
                     page.locator("article").filter(has=heading).get_by_role("button", name="安装", exact=True).click()
-                    drawer = page.get_by_role("dialog", name="安装 " + name, exact=True)
+                    drawer = page.locator(".el-drawer:visible").last
                     drawer.wait_for()
+                    drawer.get_by_role("button", name="Ops 离线安装", exact=True).click()
                     return drawer
 
                 def close_install(drawer):
@@ -126,10 +127,11 @@ def main():
 
                 for name in ("MySQL", "Redis", "Nginx", "SeaweedFS", "MediaMTX", "ZLMediaKit", "Java", "Maven", "Python", "FFmpeg", "Codex CLI", "Claude Code", "Docker Engine (Ubuntu 24.04)"):
                     page.get_by_role("heading", name=name, exact=True).wait_for()
-                assert page.locator("article.plugin-card").count() == 13
+                assert page.locator("article.plugin-card:not(.node-catalog-card)").count() == 13
+                expect(page.locator("article.node-catalog-card")).to_have_count(1)
                 checks.append("thirteen-software-cards-visible")
                 page.get_by_role("button", name="编程软件", exact=True).click()
-                assert page.locator("article.plugin-card").count() == 2
+                assert page.locator("article.plugin-card:not(.node-catalog-card)").count() == 2
                 drawer = open_install("Claude Code")
                 assert drawer.get_by_role("radio", name="Docker 容器", exact=False).count() == 0
                 expect(drawer.get_by_role("radio", name="本地离线材料库 · 默认", exact=False)).to_be_checked()
@@ -159,7 +161,7 @@ def main():
                 close_install(drawer)
                 page.unroute(material_route)
                 page.get_by_role("button", name="运行环境", exact=True).click()
-                assert page.locator("article.plugin-card").count() == 2
+                assert page.locator("article.plugin-card:not(.node-catalog-card)").count() == 2
                 page.get_by_role("heading", name="Python", exact=True).wait_for()
                 page.get_by_role("button", name="媒体工具", exact=True).click()
                 assert page.locator("article.plugin-card").count() == 1
@@ -175,7 +177,7 @@ def main():
                 drawer.get_by_role("button", name="下一步", exact=True).click()
                 expect(drawer.get_by_role("alert")).to_contain_text("离线归档")
                 drawer.get_by_role("radio", name="Docker 容器", exact=False).check()
-                drawer.get_by_role("radio", name="在线获取 · 可选", exact=False).check()
+                drawer.get_by_role("radio", name="目标在线拉取镜像", exact=False).check()
                 drawer.get_by_role("button", name="下一步", exact=True).click()
                 drawer.get_by_label("实例名称", exact=True).fill("nginx-test-8088")
                 assert drawer.get_by_role("button", name="新建凭据", exact=True).count() == 0
@@ -207,7 +209,7 @@ def main():
 
                 drawer = open_install("SeaweedFS")
                 drawer.get_by_role("radio", name="Docker 容器", exact=False).check()
-                drawer.get_by_role("radio", name="在线获取 · 可选", exact=False).check()
+                drawer.get_by_role("radio", name="目标在线拉取镜像", exact=False).check()
                 drawer.get_by_role("button", name="下一步", exact=True).click()
                 drawer.get_by_label("S3 Access Key", exact=True).select_option(access["id"] + ":" + access["revision"])
                 drawer.get_by_label("S3 Secret Key", exact=True).select_option(secret["id"] + ":" + secret["revision"])

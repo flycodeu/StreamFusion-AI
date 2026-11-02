@@ -21,7 +21,7 @@ import (
 )
 
 const Version = "0.2.0"
-const SchemaVersion = 14
+const SchemaVersion = 15
 
 //go:embed schema.sql
 var schema string
@@ -640,6 +640,44 @@ func Open(dir string) (*Store, error) {
 	}
 	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=14").Scan(&checksum); err != nil || checksum != hashToken(schemaV14) {
 		return nil, errors.New("SCHEMA_MISMATCH: 迁移14摘要不匹配")
+	}
+	if version > 0 && version <= 14 {
+		backupPath := filepath.Join(abs, "before-schema-15-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 14 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV15); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(15,?,?,?)", hashToken(schemaV15), Version, Now())
+		}
+		if e == nil {
+			rows, checkErr := tx.Query("PRAGMA foreign_key_check")
+			if checkErr != nil {
+				e = checkErr
+			} else {
+				if rows.Next() {
+					e = errors.New("SCHEMA_FOREIGN_KEY_INVALID")
+				} else {
+					e = rows.Err()
+				}
+				rows.Close()
+			}
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=15").Scan(&checksum); err != nil || checksum != hashToken(schemaV15) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移15摘要不匹配")
 	}
 	if _, err = s.DB.Exec("DELETE FROM sessions WHERE expires_at<=? OR last_seen<?", time.Now().Unix(), time.Now().Add(-30*time.Minute).Unix()); err != nil {
 		return nil, err

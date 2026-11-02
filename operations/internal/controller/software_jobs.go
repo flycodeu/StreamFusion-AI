@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/streamfusion-ai/operations/internal/deploy"
@@ -88,7 +89,25 @@ func (h *HTTP) commitSoftwareResult(id string, req deploy.Request, result deploy
 		if err != nil {
 			return err
 		}
-		if req.Uninstallation == nil || e == nil || e.SoftwareID != req.Software.ID || e.Kind != req.Software.Kind || e.Locator != req.Software.Locator || e.IdentityHash != req.Software.IdentityHash || !e.ProgramRemoved && !(req.Software.Kind == "TOOL" && req.Software.Ownership != nil && req.Software.Ownership.RuntimeMode != "NATIVE" && e.SharedProgramRetained) || e.ProgramRemoved && e.SharedProgramRetained || e.DeleteData != req.Uninstallation.DeleteData || e.DataRemoved != e.DeleteData || e.DataRoot != serviceinstall.InstallRoot(t.InstallRoot, req.Software.ID, req.Uninstallation.Installation.Config) {
+		if req.Uninstallation == nil || e == nil {
+			return errors.New("SOFTWARE_UNINSTALL_EVIDENCE_MISMATCH")
+		}
+		dataRoot := serviceinstall.InstallRoot(t.InstallRoot, req.Software.ID, req.Uninstallation.Installation.Config)
+		var removedPaths []string
+		if official := req.Uninstallation.Installation.Official; official != nil {
+			dataRoot = official.Paths.Data
+			if req.Uninstallation.DeleteData {
+				removedPaths = official.Paths.OwnedPaths
+			}
+		}
+		if n := req.Uninstallation.Installation.Node; n != nil {
+			v := req.Uninstallation.Installation.Definition.Version
+			dataRoot = n.RootPath + "/cache/" + v
+			if req.Uninstallation.DeleteData {
+				removedPaths = nodeVersionDataPaths(*n, v)
+			}
+		}
+		if e.SoftwareID != req.Software.ID || e.Kind != req.Software.Kind || e.Locator != req.Software.Locator || e.IdentityHash != req.Software.IdentityHash || !e.ProgramRemoved && !(req.Software.Kind == "TOOL" && req.Software.Ownership != nil && req.Software.Ownership.RuntimeMode != "NATIVE" && e.SharedProgramRetained) || e.ProgramRemoved && e.SharedProgramRetained || e.DeleteData != req.Uninstallation.DeleteData || e.DataRemoved != e.DeleteData || e.DataRoot != dataRoot || !slices.Equal(e.RemovedPaths, removedPaths) {
 			return errors.New("SOFTWARE_UNINSTALL_EVIDENCE_MISMATCH")
 		}
 		if _, err := time.Parse(time.RFC3339Nano, e.ObservedAt); err != nil {
@@ -159,6 +178,9 @@ func (h *HTTP) commitSoftwareResult(id string, req deploy.Request, result deploy
 				_, e = tx.Exec("DELETE FROM plugin_installations WHERE id=?", req.Software.ID)
 			}
 		}
+	}
+	if e == nil && req.Uninstallation != nil && req.Uninstallation.Installation.Node != nil {
+		e = commitNodeSoftwareObservation(tx, id, req.Uninstallation.Installation.Node, result, req.Software.ID, req.Uninstallation.Installation.Definition.Version, true)
 	}
 	if e == nil {
 		_, e = tx.Exec("UPDATE jobs SET status=?,phase=?,error_code=?,result_json=?,target_ack_pending=1,updated_at=? WHERE id=?", result.Status, result.Phase, result.ErrorCode, jsonText(result), Now(), id)

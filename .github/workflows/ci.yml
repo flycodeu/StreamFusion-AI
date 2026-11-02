@@ -137,6 +137,6 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           go test -c -o "$RUNNER_TEMP/streamfusion-deploy.test" ./internal/deploy
-          sudo "$RUNNER_TEMP/streamfusion-deploy.test" -test.v
+          sudo env SFOPS_TEST_NODE_LINUX=1 "$RUNNER_TEMP/streamfusion-deploy.test" -test.v
       - run: go vet ./...
       - run: go build -trimpath ./cmd/streamfusion-ops

@@ -3,6 +3,7 @@ import { computed, onUnmounted, ref, watch } from "vue";
 import { ApiError, request } from "./api";
 import { hostTime, type Host } from "./hosts";
 import ServiceNetworkFields from "./ServiceNetworkFields.vue";
+import OfficialInstallationDetails from "./OfficialInstallationDetails.vue";
 import {
   isTool,
   isDockerEngine,
@@ -64,6 +65,7 @@ const expired = computed(
 const canEdit = computed(
   () =>
     !!recipe.value &&
+    !props.detail.installation?.official &&
     !isTool(recipe.value) &&
     !isDockerEngine(recipe.value) &&
     props.detail.managementMode === "MANAGED" &&
@@ -152,6 +154,10 @@ async function submit() {
     <p v-if="!recipe || !currentConfig || !draft" class="install-note">
       此对象通过外部登记接入。当前可观察与维护生命周期，配置仍由原安装方式管理。
     </p>
+    <template v-else-if="detail.installation?.official">
+      <p class="install-note">通过官方系统软件包安装。配置由服务器的系统工具维护。</p>
+      <OfficialInstallationDetails :installation="detail.installation.official" />
+    </template>
     <template v-else>
       <dl v-if="!editing" class="configuration-facts">
         <dt>运行方式</dt>

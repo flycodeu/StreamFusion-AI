@@ -415,7 +415,11 @@ func writeMaterialCatalog(args []string, output io.Writer) error {
 	if flags.NArg() != 0 {
 		return errors.New("NO_POSITIONAL_ARGUMENTS")
 	}
-	return json.NewEncoder(output).Encode(serviceinstall.Catalog())
+	// Material discovery includes Node tools without changing the legacy
+	// installation catalog hash used by existing target executors.
+	rows := append(serviceinstall.Catalog(), serviceinstall.NodeCatalog()...)
+	rows = append(rows, serviceinstall.NodeEnvironmentRecipes()...)
+	return json.NewEncoder(output).Encode(rows)
 }
 
 func importMaterialLibrary(store *controller.Store, selected string, explicit bool, executable string, output io.Writer) error {

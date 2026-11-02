@@ -18,8 +18,13 @@ func TestMaterialCatalogPrintsCompiledRecipesWithoutState(t *testing.T) {
 		t.Fatal(err)
 	}
 	var catalog []serviceinstall.Definition
-	if err := json.Unmarshal(output.Bytes(), &catalog); err != nil || len(catalog) != len(serviceinstall.Catalog()) {
+	if err := json.Unmarshal(output.Bytes(), &catalog); err != nil || len(catalog) != len(serviceinstall.Catalog())+len(serviceinstall.NodeCatalog())+len(serviceinstall.NodeEnvironmentRecipes()) {
 		t.Fatal(catalog, err)
+	}
+	for _, recipe := range catalog {
+		if err := serviceinstall.ValidateDefinition(recipe); err != nil {
+			t.Fatal("material catalog includes an untrusted recipe", recipe.Key, err)
+		}
 	}
 	if err := writeMaterialCatalog([]string{"unexpected"}, &output); err == nil {
 		t.Fatal("positional argument accepted")

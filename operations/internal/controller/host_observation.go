@@ -21,6 +21,8 @@ type hostCapability struct {
 
 // Keep the complete additive CAPABILITIES contract in one strict decoder.
 type executorCapabilities struct {
+	NodeEnvironmentVersion   int          `json:"nodeEnvironmentVersion"`
+	OfficialInstallVersion   int          `json:"officialInstallVersion"`
 	FirewallVersion          int          `json:"firewallVersion"`
 	Owner                    deploy.Owner `json:"owner"`
 	Platform                 string       `json:"platform"`
