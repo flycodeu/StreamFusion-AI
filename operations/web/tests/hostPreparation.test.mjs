@@ -17,7 +17,7 @@ const compiled = ts.transpileModule(source, {
 const createPanel = new Function(
   "computed", "ref", "watch", "onUnmounted", "defineProps", "defineEmits",
   "ApiError", "request", "setTimeout", "clearTimeout", "fetch", "location", "document", "URL", "navigator",
-  compiled + "\nreturn { data, busy, error, sudoPassword, needsSudoPassword, canRecover, checkResult, updateRequested, openUpdate, load, install, repair, check, reconcile, download };",
+  compiled + "\nreturn { data, busy, visibleStatus, currentPhaseIndex, statusTitle, phaseState, error, sudoPassword, needsSudoPassword, canRecover, checkResult, updateRequested, openUpdate, load, install, repair, check, reconcile, download };",
 );
 
 function deferred() {
@@ -509,4 +509,42 @@ test("confirming an unknown automatic update resumes once without replaying inst
  assert.equal(h.emitted.filter(x=>x==="updated").length,1);
  await h.panel.load();assert.equal(installs,1);
  h.unmount();
+});
+
+test("update progress reacts to polled stages before the install POST completes", async () => {
+  const submitted = deferred();
+  let latest = { id: "old-success", status: "SUCCEEDED", phase: "VERIFYING_EXECUTOR" };
+  let postCompleted = false;
+  const h = harness(async (path) => {
+    if (path.endsWith("/install")) { const result = await submitted.promise; postCompleted = true; return result; }
+    if (path.endsWith("/checks")) return {};
+    return preparation("host-a", latest);
+  }, undefined, { updateOnly: true });
+  await flush();
+  const pending = h.panel.install();
+  assert.equal(h.panel.visibleStatus.value, "RUNNING");
+  assert.equal(h.panel.currentPhaseIndex.value, 0);
+  assert.equal(h.panel.statusTitle.value, "准备更新接入组件");
+  latest = { id: "new-update", status: "RUNNING", phase: "UPLOADING_EXECUTOR" };
+  await h.tick();
+  assert.equal(postCompleted, false);
+  assert.equal(h.panel.currentPhaseIndex.value, 1);
+  assert.equal(h.panel.statusTitle.value, "传输安装材料");
+  assert.equal(h.panel.phaseState(0), "done");
+  assert.equal(h.panel.phaseState(1), "active");
+  latest = { ...latest, phase: "INSTALLING_EXECUTOR" };
+  await h.tick();
+  assert.equal(h.panel.currentPhaseIndex.value, 2);
+  latest = { ...latest, status: "UNKNOWN" };
+  await h.tick();
+  assert.equal(h.panel.visibleStatus.value, "UNKNOWN");
+  assert.equal(h.panel.phaseState(2), "uncertain");
+  latest = { ...latest, status: "SUCCEEDED", phase: "VERIFYING_EXECUTOR" };
+  await h.tick();
+  assert.equal(postCompleted, false);
+  assert.equal(h.panel.visibleStatus.value, "SUCCEEDED");
+  assert.equal(h.panel.currentPhaseIndex.value, 3);
+  assert.equal(h.panel.phaseState(3), "done");
+  submitted.resolve(latest); await pending;
+  h.unmount();
 });

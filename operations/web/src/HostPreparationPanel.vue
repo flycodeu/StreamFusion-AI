@@ -43,14 +43,14 @@ const phaseLabels: Record<string, string> = {
   INSTALLING_EXECUTOR: "安装接入组件", VERIFYING_EXECUTOR: "验证接入结果",
 };
 const phaseOrder = ["CONNECTING", "UPLOADING_EXECUTOR", "INSTALLING_EXECUTOR", "VERIFYING_EXECUTOR"];
-const visibleStatus = computed(() => installing.value && !installationIntent?.jobId ? "RUNNING" : job.value?.status || (installing.value ? "RUNNING" : ""));
+const visibleStatus = computed(() => installing.value && installationIntent.value && !installationIntent.value.jobId ? "RUNNING" : job.value?.status || (installing.value ? "RUNNING" : ""));
 const statusTone = computed(() => ({ RUNNING: "running", UNKNOWN: "unknown", SUCCEEDED: "success", FAILED: "failed" }[visibleStatus.value] || "running"));
 const statusLabel = computed(() => ({ RUNNING: "执行中", UNKNOWN: "待确认", SUCCEEDED: "已完成", FAILED: "未完成" }[visibleStatus.value] || "执行中"));
-const currentPhaseIndex = computed(() => installing.value && !installationIntent?.jobId ? 0 : phaseOrder.indexOf(job.value?.phase || ""));
+const currentPhaseIndex = computed(() => installing.value && installationIntent.value && !installationIntent.value.jobId ? 0 : phaseOrder.indexOf(job.value?.phase || ""));
 const showPhaseTrack = computed(() => Boolean(visibleStatus.value));
 const statusTitle = computed(() => {
   if (props.updateOnly || updateRequested.value) {
-    if (visibleStatus.value === "RUNNING") return installing.value && !installationIntent?.jobId ? "准备更新接入组件" : phaseLabels[job.value?.phase || ""] || "正在更新接入组件";
+    if (visibleStatus.value === "RUNNING") return installing.value && installationIntent.value && !installationIntent.value.jobId ? "准备更新接入组件" : phaseLabels[job.value?.phase || ""] || "正在更新接入组件";
     if (visibleStatus.value === "UNKNOWN") return "更新结果待确认";
     if (visibleStatus.value === "SUCCEEDED") return "接入组件已就绪";
     return "组件更新未完成";
@@ -93,7 +93,7 @@ let generation = 0;
 let hostGeneration = 0;
 let operation = 0;
 let pollFailures = 0;
-let installationIntent: { key: string; previousJobId?: string; jobId?: string } | undefined;
+const installationIntent = ref<{ key: string; previousJobId?: string; jobId?: string }>();
 let polling: ReturnType<typeof setTimeout> | undefined;
 let installAbort: AbortController | undefined;
 function report(cause: unknown, source?: "poll") {
@@ -108,9 +108,9 @@ function currentOperation(value: { host: number; id: number }) {
   return value.host === hostGeneration && value.id === operation;
 }
 function observeJob(value?: PreparationJob) {
-  if (!value || !installationIntent) return;
-  if (value.id !== installationIntent.previousJobId) installationIntent.jobId = value.id;
-  if (value.id === installationIntent.jobId && ["SUCCEEDED", "FAILED"].includes(value.status)) installationIntent = undefined;
+  if (!value || !installationIntent.value) return;
+  if (value.id !== installationIntent.value.previousJobId) installationIntent.value.jobId = value.id;
+  if (value.id === installationIntent.value.jobId && ["SUCCEEDED", "FAILED"].includes(value.status)) installationIntent.value = undefined;
 }
 function schedulePoll(delay = 1500) {
   clearTimeout(polling);
@@ -158,7 +158,7 @@ async function load(quiet = false) {
 watch([() => props.host.id, () => props.host.version], () => {
   hostGeneration++; generation++; operation++;
   installAbort?.abort(); clearTimeout(polling); data.value = undefined;
-  busy.value = false; installing.value = false; repairing.value = false; pollFailures = 0; installationIntent = undefined;
+  busy.value = false; installing.value = false; repairing.value = false; pollFailures = 0; installationIntent.value = undefined;
   updateRequested.value = !!props.updateOnly; explicitUpdate = false; automaticStarted = false;
   checkResult.value = undefined; copied.value = "";
   sudoPassword.value = ""; needsSudoPassword.value = false; error.value = undefined;
@@ -221,8 +221,8 @@ async function install() {
   const active = beginOperation();
   installing.value = true; pollFailures = 0; checkResult.value = undefined;
   installAbort = new AbortController();
-  installationIntent ??= { key: crypto.randomUUID(), previousJobId: job.value?.id };
-  const input = { expectedVersion: data.value.expectedHostVersion, idempotencyKey: installationIntent.key, confirmed: true, sudoPassword: sudoPassword.value,
+  installationIntent.value ??= { key: crypto.randomUUID(), previousJobId: job.value?.id };
+  const input = { expectedVersion: data.value.expectedHostVersion, idempotencyKey: installationIntent.value.key, confirmed: true, sudoPassword: sudoPassword.value,
     ...(props.automaticUpdate ? { updateOnly: true, expectedCurrentSHA256: props.automaticUpdate.currentSHA256, expectedPackageSHA256: props.automaticUpdate.packageSHA256 } : {}) };
   sudoPassword.value = ""; schedulePoll(1000);
   try {
