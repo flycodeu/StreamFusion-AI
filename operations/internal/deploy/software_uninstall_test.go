@@ -79,12 +79,20 @@ func newUninstallFixture(t *testing.T) *uninstallFixture {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux protected paths, directory fsync and os.Root deletion fixture")
 	}
+	// A writable /opt on CI does not make runner-owned files protected. These
+	// fixtures exercise the production root-ownership boundary under sudo.
+	if os.Geteuid() != 0 {
+		t.Skip("requires root-owned fixture; covered by the sudo deploy test step")
+	}
 	x, req := uninstallRequestFixture(t)
-	root, err := os.MkdirTemp("/opt", "sfops-uninstall-test-")
+	root, err := os.MkdirTemp("/var/lib", "sfops-uninstall-test-")
 	if err != nil {
-		t.Skip("isolated root-owned /opt fixture unavailable:", err)
+		t.Fatal("isolated root-owned /var/lib fixture unavailable:", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	if err = secureAncestors(root); err != nil {
+		t.Fatal("root fixture is not protected:", err)
+	}
 	x.root = root
 	f := &uninstallFixture{x: x, req: req, root: serviceinstall.InstallRoot(root, req.Software.ID, req.Uninstallation.Installation.Config)}
 	for _, dir := range []string{filepath.Join(root, "jobs"), filepath.Dir(x.softwareFile(req.Software.ID)), filepath.Join(f.root, "data"), filepath.Join(f.root, "config"), filepath.Join(f.root, "logs")} {
