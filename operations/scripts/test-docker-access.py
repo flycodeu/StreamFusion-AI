@@ -233,8 +233,10 @@ def main():
                 expect(panel.get_by_text("docker 组权限已更新，请重新登录该账号。", exact=True)).to_be_visible()
                 assert panel.get_by_role("button", name="授予访问权限", exact=True).count() == 0
                 panel.get_by_text("任务详情", exact=True).click()
-                expect(panel.get_by_text("已完成（SUCCEEDED） · Docker 账号权限已更新（DOCKER_ACCESS_UPDATED）",exact=False)).to_be_visible()
-                checks.append("docker-diagnostics-show-chinese-state-and-original-code")
+                job_details = panel.locator('details.access-diagnostics').filter(has=page.locator('summary', has_text='任务详情'))
+                expect(job_details.get_by_text("已完成 · Docker 账号权限已更新",exact=False)).to_be_visible()
+                expect(job_details).not_to_contain_text('（SUCCEEDED）')
+                checks.append("docker-diagnostics-show-concise-chinese-status")
                 layout(drawer, "docker-access-granted")
                 checks.append("unknown-restored-after-reopen-and-reconciled-without-regrant-session-warning-visible")
                 observation["socket"]["ready"] = False

@@ -503,17 +503,22 @@ test("closing the install drawer clears automatic update intent before any reope
  h.dispose();
 });
 
-test("diagnostics pair core job states and phases with Chinese labels", () => {
+test("job summaries use Chinese labels without repeating protocol codes", () => {
   assert.equal(
     software.softwareJobDiagnostic("SUCCEEDED", "NODE_ENVIRONMENT_UPDATED"),
-    "已完成（SUCCEEDED） · Node 环境已更新（NODE_ENVIRONMENT_UPDATED）",
+    "已完成 · Node 环境已更新",
   );
   assert.equal(
     software.softwareJobDiagnostic("SUCCEEDED", "DOCKER_ACCESS_UPDATED"),
-    "已完成（SUCCEEDED） · Docker 账号权限已更新（DOCKER_ACCESS_UPDATED）",
+    "已完成 · Docker 账号权限已更新",
   );
   assert.equal(
     software.softwareJobDiagnostic("FUTURE_STATE", "FUTURE_PHASE"),
-    "状态未识别（FUTURE_STATE） · 阶段未识别（FUTURE_PHASE）",
+    "状态未识别 · 阶段未识别",
   );
+  assert.equal(
+    software.softwareJobDiagnostic("SUCCEEDED", "READY", { READY: "材料已就绪" }),
+    "已完成 · 材料已就绪",
+  );
+  assert.equal(software.softwareJobDiagnostic(), "状态未提供 · 阶段未提供");
 });

@@ -561,8 +561,9 @@ onUnmounted(() => {
       <details class="access-diagnostics">
         <summary>任务详情</summary>
         <ErrorHelpLink v-if="job.errorCode" :code="job.errorCode" /><code
-          >{{ softwareJobDiagnostic(job.status, job.phase) }} ·
-          {{ job.errorCode }}</code
+          >{{ softwareJobDiagnostic(job.status, job.phase) }}<span
+            v-if="job.errorCode"
+          > · {{ job.errorCode }}</span></code
         ><code>{{ job.id }} · traceId={{ job.traceId }}</code
         ><time>{{ hostTime(job.updatedAt) }}</time>
       </details>

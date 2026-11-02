@@ -1158,8 +1158,9 @@ poll();
           <summary>诊断信息</summary>
           <ErrorHelpLink v-if="job.errorCode" :code="job.errorCode" />
           <p>
-            {{ softwareJobDiagnostic(job.status, job.phase) }} ·
-            {{ job.errorCode }} · {{ hostTime(job.updatedAt) }}
+            {{ softwareJobDiagnostic(job.status, job.phase) }}
+            <span v-if="job.errorCode"> · {{ job.errorCode }}</span>
+            · {{ hostTime(job.updatedAt) }}
           </p>
           <code>{{ job.id }} · {{ job.traceId }}</code>
         </details>

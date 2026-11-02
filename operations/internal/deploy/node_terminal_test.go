@@ -27,6 +27,12 @@ func TestNodeTerminalBlockPreservesContentAndRejectsOtherManagers(t *testing.T) 
 	if _, _, err = nodeTerminalContent(malformed, n); err == nil {
 		t.Fatal("edited owned block silently overwritten")
 	}
+	for _, extra := range [][]byte{nodeTerminalBlock(n), []byte("export NVM_DIR=~/.nvm\n")} {
+		profile := append(append([]byte(nil), result...), extra...)
+		if _, _, err = nodeTerminalContent(profile, n); err == nil {
+			t.Fatal("duplicate or competing block accepted")
+		}
+	}
 	if !bytes.Contains(result, []byte("--no-use")) || !bytes.Contains(result, []byte("nvm version default")) {
 		t.Fatal("no-default compatibility missing")
 	}

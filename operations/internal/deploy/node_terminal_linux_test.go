@@ -27,7 +27,20 @@ func TestNodeTerminalLinuxBashLifecycle(t *testing.T) {
 	if _, err := os.Lstat(home); !os.IsNotExist(err) {
 		t.Fatal("fixture HOME exists")
 	}
-	if out, err := exec.Command("/usr/sbin/useradd", "--create-home", "--home-dir", home, "--shell", "/bin/bash", name).CombinedOutput(); err != nil {
+	// Runner images may preload nvm through /etc/skel/.bash_profile. This
+	// lifecycle starts with an unmanaged Bash account; foreign managers are
+	// exercised explicitly below instead of inherited from the host image.
+	skeleton := t.TempDir()
+	profiles := map[string]string{
+		".bashrc":  "# existing interactive configuration\nexport KEEP_ME='unchanged'\ncase $- in *i*) ;; *) return ;; esac\n",
+		".profile": "# existing login configuration\nif [ -n \"${BASH_VERSION:-}\" ] && [ -f \"$HOME/.bashrc\" ]; then . \"$HOME/.bashrc\"; fi\n",
+	}
+	for file, content := range profiles {
+		if err := os.WriteFile(filepath.Join(skeleton, file), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := exec.Command("/usr/sbin/useradd", "--create-home", "--skel", skeleton, "--home-dir", home, "--shell", "/bin/bash", name).CombinedOutput(); err != nil {
 		t.Fatalf("account fixture: %v %s", err, out)
 	}
 	t.Cleanup(func() {
@@ -101,6 +114,31 @@ func TestNodeTerminalLinuxBashLifecycle(t *testing.T) {
 	n.ConnectTerminal = true
 	req, dir = request()
 	req.Installation = &serviceinstall.Request{SoftwareID: "55555555-5555-4555-8555-555555555555", BindingRevision: 1, Definition: d, Config: serviceinstall.Config{Name: "node-terminal-test", RuntimeMode: "NATIVE", MemoryMiB: 512}, Source: *material("node-" + d.Version + "-native-node-" + d.Version + "-linux-x64.tar.xz"), Node: &n}
+	// A high-priority profile from another nvm installation must still block
+	// terminal integration, including the form used by GitHub runner images.
+	foreignProfile := filepath.Join(home, ".bash_profile")
+	foreignContent := []byte("[ -s \"$NVM_DIR/nvm.sh\" ] && \\. \"$NVM_DIR/nvm.sh\"  # This loads nvm\n")
+	if err := os.WriteFile(foreignProfile, foreignContent, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(foreignProfile, uid, gid); err != nil {
+		t.Fatal(err)
+	}
+	conflict := x.nodeInstallPreflight(*req.Installation)
+	if conflict.Ready || len(conflict.Checks) != 1 || conflict.Checks[0].Code != "NODE_TERMINAL_CONFLICT" {
+		t.Fatalf("foreign nvm preflight: %+v", conflict)
+	}
+	if raw, err := os.ReadFile(foreignProfile); err != nil || !bytes.Equal(raw, foreignContent) {
+		t.Fatal("preflight changed foreign profile")
+	}
+	for file, before := range original {
+		if raw, err := os.ReadFile(filepath.Join(home, file)); err != nil || !bytes.Equal(raw, before) {
+			t.Fatal("preflight changed existing profile")
+		}
+	}
+	if err := os.Remove(foreignProfile); err != nil {
+		t.Fatal(err)
+	}
 	pre := x.nodeInstallPreflight(*req.Installation)
 	if !pre.Ready || pre.NodeTerminalHash == "" {
 		t.Fatalf("preflight: %+v", pre)
