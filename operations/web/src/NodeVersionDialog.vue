@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { ElDrawer } from "element-plus";
+import { ElDrawer, ElMessageBox } from "element-plus";
 import type {
   InstallationMaterial,
   ServiceRecipe,
@@ -43,6 +43,14 @@ const emit = defineEmits<{
   initialMaterial: [InstallationMaterial];
   materialBusy: [boolean];
 }>();
+const initialDraft = JSON.stringify(props.draft);
+async function confirmClose(done?: () => void) {
+  if (props.busy || props.attempted) return;
+  if (JSON.stringify(props.draft) !== initialDraft) {
+    try { await ElMessageBox.confirm("放弃本次修改？", "关闭安装窗口", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); } catch { return; }
+  }
+  if (done) done(); else emit("close");
+}
 const isDownload = computed(() =>
   [
     "INITIALIZE",
@@ -100,7 +108,8 @@ const canSubmit = computed(
     size="min(960px, 100vw)"
     append-to-body
     class="node-action-drawer"
-    :close-on-click-modal="false"
+    :close-on-click-modal="!busy && !attempted"
+    :before-close="confirmClose"
     :close-on-press-escape="!busy && !attempted"
     :show-close="!busy && !attempted"
     @close="emit('close')"
@@ -358,6 +367,7 @@ const canSubmit = computed(
       </fieldset>
       <section v-if="plan" class="plan preview" aria-label="Node 变更预览">
         <strong>预检完成</strong>
+        <div v-if="plan.registry" class="terminal-files"><strong>{{ plan.registry.name }}</strong><code>{{ plan.registry.url }}</code><p>账号 {{ environment?.account }} · ~/.npmrc</p></div>
         <p v-if="['INITIALIZE', 'INSTALL_NODE'].includes(draft.action)">
           {{ draft.makeDefault ? "安装后设为默认版本" : "保留当前默认版本" }}
         </p>
@@ -394,7 +404,7 @@ const canSubmit = computed(
         {{ error }}
         <button
           v-if="
-            ['NODE_CAPABILITY_REQUIRED', 'NODE_TERMINAL_CAPABILITY_REQUIRED', 'EXECUTOR_UPGRADE_REQUIRED'].includes(
+            ['NODE_CAPABILITY_REQUIRED', 'NODE_TERMINAL_CAPABILITY_REQUIRED', 'NODE_REGISTRY_CAPABILITY_REQUIRED', 'EXECUTOR_UPGRADE_REQUIRED'].includes(
               errorCode || '',
             )
           "
@@ -418,7 +428,7 @@ const canSubmit = computed(
           type="button"
           class="secondary"
           :disabled="busy || attempted"
-          @click="emit('close')"
+          @click="confirmClose()"
         >
           取消
         </button>

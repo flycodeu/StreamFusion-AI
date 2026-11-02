@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
-import { ElDrawer, ElTabs, ElTabPane } from "element-plus";
+import { computed, ref, watch } from "vue";
+import { ElDrawer, ElTabs, ElTabPane, ElMessageBox } from "element-plus";
 import { hostTime, type Host } from "./hosts";
 import ServiceConfigurationPanel from "./ServiceConfigurationPanel.vue";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
@@ -68,6 +68,17 @@ function loadLogs(source: "software" | "job") {
   emit("readLogs", source);
 }
 const active = (item: SoftwareInstance) => item.managementMode !== "RELEASED";
+const configCloseState = ref({ blocked: false, dirty: false });
+const accessCloseBlocked = ref(false);
+const closeBlocked = computed(() => props.busy || props.pendingJob || configCloseState.value.blocked || accessCloseBlocked.value);
+watch(() => props.detail?.id, () => { configCloseState.value = { blocked: false, dirty: false }; accessCloseBlocked.value = false; });
+async function close(done: () => void) {
+  if (closeBlocked.value) return;
+  if (configCloseState.value.dirty) {
+    try { await ElMessageBox.confirm("放弃未保存的软件配置？", "关闭详情", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); } catch { return; }
+  }
+  done();
+}
 const service = (item: SoftwareInstance) => !softwareIsTool(item);
 </script>
 
@@ -77,6 +88,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
     :title="detail?.name || '软件详情'"
     size="min(820px,100vw)"
     destroy-on-close
+    :close-on-click-modal="!closeBlocked" :close-on-press-escape="!closeBlocked" :show-close="!closeBlocked" :before-close="close"
     @close="emit('close')"
   >
     <div v-if="detail" class="software-detail">
@@ -224,7 +236,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
           </details>
         </ElTabPane>
         <ElTabPane :label="detail.installation?.official ? '安装详情' : '服务配置'" name="configuration"
-          ><ServiceConfigurationPanel
+          ><ServiceConfigurationPanel @close-state="configCloseState = $event"
             :detail="detail"
             :host="host"
             :disabled="busy || pendingJob || !canChange"
@@ -232,7 +244,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
             @preparation="emit('preparation', $event)"
         /></ElTabPane>
         <ElTabPane v-if="managedDockerAccess(detail)" label="账号权限" name="docker-access">
-          <DockerAccessPanel :detail="detail" :host="host" :active="detailTab === 'docker-access'" :disabled="busy || pendingJob || !canChange" @changed="emit('changed')" />
+          <DockerAccessPanel @close-blocked="accessCloseBlocked = $event" :detail="detail" :host="host" :active="detailTab === 'docker-access'" :disabled="busy || pendingJob || !canChange" @changed="emit('changed')" />
         </ElTabPane>
         <ElTabPane label="执行记录" name="job">
           <div v-if="job" class="software-job">

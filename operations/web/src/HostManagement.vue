@@ -35,8 +35,11 @@ const stateFilter = ref("");
 const dialog = ref(false);
 const editingHost = ref<Host>();
 const detailId = ref("");
+const preparationCloseBlocked = ref(false);
+function closeDetail(done: () => void) { if (!preparationCloseBlocked.value) done(); }
 const detailTab = ref("connection");
 watch(detailId, () => {
+  preparationCloseBlocked.value = false;
   detailTab.value = "connection";
 });
 watch(
@@ -424,6 +427,7 @@ onUnmounted(() => {
     :model-value="!!detail"
     :title="detail?.name || '主机详情'"
     size="min(900px, 100vw)"
+    :close-on-click-modal="!preparationCloseBlocked" :close-on-press-escape="!preparationCloseBlocked" :show-close="!preparationCloseBlocked" :before-close="closeDetail"
     @close="detailId = ''"
   >
     <div v-if="detail" class="host-detail">
@@ -520,7 +524,7 @@ onUnmounted(() => {
           ><HostPreparationPanel
             v-if="detailTab === 'preparation'"
             :host="detail"
-            @checked="load"
+            @checked="load" @close-blocked="preparationCloseBlocked = $event"
         /></ElTabPane>
         <ElTabPane label="项目目录" name="directory">
           <div class="host-identifiers">

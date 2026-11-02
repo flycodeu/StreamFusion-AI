@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from "vue";
-import { ElDialog, ElDrawer } from "element-plus";
+import { ElDialog, ElDrawer, ElMessageBox } from "element-plus";
 import HostPreparationPanel from "./HostPreparationPanel.vue";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
 import OfficialInstallationDetails from "./OfficialInstallationDetails.vue";
@@ -94,12 +94,22 @@ const {
   jobAction,
   loadLogs,
   clearError,
-  close,
+  close: closeFlow,
 } = useServiceInstallation(
   flowProps,
   () => emit("close"),
   (receipt) => emit("submitted", receipt),
 );
+const touched = ref(false);
+watch(() => props.open, () => { touched.value = false; });
+const closeBlocked = computed(() => busy.value || preparationOpen.value || (submissionAttempted.value && !receipt.value) || !!job.value && (['QUEUED', 'RUNNING', 'UNKNOWN'].includes(job.value.status) || job.value.targetAckPending));
+async function close(done?: () => void) {
+  if (closeBlocked.value) return;
+  if (touched.value && !submitted.value) {
+    try { await ElMessageBox.confirm("放弃本次安装设置？", "关闭窗口", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); } catch { return; }
+  }
+  if (done) done(); else closeFlow();
+}
 const visibleStep = computed(() => method.value === "OFFICIAL" ? step.value === 4 ? 2 : step.value === 3 ? 1 : 0 : step.value);
 const logPane = ref<HTMLElement>();
 const followOutput = ref(true);
@@ -126,12 +136,13 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
     :title="`安装 ${recipe?.name || '服务'}`"
     size="min(960px,100vw)"
     destroy-on-close
-    :close-on-click-modal="!busy"
-    :close-on-press-escape="!busy"
-    :show-close="!busy"
-    @close="close"
+    :close-on-click-modal="!closeBlocked"
+    :before-close="close"
+    :close-on-press-escape="!closeBlocked"
+    :show-close="!closeBlocked"
+    @close="closeFlow"
   >
-    <div v-if="recipe && host && configuration" class="service-install">
+    <div v-if="recipe && host && configuration" class="service-install" @input="touched = true" @change="touched = true">
       <header class="install-context">
         <SoftwareIcon :type="recipe.key" />
         <div>
@@ -778,7 +789,7 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
     </div>
     <template #footer
       ><div class="install-footer">
-        <button class="secondary" :disabled="busy" @click="close">
+        <button class="secondary" :disabled="busy" @click="close()">
           {{ submitted ? "关闭" : "取消" }}</button
         ><span class="footer-spacer"></span
         ><button

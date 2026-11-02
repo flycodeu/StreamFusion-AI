@@ -40,6 +40,12 @@ const hostId = ref("");
 const nodeEnvironmentId = ref("");
 const nodeHostId = ref("");
 const nodeOpen = ref(false);
+const nodeCloseState = ref({ blocked: false, dirty: false });
+async function closeNode(done: () => void) {
+  if (nodeCloseState.value.blocked) return;
+  // The mounted panel retains its draft when this drawer is hidden.
+  done();
+}
 const nodeHost = computed(() => hosts.value.find((host) => host.id === nodeHostId.value));
 async function openNode(targetId: string, environmentId = "") {
   await act(async () => {
@@ -677,9 +683,9 @@ onUnmounted(() => {
       </div>
     </div>
   </section>
-  <ElDrawer v-model="nodeOpen" title="Node.js" size="min(1080px, 100vw)" append-to-body :destroy-on-close="false" :close-on-click-modal="false">
+  <ElDrawer v-model="nodeOpen" title="Node.js" size="min(1080px, 100vw)" append-to-body :destroy-on-close="false" :close-on-click-modal="!nodeCloseState.blocked" :close-on-press-escape="!nodeCloseState.blocked" :show-close="!nodeCloseState.blocked" :before-close="closeNode">
     <p v-if="nodeHost" class="node-host-label">{{nodeHost.name}} · {{nodeHost.address || '本机'}}</p>
-    <NodeEnvironmentPanel v-if="nodeHost" :host="nodeHost" :initial-environment-id="nodeEnvironmentId" @changed="act(refresh)" />
+    <NodeEnvironmentPanel v-if="nodeHost" :host="nodeHost" :initial-environment-id="nodeEnvironmentId" @changed="act(refresh)" @close-state="nodeCloseState = $event" />
     <p v-else class="empty">此主机已不可用，请重新选择。</p>
   </ElDrawer>
   <SoftwareRegistrationDialog

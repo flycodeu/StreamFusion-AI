@@ -230,6 +230,15 @@ export const softwareJobLabels: Record<string, string> = {
   CANCELLED: "已取消",
 };
 export const softwareJobErrorMessages: Record<string, string> = {
+  NODE_REGISTRY_CHANGED: "镜像列表或账号配置已变化，请重新预检并确认。",
+  NODE_REGISTRY_RESULT_MISMATCH: "账号镜像回读与所选地址不一致，请核对原作业。",
+  NODE_REGISTRY_NPM_REQUIRED: "请先在此环境安装带有 npm 的 Node 版本。",
+  NODE_REGISTRY_PATH_UNSAFE: "请检查 .npmrc 的文件归属、权限和链接。",
+  NODE_REGISTRY_READ_FAILED: "npm 配置不可读，请检查 .npmrc 和 npm 程序。",
+  NODE_REGISTRY_CONFIG_UNSUPPORTED: "registry 包含变量或认证地址，请在服务器核对 .npmrc。",
+  NODE_REGISTRY_CONFIG_REJECTED: "npm 拒绝此配置，原文件未替换；请检查配置格式。",
+  NODE_REGISTRY_OTHER_CONFIG_CHANGED: "新配置改变了其他设置，原文件未替换；请核对 .npmrc。",
+  NODE_REGISTRY_RESULT_UNCONFIRMED: "镜像切换结果待确认，请核对原作业。",
   DOCKER_CONTAINER_DEPENDENCIES_UNCONFIRMED: "Docker Engine 当前不可访问，无法确认容器依赖。请检查 Engine 状态；若已停止，请先明确启动 Docker，再提交卸载。启动可能恢复原有容器，请先确认业务影响。",
 };
 export const softwareJobPhaseLabels: Record<string, string> = {

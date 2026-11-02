@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { ElDialog, ElDrawer, ElTabs, ElTabPane, ElMessage } from "element-plus";
+import { ElDialog, ElDrawer, ElTabs, ElTabPane, ElMessage, ElMessageBox } from "element-plus";
 import { request } from "./api";
 import {
   hostTime,
@@ -25,6 +25,7 @@ const credentialName = ref("");
 const credentialKind = ref("SSH_KEY");
 const credentialSecret = ref("");
 const draft = ref(emptyDraft());
+const initialDraft = ref(JSON.stringify(draft.value));
 const formTab = ref("connection");
 const hostForm = ref<HTMLFormElement>();
 async function validateForm() {
@@ -103,6 +104,7 @@ watch(
           installRoot: props.host.installRoot,
         }
       : emptyDraft();
+    initialDraft.value = JSON.stringify(draft.value);
     fingerprint.value = undefined;
     confirmed.value = false;
     try {
@@ -251,8 +253,13 @@ async function saveCredential() {
   });
 }
 
-function close() {
-  if (!busy.value) emit("close");
+function finishClose() { if (!busy.value) emit("close"); }
+async function close(done?: () => void) {
+  if (busy.value || credentialDialog.value) return;
+  if (JSON.stringify(draft.value) !== initialDraft.value) {
+    try { await ElMessageBox.confirm("放弃未保存的连接修改？", "关闭窗口", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); } catch { return; }
+  }
+  if (done) done(); else finishClose();
 }
 </script>
 
@@ -262,10 +269,11 @@ function close() {
     :title="host ? '维护主机连接' : '新增主机'"
     size="min(640px, 100vw)"
     destroy-on-close
-    :close-on-click-modal="false"
+    :close-on-click-modal="!busy && !credentialDialog"
+    :before-close="close"
     :close-on-press-escape="!busy"
     :show-close="!busy"
-    @close="close"
+    @close="finishClose"
   >
     <form
       id="host-connection-form"
@@ -418,7 +426,7 @@ function close() {
     </form>
     <template #footer>
       <footer class="dialog-actions">
-        <button type="button" class="secondary" :disabled="busy" @click="close">
+        <button type="button" class="secondary" :disabled="busy" @click="close()">
           取消
         </button>
         <button

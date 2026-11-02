@@ -24,6 +24,7 @@ type executorCapabilities struct {
 	DockerAccessVersion      int          `json:"dockerAccessVersion"`
 	NodeEnvironmentVersion   int          `json:"nodeEnvironmentVersion"`
 	NodeTerminalVersion      int          `json:"nodeTerminalVersion"`
+	NodeRegistryVersion      int          `json:"nodeRegistryVersion"`
 	OfficialInstallVersion   int          `json:"officialInstallVersion"`
 	FirewallVersion          int          `json:"firewallVersion"`
 	Owner                    deploy.Owner `json:"owner"`

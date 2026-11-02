@@ -174,7 +174,7 @@ def main():
                     drawer = page.get_by_role("dialog", name=item["name"], exact=True)
                     drawer.wait_for(); return drawer
                 def close(drawer):
-                    drawer.get_by_role("button", name="Close this dialog", exact=True).click(); drawer.wait_for(state="hidden")
+                    page.mouse.click(120,400); drawer.wait_for(state="hidden")
                 def layout(drawer, label):
                     for width in (1440, 390):
                         page.set_viewport_size({"width": width, "height": 1000}); page.wait_for_timeout(150)
@@ -217,7 +217,10 @@ def main():
                 expect(panel.get_by_role("button", name="核对原作业", exact=True)).to_be_visible()
                 assert len(requests) == 2 and requests[0] == requests[1]
                 checks.append("explicit-grant-lost-response-retries-exact-original-key-account-and-hash")
-                close(drawer)
+                page.mouse.click(120,400)
+                expect(drawer).to_be_visible()
+                checks.append("unknown-permission-job-blocks-mask-close")
+                software_page()
                 drawer = open_detail(engine)
                 drawer.get_by_role("tab", name="账号权限", exact=True).click()
                 panel = drawer.get_by_label("Docker 账号权限", exact=True)

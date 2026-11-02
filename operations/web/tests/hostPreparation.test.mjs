@@ -61,7 +61,7 @@ function harness(request, fetch = async () => Response.json({}), options = {}) {
     computed, ref,
     (_sources, callback) => { change = callback; callback(); },
     (callback) => { unmount = callback; },
-    () => props, () => (name) => emitted.push(name), TestApiError, request,
+    () => props, () => (name) => { if (name !== "closeBlocked") emitted.push(name); }, TestApiError, request,
     (callback, delay) => { const id = ++timerId; timers.set(id, { callback, delay }); return id; },
     (id) => timers.delete(id), fetch, { origin: "http://ops.test" },
     { createElement: () => ({ click() { clicks.push(this.download); } }) },

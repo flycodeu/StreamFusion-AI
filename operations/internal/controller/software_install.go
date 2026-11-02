@@ -280,8 +280,8 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		h.nodeError(w, r, err)
 		return
 	}
-	if node != nil && node.ConnectTerminal {
-		if err = h.nodeTargetReady(ctx, t, true); err != nil {
+	if node != nil && (node.ConnectTerminal || node.ObserveRegistry) {
+		if err = h.nodeTargetReady(ctx, t, node.ConnectTerminal, node.ObserveRegistry); err != nil {
 			h.nodeError(w, r, err)
 			return
 		}
@@ -452,8 +452,8 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		h.fail(w, r, 409, code, message)
 		return
 	}
-	if p.Node != nil && p.Node.ConnectTerminal {
-		if err = h.nodeTargetReady(ctx, t, true); err != nil {
+	if p.Node != nil && (p.Node.ConnectTerminal || p.Node.ObserveRegistry) {
+		if err = h.nodeTargetReady(ctx, t, p.Node.ConnectTerminal, p.Node.ObserveRegistry); err != nil {
 			h.nodeError(w, r, err)
 			return
 		}

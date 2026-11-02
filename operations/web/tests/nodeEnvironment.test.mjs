@@ -107,7 +107,7 @@ function harness(options = {}) {
     () =>
       load(
         source +
-          "\nexport const flow={draft,plan,environment,error,attempted,openAction,preflight,submit,source,matchingMaterials,job,initialIntent,continuationRetry,continueInitialInstallation,automaticUpdate,preparationOpen,updatedPreparation};",
+          "\nexport const flow={draft,plan,environment,error,attempted,openAction,selectRegistry,preflight,submit,source,matchingMaterials,job,initialIntent,continuationRetry,continueInitialInstallation,automaticUpdate,preparationOpen,updatedPreparation};",
         {
           vue: { ...vue, onUnmounted: (fn) => stops.push(fn) },
           "./api": { request, ApiError: class extends Error {} },
@@ -521,4 +521,29 @@ test("terminal connection preflight preserves no-default choice and never submit
   assert.equal(h.calls.at(-1).data.node.makeDefault,false);
   assert.equal(h.calls.at(-1).data.node.connectTerminal,true);
   h.dispose();
+});
+
+test("npm registries accept intranet HTTP paths but never credentials or URL parameters", () => {
+  for (const url of ["https://registry.npmjs.org/", "http://192.0.2.5:4873/repository/npm/", "https://npm.internal/path"]) assert.equal(model.nodeRegistryURLValid(url), true, url);
+  for (const url of ["", "https:registry.example", "ftp://registry.example/", "https://user:secret@example/", "https://@example/", "https://example/?token=x", "https://example/#x", "https://example/?", " https://example/", "https://example/with space", "http://npm.internal:0/", "http://npm.internal:65536/", "https://example/${TOKEN}", "https://example/%24%7BTOKEN%7D"]) assert.equal(model.nodeRegistryURLValid(url), false, url);
+});
+test("npm registry switch freezes list identity and never adds a source or version selection", async () => {
+ const h=harness(); await flush();
+ h.flow.selectRegistry({id:"mirror",version:"3",name:"内网",url:"http://npm.internal/repo/",builtIn:false});
+ await h.flow.preflight(); const data=h.calls.at(-1).data;
+ assert.equal(data.action,"SET_NPM_REGISTRY"); assert.equal(data.registryId,"mirror"); assert.equal(data.expectedRegistryVersion,"3");
+ assert.equal(data.nodeVersion,undefined); assert.equal(data.source,undefined);
+ assert.equal(h.calls.some(c=>c.path.endsWith("/submit")),false); h.dispose();
+});
+test("Node drawer mask closes unchanged drafts and confirms dirty drafts while blocking pending work", async () => {
+ const text=await readFile(new URL("../src/NodeVersionDialog.vue",import.meta.url),"utf8");
+ const script=text.split('<script setup lang="ts">')[1].split("</script>")[0];
+ const props={draft:{action:"INSTALL_NODE",nodeVersion:"v22",makeDefault:true},busy:false,attempted:false};
+ let confirmations=0, accepted=false, closed=0;
+ const flow=load(script+"\nexport const flow={confirmClose};",{vue,"element-plus":{ElMessageBox:{confirm:async()=>{confirmations++;if(!accepted)throw new Error("cancel");}}},"./nodeEnvironment":model},props).flow;
+ await flow.confirmClose(()=>closed++); assert.equal(closed,1); assert.equal(confirmations,0);
+ props.draft.makeDefault=false; await flow.confirmClose(()=>closed++); assert.equal(closed,1); assert.equal(confirmations,1);
+ accepted=true; await flow.confirmClose(()=>closed++); assert.equal(closed,2);
+ props.attempted=true; await flow.confirmClose(()=>closed++); assert.equal(closed,2);
+ props.attempted=false;props.busy=true;await flow.confirmClose(()=>closed++);assert.equal(closed,2);
 });

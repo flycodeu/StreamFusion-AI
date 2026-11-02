@@ -15,6 +15,7 @@ type NodeEnvironmentRequest struct {
 	ExpectedHash   string                     `json:"expectedHash,omitempty"`
 	Source         serviceinstall.Source      `json:"source"`
 	DeleteData     bool                       `json:"deleteData,omitempty"`
+	RegistryURL    string                     `json:"registryUrl,omitempty"`
 }
 
 type NodeVersionObservation struct {
@@ -44,6 +45,7 @@ type NodeEnvironmentObservation struct {
 	ObservedAt     string                   `json:"observedAt"`
 	Exists         bool                     `json:"exists"`
 	Terminal       *NodeTerminalObservation `json:"terminal,omitempty"`
+	Registry       *NodeRegistryObservation `json:"registry,omitempty"`
 }
 type NodeEnvironmentPreflight struct {
 	RemovedPaths []string                         `json:"removedPaths,omitempty"`
@@ -55,6 +57,9 @@ type NodeEnvironmentPreflight struct {
 }
 
 func (n NodeEnvironmentRequest) Validate() error {
+	if n.RegistryURL != "" && n.Action != "SET_NPM_REGISTRY" {
+		return errors.New("NODE_REGISTRY_UNEXPECTED")
+	}
 	if n.DeleteData && n.Action != "REMOVE_ENVIRONMENT" {
 		return errors.New("NODE_DELETE_DATA_UNEXPECTED")
 	}
@@ -62,6 +67,13 @@ func (n NodeEnvironmentRequest) Validate() error {
 		return errors.New("NODE_ENVIRONMENT_INVALID")
 	}
 	switch n.Action {
+	case "SET_NPM_REGISTRY":
+		if !n.Context.ObserveRegistry || n.PackageVersion != "" || !serviceinstall.NodeVersionPattern.MatchString(n.NodeVersion) {
+			return errors.New("NODE_REGISTRY_INPUT_INVALID")
+		}
+		if err := serviceinstall.ValidateNodeRegistryURL(n.RegistryURL); err != nil {
+			return err
+		}
 	case "INITIALIZE", "OBSERVE", "DISCOVER", "REMOVE_ENVIRONMENT", "CONNECT_TERMINAL":
 		if n.NodeVersion != "" || n.PackageVersion != "" {
 			return errors.New("NODE_ACTION_INVALID")

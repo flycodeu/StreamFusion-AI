@@ -69,6 +69,9 @@ type nodeControllerFixture struct {
 	terminalDrift   atomic.Bool
 	omitTerminal    atomic.Bool
 	terminalRemains atomic.Bool
+	noRegistry      atomic.Bool
+	registryDrift   atomic.Bool
+	wrongRegistry   atomic.Bool
 }
 
 func nodeFixture(t *testing.T, s *Store, b *browser) (string, *nodeControllerFixture) {
@@ -78,13 +81,17 @@ func nodeFixture(t *testing.T, s *Store, b *browser) (string, *nodeControllerFix
 		if req.Action == "CAPABILITIES" {
 			cap := 1
 			terminal := 1
+			registry := 1
+			if f.noRegistry.Load() {
+				registry = 0
+			}
 			if f.noTerminal.Load() {
 				terminal = 0
 			}
 			if f.noCapability.Load() {
 				cap = 0
 			}
-			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "nodeEnvironmentVersion": cap, "nodeTerminalVersion": terminal, "nativeInstallVersion": 1, "softwareLifecycleVersion": 1, "softwareUninstallVersion": 1, "serviceInstallVersion": serviceinstall.CapabilityVersion})
+			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "nodeEnvironmentVersion": cap, "nodeTerminalVersion": terminal, "nodeRegistryVersion": registry, "nativeInstallVersion": 1, "softwareLifecycleVersion": 1, "softwareUninstallVersion": 1, "serviceInstallVersion": serviceinstall.CapabilityVersion})
 		}
 		if req.NodeEnvironment == nil && (req.Installation == nil || req.Installation.Node == nil) && (req.Uninstallation == nil || req.Uninstallation.Installation.Node == nil) {
 			return nil, false
@@ -107,6 +114,16 @@ func nodeFixture(t *testing.T, s *Store, b *browser) (string, *nodeControllerFix
 					o.Terminal.Profiles[0].SHA256 = strings.Repeat("d", 64)
 				}
 			}
+			if c.ObserveRegistry && o.Registry == nil {
+				o.Registry = nodeRegistryObservationFixture("")
+			}
+			if f.registryDrift.Load() && o.Registry != nil {
+				changed := *o.Registry
+				changed.Exists = true
+				changed.ConfigSHA256 = strings.Repeat("e", 64)
+				changed.Mode = 0600
+				o.Registry = &changed
+			}
 			o.Fingerprint = nodeTestFingerprint(o)
 			var removed []string
 			if req.NodeEnvironment.Action == "REMOVE_ENVIRONMENT" && req.NodeEnvironment.DeleteData {
@@ -118,6 +135,9 @@ func nodeFixture(t *testing.T, s *Store, b *browser) (string, *nodeControllerFix
 			o := f.observation
 			if req.Action == "NODE_ENVIRONMENT_OBSERVE" && req.NodeEnvironment.Context.ConnectTerminal && o.Terminal == nil {
 				o.Terminal = nodeTerminalFixture(false)
+			}
+			if req.Action == "NODE_ENVIRONMENT_OBSERVE" && req.NodeEnvironment.Context.ObserveRegistry && o.Registry == nil {
+				o.Registry = nodeRegistryObservationFixture("")
 			}
 			o.EnvironmentID = req.NodeEnvironment.Context.EnvironmentID
 			o.Account = req.NodeEnvironment.Context.Account
@@ -170,6 +190,11 @@ func nodeFixture(t *testing.T, s *Store, b *browser) (string, *nodeControllerFix
 					f.observation.DefaultVersion = c.NodeVersion
 				case "CONNECT_TERMINAL":
 					f.observation.Terminal = nodeTerminalFixture(true)
+				case "SET_NPM_REGISTRY":
+					f.observation.Registry = nodeRegistryObservationFixture(c.RegistryURL)
+					if f.wrongRegistry.Load() {
+						f.observation.Registry.URL = "https://wrong.example/npm/"
+					}
 				case "REMOVE_ENVIRONMENT":
 					f.observation.Exists = false
 					f.observation.DefaultVersion = ""

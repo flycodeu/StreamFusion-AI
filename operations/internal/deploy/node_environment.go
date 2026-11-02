@@ -205,6 +205,13 @@ func (x *executor) observeNode(ctx context.Context, n serviceinstall.NodeContext
 		frozen.ObservedAt = ""
 		obs.Fingerprint = Digest(frozen)
 	}
+	if n.ObserveRegistry && !discovery {
+		obs.Registry = x.observeNodeRegistry(ctx, n, obs)
+		frozen := *obs
+		frozen.Fingerprint = ""
+		frozen.ObservedAt = ""
+		obs.Fingerprint = Digest(frozen)
+	}
 	return obs, nil
 }
 
@@ -286,6 +293,22 @@ func (x *executor) nodePreflight(req Request) NodeEnvironmentPreflight {
 			return fail("NODE_TERMINAL_" + terminal.Status)
 		}
 	}
+	if n.Action == "SET_NPM_REGISTRY" {
+		if nodeRegistryVersion(obs, n.NodeVersion) == nil {
+			return fail("NODE_REGISTRY_NPM_REQUIRED")
+		}
+		if obs.Registry == nil || obs.Registry.Validate(resolved) != nil {
+			return fail("NODE_REGISTRY_READ_FAILED")
+		}
+		switch obs.Registry.Status {
+		case "UNSAFE":
+			return fail("NODE_REGISTRY_PATH_UNSAFE")
+		case "UNAVAILABLE":
+			return fail("NODE_REGISTRY_READ_FAILED")
+		case "REDACTED":
+			return fail("NODE_REGISTRY_CONFIG_UNSUPPORTED")
+		}
+	}
 	if d, e := nodeEnvironmentDefinition(n); e == nil {
 		if e = n.Source.ValidateFor(d, serviceinstall.Config{RuntimeMode: "NATIVE"}); e != nil {
 			return fail(e.Error())
@@ -306,6 +329,8 @@ func nodePlanCommands(n NodeEnvironmentRequest) []serviceinstall.OfficialCommand
 	root := n.Context.RootPath
 	base := serviceinstall.NodeVersionRoot(n.Context, n.NodeVersion)
 	switch n.Action {
+	case "SET_NPM_REGISTRY":
+		return []serviceinstall.OfficialCommand{{Executable: path.Join(base, "bin/npm"), Args: []string{"config", "set", "registry", n.RegistryURL, "--location=user"}}}
 	case "OBSERVE", "DISCOVER", "CONNECT_TERMINAL":
 		return []serviceinstall.OfficialCommand{}
 	case "INITIALIZE", "UPDATE_NVM":
@@ -352,6 +377,16 @@ func nodeErrorMessage(code string) string {
 		return "终端接入目前支持本地 Bash 账号"
 	case "NODE_TERMINAL_CHANGED":
 		return "Bash 配置已变化，请重新预检"
+	case "NODE_REGISTRY_NPM_REQUIRED":
+		return "请先安装包含 npm 的 Node 版本"
+	case "NODE_REGISTRY_PATH_UNSAFE":
+		return "账号 ~/.npmrc 的路径、所有者、权限或大小不符合要求，请检查后重试"
+	case "NODE_REGISTRY_CONFIG_UNSUPPORTED":
+		return "现有 registry 地址含认证信息或无法安全识别，请在服务器核对 ~/.npmrc"
+	case "NODE_REGISTRY_CHANGED":
+		return "账号 ~/.npmrc 已变化，请重新预检"
+	case "NODE_REGISTRY_READ_FAILED":
+		return "无法读取账号 npm 配置，请检查 npm 和 ~/.npmrc"
 	default:
 		return "无法确认 Node 环境，请查看检查详情"
 	}
@@ -463,6 +498,16 @@ func (x *executor) applyNodeEnvironment(req Request, dir string) (Result, error)
 	if err := atomicJSON(filepath.Join(dir, "node-change.json"), n); err != nil {
 		return result, err
 	}
+	if n.Action == "SET_NPM_REGISTRY" {
+		if err := x.applyNodeRegistry(ctx, req, dir, preflight.Observation); err != nil {
+			if _, e := os.Lstat(filepath.Join(dir, "node-registry.json")); os.IsNotExist(e) {
+				return result, err
+			}
+			result.ErrorCode = "NODE_REGISTRY_RESULT_UNCONFIRMED"
+			return result, nil
+		}
+		return x.reconcileNodeEnvironment(req, dir), nil
+	}
 	if n.Action == "CONNECT_TERMINAL" {
 		terminalContext := n.Context
 		terminalContext.TerminalHash = Digest(preflight.Observation.Terminal)
@@ -536,6 +581,8 @@ func (x *executor) reconcileNodeEnvironment(req Request, dir string) Result {
 	}
 	matched := false
 	switch n.Action {
+	case "SET_NPM_REGISTRY":
+		matched = x.nodeRegistryApplied(ctx, req, dir, obs)
 	case "CONNECT_TERMINAL":
 		matched = nodeTerminalPlanApplied(n.Context, dir)
 	case "INITIALIZE", "UPDATE_NVM":

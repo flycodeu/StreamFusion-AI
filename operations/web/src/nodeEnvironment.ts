@@ -25,6 +25,7 @@ export interface NodeObservation {
   fingerprint: string;
   observedAt: string;
   exists: boolean;
+  registry?: { status: string; url?: string; configPath: string; configSHA256: string; mode: number; exists: boolean };
   terminal?: {
     status: "CONNECTED" | "NOT_CONNECTED" | "CONFLICT" | "UNSUPPORTED";
     profiles: { path: string; sha256: string; connected: boolean }[];
@@ -60,6 +61,7 @@ export interface NodeDiscovery {
 export type NodeAction =
   | "INITIALIZE"
   | "INSTALL_NODE"
+  | "SET_NPM_REGISTRY"
   | "CONNECT_TERMINAL"
   | "SET_DEFAULT"
   | "UPDATE_NPM"
@@ -73,6 +75,7 @@ export type NodeAction =
 export interface NodePlan {
   id: string;
   action?: string;
+  registry?: NodeRegistry;
   expiresAt: string;
   commands?: { executable: string; args: string[] }[];
   checks?: { key: string; status: string; message: string }[];
@@ -124,12 +127,15 @@ export interface NodeDraft {
   deleteData: boolean;
   clearNodeDefault: boolean;
   confirmationName: string;
+  registryId?: string;
+  expectedRegistryVersion?: string;
 }
 export const nodeActionLabels: Record<NodeAction, string> = {
   INITIALIZE: "准备 Node 环境",
   INSTALL_NODE: "安装 Node 版本",
   SET_DEFAULT: "设为环境默认",
   CONNECT_TERMINAL: "接入终端",
+  SET_NPM_REGISTRY: "切换 npm 镜像",
   UPDATE_NPM: "更新 npm",
   INSTALL_PNPM: "安装 pnpm",
   UPDATE_PNPM: "更新 pnpm",
@@ -272,4 +278,10 @@ export function nodeInitialPlanMatches(
     Date.parse(intent.expiresAt) > Date.now() &&
     Date.parse(plan.expiresAt) > Date.now()
   );
+}
+
+export interface NodeRegistry { id: string; name: string; url: string; version: string; builtIn: boolean }
+export function nodeRegistryURLValid(value: string) {
+  if (value.length > 2048 || value.split("/")[2]?.endsWith(":") || !/^https?:\/\//i.test(value) || value.split("/")[2]?.includes("@") || value !== value.trim() || /[\s\\]/.test(value) || value.includes("?") || value.includes("#")) return false;
+  try { const decoded = decodeURIComponent(value); if (decoded.includes("${") || /[\s\u0000-\u001f\u007f]/.test(decoded)) return false; const url = new URL(value); return ["http:", "https:"].includes(url.protocol) && !!url.hostname && !url.username && !url.password && (!url.port || Number(url.port) >= 1 && Number(url.port) <= 65535); } catch { return false; }
 }

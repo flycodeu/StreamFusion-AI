@@ -98,7 +98,7 @@ func TestSchemaSixteenPreservesOriginalJobsReferencesAndLocks(t *testing.T) {
 	}
 	var version int
 	s.DB.QueryRow("PRAGMA user_version").Scan(&version)
-	if version != 16 {
+	if version != SchemaVersion {
 		t.Fatal(version)
 	}
 	backups, _ := filepath.Glob(filepath.Join(f.dir, "before-schema-16-*.tar.gz"))

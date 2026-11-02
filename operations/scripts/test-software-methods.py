@@ -199,6 +199,8 @@ def main():
 
                 def close(subject):
                     subject.get_by_role("button", name="取消", exact=True).click()
+                    discard = page.get_by_role("dialog", name="关闭窗口", exact=True)
+                    if discard.is_visible(): discard.get_by_role("button", name="放弃修改", exact=True).click()
                     subject.wait_for(state="hidden")
 
                 def layout(subject, name):

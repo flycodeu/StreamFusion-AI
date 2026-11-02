@@ -166,6 +166,12 @@ func (x *executor) verifySoftwareResult(req Request, result Result) error {
 		if result.NodeEnvironment == nil || result.NodeEnvironment.EnvironmentID != req.NodeEnvironment.Context.EnvironmentID {
 			return errors.New("NODE_RECEIPT_MISMATCH")
 		}
+		if req.NodeEnvironment.Action == "SET_NPM_REGISTRY" {
+			r := result.NodeEnvironment.Registry
+			if r == nil || r.Validate(req.NodeEnvironment.Context) != nil || r.Status != "CONFIGURED" || r.URL != req.NodeEnvironment.RegistryURL {
+				return errors.New("NODE_REGISTRY_RECEIPT_MISMATCH")
+			}
+		}
 		return nil
 	}
 	if req.NodeEnvironment != nil {

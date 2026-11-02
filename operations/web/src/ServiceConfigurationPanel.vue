@@ -25,8 +25,10 @@ const props = defineProps<{
 const emit = defineEmits<{
   submitted: [ServiceInstallReceipt];
   preparation: [string];
+  closeState: [state: { blocked: boolean; dirty: boolean }];
 }>();
 const editing = ref(false);
+const initialDraft = ref("");
 const busy = ref(false);
 const draft = ref<ServiceConfiguration>();
 const plan = ref<ServiceConfigurationPlan>();
@@ -87,6 +89,7 @@ function reset() {
       storageRoot: currentConfig.value.storageRoot || "",
       ports: { ...currentConfig.value.ports },
     };
+  initialDraft.value = JSON.stringify(draft.value);
 }
 watch(() => props.detail.id, reset, { immediate: true });
 watch(
@@ -105,6 +108,8 @@ watch(
   },
   { deep: true },
 );
+
+watch(() => [busy.value, attempted.value, receipt.value, editing.value, draft.value], () => emit("closeState", { blocked: busy.value || (attempted.value && !receipt.value), dirty: !receipt.value && editing.value && JSON.stringify(draft.value) !== initialDraft.value }), { deep: true, immediate: true });
 
 async function act(action: () => Promise<void>) {
   if (busy.value) return;

@@ -15,24 +15,26 @@ import (
 )
 
 type nodeEnvironmentPlan struct {
-	ID            string                             `json:"id"`
-	HostID        string                             `json:"hostId"`
-	EnvironmentID string                             `json:"environmentId"`
-	Name          string                             `json:"name"`
-	Action        string                             `json:"action"`
-	Change        deploy.NodeEnvironmentRequest      `json:"change"`
-	Snapshot      *deploy.NodeEnvironmentObservation `json:"snapshot,omitempty"`
-	Checks        []serviceinstall.Check             `json:"checks"`
-	Commands      []serviceinstall.OfficialCommand   `json:"commands"`
-	RemovedPaths  []string                           `json:"removedPaths"`
-	MaterialID    string                             `json:"materialId,omitempty"`
-	HostSnapshot  string                             `json:"hostSnapshot"`
-	ExpiresAt     string                             `json:"expiresAt"`
+	Registry        *nodeRegistry                      `json:"registry,omitempty"`
+	ActorGeneration int                                `json:"actorGeneration,omitempty"`
+	ID              string                             `json:"id"`
+	HostID          string                             `json:"hostId"`
+	EnvironmentID   string                             `json:"environmentId"`
+	Name            string                             `json:"name"`
+	Action          string                             `json:"action"`
+	Change          deploy.NodeEnvironmentRequest      `json:"change"`
+	Snapshot        *deploy.NodeEnvironmentObservation `json:"snapshot,omitempty"`
+	Checks          []serviceinstall.Check             `json:"checks"`
+	Commands        []serviceinstall.OfficialCommand   `json:"commands"`
+	RemovedPaths    []string                           `json:"removedPaths"`
+	MaterialID      string                             `json:"materialId,omitempty"`
+	HostSnapshot    string                             `json:"hostSnapshot"`
+	ExpiresAt       string                             `json:"expiresAt"`
 }
 
 func (h *HTTP) nodePreflight(ctx context.Context, t target, c deploy.NodeEnvironmentRequest) (deploy.NodeEnvironmentPreflight, error) {
 	var p deploy.NodeEnvironmentPreflight
-	if err := h.nodeTargetReady(ctx, t, c.Action == "CONNECT_TERMINAL" || c.Context.ConnectTerminal); err != nil {
+	if err := h.nodeTargetReady(ctx, t, c.Action == "CONNECT_TERMINAL" || c.Context.ConnectTerminal, c.Action == "SET_NPM_REGISTRY" || c.Context.ObserveRegistry); err != nil {
 		return p, err
 	}
 	err := h.store.callTarget(ctx, t, deploy.Request{Action: "NODE_ENVIRONMENT_CHECK", NodeEnvironment: &c}, "", &p)
@@ -77,6 +79,8 @@ func (h *HTTP) createNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 		Account            string `json:"account"`
 		NodeVersion        string `json:"nodeVersion"`
 		PackageVersion     string `json:"packageVersion"`
+		RegistryID         string `json:"registryId"`
+		RegistryVersion    string `json:"expectedRegistryVersion"`
 		Source             struct {
 			Type       string `json:"type"`
 			MaterialID string `json:"materialId,omitempty"`
@@ -89,7 +93,7 @@ func (h *HTTP) createNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	switch in.Action {
-	case "INITIALIZE", "SET_DEFAULT", "UPDATE_NVM", "UPDATE_NPM", "INSTALL_PNPM", "UPDATE_PNPM", "REMOVE_PNPM", "REMOVE_ENVIRONMENT", "CONNECT_TERMINAL":
+	case "INITIALIZE", "SET_DEFAULT", "UPDATE_NVM", "UPDATE_NPM", "INSTALL_PNPM", "UPDATE_PNPM", "REMOVE_PNPM", "REMOVE_ENVIRONMENT", "CONNECT_TERMINAL", "SET_NPM_REGISTRY":
 	default:
 		h.nodeError(w, r, errors.New("NODE_ACTION_INVALID"))
 		return
@@ -104,6 +108,11 @@ func (h *HTTP) createNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	var env nodeEnvironment
+	var registry *nodeRegistry
+	if in.Action != "SET_NPM_REGISTRY" && (in.RegistryID != "" || in.RegistryVersion != "") {
+		h.fail(w, r, 400, "NODE_REGISTRY_INPUT_INVALID", "镜像参数仅适用于npm镜像操作")
+		return
+	}
 	c := deploy.NodeEnvironmentRequest{Action: in.Action, NodeVersion: in.NodeVersion, PackageVersion: in.PackageVersion, Source: serviceinstall.Source{Type: in.Source.Type}, DeleteData: in.DeleteData}
 	if in.Action == "INITIALIZE" {
 		if in.EnvironmentID != "" || strings.TrimSpace(in.Name) == "" || len(in.Name) > 120 || !serviceinstall.NodeAccountPattern.MatchString(in.Account) || in.Account == "root" {
@@ -132,6 +141,25 @@ func (h *HTTP) createNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 			// below while retaining the environment/account/default identity.
 			c.ExpectedHash = ""
 			c.Context.ConnectTerminal = true
+		}
+		if in.Action == "SET_NPM_REGISTRY" {
+			if in.NodeVersion != "" || in.PackageVersion != "" || !deploy.ID.MatchString(in.RegistryID) || in.RegistryVersion == "" {
+				h.fail(w, r, 400, "NODE_REGISTRY_INPUT_INVALID", "请选择列表中当前版本的npm镜像")
+				return
+			}
+			selected, e := scanNodeRegistry(h.store.DB.QueryRow("SELECT "+nodeRegistryColumns+" FROM node_registries WHERE id=?", in.RegistryID))
+			if e != nil || selected.Version != in.RegistryVersion {
+				h.nodeError(w, r, errors.New("NODE_REGISTRY_CHANGED"))
+				return
+			}
+			registry = &selected
+			c.RegistryURL = selected.URL
+			c.Context.ObserveRegistry = true
+			c.ExpectedHash = ""
+			if e = h.store.DB.QueryRow("SELECT software_version FROM software_instances WHERE node_environment_id=? AND management_mode='MANAGED' AND installation_status='READY' ORDER BY CASE WHEN software_version=? THEN 0 ELSE 1 END,created_at,id LIMIT 1", env.ID, env.ObservedDefaultVersion).Scan(&c.NodeVersion); e != nil {
+				h.nodeError(w, r, errors.New("NODE_VERSION_NOT_MANAGED"))
+				return
+			}
 		}
 		in.Name = env.Name
 		if in.Action == "REMOVE_ENVIRONMENT" && in.ConfirmationName != env.Name {
@@ -192,7 +220,7 @@ func (h *HTTP) createNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	c.Context = check.Context
-	if c.Action == "CONNECT_TERMINAL" {
+	if c.Action == "CONNECT_TERMINAL" || c.Action == "SET_NPM_REGISTRY" {
 		c.ExpectedHash = check.Observation.Fingerprint
 	}
 	if c.Validate() != nil {
@@ -200,6 +228,10 @@ func (h *HTTP) createNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	p := nodeEnvironmentPlan{ID: uuid.NewString(), HostID: hostID, EnvironmentID: c.Context.EnvironmentID, Name: in.Name, Action: in.Action, Change: c, Snapshot: check.Observation, Checks: check.Checks, Commands: check.Commands, RemovedPaths: check.RemovedPaths, MaterialID: in.Source.MaterialID, HostSnapshot: pluginTargetSnapshot(t), ExpiresAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)}
+	if registry != nil {
+		p.Registry = registry
+		p.ActorGeneration = s.Generation
+	}
 	h.store.mu.Lock()
 	defer h.store.mu.Unlock()
 	tx, err := h.beginAuthorized(s)
@@ -218,6 +250,12 @@ func (h *HTTP) createNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 	}
 	if err == nil {
 		err = validateNodeActionMembers(tx, p.EnvironmentID, p.Change)
+	}
+	if err == nil && p.Registry != nil {
+		err = checkNodeRegistrySnapshot(tx, p.Registry)
+	}
+	if err == nil && p.Action == "SET_NPM_REGISTRY" {
+		err = nodeRegistryAccountUnlocked(tx, hostID, c.Context.AccountUID)
 	}
 	if err != nil {
 		h.nodeError(w, r, err)
@@ -359,6 +397,9 @@ func (h *HTTP) submitNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 		if p.Action == "CONNECT_TERMINAL" {
 			expectedContext.ConnectTerminal = true
 		}
+		if p.Action == "SET_NPM_REGISTRY" {
+			expectedContext.ObserveRegistry = true
+		}
 		if e != nil || n.Version != c.EnvironmentVersion || n.ManagementMode != "MANAGED" || deploy.Digest(expectedContext) != deploy.Digest(c) {
 			h.nodeError(w, r, errors.New("NODE_ENVIRONMENT_CHANGED"))
 			return
@@ -373,6 +414,23 @@ func (h *HTTP) submitNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 	if err = validateNodeActionMembers(tx, p.EnvironmentID, p.Change); err != nil {
 		h.nodeError(w, r, err)
 		return
+	}
+	if p.Action == "SET_NPM_REGISTRY" {
+		if p.ActorGeneration != s.Generation {
+			h.nodeError(w, r, errors.New("NODE_REGISTRY_ACTOR_CHANGED"))
+			return
+		}
+		if p.Registry == nil || p.Registry.URL != p.Change.RegistryURL {
+			h.nodeError(w, r, errors.New("NODE_REGISTRY_CHANGED"))
+			return
+		}
+		if err = checkNodeRegistrySnapshot(tx, p.Registry); err == nil {
+			err = nodeRegistryAccountUnlocked(tx, p.HostID, c.AccountUID)
+		}
+		if err != nil {
+			h.nodeError(w, r, err)
+			return
+		}
 	}
 	job, now := uuid.NewString(), Now()
 	req := deploy.Request{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: h.storeIDTx(tx), TargetID: p.HostID, JobID: job, TraceID: r.Context().Value(traceKey{}).(string), Action: "NODE_ENVIRONMENT_CHANGE", SoftwareOperation: "NODE_ENVIRONMENT_CHANGE", NodeEnvironment: &p.Change, DeadlineAt: time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)}
@@ -390,6 +448,9 @@ func (h *HTTP) submitNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 	}
 	if err == nil {
 		_, err = tx.Exec("INSERT INTO operation_locks VALUES(?,?)", "target:"+p.HostID, job)
+	}
+	if err == nil && p.Action == "SET_NPM_REGISTRY" {
+		_, err = tx.Exec("INSERT INTO operation_locks VALUES(?,?)", nodeRegistryAccountKey(p.HostID, c.AccountUID), job)
 	}
 	if err == nil {
 		err = auditTx(tx, s.Username, "NODE_ENVIRONMENT_CHANGE_ACCEPTED", p.EnvironmentID, "SUCCESS", req.TraceID)
@@ -415,14 +476,20 @@ func (h *HTTP) processNodeEnvironment(ctx context.Context, id, raw string) {
 		h.jobUnknown(id, "TARGET_MISSING")
 		return
 	}
-	h.store.mu.Lock()
-	claimed, err := h.store.DB.Exec("UPDATE jobs SET status='RUNNING',phase='NODE_EXECUTION',updated_at=? WHERE id=? AND status='QUEUED' AND EXISTS(SELECT 1 FROM targets WHERE id=? AND maintenance=0)", Now(), id, t.ID)
-	h.store.mu.Unlock()
-	if err != nil {
-		return
-	}
-	if count, _ := claimed.RowsAffected(); count != 1 {
-		return
+	if req.NodeEnvironment.Action == "SET_NPM_REGISTRY" {
+		if !h.startNodeRegistryJob(id, req) {
+			return
+		}
+	} else {
+		h.store.mu.Lock()
+		claimed, e := h.store.DB.Exec("UPDATE jobs SET status='RUNNING',phase='NODE_EXECUTION',updated_at=? WHERE id=? AND status='QUEUED' AND EXISTS(SELECT 1 FROM targets WHERE id=? AND maintenance=0)", Now(), id, t.ID)
+		h.store.mu.Unlock()
+		if e != nil {
+			return
+		}
+		if count, _ := claimed.RowsAffected(); count != 1 {
+			return
+		}
 	}
 	archive := ""
 	if req.NodeEnvironment.Source.Type == "ARCHIVE" {
@@ -520,6 +587,9 @@ func (h *HTTP) commitNodeEnvironmentResult(id string, req deploy.Request, result
 		}
 		if c.Action == "REMOVE_ENVIRONMENT" && c.Context.ConnectTerminal && (o.Terminal == nil || o.Terminal.Status != "NOT_CONNECTED") {
 			return errors.New("NODE_TERMINAL_UNCONFIRMED")
+		}
+		if c.Action == "SET_NPM_REGISTRY" && (o.Registry == nil || o.Registry.Status != "CONFIGURED" || o.Registry.URL != c.RegistryURL || !nodeUnchangedVersions(n.Observation.Versions, o.Versions, "") || deploy.Digest(n.Observation.Terminal) != deploy.Digest(o.Terminal)) {
+			return errors.New("NODE_REGISTRY_RESULT_MISMATCH")
 		}
 		if c.Action != "SET_DEFAULT" && c.Action != "REMOVE_ENVIRONMENT" && o.DefaultVersion != c.Context.ExpectedDefault {
 			return errors.New("NODE_DEFAULT_MISMATCH")

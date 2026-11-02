@@ -14,6 +14,9 @@ import (
 )
 
 func (h *HTTP) nodeEnvironmentRoute(w http.ResponseWriter, r *http.Request, s *session, route string) bool {
+	if h.nodeRegistryRoute(w, r, s, route) {
+		return true
+	}
 	if route == "/node-environment-recipes" && r.Method == "GET" {
 		h.success(w, r, map[string]any{"node": serviceinstall.NodeCatalog(), "tools": serviceinstall.NodeEnvironmentRecipes()})
 		return true
@@ -69,31 +72,43 @@ func (h *HTTP) nodeEnvironmentRoute(w http.ResponseWriter, r *http.Request, s *s
 func (h *HTTP) nodeError(w http.ResponseWriter, r *http.Request, err error) {
 	code := "NODE_OPERATION_UNAVAILABLE"
 	messages := map[string]string{
-		"NODE_CAPABILITY_REQUIRED":          "主机已接入，需更新接入组件以管理 Node；更新后重新检查即可",
-		"NODE_TERMINAL_CAPABILITY_REQUIRED": "接入组件尚未支持终端接入，请更新后重新检查",
-		"NODE_TERMINAL_CHANGED":             "Bash配置已变化，请重新预检后确认接入",
-		"NODE_TERMINAL_UNCONFIRMED":         "终端接入结果尚未确认，请检查原操作结果",
-		"NODE_TERMINAL_CONFLICT":            "Bash配置已有其他nvm设置或被修改的Ops片段，请核对后重新预检；原配置未覆盖",
-		"NODE_TERMINAL_UNSUPPORTED":         "此账号未使用受支持的Bash登录环境，暂不能自动接入终端",
-		"NODE_ACCOUNT_CHANGED":              "执行账号身份已变化，请重新核对账号",
-		"NODE_ENVIRONMENT_CHANGED":          "环境已变化，请刷新后重新检查",
-		"NODE_ENVIRONMENT_DRIFT":            "服务器环境已被修改，请重新检测",
-		"NODE_ENVIRONMENT_READ_ONLY":        "这是自行安装的环境，只支持检测和解除登记",
-		"NODE_PLAN_STALE":                   "计划已变化或过期，请重新预检",
-		"NODE_MATERIAL_MISSING":             "所选版本离线材料未就绪，请选择已有材料或补充材料",
-		"NODE_MATERIAL_MISMATCH":            "材料与所选软件版本不一致，请重新选择",
-		"NODE_CLEAR_DEFAULT_REQUIRED":       "这是最后一个默认版本，请明确确认清空环境默认版本",
-		"NODE_VERSION_EXISTS":               "该版本已存在，请查看现有安装记录",
-		"NODE_VERSION_NOT_MANAGED":          "请选择此环境中已安装且由 Ops 管理的版本",
-		"NODE_DEFAULT_IN_USE":               "该 Node 版本仍是环境默认，请先切换默认版本",
-		"NODE_VERSION_REFERENCED":           "该 Node 版本仍被使用，请先处理引用",
-		"NODE_ENVIRONMENT_NOT_EMPTY":        "环境仍有已安装版本，请先逐个卸载",
-		"NODE_ALREADY_INSTALLED":            "该 Node 版本已安装，请查看现有版本",
-		"NODE_CONFIRMATION_REQUIRED":        "请确认操作影响并输入环境名称",
-		"NODE_RESULT_UNCONFIRMED":           "操作结果待确认，请检查原操作结果",
-		"OPERATION_LOCKED":                  "主机有未决操作，请先检查原操作结果",
-		"HOST_CHANGED":                      "主机已变化，请刷新后重试",
-		"QUEUE_FULL":                        "未结束作业已达到上限，请稍后重试",
+		"NODE_CAPABILITY_REQUIRED":           "主机已接入，需更新接入组件以管理 Node；更新后重新检查即可",
+		"NODE_TERMINAL_CAPABILITY_REQUIRED":  "接入组件尚未支持终端接入，请更新后重新检查",
+		"NODE_TERMINAL_CHANGED":              "Bash配置已变化，请重新预检后确认接入",
+		"NODE_TERMINAL_UNCONFIRMED":          "终端接入结果尚未确认，请检查原操作结果",
+		"NODE_TERMINAL_CONFLICT":             "Bash配置已有其他nvm设置或被修改的Ops片段，请核对后重新预检；原配置未覆盖",
+		"NODE_TERMINAL_UNSUPPORTED":          "此账号未使用受支持的Bash登录环境，暂不能自动接入终端",
+		"NODE_REGISTRY_CAPABILITY_REQUIRED":  "接入组件尚未支持npm镜像管理，请更新后重新检查",
+		"NODE_REGISTRY_CHANGED":              "镜像列表或账号配置已变化，请重新预检并确认",
+		"NODE_REGISTRY_RESULT_MISMATCH":      "npm账号镜像回读与所选地址不一致，请核对原作业",
+		"NODE_REGISTRY_NPM_REQUIRED":         "请先在此环境安装带有npm的Node版本",
+		"NODE_REGISTRY_PATH_UNSAFE":          "账号的.npmrc路径或权限不符合要求，请检查文件归属和链接",
+		"NODE_REGISTRY_READ_FAILED":          "无法读取账号的npm配置，请检查.npmrc读取权限和npm程序",
+		"NODE_REGISTRY_CONFIG_UNSUPPORTED":   "现有registry包含变量或认证地址，请先在服务器核对.npmrc",
+		"NODE_REGISTRY_CONFIG_REJECTED":      "npm拒绝此配置，原文件未替换；请检查.npmrc格式和认证配置",
+		"NODE_REGISTRY_OTHER_CONFIG_CHANGED": "npm准备的新配置改变了其他设置，原文件未替换；请核对.npmrc",
+		"NODE_REGISTRY_RESULT_UNCONFIRMED":   "镜像切换结果待确认，请核对原作业",
+		"NODE_REGISTRY_ACTOR_CHANGED":        "操作账号状态已变化，请重新登录并预检",
+		"NODE_REGISTRY_LOCK_MISMATCH":        "操作锁状态不一致，请检查原作业",
+		"NODE_ACCOUNT_CHANGED":               "执行账号身份已变化，请重新核对账号",
+		"NODE_ENVIRONMENT_CHANGED":           "环境已变化，请刷新后重新检查",
+		"NODE_ENVIRONMENT_DRIFT":             "服务器环境已被修改，请重新检测",
+		"NODE_ENVIRONMENT_READ_ONLY":         "这是自行安装的环境，只支持检测和解除登记",
+		"NODE_PLAN_STALE":                    "计划已变化或过期，请重新预检",
+		"NODE_MATERIAL_MISSING":              "所选版本离线材料未就绪，请选择已有材料或补充材料",
+		"NODE_MATERIAL_MISMATCH":             "材料与所选软件版本不一致，请重新选择",
+		"NODE_CLEAR_DEFAULT_REQUIRED":        "这是最后一个默认版本，请明确确认清空环境默认版本",
+		"NODE_VERSION_EXISTS":                "该版本已存在，请查看现有安装记录",
+		"NODE_VERSION_NOT_MANAGED":           "请选择此环境中已安装且由 Ops 管理的版本",
+		"NODE_DEFAULT_IN_USE":                "该 Node 版本仍是环境默认，请先切换默认版本",
+		"NODE_VERSION_REFERENCED":            "该 Node 版本仍被使用，请先处理引用",
+		"NODE_ENVIRONMENT_NOT_EMPTY":         "环境仍有已安装版本，请先逐个卸载",
+		"NODE_ALREADY_INSTALLED":             "该 Node 版本已安装，请查看现有版本",
+		"NODE_CONFIRMATION_REQUIRED":         "请确认操作影响并输入环境名称",
+		"NODE_RESULT_UNCONFIRMED":            "操作结果待确认，请检查原操作结果",
+		"OPERATION_LOCKED":                   "主机有未决操作，请先检查原操作结果",
+		"HOST_CHANGED":                       "主机已变化，请刷新后重试",
+		"QUEUE_FULL":                         "未结束作业已达到上限，请稍后重试",
 	}
 	if err != nil {
 		if _, ok := messages[err.Error()]; ok {
@@ -116,6 +131,9 @@ func (h *HTTP) nodeTargetReady(ctx context.Context, t target, terminal ...bool) 
 	}
 	if len(terminal) > 0 && terminal[0] && cap.NodeTerminalVersion != 1 {
 		return errors.New("NODE_TERMINAL_CAPABILITY_REQUIRED")
+	}
+	if len(terminal) > 1 && terminal[1] && cap.NodeRegistryVersion != 1 {
+		return errors.New("NODE_REGISTRY_CAPABILITY_REQUIRED")
 	}
 	return nil
 }
@@ -213,6 +231,7 @@ func (h *HTTP) observeNodeEnvironment(w http.ResponseWriter, r *http.Request, s 
 		}
 		nodeContext := n.context()
 		nodeContext.ConnectTerminal = n.ManagementMode == "MANAGED" && capabilities.NodeTerminalVersion == 1
+		nodeContext.ObserveRegistry = n.ManagementMode == "MANAGED" && capabilities.NodeRegistryVersion == 1
 		err = h.store.callTarget(ctx, t, deploy.Request{Action: action, NodeEnvironment: &deploy.NodeEnvironmentRequest{Context: nodeContext, Action: strings.TrimPrefix(action, "NODE_ENVIRONMENT_")}}, "", &observed)
 	}
 	if err == nil && !nodeObservationMatches(n, observed) {

@@ -20,6 +20,7 @@ func inspectExecutorCapabilities(owner Owner, platform string, command func(time
 		"nativeInstallVersion":     1,
 		"nodeEnvironmentVersion":   NodeEnvironmentCapabilityVersion,
 		"nodeTerminalVersion":      1,
+		"nodeRegistryVersion":      1,
 		"officialInstallVersion":   1,
 		"softwareConfigureVersion": 1,
 		"softwareUninstallVersion": 1,

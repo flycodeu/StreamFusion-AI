@@ -19,7 +19,7 @@ interface HostPreparation {
   remoteJob?: PreparationJob;
 }
 const props = defineProps<{ host: Host; updateOnly?: boolean; automaticUpdate?: AutomaticPreparationUpdate }>();
-const emit = defineEmits<{ checked: []; updated: [] }>();
+const emit = defineEmits<{ checked: []; updated: []; closeBlocked: [boolean] }>();
 const data = ref<HostPreparation>();
 const busy = ref(false);
 const mode = ref<"online" | "offline">("online");
@@ -94,6 +94,7 @@ let hostGeneration = 0;
 let operation = 0;
 let pollFailures = 0;
 const installationIntent = ref<{ key: string; previousJobId?: string; jobId?: string }>();
+watch(() => busy.value || installing.value || repairing.value || !!installationIntent.value || ["RUNNING", "UNKNOWN"].includes(job.value?.status || ""), value => emit("closeBlocked", value));
 let polling: ReturnType<typeof setTimeout> | undefined;
 let installAbort: AbortController | undefined;
 function report(cause: unknown, source?: "poll") {
@@ -176,7 +177,7 @@ watch([() => props.host.id, () => props.host.version], () => {
     await install();
   });
 }, { immediate: true });
-onUnmounted(() => { generation++; hostGeneration++; clearTimeout(polling); installAbort?.abort(); sudoPassword.value = ""; });
+onUnmounted(() => { emit("closeBlocked", false); generation++; hostGeneration++; clearTimeout(polling); installAbort?.abort(); sudoPassword.value = ""; });
 async function refreshHostStatus(revision = hostGeneration) {
   try {
     await request<Host>(`/hosts/${props.host.id}/checks`, "POST", {});

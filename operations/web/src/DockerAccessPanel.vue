@@ -25,7 +25,7 @@ const props = defineProps<{
   active: boolean;
   disabled?: boolean;
 }>();
-const emit = defineEmits<{ changed: [] }>();
+const emit = defineEmits<{ changed: []; closeBlocked: [boolean] }>();
 const snapshot = ref<DockerAccessSnapshot>();
 const selectedAccount = ref("");
 const localHost = ref<Host>();
@@ -54,6 +54,7 @@ const pending = computed(
       ["QUEUED", "RUNNING", "UNKNOWN"].includes(job.value.status) ||
       job.value.targetAckPending),
 );
+watch(() => busy.value || attempted.value || pending.value || preparationOpen.value, value => emit("closeBlocked", value), { immediate: true });
 const writable = computed(
   () =>
     managedDockerAccess(localDetail.value || props.detail) &&

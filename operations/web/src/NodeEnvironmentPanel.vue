@@ -14,11 +14,13 @@ import type {
 } from "./serviceInstallation";
 import {
   softwareJobStatusLabel,
+  softwareJobErrorMessages,
   softwareJobDiagnostic,
   type SoftwareJob,
 } from "./software";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
 import HostPreparationPanel from "./HostPreparationPanel.vue";
+import NodeRegistryPanel from "./NodeRegistryPanel.vue";
 import NodeVersionDialog from "./NodeVersionDialog.vue";
 import {
   nodeInitialPlanMatches,
@@ -36,10 +38,12 @@ import {
   type NodeEnvironment,
   type NodeObservation,
   type NodePlan,
+  type NodeRegistry,
 } from "./nodeEnvironment";
 
 const props = defineProps<{ host: Host; initialEnvironmentId?: string }>();
-const emit = defineEmits<{ changed: [] }>();
+const emit = defineEmits<{ changed: []; closeState: [state: { blocked: boolean; dirty: boolean }] }>();
+const registryCloseState = ref({ busy: false, dirty: false });
 const environments = ref<NodeEnvironment[]>([]);
 const selectedId = ref("");
 const environment = ref<NodeEnvironment>();
@@ -104,6 +108,15 @@ const writable = computed(
     !currentHost.value.maintenance &&
     !pending.value,
 );
+watch(() => [busy.value, attempted.value, pending.value, !!draft.value, discoveryOpen.value, preparationOpen.value, terminalOpen.value, registryCloseState.value], () => emit("closeState", {
+  blocked: busy.value || pending.value || !!draft.value || discoveryOpen.value || preparationOpen.value || terminalOpen.value || registryCloseState.value.busy,
+  dirty: registryCloseState.value.dirty,
+}), { immediate: true, deep: true });
+function selectRegistry(entry: NodeRegistry) {
+  openAction("SET_NPM_REGISTRY");
+  draft.value!.registryId = entry.id;
+  draft.value!.expectedRegistryVersion = entry.version;
+}
 const toolsKey = computed(() =>
   !draft.value
     ? ""
@@ -334,6 +347,7 @@ function openAction(action: NodeAction, nodeVersion = "") {
     action === "INITIALIZE" ||
     action === "UPDATE_NVM" ||
     action === "CONNECT_TERMINAL" ||
+    action === "SET_NPM_REGISTRY" ||
     action === "REMOVE_ENVIRONMENT" ||
     action === "RELEASE"
   )
@@ -498,7 +512,9 @@ async function runPreflight(allowAutomaticUpdate: boolean) {
           ].includes(d.action)
             ? d.packageVersion
             : undefined,
-          source: d.action === "CONNECT_TERMINAL" ? undefined : source(),
+          source: ["CONNECT_TERMINAL", "SET_NPM_REGISTRY"].includes(d.action) ? undefined : source(),
+          registryId: d.registryId,
+          expectedRegistryVersion: d.expectedRegistryVersion,
           deleteData: d.deleteData,
           confirmationName: d.confirmationName,
         },
@@ -788,7 +804,7 @@ poll();
       {{ error.message }}
       <button
         v-if="
-          ['NODE_CAPABILITY_REQUIRED', 'NODE_TERMINAL_CAPABILITY_REQUIRED', 'EXECUTOR_UPGRADE_REQUIRED'].includes(
+          ['NODE_CAPABILITY_REQUIRED', 'NODE_TERMINAL_CAPABILITY_REQUIRED', 'NODE_REGISTRY_CAPABILITY_REQUIRED', 'EXECUTOR_UPGRADE_REQUIRED'].includes(
             error.code,
           )
         "
@@ -902,6 +918,7 @@ poll();
           v-for="entry in [
             { key: 'versions', name: '版本列表' },
             { key: 'sources', name: '来源与目录' },
+            { key: 'registry', name: 'npm 镜像' },
             { key: 'history', name: '操作记录' },
           ]"
           :key="entry.key"
@@ -1071,6 +1088,7 @@ poll();
           </button>
         </div>
       </section>
+      <NodeRegistryPanel v-else-if="tab === 'registry'" :environment="environment" :disabled="busy || !writable" @select="selectRegistry" @close-state="registryCloseState = $event" />
       <section v-else class="node-history">
         <button
           v-for="item in jobs"
@@ -1095,7 +1113,7 @@ poll();
               ? "请核对原操作结果，避免重复执行"
               : ""
         }}</span
-        ><button
+        ><p v-if="softwareJobErrorMessages[job.errorCode]">{{ softwareJobErrorMessages[job.errorCode] }}</p><button
           v-if="job.status === 'UNKNOWN' || job.targetAckPending"
           class="secondary"
           :disabled="busy"

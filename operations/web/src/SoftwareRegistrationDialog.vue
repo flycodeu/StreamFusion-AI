@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { ElDrawer } from "element-plus";
+import { ElDrawer, ElMessageBox } from "element-plus";
 import { request } from "./api";
 import type { Host } from "./hosts";
 import {
@@ -32,6 +32,14 @@ const emptyDraft = (): SoftwareRegistrationDraft => ({
   softwareVersion: "",
 });
 const draft = ref(emptyDraft());
+const initialDraft = ref("");
+async function close(done?: () => void) {
+  if (busy.value) return;
+  if (JSON.stringify(draft.value) !== initialDraft.value) {
+    try { await ElMessageBox.confirm("放弃未保存的登记内容？", "关闭窗口", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); } catch { return; }
+  }
+  if (done) done(); else emit("close");
+}
 const toolTypes: SoftwareType[] = ["JAVA", "PYTHON", "FFMPEG"];
 const tools: Partial<Record<SoftwareType, string>> = {
   JAVA: "java",
@@ -64,12 +72,14 @@ const valid = computed(() => {
 watch(
   () => props.open,
   (open) => {
-    if (open)
+    if (open) {
       draft.value = {
         ...emptyDraft(),
         hostId: props.hostId || props.hosts[0]?.id || "",
         ...props.prefill,
       };
+      initialDraft.value = JSON.stringify(draft.value);
+    }
   },
 );
 watch(
@@ -128,6 +138,7 @@ async function save() {
     size="min(600px,100vw)"
     destroy-on-close
     :close-on-click-modal="!busy"
+    :before-close="close"
     :close-on-press-escape="!busy"
     :show-close="!busy"
     @close="emit('close')"
@@ -233,7 +244,7 @@ async function save() {
           type="button"
           class="secondary"
           :disabled="busy"
-          @click="emit('close')"
+          @click="close()"
         >
           取消</button
         ><button

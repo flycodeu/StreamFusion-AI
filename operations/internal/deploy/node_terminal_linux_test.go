@@ -272,4 +272,5 @@ func TestNodeTerminalLinuxBashLifecycle(t *testing.T) {
 	if !nodeTerminalPlanMatches(n, dir, false) {
 		t.Fatal("disconnect result unconfirmed")
 	}
+	t.Run("npmRegistry", func(t *testing.T) { testNodeRegistryLinux(t, x, n, d.Version, request) })
 }

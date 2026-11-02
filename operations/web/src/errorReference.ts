@@ -9,6 +9,8 @@ export interface ErrorReferenceEntry {
 }
 
 export const errorReference: ErrorReferenceEntry[] = [
+  { code: "NODE_REGISTRY_CAPABILITY_REQUIRED", name: "组件不支持 npm 镜像管理", category: "Node 环境", meaning: "当前主机组件尚不支持账号级 npm registry 管理。", steps: ["更新接入组件后重新预检。", "更新组件不会自动切换服务器镜像地址。"] },
+  { code: "NODE_REGISTRY_CHANGED", name: "镜像或账号配置已变化", category: "Node 环境", meaning: "镜像列表或账号配置已变化，请重新预检并确认。", steps: ["刷新镜像地址列表并检测账号配置。", "重新选择地址并预检确认；删除列表项不会改变服务器已有配置。"] },
   { code: "NODE_TERMINAL_CAPABILITY_REQUIRED", name: "组件不支持 Node 终端接入", category: "Node 环境", meaning: "当前主机组件尚不支持为所选账号配置 Bash。", steps: ["更新接入组件后重新预检。", "更新组件不会自动执行 Node 安装或终端接入。"] },
   { code: "NODE_TERMINAL_CONFLICT", name: "Bash 接入配置冲突", category: "Node 环境", meaning: "现有启动文件中的接入片段与本次环境不匹配，操作已停止。", steps: ["检查该账号启动文件中的 Ops 片段及对应环境。", "保留原配置，处理冲突后重新预检，不要覆盖整个启动文件。"] },
   { code: "NODE_TERMINAL_CHANGED", name: "Bash 配置已变化", category: "Node 环境", meaning: "启动文件在预检后发生变化，本次操作已停止。", steps: ["核对是否有其他管理员修改了账号启动文件。", "重新预检并确认新的变更范围。"] },

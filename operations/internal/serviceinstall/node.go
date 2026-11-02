@@ -77,6 +77,7 @@ type NodeContext struct {
 	MakeDefault        bool   `json:"makeDefault,omitempty"`
 	ConnectTerminal    bool   `json:"connectTerminal,omitempty"`
 	TerminalHash       string `json:"terminalHash,omitempty"`
+	ObserveRegistry    bool   `json:"observeRegistry,omitempty"`
 }
 
 var NodeVersionPattern = regexp.MustCompile(`^v[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$`)

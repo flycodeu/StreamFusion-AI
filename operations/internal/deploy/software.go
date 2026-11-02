@@ -315,7 +315,7 @@ func (x *executor) ackSoftware(req, intent Request, result Result, dir string, o
 }
 
 func (x *executor) softwareNotStarted(req Request, dir string, output io.Writer) error {
-	for _, name := range []string{"intent.json", "progress.json", "result.json", "ack.json", "software-command.json", "software-detach.json", "software-uninstall.json", "software-uninstalled.json", "node-change.json", "node-before.json", "node-install.json", "node-uninstall.json", "docker-access-command.json"} {
+	for _, name := range []string{"intent.json", "progress.json", "result.json", "ack.json", "software-command.json", "software-detach.json", "software-uninstall.json", "software-uninstalled.json", "node-change.json", "node-before.json", "node-install.json", "node-uninstall.json", "node-terminal.json", "node-registry.json", "docker-access-command.json"} {
 		if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
 			return errors.New("TARGET_EVIDENCE_PRESENT_OR_DAMAGED")
 		}
