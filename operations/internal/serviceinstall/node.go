@@ -75,6 +75,8 @@ type NodeContext struct {
 	NVMHash            string `json:"nvmHash"`
 	ExpectedDefault    string `json:"expectedDefault"`
 	MakeDefault        bool   `json:"makeDefault,omitempty"`
+	ConnectTerminal    bool   `json:"connectTerminal,omitempty"`
+	TerminalHash       string `json:"terminalHash,omitempty"`
 }
 
 var NodeVersionPattern = regexp.MustCompile(`^v[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$`)
@@ -82,6 +84,9 @@ var NodeAccountPattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 var nodeUIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,9}$`)
 
 func (n NodeContext) Validate() error {
+	if n.TerminalHash != "" && (!n.ConnectTerminal || !sha.MatchString(n.TerminalHash)) {
+		return errors.New("NODE_TERMINAL_HASH_INVALID")
+	}
 	if !uuid.MatchString(n.EnvironmentID) || !revision.MatchString(n.EnvironmentVersion) || !NodeAccountPattern.MatchString(n.Account) || n.Account == "root" || !nodeUIDPattern.MatchString(n.AccountUID) || !ValidNodeRoot(n.RootPath) || !TrustedNodeManager(n.NVMVersion, n.NVMHash) || n.ExpectedDefault != "" && !NodeVersionPattern.MatchString(n.ExpectedDefault) {
 		return errors.New("NODE_ENVIRONMENT_INVALID")
 	}

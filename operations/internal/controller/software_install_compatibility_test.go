@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/streamfusion-ai/operations/internal/deploy"
@@ -174,5 +175,62 @@ func TestServiceInstallRecipeInvocationErrorsRemainSpecificAndSanitized(t *testi
 	code, message := installPreflightError(err)
 	if code != "INSTALL_PREFLIGHT_FAILED" || strings.Contains(message, "opaque-secret") {
 		t.Fatal("untrusted stderr escaped fixed-code classification", code, message)
+	}
+}
+
+func TestServiceInstallChecksLiveCapabilitiesWithoutCachedReadiness(t *testing.T) {
+	for _, status := range []string{"AVAILABLE", "UNAVAILABLE", "UNKNOWN"} {
+		t.Run(status, func(t *testing.T) {
+			s, b := setup(t)
+			b.login()
+			var capabilities, checks atomic.Int32
+			host, f := installSSHFixture(t, s, b, func(req deploy.Request) ([]byte, bool) {
+				if req.Action == "CAPABILITIES" {
+					capabilities.Add(1)
+				}
+				if req.Action == "SOFTWARE_INSTALL_CHECK" {
+					checks.Add(1)
+				}
+				return nil, false
+			})
+			cached := unknownHostCapabilities()
+			cached.Mutation.Status = status
+			cached.Mutation.Code = "HISTORICAL_CHECK"
+			cached.ExpiresAt = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+			if _, err := s.DB.Exec("UPDATE targets SET capabilities_json=?,observed_at=? WHERE id=?", jsonText(cached), time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano), host); err != nil {
+				t.Fatal(err)
+			}
+			p := nginxPlan(t, b, host, 18211)
+			b.call("POST", "/software-install-plans/"+p["id"].(string)+"/submit", map[string]string{"idempotencyKey": "live-capability-" + status}, 202)
+			if capabilities.Load() != 2 || checks.Load() != 2 || f.InstallCount.Load() != 0 {
+				t.Fatal("cached status replaced live check or executed installation", capabilities.Load(), checks.Load(), f.InstallCount.Load())
+			}
+			current, err := s.readTarget(host)
+			if err != nil || current.Version != "1" || current.Capabilities.Mutation.Status != status || current.Capabilities.ExpiresAt != cached.ExpiresAt {
+				t.Fatal("preflight altered host configuration or historical capability facts", err)
+			}
+		})
+	}
+}
+
+func TestServiceInstallFreshCacheCannotAuthorizeChangedExecutor(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	host, f := installSSHFixture(t, s, b)
+	cached := unknownHostCapabilities()
+	cached.Mutation = checkedCapability(true, "EXECUTOR_READY", "historical success")
+	cached.ExpiresAt = time.Now().Add(hostCapabilityFreshnessTTL).UTC().Format(time.RFC3339Nano)
+	if _, err := s.DB.Exec("UPDATE targets SET capabilities_json=? WHERE id=?", jsonText(cached), host); err != nil {
+		t.Fatal(err)
+	}
+	p := nginxPlan(t, b, host, 18212)
+	f.OldExecutor.Store(true)
+	response := b.call("POST", "/software-install-plans/"+p["id"].(string)+"/submit", map[string]string{"idempotencyKey": "fresh-cache-changed-executor"}, 409)
+	if !strings.Contains(response.Body.String(), "EXECUTOR_UPGRADE_REQUIRED") {
+		t.Fatal(response.Body.String())
+	}
+	var jobs int
+	if err := s.DB.QueryRow("SELECT count(*) FROM jobs WHERE kind='SOFTWARE_INSTALL'").Scan(&jobs); err != nil || jobs != 0 || f.InstallCount.Load() != 0 {
+		t.Fatal("cached success authorized a changed executor", err, jobs, f.InstallCount.Load())
 	}
 }

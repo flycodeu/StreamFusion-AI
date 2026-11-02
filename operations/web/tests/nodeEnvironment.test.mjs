@@ -138,7 +138,7 @@ test("Node online preflight sends no material operations and freezes environment
   assert.deepEqual(call.data.node, {
     environmentId: "env",
     environmentVersion: "4",
-    makeDefault: true,
+    makeDefault: true, connectTerminal: true,
   });
   assert.equal(
     h.calls.some((c) => c.method === "POST" && c.path.includes("materials")),
@@ -292,7 +292,7 @@ test("initial sequence accepts only the confirmed exact identity and Node plan",
     context,
     definition: recipe,
     source: { type: "OFFICIAL" },
-    makeDefault: true,
+    makeDefault: true, connectTerminal: true,
     expiresAt: "2099-01-01T00:00:00Z",
   };
   const env = {
@@ -313,7 +313,7 @@ test("initial sequence accepts only the confirmed exact identity and Node plan",
       ...context,
       environmentId: "env",
       environmentVersion: env.version,
-      makeDefault: true,
+      makeDefault: true, connectTerminal: true,
     },
     paths: { root: "/env/nvm/versions/node/" + recipe.version },
     checks: [{ status: "PASSED" }],
@@ -377,7 +377,7 @@ test("first-install continuation stops on drift and preserves a lost second subm
     context,
     definition: recipe,
     source: { type: "OFFICIAL" },
-    makeDefault: true,
+    makeDefault: true, connectTerminal: true,
     expiresAt: "2099-01-01",
     initializationJobId: "init-job",
     submitKey: "stable-second-key",
@@ -396,7 +396,7 @@ test("first-install continuation stops on drift and preserves a lost second subm
       ...context,
       environmentId: "env",
       environmentVersion: "4",
-      makeDefault: true,
+      makeDefault: true, connectTerminal: true,
     },
     paths: { root: "/env/nvm/versions/node/" + recipe.version },
     checks: [{ status: "PASSED" }],
@@ -504,5 +504,21 @@ test("Node preflight resumes after component update without submitting its opera
   assert.equal(h.flow.draft.value.nodeVersion,version);
   assert.equal(h.flow.plan.value.id,"plan");
   assert.equal(h.calls.some(c=>c.path.endsWith("/submit")),false);
+  h.dispose();
+});
+
+test("terminal connection preflight preserves no-default choice and never submits automatically", async () => {
+  const h=harness(); await flush();
+  h.flow.openAction("CONNECT_TERMINAL"); await h.flow.preflight();
+  const call=h.calls.at(-1);
+  assert.equal(call.data.action,"CONNECT_TERMINAL");
+  assert.equal(call.data.environmentId,"env");
+  assert.equal(call.data.source,undefined);
+  assert.equal(call.data.nodeVersion,undefined);
+  assert.equal(call.data.packageVersion,undefined);
+  assert.equal(h.calls.some(c=>c.path.endsWith("/submit")),false);
+  h.flow.openAction("INSTALL_NODE"); h.flow.draft.value.makeDefault=false; await h.flow.preflight();
+  assert.equal(h.calls.at(-1).data.node.makeDefault,false);
+  assert.equal(h.calls.at(-1).data.node.connectTerminal,true);
   h.dispose();
 });

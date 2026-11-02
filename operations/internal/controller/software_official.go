@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path"
 
+	"github.com/streamfusion-ai/operations/internal/deploy"
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
@@ -16,6 +17,14 @@ func validateInstallPreflightPaths(base string, plan *softwareInstallPlan, prefl
 		root := serviceinstall.NodeVersionRoot(*n, plan.Definition.Version)
 		if preflight.Official != nil || preflight.Root != root || preflight.BinaryDirectory != root+"/bin" || preflight.DataDirectory != n.RootPath+"/cache/"+plan.Definition.Version || preflight.ConfigDirectory != n.RootPath+"/nvm/alias" || preflight.LogsDirectory != n.RootPath+"/backups/"+plan.Definition.Version {
 			return errors.New("NODE_PATHS_INVALID")
+		}
+		if n.ConnectTerminal {
+			if !deploy.Hex.MatchString(preflight.NodeTerminalHash) || n.TerminalHash != "" && n.TerminalHash != preflight.NodeTerminalHash {
+				return errors.New("NODE_TERMINAL_CHANGED")
+			}
+			n.TerminalHash = preflight.NodeTerminalHash
+		} else if preflight.NodeTerminalHash != "" {
+			return errors.New("NODE_TERMINAL_UNEXPECTED")
 		}
 		return nil
 	}

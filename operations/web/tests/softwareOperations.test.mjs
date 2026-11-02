@@ -464,3 +464,18 @@ test("closing the install drawer clears automatic update intent before any reope
  assert.equal(h.flow.preparationOpen.value,false);assert.equal(h.calls.length,1);
  h.dispose();
 });
+
+test("diagnostics pair core job states and phases with Chinese labels", () => {
+  assert.equal(
+    software.softwareJobDiagnostic("SUCCEEDED", "NODE_ENVIRONMENT_UPDATED"),
+    "已完成（SUCCEEDED） · Node 环境已更新（NODE_ENVIRONMENT_UPDATED）",
+  );
+  assert.equal(
+    software.softwareJobDiagnostic("SUCCEEDED", "DOCKER_ACCESS_UPDATED"),
+    "已完成（SUCCEEDED） · Docker 账号权限已更新（DOCKER_ACCESS_UPDATED）",
+  );
+  assert.equal(
+    software.softwareJobDiagnostic("FUTURE_STATE", "FUTURE_PHASE"),
+    "状态未识别（FUTURE_STATE） · 阶段未识别（FUTURE_PHASE）",
+  );
+});

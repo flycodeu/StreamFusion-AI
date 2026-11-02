@@ -5,6 +5,7 @@ import { ApiError, request } from "./api";
 import { hostTime, type Host } from "./hosts";
 import {
   softwareJobStatusLabel,
+  softwareJobDiagnostic,
   type SoftwareInstance,
 } from "./software";
 import {
@@ -559,7 +560,8 @@ onUnmounted(() => {
       <details class="access-diagnostics">
         <summary>任务详情</summary>
         <ErrorHelpLink v-if="job.errorCode" :code="job.errorCode" /><code
-          >{{ job.status }} · {{ job.phase }} · {{ job.errorCode }}</code
+          >{{ softwareJobDiagnostic(job.status, job.phase) }} ·
+          {{ job.errorCode }}</code
         ><code>{{ job.id }} · traceId={{ job.traceId }}</code
         ><time>{{ hostTime(job.updatedAt) }}</time>
       </details>

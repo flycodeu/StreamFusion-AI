@@ -13,6 +13,7 @@ type nodeInstallInput struct {
 	EnvironmentID      string `json:"environmentId"`
 	EnvironmentVersion string `json:"environmentVersion"`
 	MakeDefault        bool   `json:"makeDefault"`
+	ConnectTerminal    bool   `json:"connectTerminal,omitempty"`
 }
 
 func nodeVersionDataPaths(n serviceinstall.NodeContext, version string) []string {
@@ -78,6 +79,7 @@ func (h *HTTP) resolveNodeInstall(host string, d serviceinstall.Definition, in *
 	}
 	n := e.context()
 	n.MakeDefault = in.MakeDefault
+	n.ConnectTerminal = in.ConnectTerminal
 	return &n, n.Validate()
 }
 
@@ -156,6 +158,9 @@ func commitNodeSoftwareObservation(tx *sql.Tx, job string, n *serviceinstall.Nod
 	o := result.NodeEnvironment
 	if o == nil || !nodeObservationMatches(e, *o) || !o.Exists {
 		return errors.New("NODE_RESULT_MISMATCH")
+	}
+	if !removed && n.ConnectTerminal && (o.Terminal == nil || o.Terminal.Status != "CONNECTED") {
+		return errors.New("NODE_TERMINAL_UNCONFIRMED")
 	}
 	if !nodeUnchangedVersions(e.Observation.Versions, o.Versions, version) {
 		return errors.New("NODE_SIBLING_VERSION_CHANGED")

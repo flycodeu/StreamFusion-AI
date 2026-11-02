@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { ElDialog } from "element-plus";
+import { ElDrawer } from "element-plus";
 import type {
   InstallationMaterial,
   ServiceRecipe,
@@ -94,24 +94,38 @@ const canSubmit = computed(
 </script>
 
 <template>
-  <ElDialog
+  <ElDrawer
     :model-value="true"
     :title="nodeActionLabels[draft.action]"
-    width="min(720px,94vw)"
-    align-center
+    size="min(960px, 100vw)"
+    append-to-body
+    class="node-action-drawer"
     :close-on-click-modal="false"
     :close-on-press-escape="!busy && !attempted"
     :show-close="!busy && !attempted"
     @close="emit('close')"
   >
     <form
+      id="node-action-form"
       class="node-form"
+      :class="{ 'has-plan': plan }"
       @submit.prevent="plan || !needsPlan ? emit('submit') : emit('preflight')"
     >
       <p v-if="environment" class="context">
         {{ environment.name }} · {{ environment.account }}<br /><code>{{
           environment.rootPath
         }}</code>
+      </p>
+      <p
+        v-if="
+          ['INITIALIZE', 'INSTALL_NODE', 'CONNECT_TERMINAL'].includes(
+            draft.action,
+          )
+        "
+        class="hint"
+      >
+        为 {{ environment?.account || draft.account || "所选账号" }} 配置
+        Bash，新登录生效。
       </p>
       <fieldset
         :disabled="busy || attempted"
@@ -134,8 +148,7 @@ const canSubmit = computed(
               required
           /></label>
         </template>
-        <section v-if="draft.action === 'INITIALIZE'" class="plan">
-          <strong>同时安装 Node.js</strong>
+        <section v-if="draft.action === 'INITIALIZE'" class="initial-version">
           <label
             >Node 版本<select
               v-model="draft.initialNodeVersion"
@@ -221,7 +234,10 @@ const canSubmit = computed(
             </option>
           </select></label
         >
-        <p v-if="draft.nodeVersion" class="version">
+        <p
+          v-if="draft.nodeVersion && draft.action !== 'INSTALL_NODE'"
+          class="version"
+        >
           Node {{ draft.nodeVersion }}
         </p>
         <template v-if="isDownload">
@@ -340,8 +356,11 @@ const canSubmit = computed(
             autocomplete="off"
         /></label>
       </fieldset>
-      <section v-if="plan" class="plan" aria-label="Node 变更预览">
+      <section v-if="plan" class="plan preview" aria-label="Node 变更预览">
         <strong>预检完成</strong>
+        <p v-if="['INITIALIZE', 'INSTALL_NODE'].includes(draft.action)">
+          {{ draft.makeDefault ? "安装后设为默认版本" : "保留当前默认版本" }}
+        </p>
         <p v-if="plan.change?.context">
           账号 {{ plan.change.context.account }} · nvm
           {{ plan.change.context.nvmVersion }}
@@ -349,9 +368,21 @@ const canSubmit = computed(
         <code v-if="plan.change?.context">{{
           plan.change.context.rootPath
         }}</code>
-        <details v-if="plan.checks?.length"><summary>预检详情</summary><p v-for="check in plan.checks" :key="check.key">{{ check.message }}</p></details>
+        <div
+          v-if="plan.snapshot?.terminal?.profiles.length && (draft.action === 'CONNECT_TERMINAL' || (draft.action === 'REMOVE_ENVIRONMENT' && plan.change?.context.connectTerminal))"
+          class="terminal-files"
+        >
+          <strong>终端文件</strong>
+          <code v-for="profile in plan.snapshot.terminal.profiles" :key="profile.path">{{ profile.path }}</code>
+        </div>
+        <details v-if="plan.checks?.length">
+          <summary>预检详情</summary>
+          <p v-for="check in plan.checks" :key="check.key">
+            {{ check.message }}
+          </p>
+        </details>
         <code v-if="plan.paths?.root">{{ plan.paths.root }}</code>
-        <details v-if="plan.commands?.length" open>
+        <details v-if="plan.commands?.length">
           <summary>将在目标服务器执行</summary>
           <pre v-for="(command, index) in plan.commands" :key="index">{{
             nodeCommand(command)
@@ -363,7 +394,7 @@ const canSubmit = computed(
         {{ error }}
         <button
           v-if="
-            ['NODE_CAPABILITY_REQUIRED', 'EXECUTOR_UPGRADE_REQUIRED'].includes(
+            ['NODE_CAPABILITY_REQUIRED', 'NODE_TERMINAL_CAPABILITY_REQUIRED', 'EXECUTOR_UPGRADE_REQUIRED'].includes(
               errorCode || '',
             )
           "
@@ -380,6 +411,8 @@ const canSubmit = computed(
         <code>{{ diagnostic }}</code>
       </details>
       <p v-if="attempted" class="hint">提交结果未确认，可核对原请求。</p>
+    </form>
+    <template #footer>
       <footer>
         <button
           type="button"
@@ -398,22 +431,30 @@ const canSubmit = computed(
         >
           {{ busy ? "检查中…" : "检查安装条件" }}
         </button>
-        <button v-else class="primary" type="submit" :disabled="!canSubmit">
+        <button
+          v-else
+          class="primary"
+          type="submit"
+          form="node-action-form"
+          :disabled="!canSubmit"
+        >
           {{ busy ? "提交中…" : attempted ? "核对提交结果" : "确认执行" }}
         </button>
       </footer>
-    </form>
-  </ElDialog>
+    </template>
+  </ElDrawer>
 </template>
 
 <style scoped>
 .node-form,
-fieldset {
+fieldset,
+.initial-version {
   display: grid;
   gap: 16px;
   min-width: 0;
 }
 fieldset {
+  align-content: start;
   border: 0;
   padding: 0;
   margin: 0;
@@ -478,6 +519,11 @@ pre {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+.terminal-files {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
 .source-details div {
   display: grid;
   gap: 6px;
@@ -511,11 +557,41 @@ summary {
   margin: 0;
   line-height: 1.8;
 }
+@media (min-width: 900px) {
+  fieldset {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+  fieldset > :not(label),
+  fieldset > .check,
+  fieldset > .source-details {
+    grid-column: 1 / -1;
+  }
+  .node-form.has-plan {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: start;
+  }
+  .node-form.has-plan > :not(fieldset):not(.preview) {
+    grid-column: 1 / -1;
+  }
+  .has-plan fieldset {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 footer {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
   border-top: 1px solid var(--border);
   padding-top: 16px;
+}
+</style>
+
+<style>
+.node-action-drawer .el-drawer__body {
+  overflow-y: auto;
+  min-height: 0;
+}
+.node-action-drawer .el-drawer__footer {
+  padding-top: 0;
 }
 </style>

@@ -145,7 +145,7 @@ def main():
                             action = body["dockerAccess"]["action"]
                             assert body["expectedVersion"] == engine["version"] and body["expectedHostVersion"] == fixture_host["version"]
                             assert body["dockerAccess"]["expectedStateHash"] == observation["fingerprint"]
-                            jobs[key] = {"id": key, "kind": "SOFTWARE_DOCKER_ACCESS", "status": "UNKNOWN" if action == "GRANT" else "SUCCEEDED", "phase": "DOCKER_ACCESS_CHANGED", "errorCode": "",
+                            jobs[key] = {"id": key, "kind": "SOFTWARE_DOCKER_ACCESS", "status": "UNKNOWN" if action == "GRANT" else "SUCCEEDED", "phase": "DOCKER_ACCESS_UPDATED", "errorCode": "",
                                          "traceId": "UI_FIXTURE_ACCESS", "updatedAt": stamp, "targetAckPending": False, "result": {"dockerAccess": {"action": action, "account": "operator", "member": action == "GRANT"}}}
                             engine["lastJobId"] = key
                             engine["version"] = str(int(engine["version"]) + 1)
@@ -229,6 +229,9 @@ def main():
                 expect(panel.get_by_text("已加入 docker 组", exact=True)).to_be_visible()
                 expect(panel.get_by_text("docker 组权限已更新，请重新登录该账号。", exact=True)).to_be_visible()
                 assert panel.get_by_role("button", name="授予访问权限", exact=True).count() == 0
+                panel.get_by_text("任务详情", exact=True).click()
+                expect(panel.get_by_text("已完成（SUCCEEDED） · Docker 账号权限已更新（DOCKER_ACCESS_UPDATED）",exact=False)).to_be_visible()
+                checks.append("docker-diagnostics-show-chinese-state-and-original-code")
                 layout(drawer, "docker-access-granted")
                 checks.append("unknown-restored-after-reopen-and-reconciled-without-regrant-session-warning-visible")
                 observation["socket"]["ready"] = False

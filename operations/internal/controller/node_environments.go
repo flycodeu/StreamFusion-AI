@@ -69,26 +69,31 @@ func (h *HTTP) nodeEnvironmentRoute(w http.ResponseWriter, r *http.Request, s *s
 func (h *HTTP) nodeError(w http.ResponseWriter, r *http.Request, err error) {
 	code := "NODE_OPERATION_UNAVAILABLE"
 	messages := map[string]string{
-		"NODE_CAPABILITY_REQUIRED":    "主机已接入，需更新接入组件以管理 Node；更新后重新检查即可",
-		"NODE_ACCOUNT_CHANGED":        "执行账号身份已变化，请重新核对账号",
-		"NODE_ENVIRONMENT_CHANGED":    "环境已变化，请刷新后重新检查",
-		"NODE_ENVIRONMENT_DRIFT":      "服务器环境已被修改，请重新检测",
-		"NODE_ENVIRONMENT_READ_ONLY":  "这是自行安装的环境，只支持检测和解除登记",
-		"NODE_PLAN_STALE":             "计划已变化或过期，请重新预检",
-		"NODE_MATERIAL_MISSING":       "所选版本离线材料未就绪，请选择已有材料或补充材料",
-		"NODE_MATERIAL_MISMATCH":      "材料与所选软件版本不一致，请重新选择",
-		"NODE_CLEAR_DEFAULT_REQUIRED": "这是最后一个默认版本，请明确确认清空环境默认版本",
-		"NODE_VERSION_EXISTS":         "该版本已存在，请查看现有安装记录",
-		"NODE_VERSION_NOT_MANAGED":    "请选择此环境中已安装且由 Ops 管理的版本",
-		"NODE_DEFAULT_IN_USE":         "该 Node 版本仍是环境默认，请先切换默认版本",
-		"NODE_VERSION_REFERENCED":     "该 Node 版本仍被使用，请先处理引用",
-		"NODE_ENVIRONMENT_NOT_EMPTY":  "环境仍有已安装版本，请先逐个卸载",
-		"NODE_ALREADY_INSTALLED":      "该 Node 版本已安装，请查看现有版本",
-		"NODE_CONFIRMATION_REQUIRED":  "请确认操作影响并输入环境名称",
-		"NODE_RESULT_UNCONFIRMED":     "操作结果待确认，请检查原操作结果",
-		"OPERATION_LOCKED":            "主机有未决操作，请先检查原操作结果",
-		"HOST_CHANGED":                "主机已变化，请刷新后重试",
-		"QUEUE_FULL":                  "未结束作业已达到上限，请稍后重试",
+		"NODE_CAPABILITY_REQUIRED":          "主机已接入，需更新接入组件以管理 Node；更新后重新检查即可",
+		"NODE_TERMINAL_CAPABILITY_REQUIRED": "接入组件尚未支持终端接入，请更新后重新检查",
+		"NODE_TERMINAL_CHANGED":             "Bash配置已变化，请重新预检后确认接入",
+		"NODE_TERMINAL_UNCONFIRMED":         "终端接入结果尚未确认，请检查原操作结果",
+		"NODE_TERMINAL_CONFLICT":            "Bash配置已有其他nvm设置或被修改的Ops片段，请核对后重新预检；原配置未覆盖",
+		"NODE_TERMINAL_UNSUPPORTED":         "此账号未使用受支持的Bash登录环境，暂不能自动接入终端",
+		"NODE_ACCOUNT_CHANGED":              "执行账号身份已变化，请重新核对账号",
+		"NODE_ENVIRONMENT_CHANGED":          "环境已变化，请刷新后重新检查",
+		"NODE_ENVIRONMENT_DRIFT":            "服务器环境已被修改，请重新检测",
+		"NODE_ENVIRONMENT_READ_ONLY":        "这是自行安装的环境，只支持检测和解除登记",
+		"NODE_PLAN_STALE":                   "计划已变化或过期，请重新预检",
+		"NODE_MATERIAL_MISSING":             "所选版本离线材料未就绪，请选择已有材料或补充材料",
+		"NODE_MATERIAL_MISMATCH":            "材料与所选软件版本不一致，请重新选择",
+		"NODE_CLEAR_DEFAULT_REQUIRED":       "这是最后一个默认版本，请明确确认清空环境默认版本",
+		"NODE_VERSION_EXISTS":               "该版本已存在，请查看现有安装记录",
+		"NODE_VERSION_NOT_MANAGED":          "请选择此环境中已安装且由 Ops 管理的版本",
+		"NODE_DEFAULT_IN_USE":               "该 Node 版本仍是环境默认，请先切换默认版本",
+		"NODE_VERSION_REFERENCED":           "该 Node 版本仍被使用，请先处理引用",
+		"NODE_ENVIRONMENT_NOT_EMPTY":        "环境仍有已安装版本，请先逐个卸载",
+		"NODE_ALREADY_INSTALLED":            "该 Node 版本已安装，请查看现有版本",
+		"NODE_CONFIRMATION_REQUIRED":        "请确认操作影响并输入环境名称",
+		"NODE_RESULT_UNCONFIRMED":           "操作结果待确认，请检查原操作结果",
+		"OPERATION_LOCKED":                  "主机有未决操作，请先检查原操作结果",
+		"HOST_CHANGED":                      "主机已变化，请刷新后重试",
+		"QUEUE_FULL":                        "未结束作业已达到上限，请稍后重试",
 	}
 	if err != nil {
 		if _, ok := messages[err.Error()]; ok {
@@ -104,21 +109,32 @@ func (h *HTTP) nodeError(w http.ResponseWriter, r *http.Request, err error) {
 	h.fail(w, r, 409, code, message)
 }
 
-func (h *HTTP) nodeTargetReady(ctx context.Context, t target) error {
-	var cap executorCapabilities
-	if err := h.store.callTarget(ctx, t, deploy.Request{Action: "CAPABILITIES"}, "", &cap); err != nil {
+func (h *HTTP) nodeTargetReady(ctx context.Context, t target, terminal ...bool) error {
+	cap, err := h.nodeTargetCapabilities(ctx, t)
+	if err != nil {
 		return err
 	}
-	if cap.Owner.ControllerID != h.store.controllerID() || cap.Owner.TargetID != t.ID || cap.Owner.ProtocolVersion != 1 || cap.Owner.ExecutorVersion != deploy.Version {
-		return errors.New("EXECUTOR_IDENTITY_MISMATCH")
-	}
-	if cap.Platform != "linux/amd64" {
-		return errors.New("NODE_PLATFORM_UNSUPPORTED")
-	}
-	if cap.NodeEnvironmentVersion != deploy.NodeEnvironmentCapabilityVersion {
-		return errors.New("NODE_CAPABILITY_REQUIRED")
+	if len(terminal) > 0 && terminal[0] && cap.NodeTerminalVersion != 1 {
+		return errors.New("NODE_TERMINAL_CAPABILITY_REQUIRED")
 	}
 	return nil
+}
+
+func (h *HTTP) nodeTargetCapabilities(ctx context.Context, t target) (executorCapabilities, error) {
+	var cap executorCapabilities
+	if err := h.store.callTarget(ctx, t, deploy.Request{Action: "CAPABILITIES"}, "", &cap); err != nil {
+		return cap, err
+	}
+	if cap.Owner.ControllerID != h.store.controllerID() || cap.Owner.TargetID != t.ID || cap.Owner.ProtocolVersion != 1 || cap.Owner.ExecutorVersion != deploy.Version {
+		return cap, errors.New("EXECUTOR_IDENTITY_MISMATCH")
+	}
+	if cap.Platform != "linux/amd64" {
+		return cap, errors.New("NODE_PLATFORM_UNSUPPORTED")
+	}
+	if cap.NodeEnvironmentVersion != deploy.NodeEnvironmentCapabilityVersion {
+		return cap, errors.New("NODE_CAPABILITY_REQUIRED")
+	}
+	return cap, nil
 }
 
 func (h *HTTP) listNodeEnvironments(w http.ResponseWriter, r *http.Request, hostID string) {
@@ -188,14 +204,16 @@ func (h *HTTP) observeNodeEnvironment(w http.ResponseWriter, r *http.Request, s 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	err = h.nodeTargetReady(ctx, t)
+	capabilities, err := h.nodeTargetCapabilities(ctx, t)
 	var observed deploy.NodeEnvironmentObservation
 	if err == nil {
 		action := "NODE_ENVIRONMENT_OBSERVE"
 		if n.ManagementMode == "OBSERVE" {
 			action = "NODE_ENVIRONMENT_DISCOVER"
 		}
-		err = h.store.callTarget(ctx, t, deploy.Request{Action: action, NodeEnvironment: &deploy.NodeEnvironmentRequest{Context: n.context(), Action: strings.TrimPrefix(action, "NODE_ENVIRONMENT_")}}, "", &observed)
+		nodeContext := n.context()
+		nodeContext.ConnectTerminal = n.ManagementMode == "MANAGED" && capabilities.NodeTerminalVersion == 1
+		err = h.store.callTarget(ctx, t, deploy.Request{Action: action, NodeEnvironment: &deploy.NodeEnvironmentRequest{Context: nodeContext, Action: strings.TrimPrefix(action, "NODE_ENVIRONMENT_")}}, "", &observed)
 	}
 	if err == nil && !nodeObservationMatches(n, observed) {
 		err = errors.New("NODE_ENVIRONMENT_DRIFT")

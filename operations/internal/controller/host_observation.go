@@ -23,6 +23,7 @@ type hostCapability struct {
 type executorCapabilities struct {
 	DockerAccessVersion      int          `json:"dockerAccessVersion"`
 	NodeEnvironmentVersion   int          `json:"nodeEnvironmentVersion"`
+	NodeTerminalVersion      int          `json:"nodeTerminalVersion"`
 	OfficialInstallVersion   int          `json:"officialInstallVersion"`
 	FirewallVersion          int          `json:"firewallVersion"`
 	Owner                    deploy.Owner `json:"owner"`

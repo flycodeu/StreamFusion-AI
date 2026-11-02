@@ -7,7 +7,7 @@ import { previewDefaults, type PreviewConfig } from "./preview";
 import ZLMConfigForm from "./ZLMConfigForm.vue";
 import { zlmDefaults, type ZLMConfig } from "./zlm";
 import type { Host } from "./hosts";
-import { softwareJobPhaseLabels } from "./software";
+import { softwareJobPhaseLabels, softwareJobDiagnostic } from "./software";
 const props = defineProps<{ page: string }>();
 const emit = defineEmits<{ error: [unknown] }>();
 interface Artifact {
@@ -1543,7 +1543,7 @@ function credentialSelected(
         <dd>{{ time(detail.updatedAt) }}</dd>
       </dl>
       <details><summary>诊断信息</summary><dl class="plan-detail">
-        <dt>状态 / 阶段</dt><dd><code>{{ detail.status }} · {{ detail.phase }}</code></dd>
+        <dt>状态 / 阶段</dt><dd><code>{{ softwareJobDiagnostic(detail.status, detail.phase, phaseLabels) }}</code></dd>
         <dt>错误码</dt><dd>{{ detail.errorCode || "—" }}</dd>
         <dt>追踪</dt>
         <dd>

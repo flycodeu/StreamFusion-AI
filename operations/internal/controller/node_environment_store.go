@@ -70,7 +70,7 @@ func (s *Store) nodeEnvironmentVersions(id string) ([]softwareInstance, error) {
 }
 
 func (n nodeEnvironment) context() serviceinstall.NodeContext {
-	return serviceinstall.NodeContext{EnvironmentID: n.ID, EnvironmentVersion: n.Version, Account: n.Account, AccountUID: n.AccountUID, RootPath: n.RootPath, NVMVersion: n.NVMVersion, NVMHash: n.NVMHash, ExpectedDefault: n.ObservedDefaultVersion}
+	return serviceinstall.NodeContext{EnvironmentID: n.ID, EnvironmentVersion: n.Version, Account: n.Account, AccountUID: n.AccountUID, RootPath: n.RootPath, NVMVersion: n.NVMVersion, NVMHash: n.NVMHash, ExpectedDefault: n.ObservedDefaultVersion, ConnectTerminal: n.Observation.Terminal != nil}
 }
 
 func nodeTargetUnlocked(tx *sql.Tx, hostID string) error {
@@ -103,6 +103,9 @@ func nodeObservationMatches(n nodeEnvironment, o deploy.NodeEnvironmentObservati
 	frozen.ObservedAt = ""
 	frozen.Fingerprint = ""
 	if deploy.Digest(frozen) != o.Fingerprint {
+		return false
+	}
+	if o.Terminal != nil && (n.ManagementMode != "MANAGED" || o.Terminal.Validate(n.context()) != nil) {
 		return false
 	}
 	if _, err := time.Parse(time.RFC3339Nano, o.ObservedAt); err != nil {

@@ -11,6 +11,7 @@ import {
   softwareDesiredLabels,
   softwareActualLabels,
   softwareJobStatusLabel,
+  softwareJobDiagnostic,
   softwareJobErrorMessages,
   softwareJobPhaseLabel,
   softwareObservationMessage,
@@ -254,7 +255,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
             <details class="software-diagnostics">
               <summary>诊断信息</summary>
               <ErrorHelpLink v-if="job.errorCode" :code="job.errorCode" />
-              <code>{{ job.status }} · {{ job.phase }}</code>
+              <code>{{ softwareJobDiagnostic(job.status, job.phase) }}</code>
               <code v-if="job.errorCode">{{ job.errorCode }}</code>
               <code>作业 {{ job.id }}</code><code>traceId={{ job.traceId }}</code>
             </details>

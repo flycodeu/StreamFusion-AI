@@ -96,7 +96,7 @@ def main():
                 expiry = (now + timedelta(hours=1)).isoformat().replace('+00:00','Z')
                 root = '/home/ubuntu/.local/share/streamfusion-ops/node/ui-environment'
                 cap = {'status':'AVAILABLE','code':'UI_FIXTURE','message':'Isolated fixture','observedAt':stamp}
-                fixture_host = {**host,'name':'Node 界面夹具','kind':'SSH','address':'192.0.2.21','sshUser':'ubuntu','version':'1','maintenance':False,'capabilities':{'reachability':cap,'readOnly':cap,'mutation':cap,'docker':cap,'expiresAt':expiry}}
+                fixture_host = {**host,'name':'Node 界面夹具','kind':'SSH','address':'192.0.2.21','sshUser':'ubuntu','version':'1','maintenance':False,'capabilities':{'reachability':cap,'readOnly':cap,'mutation':cap,'docker':cap,'expiresAt':(now-timedelta(minutes=1)).isoformat()}}
                 env = {'id':'ui-environment','hostId':host['id'],'name':'开发环境','account':'ubuntu','accountUid':'1000','rootPath':root,'managerType':'NVM','managementMode':'MANAGED','nvmVersion':'0.40.8','version':'1','observedAt':stamp,'observedDefaultVersion':'','desiredDefaultSoftwareId':'','observation':{'versions':[],'nvmHash':catalog['tools'][0]['native']['parts'][0]['sha256']},'versions':[],'lastJobId':''}
                 material = {'id':'node-material','name':'Node 离线材料','recipeKey':catalog['node'][0]['key'],'recipeVersion':catalog['node'][0]['version'],'recipeRevision':catalog['node'][0]['revision'],'runtimeMode':'NATIVE','status':'AVAILABLE','available':True,'byteSize':100}
                 envs, history, plans, submissions = [], [], {}, []
@@ -128,20 +128,25 @@ def main():
                     elif path.endswith('-plans'):
                         plan_id='plan-'+str(len(plans)+1)
                         plans[plan_id]=data
-                        reply({'id':plan_id,'environmentId':env['id'],'expiresAt':expiry,'checks':[{'key':'FIXTURE','status':'PASSED','message':'界面夹具预检，无目标执行'}],'commands':([{'executable':'install','args':['-m','600','nvm.sh',root+'/nvm/nvm.sh']},{'executable':'install','args':['-m','700','nvm-exec',root+'/nvm/nvm-exec']}] if data.get('action') in ('INITIALIZE','UPDATE_NVM') else []),'removedPaths':[root] if data.get('deleteData') else [],'change':{'context':context},'definition':next((r for r in catalog['node'] if r['version']==data.get('recipeVersion')),None),'source':data.get('source'),'config':data.get('config'),'node':{**context,'environmentVersion':env['version'],'makeDefault':data.get('node',{}).get('makeDefault',False)},'paths':{'root':root+'/nvm/versions/node/'+data.get('recipeVersion','')}})
+                        reply({'id':plan_id,'environmentId':env['id'],'expiresAt':expiry,'checks':[{'key':'FIXTURE','status':'PASSED','message':'界面夹具预检，无目标执行'}],'commands':([{'executable':'install','args':['-m','600','nvm.sh',root+'/nvm/nvm.sh']},{'executable':'install','args':['-m','700','nvm-exec',root+'/nvm/nvm-exec']}] if data.get('action') in ('INITIALIZE','UPDATE_NVM') else []),'removedPaths':[root] if data.get('deleteData') else [],'change':{'context':context},'definition':next((r for r in catalog['node'] if r['version']==data.get('recipeVersion')),None),'source':data.get('source'),'config':data.get('config'),'node':{**context,'environmentVersion':env['version'],'makeDefault':data.get('node',{}).get('makeDefault',False),'connectTerminal':data.get('node',{}).get('connectTerminal',False)},'paths':{'root':root+'/nvm/versions/node/'+data['recipeVersion']} if data.get('recipeVersion') else None})
                     elif path.endswith('/submit'):
                         intent=plans[path.split('/')[-2]];submissions.append({'intent':intent,'submit':data})
                         if '/software-install-plans/' in path:
+                            assert intent['node']['connectTerminal'] is True
+                            env['observation']['terminal']={'status':'CONNECTED','profiles':[]}
                             v=intent['recipeVersion']
                             env['observation']['versions'].append({'version':v,'npmVersion':'11.6.2','pnpmVersion':'','binaryPath':root+'/nvm/versions/node/'+v+'/bin/node','globalPackages':[]})
                             env['versions'].append({'id':'node-'+v,'name':'Node.js '+v,'hostId':host['id'],'softwareType':'NODE','softwareVersion':v,'version':'1','runtimeKind':'TOOL','managementMode':'MANAGED','installationStatus':'READY','nodeDataPaths':[root+'/cache/'+v,root+'/backups/'+v,root+'/nvm/.cache/bin/node-'+v+'-linux-x64'],'installationPaths':{'root':root+'/nvm/versions/node/'+v,'data':root+'/cache/'+v,'logs':root+'/backups/'+v},'locator':root+'/nvm/versions/node/'+v+'/bin/node'})
                             if intent['node']['makeDefault']: env['observedDefaultVersion']=v;env['desiredDefaultSoftwareId']='node-'+v
+                        elif intent['action']=='CONNECT_TERMINAL':
+                            assert not intent.get('source') and not intent.get('nodeVersion') and not intent.get('packageVersion')
+                            env['observation']['terminal']={'status':'CONNECTED','profiles':[]}
                         elif intent['action']=='INITIALIZE': envs.append(env)
                         elif intent['action']=='SET_DEFAULT': env['observedDefaultVersion']=intent['nodeVersion']
                         elif intent['action']=='INSTALL_PNPM': env['observation']['versions'][0]['pnpmVersion']=intent['packageVersion']
                         elif intent['action']=='REMOVE_PNPM': env['observation']['versions'][0]['pnpmVersion']=''
                         elif intent['action']=='REMOVE_ENVIRONMENT': envs.clear()
-                        job={'id':'job-'+str(len(history)+1),'status':'SUCCEEDED','updatedAt':stamp,'traceId':'ui-trace','errorCode':''}
+                        job={'id':'job-'+str(len(history)+1),'phase':'NODE_ENVIRONMENT_UPDATED','status':'SUCCEEDED','updatedAt':stamp,'traceId':'ui-trace','errorCode':''}
                         history.append(job);env['lastJobId']=job['id'];env['version']=str(int(env['version'])+1)
                         reply({'jobId':job['id'],'environmentId':env['id']})
                     elif path.startswith('/jobs/') and path.endswith('/logs'): reply({'text':'fixture: no target commands executed'})
@@ -172,6 +177,15 @@ def main():
                         page.set_viewport_size({'width':width,'height':1000});page.wait_for_timeout(120)
                         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'),(name,width,'document')
                         assert subject.evaluate('e=>e.scrollWidth<=e.clientWidth+1'),(name,width,'subject')
+                        if subject.locator('.node-form').count():
+                            footer=subject.locator('.el-drawer__footer')
+                            box=footer.bounding_box()
+                            assert box and box['y']>=0 and box['y']+box['height']<=1001,(name,width,'fixed footer')
+                            before=box['y']
+                            subject.locator('.el-drawer__body').evaluate('e=>{e.scrollTop=e.scrollHeight}')
+                            assert abs(footer.bounding_box()['y']-before)<1,(name,width,'footer moved')
+                            subject.locator('.el-drawer__body').evaluate('e=>{e.scrollTop=0}')
+
                         page.screenshot(path=str(output/f'{name}-{width}.png'),animations='disabled')
                         checks.append(f'{name}-{width}')
                     page.set_viewport_size({'width':1440,'height':1000})
@@ -192,6 +206,12 @@ def main():
                 assert len(submissions)==2 and submissions[0]['intent']['action']=='INITIALIZE'
                 assert submissions[1]['intent']['recipeVersion']==node_version
                 checks.append('single-confirmation-initializes-and-installs-exact-frozen-node-with-two-jobs')
+                assert not page.get_by_text('安装前请检查主机能力。',exact=True).count()
+                assert not any(c['path'].endswith('/checks') for c in calls)
+                checks.append('expired-capability-cache-does-not-add-manual-or-redundant-check-gate')
+                page.locator('.job-result details').get_by_text('诊断信息',exact=True).click()
+                expect(page.get_by_text('已完成（SUCCEEDED） · Node 环境已更新（NODE_ENVIRONMENT_UPDATED）',exact=False)).to_be_visible()
+                checks.append('node-diagnostic-chinese-status-and-original-code')
                 env['versions'].clear();env['observation']['versions'].clear();env['observedDefaultVersion']='';env['desiredDefaultSoftwareId']='';env['lastJobId']='';history.clear();submissions.clear()
                 enter()
                 layout(page.locator('.node-environments'),'node-empty')
@@ -210,6 +230,17 @@ def main():
                 assert submissions[-1]['intent']['source']=={'type':'OFFICIAL'}
                 assert set(submissions[-1]['submit'])=={'idempotencyKey'}
                 checks.append('online-explicit-submit-and-reload-installed-version')
+                expect(page.get_by_text('重新登录即可使用 node/npm',exact=True)).to_be_visible()
+                env['observation']['terminal']={'status':'NOT_CONNECTED','profiles':[]}
+                page.get_by_role('button',name='检测环境',exact=True).click()
+                page.get_by_role('button',name='接入终端',exact=True).click()
+                terminal=dialog('接入终端')
+                terminal.get_by_role('button',name='检查安装条件',exact=True).click()
+                assert submissions[-1]['intent'].get('action')!='CONNECT_TERMINAL'
+                terminal.get_by_role('button',name='确认执行',exact=True).click()
+                terminal.wait_for(state='hidden')
+                expect(page.get_by_text('Bash 已接入',exact=True)).to_be_visible()
+                checks.append('existing-environment-terminal-connection-requires-preview-and-confirmation')
                 layout(page.locator('.node-environments'),'node-installed')
                 manager=dialog('Node.js')
                 manager.get_by_role('tab',name='来源与目录',exact=True).click()

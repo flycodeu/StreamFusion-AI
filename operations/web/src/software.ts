@@ -384,3 +384,13 @@ export function softwareState(item: SoftwareInstance) {
         : "state-muted",
   };
 }
+
+export function softwareJobDiagnostic(status?: string, phase?: string, phases = softwareJobPhaseLabels) {
+  const state = status
+    ? `${softwareJobLabels[status] || "状态未识别"}（${status}）`
+    : "状态未提供";
+  const stage = phase
+    ? `${phases[phase] || "阶段未识别"}（${phase}）`
+    : "阶段未提供";
+  return `${state} · ${stage}`;
+}

@@ -280,6 +280,12 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		h.nodeError(w, r, err)
 		return
 	}
+	if node != nil && node.ConnectTerminal {
+		if err = h.nodeTargetReady(ctx, t, true); err != nil {
+			h.nodeError(w, r, err)
+			return
+		}
+	}
 	p := softwareInstallPlan{Node: node, ID: uuid.NewString(), TargetID: t.ID, TargetSnapshot: pluginTargetSnapshot(t), HostVersion: t.Version, SoftwareID: uuid.NewString(), Definition: d, Config: in.Config, Source: source, ExpiresAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)}
 	var preflight serviceinstall.Preflight
 	if err = h.store.callTarget(ctx, t, deploy.Request{Action: "SOFTWARE_INSTALL_CHECK", Installation: p.request()}, "", &preflight); err != nil {
@@ -445,6 +451,12 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		code, message := installTargetError(err)
 		h.fail(w, r, 409, code, message)
 		return
+	}
+	if p.Node != nil && p.Node.ConnectTerminal {
+		if err = h.nodeTargetReady(ctx, t, true); err != nil {
+			h.nodeError(w, r, err)
+			return
+		}
 	}
 	var checked serviceinstall.Preflight
 	if err = h.store.callTarget(ctx, t, deploy.Request{Action: "SOFTWARE_INSTALL_CHECK", Installation: p.request()}, "", &checked); err != nil || !checked.Ready {
@@ -641,6 +653,9 @@ func (h *HTTP) installPreflightRejection(p serviceinstall.Preflight, c servicein
 			continue
 		}
 		if (strings.HasPrefix(check.Code, "SERVICE_") || strings.HasPrefix(check.Code, "OFFICIAL_") || strings.HasPrefix(check.Code, "NATIVE_") || strings.HasPrefix(check.Code, "DOCKER_")) && len(check.Code) < 90 && !strings.ContainsAny(check.Code, " \r\n\t:") {
+			code = check.Code
+		}
+		if validNodeErrorCode(check.Code) {
 			code = check.Code
 		}
 		text := check.Key + ": " + check.Message

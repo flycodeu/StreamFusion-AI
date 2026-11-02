@@ -95,6 +95,19 @@ func (x *executor) nodeInstallPreflight(i serviceinstall.Request) serviceinstall
 	if _, err := os.Lstat(p.Root); !os.IsNotExist(err) {
 		return fail("NODE_DIRECTORY_EXISTS")
 	}
+	if n.ConnectTerminal {
+		terminal, _, err := nodeTerminalFiles(n)
+		if err != nil {
+			return fail(err.Error())
+		}
+		if terminal.Status == "CONFLICT" || terminal.Status == "UNSUPPORTED" {
+			return fail("NODE_TERMINAL_" + terminal.Status)
+		}
+		p.NodeTerminalHash = Digest(terminal)
+		if n.TerminalHash != "" && n.TerminalHash != p.NodeTerminalHash {
+			return fail("NODE_TERMINAL_CHANGED")
+		}
+	}
 	p.Ready = true
 	p.Checks = check.Checks
 	return p
@@ -146,6 +159,21 @@ func (x *executor) installNodeVersion(req Request, dir string) (Result, error) {
 		return result, errors.New("NODE_NPM_MANIFEST_INVALID")
 	}
 	marker := nodeInstallMarker{req.JobID, req.InputHash, hash, manifest.Version, *before}
+	if i.Node.ConnectTerminal {
+		terminal, plan, e := nodeTerminalFiles(*i.Node)
+		if e != nil {
+			return result, e
+		}
+		if terminal.Status == "CONFLICT" || terminal.Status == "UNSUPPORTED" {
+			return result, errors.New("NODE_TERMINAL_" + terminal.Status)
+		}
+		if i.Node.TerminalHash != "" && i.Node.TerminalHash != Digest(terminal) {
+			return result, errors.New("NODE_TERMINAL_CHANGED")
+		}
+		if e = atomicJSON(filepath.Join(dir, "node-terminal.json"), plan); e != nil {
+			return result, e
+		}
+	}
 	if err = atomicJSON(filepath.Join(dir, "node-install.json"), marker); err != nil {
 		return result, err
 	}
@@ -158,6 +186,12 @@ func (x *executor) installNodeVersion(req Request, dir string) (Result, error) {
 	if err != nil {
 		result.ErrorCode = "NODE_RESULT_UNCONFIRMED"
 		return result, nil
+	}
+	if i.Node.ConnectTerminal {
+		if err = x.connectNodeTerminal(ctx, *i.Node, req.JobID, dir); err != nil {
+			result.ErrorCode = "NODE_RESULT_UNCONFIRMED"
+			return result, nil
+		}
 	}
 	return x.reconcileNodeInstall(req, dir), nil
 }
@@ -181,6 +215,9 @@ func (x *executor) reconcileNodeInstall(req Request, dir string) Result {
 		def = i.Definition.Version
 	}
 	if v == nil || v.BinaryHash != m.BinaryHash || v.NPMVersion != m.NPMVersion || obs.DefaultVersion != def || !unchangedNodeVersions(&m.Before, obs, i.Definition.Version) {
+		return result
+	}
+	if i.Node.ConnectTerminal && !nodeTerminalPlanApplied(*i.Node, dir) {
 		return result
 	}
 	o := &SoftwareOwnership{ControllerID: req.ControllerID, TargetID: req.TargetID, SoftwareID: i.SoftwareID, JobID: req.JobID, ConfigHash: Digest(i.Config), RuntimeMode: "NATIVE", BinaryPath: v.BinaryPath, BinaryHash: v.BinaryHash, Node: i.Node}

@@ -58,13 +58,17 @@ func TestNodeSchemaFifteenPreservesHistoryAndLocks(t *testing.T) {
 }
 
 type nodeControllerFixture struct {
-	mu           sync.Mutex
-	observation  deploy.NodeEnvironmentObservation
-	results      map[string]deploy.Result
-	mutations    atomic.Int32
-	unknown      atomic.Bool
-	noCapability atomic.Bool
-	forged       atomic.Bool
+	mu              sync.Mutex
+	observation     deploy.NodeEnvironmentObservation
+	results         map[string]deploy.Result
+	mutations       atomic.Int32
+	unknown         atomic.Bool
+	noCapability    atomic.Bool
+	forged          atomic.Bool
+	noTerminal      atomic.Bool
+	terminalDrift   atomic.Bool
+	omitTerminal    atomic.Bool
+	terminalRemains atomic.Bool
 }
 
 func nodeFixture(t *testing.T, s *Store, b *browser) (string, *nodeControllerFixture) {
@@ -73,10 +77,14 @@ func nodeFixture(t *testing.T, s *Store, b *browser) (string, *nodeControllerFix
 		encode := func(v any) ([]byte, bool) { raw, _ := json.Marshal(v); return raw, true }
 		if req.Action == "CAPABILITIES" {
 			cap := 1
+			terminal := 1
+			if f.noTerminal.Load() {
+				terminal = 0
+			}
 			if f.noCapability.Load() {
 				cap = 0
 			}
-			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "nodeEnvironmentVersion": cap, "nativeInstallVersion": 1, "softwareLifecycleVersion": 1, "softwareUninstallVersion": 1, "serviceInstallVersion": serviceinstall.CapabilityVersion})
+			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "nodeEnvironmentVersion": cap, "nodeTerminalVersion": terminal, "nativeInstallVersion": 1, "softwareLifecycleVersion": 1, "softwareUninstallVersion": 1, "serviceInstallVersion": serviceinstall.CapabilityVersion})
 		}
 		if req.NodeEnvironment == nil && (req.Installation == nil || req.Installation.Node == nil) && (req.Uninstallation == nil || req.Uninstallation.Installation.Node == nil) {
 			return nil, false
@@ -93,6 +101,12 @@ func nodeFixture(t *testing.T, s *Store, b *browser) (string, *nodeControllerFix
 			if o.EnvironmentID == "" {
 				o = deploy.NodeEnvironmentObservation{EnvironmentID: c.EnvironmentID, Account: c.Account, AccountUID: c.AccountUID, RootPath: c.RootPath, ManagerType: "NVM", ObservedAt: Now(), Versions: []deploy.NodeVersionObservation{}}
 			}
+			if req.NodeEnvironment.Action == "CONNECT_TERMINAL" {
+				o.Terminal = nodeTerminalFixture(false)
+				if f.terminalDrift.Load() {
+					o.Terminal.Profiles[0].SHA256 = strings.Repeat("d", 64)
+				}
+			}
 			o.Fingerprint = nodeTestFingerprint(o)
 			var removed []string
 			if req.NodeEnvironment.Action == "REMOVE_ENVIRONMENT" && req.NodeEnvironment.DeleteData {
@@ -102,6 +116,9 @@ func nodeFixture(t *testing.T, s *Store, b *browser) (string, *nodeControllerFix
 		}
 		if req.Action == "NODE_ENVIRONMENT_OBSERVE" || req.Action == "NODE_ENVIRONMENT_DISCOVER" {
 			o := f.observation
+			if req.Action == "NODE_ENVIRONMENT_OBSERVE" && req.NodeEnvironment.Context.ConnectTerminal && o.Terminal == nil {
+				o.Terminal = nodeTerminalFixture(false)
+			}
 			o.EnvironmentID = req.NodeEnvironment.Context.EnvironmentID
 			o.Account = req.NodeEnvironment.Context.Account
 			if req.Action == "NODE_ENVIRONMENT_DISCOVER" {
@@ -122,7 +139,14 @@ func nodeFixture(t *testing.T, s *Store, b *browser) (string, *nodeControllerFix
 			n := req.Installation.Node
 			v := req.Installation.Definition.Version
 			root := serviceinstall.NodeVersionRoot(*n, v)
-			return encode(serviceinstall.Preflight{Ready: true, Root: root, BinaryDirectory: root + "/bin", DataDirectory: n.RootPath + "/cache/" + v, ConfigDirectory: n.RootPath + "/nvm/alias", LogsDirectory: n.RootPath + "/backups/" + v})
+			p := serviceinstall.Preflight{Ready: true, Root: root, BinaryDirectory: root + "/bin", DataDirectory: n.RootPath + "/cache/" + v, ConfigDirectory: n.RootPath + "/nvm/alias", LogsDirectory: n.RootPath + "/backups/" + v}
+			if n.ConnectTerminal {
+				p.NodeTerminalHash = deploy.Digest(nodeTerminalFixture(false))
+				if f.terminalDrift.Load() {
+					p.NodeTerminalHash = strings.Repeat("d", 64)
+				}
+			}
+			return encode(p)
 		}
 		if req.Action == "ACK" || req.Action == "STATUS" {
 			res := f.results[req.JobID]
@@ -144,9 +168,14 @@ func nodeFixture(t *testing.T, s *Store, b *browser) (string, *nodeControllerFix
 					f.observation = deploy.NodeEnvironmentObservation{EnvironmentID: n.EnvironmentID, Account: n.Account, AccountUID: n.AccountUID, RootPath: n.RootPath, ManagerType: "NVM", NVMVersion: n.NVMVersion, NVMHash: n.NVMHash, Exists: true, Versions: []deploy.NodeVersionObservation{}}
 				case "SET_DEFAULT":
 					f.observation.DefaultVersion = c.NodeVersion
+				case "CONNECT_TERMINAL":
+					f.observation.Terminal = nodeTerminalFixture(true)
 				case "REMOVE_ENVIRONMENT":
 					f.observation.Exists = false
 					f.observation.DefaultVersion = ""
+					if c.Context.ConnectTerminal && !f.terminalRemains.Load() {
+						f.observation.Terminal = nodeTerminalFixture(false)
+					}
 				case "UPDATE_NPM", "INSTALL_PNPM", "UPDATE_PNPM", "REMOVE_PNPM":
 					for i, v := range f.observation.Versions {
 						if v.Version == c.NodeVersion {
@@ -164,6 +193,9 @@ func nodeFixture(t *testing.T, s *Store, b *browser) (string, *nodeControllerFix
 				f.observation.Versions = append(f.observation.Versions, deploy.NodeVersionObservation{Version: i.Definition.Version, BinaryPath: binary, BinaryHash: strings.Repeat("b", 64), NPMVersion: "10.9.4"})
 				if i.Node.MakeDefault {
 					f.observation.DefaultVersion = i.Definition.Version
+				}
+				if i.Node.ConnectTerminal {
+					f.observation.Terminal = nodeTerminalFixture(true)
 				}
 				result.Software = &deploy.SoftwareObservation{Kind: "TOOL", Locator: binary, IdentityHash: strings.Repeat("a", 64), State: "INSTALLED", Version: i.Definition.Version, ObservedAt: Now()}
 				result.Installation = &serviceinstall.Evidence{SoftwareID: i.SoftwareID, BindingRevision: 1, RecipeKey: "node", RecipeRevision: i.Definition.Revision, ConfigHash: deploy.Digest(i.Config), Kind: "TOOL", Locator: binary, IdentityHash: result.Software.IdentityHash, ObservedVersion: i.Definition.Version, BinaryPath: binary, BinaryHash: strings.Repeat("b", 64), Health: "READY", ObservedAt: Now()}
@@ -187,6 +219,9 @@ func nodeFixture(t *testing.T, s *Store, b *browser) (string, *nodeControllerFix
 				}
 			}
 			f.observation.ObservedAt = Now()
+			if f.omitTerminal.Load() {
+				f.observation.Terminal = nil
+			}
 			f.observation.Fingerprint = nodeTestFingerprint(f.observation)
 			snapshot := f.observation
 			result.NodeEnvironment = &snapshot

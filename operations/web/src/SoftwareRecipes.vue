@@ -11,7 +11,7 @@ import {
   type ServiceRecipe,
 } from "./serviceInstallation";
 import { hostObservationExpired, type Host } from "./hosts";
-import { softwareIsDockerEngine, softwareState, type SoftwareInstance } from "./software";
+import { softwareJobDiagnostic, softwareIsDockerEngine, softwareState, type SoftwareInstance } from "./software";
 
 interface Installation {
   id: string;
@@ -343,7 +343,7 @@ onUnmounted(() => {
         </select>
       </div>
       <span class="target-capability" :class="{ available: ready }"
-        ><i></i>{{ ready ? "变更执行已就绪" : "待检查 / 未就绪" }}</span
+        ><i></i>{{ currentTarget?.maintenance ? "维护中" : ready ? "变更执行已就绪" : "安装时检查" }}</span
       >
       <button class="quiet" :disabled="busy || !targetId" @click="probe">
         检查目标
@@ -421,17 +421,7 @@ onUnmounted(() => {
       </div>
     </div>
     <div v-if="!targets.length" class="empty">请先在“主机管理”添加主机</div>
-    <p v-else-if="!ready" class="target-hint">
-      {{
-        currentTarget?.maintenance
-          ? "主机维护中，暂不接受新的安装操作。"
-          : currentTarget && !hostObservationExpired(currentTarget, Date.now())
-            ? currentTarget.capabilities?.mutation.status !== "AVAILABLE"
-              ? currentTarget.capabilities?.mutation.message
-              : currentTarget.capabilities.docker.message
-            : "安装前请检查主机能力。"
-      }}
-    </p>
+    <p v-else-if="currentTarget?.maintenance" class="target-hint">主机维护中，暂不接受新的安装操作。</p>
     <div v-if="!catalogEntries.length && !showNode && !loading" class="empty">
       没有匹配的软件
     </div>
@@ -566,7 +556,7 @@ onUnmounted(() => {
         <dd>{{ selected?.referenceCount || 0 }}</dd>
       </dl>
       <details><summary>诊断信息</summary><dl class="plugin-detail">
-        <dt>状态 / 阶段</dt><dd>{{ selected?.status || detailJob?.status }} · {{ detailJob?.phase }}</dd>
+        <dt>状态 / 阶段</dt><dd>{{ softwareJobDiagnostic(selected?.status || detailJob?.status, detailJob?.phase, phases) }}</dd>
         <dt>错误码</dt><dd>{{ selected?.errorCode || detailJob?.errorCode || "—" }}</dd>
         <dt>作业</dt><dd><code>{{ detailJob?.id }}</code></dd>
         <dt>追踪</dt><dd><code>{{ detailJob?.traceId }}</code></dd>

@@ -32,7 +32,7 @@ type nodeEnvironmentPlan struct {
 
 func (h *HTTP) nodePreflight(ctx context.Context, t target, c deploy.NodeEnvironmentRequest) (deploy.NodeEnvironmentPreflight, error) {
 	var p deploy.NodeEnvironmentPreflight
-	if err := h.nodeTargetReady(ctx, t); err != nil {
+	if err := h.nodeTargetReady(ctx, t, c.Action == "CONNECT_TERMINAL" || c.Context.ConnectTerminal); err != nil {
 		return p, err
 	}
 	err := h.store.callTarget(ctx, t, deploy.Request{Action: "NODE_ENVIRONMENT_CHECK", NodeEnvironment: &c}, "", &p)
@@ -89,7 +89,7 @@ func (h *HTTP) createNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	switch in.Action {
-	case "INITIALIZE", "SET_DEFAULT", "UPDATE_NVM", "UPDATE_NPM", "INSTALL_PNPM", "UPDATE_PNPM", "REMOVE_PNPM", "REMOVE_ENVIRONMENT":
+	case "INITIALIZE", "SET_DEFAULT", "UPDATE_NVM", "UPDATE_NPM", "INSTALL_PNPM", "UPDATE_PNPM", "REMOVE_PNPM", "REMOVE_ENVIRONMENT", "CONNECT_TERMINAL":
 	default:
 		h.nodeError(w, r, errors.New("NODE_ACTION_INVALID"))
 		return
@@ -127,6 +127,12 @@ func (h *HTTP) createNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 		}
 		c.Context = env.context()
 		c.ExpectedHash = env.Observation.Fingerprint
+		if in.Action == "CONNECT_TERMINAL" {
+			// Older observations have no terminal fields. Freeze the live read
+			// below while retaining the environment/account/default identity.
+			c.ExpectedHash = ""
+			c.Context.ConnectTerminal = true
+		}
 		in.Name = env.Name
 		if in.Action == "REMOVE_ENVIRONMENT" && in.ConfirmationName != env.Name {
 			h.nodeError(w, r, errors.New("NODE_CONFIRMATION_REQUIRED"))
@@ -186,6 +192,9 @@ func (h *HTTP) createNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	c.Context = check.Context
+	if c.Action == "CONNECT_TERMINAL" {
+		c.ExpectedHash = check.Observation.Fingerprint
+	}
 	if c.Validate() != nil {
 		h.nodeError(w, r, errors.New("NODE_PREFLIGHT_MISMATCH"))
 		return
@@ -346,7 +355,11 @@ func (h *HTTP) submitNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 	c := p.Change.Context
 	if p.Action != "INITIALIZE" {
 		n, e := scanNodeEnvironment(tx.QueryRow("SELECT "+nodeEnvironmentColumns+" FROM node_environments WHERE id=?", p.EnvironmentID))
-		if e != nil || n.Version != c.EnvironmentVersion || n.ManagementMode != "MANAGED" || deploy.Digest(n.context()) != deploy.Digest(c) {
+		expectedContext := n.context()
+		if p.Action == "CONNECT_TERMINAL" {
+			expectedContext.ConnectTerminal = true
+		}
+		if e != nil || n.Version != c.EnvironmentVersion || n.ManagementMode != "MANAGED" || deploy.Digest(expectedContext) != deploy.Digest(c) {
 			h.nodeError(w, r, errors.New("NODE_ENVIRONMENT_CHANGED"))
 			return
 		}
@@ -501,6 +514,12 @@ func (h *HTTP) commitNodeEnvironmentResult(id string, req deploy.Request, result
 		}
 		if c.Action == "SET_DEFAULT" && o.DefaultVersion != c.NodeVersion {
 			return errors.New("NODE_DEFAULT_MISMATCH")
+		}
+		if c.Action == "CONNECT_TERMINAL" && (o.Terminal == nil || o.Terminal.Status != "CONNECTED") {
+			return errors.New("NODE_TERMINAL_UNCONFIRMED")
+		}
+		if c.Action == "REMOVE_ENVIRONMENT" && c.Context.ConnectTerminal && (o.Terminal == nil || o.Terminal.Status != "NOT_CONNECTED") {
+			return errors.New("NODE_TERMINAL_UNCONFIRMED")
 		}
 		if c.Action != "SET_DEFAULT" && c.Action != "REMOVE_ENVIRONMENT" && o.DefaultVersion != c.Context.ExpectedDefault {
 			return errors.New("NODE_DEFAULT_MISMATCH")

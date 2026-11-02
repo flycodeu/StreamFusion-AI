@@ -9,6 +9,10 @@ export interface ErrorReferenceEntry {
 }
 
 export const errorReference: ErrorReferenceEntry[] = [
+  { code: "NODE_TERMINAL_CAPABILITY_REQUIRED", name: "组件不支持 Node 终端接入", category: "Node 环境", meaning: "当前主机组件尚不支持为所选账号配置 Bash。", steps: ["更新接入组件后重新预检。", "更新组件不会自动执行 Node 安装或终端接入。"] },
+  { code: "NODE_TERMINAL_CONFLICT", name: "Bash 接入配置冲突", category: "Node 环境", meaning: "现有启动文件中的接入片段与本次环境不匹配，操作已停止。", steps: ["检查该账号启动文件中的 Ops 片段及对应环境。", "保留原配置，处理冲突后重新预检，不要覆盖整个启动文件。"] },
+  { code: "NODE_TERMINAL_CHANGED", name: "Bash 配置已变化", category: "Node 环境", meaning: "启动文件在预检后发生变化，本次操作已停止。", steps: ["核对是否有其他管理员修改了账号启动文件。", "重新预检并确认新的变更范围。"] },
+  { code: "NODE_TERMINAL_RESULT_UNCONFIRMED", name: "终端接入结果未确认", category: "Node 环境", meaning: "尚未确认 Bash 接入片段的最终状态。", steps: ["在原作业检查执行结果，不要重复提交。", "核对后重新检测环境；新配置仅对后续登录生效。"] },
   { code: "EXECUTOR_DOCKER_ACCESS_UNSUPPORTED", name: "组件不支持 Docker 账号权限", category: "Docker", meaning: "已接入组件不具备本次账号权限检查和变更能力。", steps: ["在账号权限页更新接入组件，完成后重新检查。", "核对账号与当前组成员状态，再明确确认授权；组件更新不会自动授权。"] },
   { code: "DOCKER_ACCESS_STATE_CHANGED", name: "Docker 账号状态已变化", category: "Docker", meaning: "账号、Docker 组或引擎身份与确认时不同，本次变更未受理。", steps: ["重新检查权限，核对所选账号、组成员与引擎状态。", "按新检查结果重新确认操作，不要覆盖其他管理员的变更。"] },
   { code: "DOCKER_ACCESS_SOCKET_NOT_READY", name: "Docker 连接入口未就绪", category: "Docker", meaning: "标准 Docker socket 未通过属主、组和权限检查，不能授予新权限。", steps: ["检查 Docker Engine 状态以及 /run/docker.sock 是否为 root:docker、0660。", "由管理员核对原服务配置，不要改为 0666。收回已有补充组权限不要求 socket 存在。"] },

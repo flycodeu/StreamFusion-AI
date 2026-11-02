@@ -84,7 +84,13 @@ func runNode(ctx context.Context, n serviceinstall.NodeContext, action, version,
 	}
 	defer os.RemoveAll(configs)
 	for _, name := range []string{"user.npmrc", "global.npmrc"} {
-		if err = os.WriteFile(filepath.Join(configs, name), nil, 0444); err != nil {
+		file := filepath.Join(configs, name)
+		if err = os.WriteFile(file, nil, 0444); err != nil {
+			return nil, err
+		}
+		// The controller's restrictive umask must not make these empty,
+		// non-secret files unreadable to the selected execution account.
+		if err = os.Chmod(file, 0444); err != nil {
 			return nil, err
 		}
 	}
@@ -184,7 +190,22 @@ func (x *executor) observeNode(ctx context.Context, n serviceinstall.NodeContext
 	if err != nil {
 		return nil, err
 	}
-	return parseNodeObservation(n, out)
+	obs, err := parseNodeObservation(n, out)
+	if err != nil {
+		return nil, err
+	}
+	if n.ConnectTerminal && !discovery {
+		terminal, _, e := nodeTerminalFiles(n)
+		if e != nil {
+			terminal = &NodeTerminalObservation{Status: "CONFLICT", Profiles: []NodeTerminalProfile{}}
+		}
+		obs.Terminal = terminal
+		frozen := *obs
+		frozen.Fingerprint = ""
+		frozen.ObservedAt = ""
+		obs.Fingerprint = Digest(frozen)
+	}
+	return obs, nil
 }
 
 func (x *executor) nodeBound(req Request, n serviceinstall.NodeContext) error {
@@ -256,6 +277,15 @@ func (x *executor) nodePreflight(req Request) NodeEnvironmentPreflight {
 	if n.Action == "REMOVE_ENVIRONMENT" && len(obs.Versions) > 0 {
 		return fail("NODE_ENVIRONMENT_NOT_EMPTY")
 	}
+	if n.Action == "CONNECT_TERMINAL" || n.Action == "REMOVE_ENVIRONMENT" && resolved.ConnectTerminal {
+		terminal, _, e := nodeTerminalFiles(resolved)
+		if e != nil {
+			return fail(e.Error())
+		}
+		if terminal.Status == "CONFLICT" || terminal.Status == "UNSUPPORTED" {
+			return fail("NODE_TERMINAL_" + terminal.Status)
+		}
+	}
 	if d, e := nodeEnvironmentDefinition(n); e == nil {
 		if e = n.Source.ValidateFor(d, serviceinstall.Config{RuntimeMode: "NATIVE"}); e != nil {
 			return fail(e.Error())
@@ -276,7 +306,7 @@ func nodePlanCommands(n NodeEnvironmentRequest) []serviceinstall.OfficialCommand
 	root := n.Context.RootPath
 	base := serviceinstall.NodeVersionRoot(n.Context, n.NodeVersion)
 	switch n.Action {
-	case "OBSERVE", "DISCOVER":
+	case "OBSERVE", "DISCOVER", "CONNECT_TERMINAL":
 		return []serviceinstall.OfficialCommand{}
 	case "INITIALIZE", "UPDATE_NVM":
 		return []serviceinstall.OfficialCommand{{Executable: "install", Args: []string{"-m", "600", "nvm.sh", path.Join(root, "nvm/nvm.sh")}}, {Executable: "install", Args: []string{"-m", "700", "nvm-exec", path.Join(root, "nvm/nvm-exec")}}}
@@ -314,6 +344,14 @@ func nodeErrorMessage(code string) string {
 		return "环境已变化，请重新检查"
 	case "NODE_ENVIRONMENT_NOT_EMPTY":
 		return "请先卸载此环境中的 Node 版本"
+	case "NODE_TERMINAL_CONFLICT":
+		return "Bash 配置已有其他 nvm 或不同 Ops 环境，请先确认终端归属"
+	case "NODE_TERMINAL_PATH_UNSAFE":
+		return "Bash 配置不是此账号的普通文件，或权限、大小不符合要求"
+	case "NODE_TERMINAL_UNSUPPORTED":
+		return "终端接入目前支持本地 Bash 账号"
+	case "NODE_TERMINAL_CHANGED":
+		return "Bash 配置已变化，请重新预检"
 	default:
 		return "无法确认 Node 环境，请查看检查详情"
 	}
@@ -381,7 +419,12 @@ func (x *executor) nodeMaterial(ctx context.Context, req Request, dir string, d 
 			cleanup()
 			return "", nil, e
 		}
-		if e = os.WriteFile(filepath.Join(stage, name), raw, 0444); e != nil {
+		file := filepath.Join(stage, name)
+		if e = os.WriteFile(file, raw, 0444); e != nil {
+			cleanup()
+			return "", nil, e
+		}
+		if e = os.Chmod(file, 0444); e != nil {
 			cleanup()
 			return "", nil, e
 		}
@@ -419,6 +462,23 @@ func (x *executor) applyNodeEnvironment(req Request, dir string) (Result, error)
 	}
 	if err := atomicJSON(filepath.Join(dir, "node-change.json"), n); err != nil {
 		return result, err
+	}
+	if n.Action == "CONNECT_TERMINAL" {
+		terminalContext := n.Context
+		terminalContext.TerminalHash = Digest(preflight.Observation.Terminal)
+		if err := x.connectNodeTerminal(ctx, terminalContext, req.JobID, dir); err != nil {
+			result.ErrorCode = "NODE_RESULT_UNCONFIRMED"
+			return result, nil
+		}
+		return x.reconcileNodeEnvironment(req, dir), nil
+	}
+	if n.Action == "REMOVE_ENVIRONMENT" && n.Context.ConnectTerminal {
+		terminalContext := n.Context
+		terminalContext.TerminalHash = Digest(preflight.Observation.Terminal)
+		if err := x.changeNodeTerminal(ctx, terminalContext, req.JobID, dir, true); err != nil {
+			result.ErrorCode = "NODE_RESULT_UNCONFIRMED"
+			return result, nil
+		}
 	}
 	action, pkg := "", ""
 	switch n.Action {
@@ -476,6 +536,8 @@ func (x *executor) reconcileNodeEnvironment(req Request, dir string) Result {
 	}
 	matched := false
 	switch n.Action {
+	case "CONNECT_TERMINAL":
+		matched = nodeTerminalPlanApplied(n.Context, dir)
 	case "INITIALIZE", "UPDATE_NVM":
 		d, e := nodeEnvironmentDefinition(*n)
 		matched = e == nil && obs.Exists && obs.NVMVersion == d.Version && obs.NVMHash == d.Native.Parts[0].SHA256 && obs.NVMExecHash == d.Native.Parts[1].SHA256
@@ -483,6 +545,9 @@ func (x *executor) reconcileNodeEnvironment(req Request, dir string) Result {
 		matched = obs.DefaultVersion == n.NodeVersion
 	case "REMOVE_ENVIRONMENT":
 		matched = !obs.Exists && nodeEnvironmentRemoved(n.Context.RootPath, n.DeleteData)
+		if n.Context.ConnectTerminal {
+			matched = matched && nodeTerminalPlanMatches(n.Context, dir, false)
+		}
 	default:
 		for _, v := range obs.Versions {
 			if v.Version != n.NodeVersion {

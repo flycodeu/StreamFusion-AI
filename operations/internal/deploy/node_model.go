@@ -43,6 +43,7 @@ type NodeEnvironmentObservation struct {
 	Fingerprint    string                   `json:"fingerprint"`
 	ObservedAt     string                   `json:"observedAt"`
 	Exists         bool                     `json:"exists"`
+	Terminal       *NodeTerminalObservation `json:"terminal,omitempty"`
 }
 type NodeEnvironmentPreflight struct {
 	RemovedPaths []string                         `json:"removedPaths,omitempty"`
@@ -61,7 +62,7 @@ func (n NodeEnvironmentRequest) Validate() error {
 		return errors.New("NODE_ENVIRONMENT_INVALID")
 	}
 	switch n.Action {
-	case "INITIALIZE", "OBSERVE", "DISCOVER", "REMOVE_ENVIRONMENT":
+	case "INITIALIZE", "OBSERVE", "DISCOVER", "REMOVE_ENVIRONMENT", "CONNECT_TERMINAL":
 		if n.NodeVersion != "" || n.PackageVersion != "" {
 			return errors.New("NODE_ACTION_INVALID")
 		}

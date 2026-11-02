@@ -93,16 +93,17 @@ type PortMapping struct {
 }
 
 type Preflight struct {
-	Official        *OfficialPlan `json:"official,omitempty"`
-	BinaryDirectory string        `json:"binaryDirectory"`
-	LogsDirectory   string        `json:"logsDirectory"`
-	Ready           bool          `json:"ready"`
-	Root            string        `json:"root"`
-	DataDirectory   string        `json:"dataDirectory"`
-	ConfigDirectory string        `json:"configDirectory"`
-	Endpoint        string        `json:"endpoint"`
-	Checks          []Check       `json:"checks"`
-	PortMappings    []PortMapping `json:"portMappings"`
+	NodeTerminalHash string        `json:"nodeTerminalHash,omitempty"`
+	Official         *OfficialPlan `json:"official,omitempty"`
+	BinaryDirectory  string        `json:"binaryDirectory"`
+	LogsDirectory    string        `json:"logsDirectory"`
+	Ready            bool          `json:"ready"`
+	Root             string        `json:"root"`
+	DataDirectory    string        `json:"dataDirectory"`
+	ConfigDirectory  string        `json:"configDirectory"`
+	Endpoint         string        `json:"endpoint"`
+	Checks           []Check       `json:"checks"`
+	PortMappings     []PortMapping `json:"portMappings"`
 }
 
 func Digest(value any) string {

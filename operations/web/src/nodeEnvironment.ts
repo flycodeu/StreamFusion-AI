@@ -25,6 +25,10 @@ export interface NodeObservation {
   fingerprint: string;
   observedAt: string;
   exists: boolean;
+  terminal?: {
+    status: "CONNECTED" | "NOT_CONNECTED" | "CONFLICT" | "UNSUPPORTED";
+    profiles: { path: string; sha256: string; connected: boolean }[];
+  };
 }
 export interface NodeEnvironment {
   id: string;
@@ -56,6 +60,7 @@ export interface NodeDiscovery {
 export type NodeAction =
   | "INITIALIZE"
   | "INSTALL_NODE"
+  | "CONNECT_TERMINAL"
   | "SET_DEFAULT"
   | "UPDATE_NPM"
   | "INSTALL_PNPM"
@@ -79,6 +84,7 @@ export interface NodePlan {
       rootPath: string;
       nvmVersion: string;
       nvmHash: string;
+      connectTerminal?: boolean;
     };
   };
   definition?: ServiceRecipe;
@@ -98,10 +104,11 @@ export interface NodePlan {
     accountUid: string;
     rootPath: string;
     makeDefault: boolean;
+    connectTerminal?: boolean;
   };
   removedPaths?: string[];
   paths?: { root?: string; bin?: string };
-  snapshot?: { rootPath?: string };
+  snapshot?: { rootPath?: string; terminal?: NodeObservation["terminal"] };
 }
 export interface NodeDraft {
   action: NodeAction;
@@ -122,6 +129,7 @@ export const nodeActionLabels: Record<NodeAction, string> = {
   INITIALIZE: "准备 Node 环境",
   INSTALL_NODE: "安装 Node 版本",
   SET_DEFAULT: "设为环境默认",
+  CONNECT_TERMINAL: "接入终端",
   UPDATE_NPM: "更新 npm",
   INSTALL_PNPM: "安装 pnpm",
   UPDATE_PNPM: "更新 pnpm",
@@ -257,6 +265,7 @@ export function nodeInitialPlanMatches(
     node.accountUid === env.accountUid &&
     node.rootPath === env.rootPath &&
     node.makeDefault === intent.makeDefault &&
+    node.connectTerminal === true &&
     plan.paths?.root ===
       env.rootPath + "/nvm/versions/node/" + intent.definition.version &&
     !plan.checks?.some((c) => c.status !== "PASSED") &&

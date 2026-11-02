@@ -2,13 +2,21 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { ElDialog } from "element-plus";
 import { ApiError, request } from "./api";
-import { automaticPreparationUpdate, type AutomaticPreparationUpdate, type PreparationUpdateCheck } from "./preparationUpdate";
+import {
+  automaticPreparationUpdate,
+  type AutomaticPreparationUpdate,
+  type PreparationUpdateCheck,
+} from "./preparationUpdate";
 import { hostTime, type Host } from "./hosts";
 import type {
   InstallationMaterial,
   ServiceRecipe,
 } from "./serviceInstallation";
-import type { SoftwareJob } from "./software";
+import {
+  softwareJobStatusLabel,
+  softwareJobDiagnostic,
+  type SoftwareJob,
+} from "./software";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
 import HostPreparationPanel from "./HostPreparationPanel.vue";
 import NodeVersionDialog from "./NodeVersionDialog.vue";
@@ -140,14 +148,6 @@ const downloadable = (action: NodeAction) =>
     "UPDATE_PNPM",
     "UPDATE_NVM",
   ].includes(action);
-const jobLabels: Record<string, string> = {
-  QUEUED: "等待执行",
-  RUNNING: "正在执行",
-  UNKNOWN: "结果待确认",
-  SUCCEEDED: "已完成",
-  FAILED: "未完成",
-  CANCELLED: "已取消",
-};
 function report(e: unknown) {
   error.value = {
     message: e instanceof Error ? e.message : "请求未完成，请重试",
@@ -238,6 +238,7 @@ async function continueInitialInstallation() {
           environmentId: env.id,
           environmentVersion: env.version,
           makeDefault: intent.makeDefault,
+          connectTerminal: true,
         },
       },
     );
@@ -332,6 +333,7 @@ function openAction(action: NodeAction, nodeVersion = "") {
   if (
     action === "INITIALIZE" ||
     action === "UPDATE_NVM" ||
+    action === "CONNECT_TERMINAL" ||
     action === "REMOVE_ENVIRONMENT" ||
     action === "RELEASE"
   )
@@ -419,10 +421,20 @@ async function runPreflight(allowAutomaticUpdate: boolean) {
       d = draft.value!,
       env = environment.value;
     if (currentHost.value.kind === "SSH") {
-      const checked = await request<PreparationUpdateCheck>(`/hosts/${currentHost.value.id}/preparation?checkUpdate=1`);
+      const checked = await request<PreparationUpdateCheck>(
+        `/hosts/${currentHost.value.id}/preparation?checkUpdate=1`,
+      );
       if (token !== revision || disposed) return;
-      if (checked.hostId !== currentHost.value.id || checked.expectedHostVersion !== currentHost.value.version)
-        throw new ApiError("主机配置已变化，请重新选择主机", "VERSION_CONFLICT", "", new Date().toISOString());
+      if (
+        checked.hostId !== currentHost.value.id ||
+        checked.expectedHostVersion !== currentHost.value.version
+      )
+        throw new ApiError(
+          "主机配置已变化，请重新选择主机",
+          "VERSION_CONFLICT",
+          "",
+          new Date().toISOString(),
+        );
       if (checked.update?.status === "AVAILABLE" && allowAutomaticUpdate) {
         const update = automaticPreparationUpdate(checked);
         if (!update) throw new Error("组件更新信息不完整，请重新预检");
@@ -431,7 +443,12 @@ async function runPreflight(allowAutomaticUpdate: boolean) {
         return;
       }
       if (checked.update && checked.update.status !== "CURRENT")
-        throw new ApiError("接入组件需要核对，请查看主机安装准备", checked.update.code || "EXECUTOR_UPGRADE_REQUIRED", "", new Date().toISOString());
+        throw new ApiError(
+          "接入组件需要核对，请查看主机安装准备",
+          checked.update.code || "EXECUTOR_UPGRADE_REQUIRED",
+          "",
+          new Date().toISOString(),
+        );
     }
     let result: NodePlan;
     if (d.action === "INSTALL_NODE") {
@@ -456,6 +473,7 @@ async function runPreflight(allowAutomaticUpdate: boolean) {
             environmentId: env.id,
             environmentVersion: env.version,
             makeDefault: d.makeDefault,
+            connectTerminal: true,
           },
         },
       );
@@ -480,7 +498,7 @@ async function runPreflight(allowAutomaticUpdate: boolean) {
           ].includes(d.action)
             ? d.packageVersion
             : undefined,
-          source: source(),
+          source: d.action === "CONNECT_TERMINAL" ? undefined : source(),
           deleteData: d.deleteData,
           confirmationName: d.confirmationName,
         },
@@ -673,7 +691,8 @@ async function showJob(item: SoftwareJob) {
   });
 }
 async function updatedPreparation() {
-  const token = revision, hostId = currentHost.value.id;
+  const token = revision,
+    hostId = currentHost.value.id;
   let ready = false;
   await act(async () => {
     const hosts = await request<Host[]>("/hosts");
@@ -769,12 +788,15 @@ poll();
       {{ error.message }}
       <button
         v-if="
-          ['NODE_CAPABILITY_REQUIRED', 'EXECUTOR_UPGRADE_REQUIRED'].includes(
+          ['NODE_CAPABILITY_REQUIRED', 'NODE_TERMINAL_CAPABILITY_REQUIRED', 'EXECUTOR_UPGRADE_REQUIRED'].includes(
             error.code,
           )
         "
         class="quiet"
-        @click="automaticUpdate = undefined; preparationOpen = true"
+        @click="
+          automaticUpdate = undefined;
+          preparationOpen = true;
+        "
       >
         更新接入组件
       </button>
@@ -832,7 +854,8 @@ poll();
             >{{
               environment.managementMode === "MANAGED" ? "Ops 管理" : "只读登记"
             }}
-            · {{ environment.managerType === 'NVM' ? 'nvm' : '系统安装' }}</strong
+            ·
+            {{ environment.managerType === "NVM" ? "nvm" : "系统安装" }}</strong
           >
         </div>
         <div>
@@ -840,9 +863,38 @@ poll();
           ><strong>{{ hostTime(environment.observedAt) }}</strong>
         </div>
       </div>
+      <div v-if="environment.managerType === 'NVM'" class="terminal-access">
+        <span>{{
+          environment.observation?.terminal?.status === "CONNECTED"
+            ? "Bash 已接入"
+            : environment.observation?.terminal?.status === "CONFLICT"
+              ? "Bash 配置冲突"
+              : environment.observation?.terminal?.status === "UNSUPPORTED"
+                ? "当前终端不支持自动接入"
+                : environment.observation?.terminal?.status === "NOT_CONNECTED" ? "Bash 未接入" : "终端接入待检查"
+        }}</span>
+        <button
+          v-if="environment.managementMode === 'MANAGED' && environment.observation?.terminal?.status !== 'CONNECTED'"
+          class="secondary"
+          :disabled="busy || !writable"
+          @click="openAction('CONNECT_TERMINAL')"
+        >
+          接入终端
+        </button>
+        <span v-if="!environment.observedDefaultVersion && environment.observation?.terminal?.status === 'CONNECTED'" class="hint"
+          >选择默认版本后，新终端可使用 node/npm</span
+        >
+        <span
+          v-else-if="environment.observation?.terminal?.status === 'CONNECTED'"
+          class="hint"
+          >重新登录即可使用 node/npm</span
+        >
+      </div>
       <details v-if="environment.errorCode" class="hint">
         <summary>检测未完成，显示上次结果</summary>
-        <ErrorHelpLink :code="environment.errorCode" /><code>{{ environment.errorCode }}</code>
+        <ErrorHelpLink :code="environment.errorCode" /><code>{{
+          environment.errorCode
+        }}</code>
         <p>{{ hostTime(environment.observedAt) }} · {{ environment.id }}</p>
       </details>
       <div class="node-tabs" role="tablist" aria-label="Node 环境详情">
@@ -1026,7 +1078,7 @@ poll();
           class="history-row"
           @click="showJob(item)"
         >
-          <span>{{ jobLabels[item.status] || '状态待确认' }}</span
+          <span>{{ softwareJobStatusLabel(item.status) }}</span
           ><time>{{ hostTime(item.updatedAt) }}</time
           ><span>查看日志</span>
         </button>
@@ -1035,7 +1087,7 @@ poll();
         <pre v-if="logs">{{ logs }}</pre>
       </section>
       <div v-if="job" class="job-result" role="status">
-        <strong>{{ jobLabels[job.status] || '状态待确认' }}</strong
+        <strong>{{ softwareJobStatusLabel(job.status) }}</strong
         ><span>{{
           job.targetAckPending
             ? "正在等待目标确认收尾"
@@ -1061,7 +1113,10 @@ poll();
         <details>
           <summary>诊断信息</summary>
           <ErrorHelpLink v-if="job.errorCode" :code="job.errorCode" />
-          <p>{{ job.status }} · {{ job.phase }} · {{ job.errorCode }} · {{ hostTime(job.updatedAt) }}</p>
+          <p>
+            {{ softwareJobDiagnostic(job.status, job.phase) }} ·
+            {{ job.errorCode }} · {{ hostTime(job.updatedAt) }}
+          </p>
           <code>{{ job.id }} · {{ job.traceId }}</code>
         </details>
       </div>
@@ -1093,7 +1148,10 @@ poll();
       @change="changedDraft"
       @preflight="preflight"
       @submit="submit"
-      @prepare="automaticUpdate = undefined; preparationOpen = true"
+      @prepare="
+        automaticUpdate = undefined;
+        preparationOpen = true;
+      "
       @material="materialReady"
       @initial-material="initialMaterialReady"
       @material-busy="busy = $event"
@@ -1160,7 +1218,10 @@ poll();
       ><p class="hint">
         使用 {{ environment?.account }} 账号执行；只作用于当前终端。
       </p>
-      <pre v-if="environment">{{ nodeTerminalCommand(environment) }}</pre>
+      <details>
+        <summary>当前终端临时加载</summary>
+        <pre v-if="environment">{{ nodeTerminalCommand(environment) }}</pre>
+      </details>
     </ElDialog>
     <ElDialog
       v-model="preparationOpen"
@@ -1237,6 +1298,14 @@ input {
   background: var(--panel, #fff);
   color: var(--text);
   box-sizing: border-box;
+}
+.terminal-access {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0;
+  font-size: 13px;
 }
 .environment-summary {
   display: grid;

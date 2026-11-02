@@ -210,11 +210,11 @@ MySQL管理员为root，业务库/账号可选，新空目录才初始化且默�
 
 安装/配置计划有效5分钟，提交返回原持久Job。安装确认后进入软件中心，支持检测、启停及有界日志；超时和丢回执先核对原Job，不重复初始化。解除管理保留远端程序、配置和数据。Ops退出不停止既有服务；数据库和对象数据不随代码回退降级。
 
-API以`/ops/api/v1`为前缀：目录`GET /software-recipes`；安装`POST /hosts/{id}/software-install-plans`、`POST /software-install-plans/{id}/submit`；材料`POST/GET /installation-materials`、`PUT /{id}/content`、`POST /{id}/confirm`、`DELETE /{id}`，原生在线准备`POST /installation-materials/official`；配置`POST /software-instances/{id}/configuration-plans`、`POST /software-configuration-plans/{id}/submit`。新安装要求执行器`serviceInstallVersion=2`且目录摘要相符。
+API以`/ops/api/v1`为前缀：目录`GET /software-recipes`；安装`POST /hosts/{id}/software-install-plans`、`POST /software-install-plans/{id}/submit`；材料`POST/GET /installation-materials`、`PUT /{id}/content`、`POST /{id}/confirm`、`DELETE /{id}`，原生在线准备`POST /installation-materials/official`；配置`POST /software-instances/{id}/configuration-plans`、`POST /software-configuration-plans/{id}/submit`。新安装按实际配方检查执行器安装能力和身份，不用已过期的主机观察结果代替实时预检。
 
 ### Node环境
 
-“软件管理 → 软件目录 → Node.js → 安装与管理”按主机和Linux账号管理nvm、Node.js、npm、pnpm；软件中心的Node实例详情打开同一管理窗口。当前安装配方面向Linux amd64，提供固定Node22/24版本及校验摘要；已安装版本保留原配方，新配方不会修改历史记录。nvm使用用户目录下的专属环境，固定命令以所选非root账号运行，不修改系统Node或用户的Shell启动文件。
+“软件管理 → 软件目录 → Node.js → 安装与管理”按主机和Linux账号管理nvm、Node.js、npm、pnpm；软件中心的Node实例详情打开同一管理窗口。当前安装配方面向Linux amd64，提供固定Node22/24版本及校验摘要；已安装版本保留原配方，新配方不会修改历史记录。nvm使用用户目录下的专属环境，固定命令以所选非root账号运行，不修改系统Node。新安装会为所选账号配置Bash加载nvm；已有环境可通过“接入终端”补齐。只维护Ops标记片段并备份原文件，保留其他配置；遇到其他nvm配置或异常文件时停止并说明原因。设置默认版本后，新登录Bash可直接使用node/npm；已有终端不自动切换。
 
 新建环境时选择账号、Node版本和来源。官方安装由目标联网取得固定官方材料；离线安装复用平台材料库，初始化nvm也使用库中材料；自行安装只检测并登记已有用户nvm或系统Node，不自动接管。外部环境可查看、重新检测和解除登记，不能通过此入口修改其版本或全局包。
 
