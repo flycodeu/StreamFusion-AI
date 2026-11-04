@@ -431,10 +431,23 @@ try:
         assert page.get_by_label("目标主机", exact=True).input_value()
         assert page.get_by_role("heading", name="Maven", exact=True).count() == 1
         assert page.get_by_role("button", name="安装", exact=True).count() == len(catalog_keys)
-        java_version = page.get_by_label("Java版本", exact=True)
-        assert java_version.locator("option").count() == len([entry for entry in catalog if entry["key"] == "java"])
-        java_version.select_option("17")
-        assert java_version.input_value() == "17"
+        java_card = page.locator(".plugin-card").filter(has=page.get_by_role("heading", name="Java", exact=True))
+        assert java_card.locator("select").count() == 0
+        java_card.get_by_role("button", name="安装", exact=True).click()
+        java_install = page.locator(".el-drawer:visible").last
+        java_install.get_by_role("button", name="原生安装", exact=True).click()
+        java_install.get_by_label("原生安装来源", exact=True).select_option("OFFLINE")
+        java_version = java_install.get_by_label("安装版本", exact=True)
+        java_native = [entry for entry in catalog if entry["key"] == "java" and "NATIVE" in entry["runtimeModes"]]
+        assert java_version.locator('option[value]:not([value=""])').count() == len(java_native)
+        java17 = next(entry for entry in java_native if entry["version"] == "17")
+        java_version.select_option(java17["revision"])
+        assert java_version.input_value() == java17["revision"]
+        java_install.get_by_role("button", name="取消", exact=True).click()
+        discard = page.get_by_role("dialog", name="关闭窗口", exact=True)
+        if discard.is_visible():
+            discard.get_by_role("button", name="放弃修改", exact=True).click()
+        java_install.wait_for(state="hidden")
         page.get_by_role("button", name="构建工具", exact=True).click()
         assert page.locator(".plugin-card").count() == 1
         page.get_by_role("heading", name="Maven", exact=True).wait_for()

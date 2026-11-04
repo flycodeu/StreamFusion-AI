@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from "vue";
-import { ElDialog, ElDrawer, ElMessageBox } from "element-plus";
+import { computed, nextTick, onUnmounted, reactive, ref, watch } from "vue";
+import { ElCard, ElDrawer, ElMessageBox } from "element-plus";
 import HostPreparationPanel from "./HostPreparationPanel.vue";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
 import OfficialInstallationDetails from "./OfficialInstallationDetails.vue";
-import { hostTime } from "./hosts";
+import { hostTime, type Host } from "./hosts";
+import { request } from "./api";
 import SoftwareIcon from "./SoftwareIcon.vue";
 import ServiceNetworkFields from "./ServiceNetworkFields.vue";
 import InstallationMaterialDetails from "./InstallationMaterialDetails.vue";
 import { softwareJobPhaseLabel } from "./software";
 import {
+  defaultInstallationRuntime,
+  type RuntimeMode,
   materialChoiceLabel,
   serviceEndpoint,
   runtimeLabels,
@@ -24,7 +27,13 @@ import {
   type ServiceInstallationProps,
 } from "./useServiceInstallation";
 
-const props = defineProps<ServiceInstallationProps & { officialRecipes?: ServiceRecipe[] }>();
+const props = defineProps<ServiceInstallationProps & {
+  recipes?: ServiceRecipe[];
+  officialRecipes?: ServiceRecipe[];
+  dockerRecipe?: ServiceRecipe;
+  dockerOfficialRecipes?: ServiceRecipe[];
+  embedded?: boolean;
+}>();
 const emit = defineEmits<{
   close: [];
   submitted: [ServiceInstallReceipt];
@@ -32,17 +41,76 @@ const emit = defineEmits<{
   preparation: [string];
   register: [hostId: string, softwareType: string];
 }>();
-const method = ref<InstallationMethod>("OFFICIAL");
-const officialVersion = ref("");
-const officialRecipe = computed(() => props.officialRecipes?.find((item) => item.version === officialVersion.value) || props.officialRecipes?.[0]);
-const recipe = computed(() => method.value === "OFFICIAL" ? officialRecipe.value || props.recipe : props.recipe);
+const mode = ref<RuntimeMode | "SELF">();
+const nativeMethod = ref<InstallationMethod>("OFFICIAL");
+const selectedVersion = ref("");
+const checkedHost = ref<Host>();
+const host = computed(() => checkedHost.value || props.host);
+const checkingHost = ref(false);
+const hostCheckError = ref("");
+const engineInstalling = ref(false);
+let manualMode = false;
+let checkGeneration = 0;
+let hostCheckAbort: AbortController | undefined;
+const variants = computed(() => props.recipes || (props.recipe ? [props.recipe] : []));
+const nativeAvailable = computed(() => !!props.officialRecipes?.length || variants.value.some((item) => item.runtimeModes.includes("NATIVE")));
+const dockerAvailable = computed(() => variants.value.some((item) => item.runtimeModes.includes("DOCKER")));
+const method = computed<InstallationMethod>(() => mode.value === "SELF" ? "SELF" : mode.value === "NATIVE" ? nativeMethod.value : "OFFLINE");
+const choices = computed(() => method.value === "OFFICIAL" ? props.officialRecipes || [] : variants.value.filter((item) => item.runtimeModes.includes(mode.value || "DOCKER")));
+const recipe = computed(() => choices.value.find((item) => item.revision === selectedVersion.value) || choices.value[0] || props.recipe);
+const officialRecipe = computed(() => method.value === "OFFICIAL" ? choices.value.find((item) => item.revision === selectedVersion.value) : undefined);
 const selfDetectionAvailable = computed(() => props.recipe?.kind !== "TOOL" || ["java", "python", "ffmpeg"].includes(props.recipe?.key || ""));
-const steps = computed(() => method.value === "OFFICIAL" ? ["官方安装", "预检确认", "执行结果"] : ["安装来源", "实例配置", "网络存储", "预检确认", "执行结果"]);
-const flowProps = reactive({ open: computed(() => props.open), recipe, host: computed(() => props.host), method });
-watch(() => props.open, (open) => { if (open) { method.value = "OFFICIAL"; officialVersion.value = props.officialRecipes?.[0]?.version || ""; } });
-watch(() => props.officialRecipes, (items) => {
-  if (!items?.some((item) => item.version === officialVersion.value)) officialVersion.value = items?.[0]?.version || "";
+const steps = ["安装设置", "确认安装", "执行结果"];
+const flowProps = reactive({ open: computed(() => props.open), recipe, host, method, runtimeMode: computed(() => mode.value === "SELF" ? undefined : mode.value) });
+function selectMode(value: RuntimeMode | "SELF") {
+  manualMode = true;
+  mode.value = value;
+}
+function applyDefault() {
+  mode.value = defaultInstallationRuntime([...variants.value, ...(props.officialRecipes || [])], host.value);
+  selectedVersion.value = (choices.value.find((item) => item.revision === props.recipe?.revision) || choices.value[0])?.revision || "";
+}
+async function checkHost() {
+  if (!props.host || checkingHost.value) return;
+  const generation = checkGeneration, id = props.host.id;
+  checkingHost.value = true;
+  hostCheckError.value = "";
+  const abort = new AbortController();
+  hostCheckAbort = abort;
+  try {
+    const updated = await request<Host>(`/hosts/${id}/checks`, "POST", {}, abort.signal);
+    if (generation !== checkGeneration || !props.open) return;
+    checkedHost.value = updated;
+    if (!manualMode) applyDefault();
+  } catch (error) {
+    if (generation === checkGeneration && props.open && !abort.signal.aborted)
+      hostCheckError.value = error instanceof Error ? error.message : "主机检测未完成";
+  } finally {
+    if (generation === checkGeneration) checkingHost.value = false;
+  }
+}
+watch([() => props.open, () => props.host?.id, () => props.recipe?.key], () => {
+  checkGeneration++;
+  hostCheckAbort?.abort();
+  checkingHost.value = false;
+  checkedHost.value = undefined;
+  hostCheckError.value = "";
+  manualMode = false;
+  engineInstalling.value = false;
+  nativeMethod.value = props.officialRecipes?.length ? "OFFICIAL" : "OFFLINE";
+  if (!props.open) return;
+  applyDefault();
+  if (!mode.value) void checkHost();
 }, { immediate: true });
+watch(choices, (items) => {
+  if (!items.some((item) => item.revision === selectedVersion.value))
+    selectedVersion.value = items.length === 1 ? items[0]!.revision : "";
+});
+onUnmounted(() => { checkGeneration++; hostCheckAbort?.abort(); });
+async function resumeSoftware() {
+  engineInstalling.value = false;
+  await checkHost();
+}
 const {
   step,
   busy,
@@ -102,7 +170,7 @@ const {
 );
 const touched = ref(false);
 watch(() => props.open, () => { touched.value = false; });
-const closeBlocked = computed(() => busy.value || preparationOpen.value || (submissionAttempted.value && !receipt.value) || !!job.value && (['QUEUED', 'RUNNING', 'UNKNOWN'].includes(job.value.status) || job.value.targetAckPending));
+const closeBlocked = computed(() => engineInstalling.value || busy.value || preparationOpen.value || (submissionAttempted.value && !receipt.value) || !!job.value && (['QUEUED', 'RUNNING', 'UNKNOWN'].includes(job.value.status) || job.value.targetAckPending));
 async function close(done?: () => void) {
   if (closeBlocked.value) return;
   if (touched.value && !submitted.value) {
@@ -110,7 +178,7 @@ async function close(done?: () => void) {
   }
   if (done) done(); else closeFlow();
 }
-const visibleStep = computed(() => method.value === "OFFICIAL" ? step.value === 4 ? 2 : step.value === 3 ? 1 : 0 : step.value);
+const visibleStep = computed(() => step.value === 4 ? 2 : step.value === 3 ? 1 : 0);
 const logPane = ref<HTMLElement>();
 const followOutput = ref(true);
 watch(logs, async () => {
@@ -127,11 +195,12 @@ function followLatest() {
   followOutput.value = true;
   if (logPane.value) logPane.value.scrollTop = logPane.value.scrollHeight;
 }
-function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value - 1; clearError(); }
+function previous() { step.value = 0; clearError(); }
 </script>
 
 <template>
-  <ElDrawer
+  <component
+    :is="embedded ? ElCard : ElDrawer"
     :model-value="open"
     :title="`安装 ${recipe?.name || '服务'}`"
     size="min(960px,100vw)"
@@ -142,24 +211,39 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
     :show-close="!closeBlocked"
     @close="closeFlow"
   >
-    <div v-if="recipe && host && configuration" class="service-install" @input="touched = true" @change="touched = true">
+    <div v-if="recipe && host && configuration" v-show="!engineInstalling && !preparationOpen" class="service-install" @input="touched = true" @change="touched = true">
       <header class="install-context">
         <SoftwareIcon :type="recipe.key" />
         <div>
           <strong
-            >{{ recipe.name }} <span>{{ method === 'OFFLINE' ? recipe.version : method === 'OFFICIAL' ? '版本以目标仓库预检为准' : '自行安装后登记' }}</span></strong
+            >{{ recipe.name }} <span>{{ mode === 'SELF' ? '已有软件' : '' }}</span></strong
           ><small>{{ host.name }} · {{ host.address || "本机" }}</small>
         </div>
         <span class="context-kind">{{
-          method === 'OFFLINE' ? runtimeLabels[configuration.runtimeMode] : method === 'OFFICIAL' ? '官方系统安装' : '只读检测登记'
+          mode === 'SELF' ? '只读检测登记' : mode ? runtimeLabels[mode] : '选择安装方式'
         }}</span>
       </header>
       <div class="installation-methods" role="group" aria-label="安装方式">
-        <button v-for="choice in [{ key: 'OFFICIAL', label: '官方安装' }, { key: 'OFFLINE', label: 'Ops 离线安装' }, { key: 'SELF', label: '自行安装' }]"
-          :key="choice.key" :class="{ active: method === choice.key }" :aria-pressed="method === choice.key"
-          :disabled="busy || submissionAttempted || submitted" @click="method = choice.key as InstallationMethod">{{ choice.label }}</button>
+        <button v-if="dockerAvailable" :class="{ active: mode === 'DOCKER' }" :aria-pressed="mode === 'DOCKER'" :disabled="busy || submissionAttempted || submitted" @click="selectMode('DOCKER')">Docker 安装</button>
+        <button v-if="nativeAvailable" :class="{ active: mode === 'NATIVE' }" :aria-pressed="mode === 'NATIVE'" :disabled="busy || submissionAttempted || submitted" @click="selectMode('NATIVE')">原生安装</button>
+        <button :class="{ active: mode === 'SELF' }" :aria-pressed="mode === 'SELF'" :disabled="busy || submissionAttempted || submitted" @click="selectMode('SELF')">管理已有软件</button>
       </div>
-      <ol v-if="method !== 'SELF'" class="install-steps" :class="{ 'official-steps': method === 'OFFICIAL' }" aria-label="安装步骤">
+      <div v-if="checkingHost || hostCheckError || !mode" class="host-readiness" role="status">
+        <span>{{ checkingHost ? '正在检测安装环境…' : hostCheckError || '请选择安装方式，或重新检测主机' }}</span>
+        <button v-if="!checkingHost" class="quiet" :disabled="busy || submitted" @click="checkHost">重新检测</button>
+      </div>
+      <div v-if="mode === 'DOCKER' && host.capabilities?.docker.status !== 'AVAILABLE' && step < 3" class="host-readiness">
+        <span>{{ host.capabilities?.docker.code === 'DOCKER_NOT_INSTALLED' ? '未安装 Docker' : host.capabilities?.docker.message || 'Docker 状态待确认' }}</span>
+        <button v-if="host.capabilities?.docker.code === 'DOCKER_NOT_INSTALLED' && props.dockerRecipe" class="secondary" :disabled="busy" @click="engineInstalling = true">安装 Docker</button>
+      </div>
+      <div v-if="mode && mode !== 'SELF' && step < 3" class="form-row installation-selection">
+        <label v-if="mode === 'NATIVE'">安装来源<select v-model="nativeMethod" aria-label="原生安装来源" :disabled="busy">
+          <option v-if="props.officialRecipes?.length" value="OFFICIAL">官方在线</option>
+          <option v-if="variants.some((item) => item.runtimeModes.includes('NATIVE'))" value="OFFLINE">Ops 离线材料</option>
+        </select></label>
+        <label>版本<select v-model="selectedVersion" aria-label="安装版本" :disabled="busy"><option value="" disabled>请选择此安装方式的版本</option><option v-for="item in choices" :key="item.revision" :value="item.revision">{{ method === 'OFFICIAL' ? item.name : item.version }}</option></select></label>
+      </div>
+      <ol v-if="mode && method !== 'SELF'" class="install-steps official-steps" aria-label="安装步骤">
         <li
           v-for="(label, index) in steps"
           :key="label"
@@ -199,62 +283,17 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
       </div>
 
       <section v-if="method === 'SELF'" class="install-panel self-install" aria-label="自行安装">
-        <h3>在服务器自行安装，再由 Ops 检测登记</h3>
-        <p>按软件官方说明在 {{ host.name }} 安装。登记后先只读查看，生命周期接管另行确认。</p>
+        <h3>检测服务器已有软件</h3>
         <a :href="props.recipe?.officialUrl" target="_blank" rel="noopener noreferrer">查看官方安装说明 ↗</a>
         <p v-if="!selfDetectionAvailable">当前工具检测支持 Java、Python 和 FFmpeg。此软件暂不支持自动工具登记，可先按官方说明在服务器使用。</p>
         <button v-if="selfDetectionAvailable" class="primary" @click="emit('register', host.id, props.recipe?.key.toUpperCase() || 'OTHER')">检测并登记</button>
       </section>
-      <section v-else-if="method === 'OFFICIAL' && step === 0" class="install-panel" aria-label="官方安装配置">
-        <template v-if="officialRecipe">
-          <label v-if="(props.officialRecipes?.length || 0) > 1">官方配方<select v-model="officialVersion" aria-label="官方配方" :disabled="busy"><option v-for="item in props.officialRecipes" :key="item.version" :value="item.version">{{ item.name }}</option></select></label>
-          <label>实例名称<input v-model="configuration.name" aria-label="实例名称" :disabled="busy" maxlength="120" /></label>
-          <a :href="officialRecipe.officialUrl" target="_blank" rel="noopener noreferrer">官方安装说明 ↗</a>
-        </template>
-        <p v-else class="install-note">此软件暂未提供可执行的固定官方配方。请选择 Ops 离线安装，或查看官方说明自行安装。</p>
+      <div v-if="mode && mode !== 'SELF' && step < 3" class="settings-grid" :class="{ 'official-settings': method === 'OFFICIAL' }">
+      <section v-if="method === 'OFFICIAL'" class="install-panel" aria-label="官方安装配置">
+        <label>实例名称<input v-model="configuration.name" aria-label="实例名称" :disabled="busy" maxlength="120" /></label>
+        <a :href="officialRecipe?.officialUrl" target="_blank" rel="noopener noreferrer">官方安装说明 ↗</a>
       </section>
-      <section v-else-if="step === 0" class="install-panel" aria-label="安装来源">
-        <h3>运行方式</h3>
-        <div class="install-options">
-          <label
-            v-if="recipe.runtimeModes.includes('DOCKER')"
-            class="option-card"
-            :class="{
-              selected: configuration.runtimeMode === 'DOCKER',
-              unavailable: !recipe.runtimeModes.includes('DOCKER'),
-            }"
-            ><input
-              v-model="configuration.runtimeMode"
-              type="radio"
-              value="DOCKER"
-              :disabled="busy || !recipe.runtimeModes.includes('DOCKER')"
-            /><span
-              ><strong>Docker 容器</strong
-              ><small>固定镜像，独立数据目录</small></span
-            ></label
-          ><label
-            class="option-card"
-            :class="{
-              selected: configuration.runtimeMode === 'NATIVE',
-              unavailable: !recipe.runtimeModes.includes('NATIVE'),
-            }"
-            ><input
-              v-model="configuration.runtimeMode"
-              type="radio"
-              value="NATIVE"
-              :disabled="busy || !recipe.runtimeModes.includes('NATIVE')"
-            /><span
-              ><strong>{{
-                isTool(recipe) ? "原生程序" : "原生 / systemd"
-              }}</strong
-              ><small>{{
-                recipe.runtimeModes.includes("NATIVE")
-                  ? "独立目录，官方材料"
-                  : "当前配方未提供"
-              }}</small></span
-            ></label
-          >
-        </div>
+      <section v-else class="install-panel source-panel" aria-label="安装来源">
         <h3>安装材料</h3>
         <div class="install-options">
           <label
@@ -266,8 +305,8 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
               value="ARCHIVE"
               :disabled="busy || !recipe.sourceModes.includes('ARCHIVE')"
             /><span
-              ><strong>本地离线材料库 · 默认</strong
-              ><small>优先复用随包材料，无需再次下载</small></span
+              ><strong>平台离线材料</strong
+              ><small>复用已校验材料</small></span
             ></label
           ><label
             class="option-card"
@@ -283,12 +322,12 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
             ></label
           >
         </div>
-        <InstallationMaterialDetails
+        <details class="source-details"><summary>来源与校验信息</summary><InstallationMaterialDetails
           :recipe="recipe"
           :runtime-mode="configuration.runtimeMode"
           :material="sourceType === 'REGISTRY' ? undefined : selectedMaterial"
           :online="sourceType !== 'ARCHIVE'"
-        />
+        /></details>
         <div v-if="sourceType === 'ONLINE'" class="archive-picker">
           <label
             >已准备材料<select
@@ -467,8 +506,8 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
       </section>
 
       <section
-        v-else-if="step === 1"
-        class="install-panel"
+        v-if="method !== 'OFFICIAL'"
+        class="install-panel instance-panel"
         aria-label="实例配置"
       >
         <label
@@ -604,8 +643,8 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
       </section>
 
       <section
-        v-else-if="step === 2"
-        class="install-panel"
+        v-if="method !== 'OFFICIAL'"
+        class="install-panel network-panel"
         aria-label="网络存储"
       >
         <ServiceNetworkFields
@@ -617,8 +656,9 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
         />
       </section>
 
+      </div>
       <section
-        v-else-if="step === 3 && plan"
+        v-if="step === 3 && plan"
         class="install-panel"
         aria-label="预检确认"
       >
@@ -788,13 +828,19 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
         </div>
       </section>
     </div>
+    <ServiceInstallDialog v-if="engineInstalling && props.dockerRecipe" embedded :open="true" :recipe="props.dockerRecipe" :recipes="[props.dockerRecipe]" :official-recipes="props.dockerOfficialRecipes" :host="host" @close="resumeSoftware" @submitted="emit('submitted', $event)" />
+    <section v-if="preparationOpen && host" class="inline-preparation">
+      <h3>{{ automaticUpdate ? '正在准备安装环境' : '更新接入组件' }}</h3>
+      <HostPreparationPanel :host="readinessHost || host" :automatic-update="automaticUpdate" update-only @updated="preparationChecked" />
+      <button v-if="!automaticUpdate" class="secondary" @click="preparationOpen = false">返回安装设置</button>
+    </section>
     <template #footer
-      ><div class="install-footer">
+      ><div v-if="!engineInstalling && !preparationOpen" class="install-footer">
         <button class="secondary" :disabled="busy" @click="close()">
-          {{ submitted ? "关闭" : "取消" }}</button
+          {{ embedded ? "返回软件安装" : submitted ? "关闭" : "取消" }}</button
         ><span class="footer-spacer"></span
         ><button
-          v-if="method !== 'SELF' && step > 0 && step < 4"
+          v-if="method !== 'SELF' && step === 3"
           class="secondary"
           :disabled="busy || submissionAttempted"
           @click="previous"
@@ -803,11 +849,11 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
         ><button
           v-if="method !== 'SELF' && step < 3"
           class="primary"
-          :disabled="busy || !recipe || !host || (method === 'OFFICIAL' && !officialRecipe)"
+          :disabled="busy || !mode || !selectedVersion || !recipe || !host || (method === 'OFFICIAL' && !officialRecipe)"
           @click="next"
         >
           {{
-            busy ? "处理中…" : method === 'OFFICIAL' ? '检查官方安装条件' : step === 2 ? "检查安装条件" : "下一步"
+            busy ? "处理中…" : "检查安装条件"
           }}</button
         ><button
           v-if="step === 3 && planExpired && !submissionAttempted"
@@ -826,10 +872,7 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
         </button>
       </div></template
     >
-  </ElDrawer>
-  <ElDialog v-model="preparationOpen" :title="automaticUpdate ? '正在准备安装环境' : '更新接入组件'" width="min(680px,96vw)" :close-on-click-modal="false" :close-on-press-escape="false" destroy-on-close>
-    <HostPreparationPanel v-if="props.open && preparationOpen && props.host" :host="readinessHost || props.host" :automatic-update="automaticUpdate" update-only @updated="preparationChecked" />
-  </ElDialog>
+  </component>
 </template>
 
 <style scoped>
@@ -856,4 +899,19 @@ function previous() { step.value = method.value === "OFFICIAL" ? 0 : step.value 
 .self-install p { margin: 0; font-size: 13px; line-height: 1.9; color: var(--muted); }
 .self-install .primary { justify-self: start; width: auto; }
 .install-panel > a { font-size: 12px; overflow-wrap: anywhere; }
+</style>
+
+<style scoped>
+.host-readiness { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); }
+.settings-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.source-panel, .instance-panel { grid-column: 1; }
+.network-panel { grid-column: 2; grid-row: 1 / 3; }
+.official-settings { grid-template-columns: minmax(0, 1fr); }
+.source-details { overflow-wrap: anywhere; }
+.source-details summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.inline-preparation { display: grid; gap: 16px; }
+@media (max-width: 720px) {
+  .settings-grid { grid-template-columns: minmax(0, 1fr); }
+  .source-panel, .instance-panel, .network-panel { grid-column: auto; grid-row: auto; }
+}
 </style>

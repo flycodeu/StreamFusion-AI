@@ -119,7 +119,12 @@ def main():
                     drawer = page.locator(".el-drawer:visible").last
                     drawer.wait_for()
                     drawer = page.locator(".el-drawer").filter(has=page.locator(".service-install"))
-                    drawer.get_by_role("button", name="Ops 离线安装", exact=True).click()
+                    drawer.get_by_role("button", name="原生安装", exact=True).click()
+                    drawer.get_by_label("原生安装来源", exact=True).select_option("OFFLINE")
+                    version = drawer.get_by_label("安装版本", exact=True)
+                    if not version.input_value():
+                        expect(drawer.get_by_role("button", name="检查安装条件", exact=True)).to_be_disabled()
+                        version.select_option(version.locator('option[value]:not([value=""])').first.get_attribute("value"))
                     return drawer
 
                 def close_install(drawer):
@@ -143,8 +148,8 @@ def main():
                 page.get_by_role("button", name="编程软件", exact=True).click()
                 assert page.locator("article.plugin-card:not(.node-catalog-card)").count() == 2
                 drawer = open_install("Claude Code")
-                assert drawer.get_by_role("radio", name="Docker 容器", exact=False).count() == 0
-                expect(drawer.get_by_role("radio", name="本地离线材料库 · 默认", exact=False)).to_be_checked()
+                assert drawer.get_by_role("button", name="Docker 安装", exact=True).count() == 0
+                expect(drawer.get_by_role("radio", name="平台离线材料", exact=False)).to_be_checked()
                 drawer.get_by_text("上传离线安装包", exact=True).click()
                 assert drawer.get_by_label("原生安装归档", exact=True).get_attribute("accept") == ""
                 assert "原始二进制" in drawer.inner_text()
@@ -163,10 +168,8 @@ def main():
                 page.route(material_route, lambda route: route.fulfill(json={"data": [{"id": "native-layout-fixture", "name": "界面测试材料", "recipeVersion": codex["version"], "recipeRevision": codex["revision"], "runtimeMode": "NATIVE", "available": True, "status": "AVAILABLE"}]}))
                 drawer = open_install("Codex CLI")
                 drawer.get_by_label("可用安装包", exact=True).select_option("native-layout-fixture")
-                drawer.get_by_role("button", name="下一步", exact=True).click()
                 assert drawer.get_by_role("button", name="新建凭据", exact=True).count() == 0
                 assert "自己的 SSH" in drawer.inner_text()
-                drawer.get_by_role("button", name="下一步", exact=True).click()
                 assert drawer.get_by_label("宿主机访问端口", exact=True).count() == 0
                 close_install(drawer)
                 page.unroute(material_route)
@@ -180,18 +183,14 @@ def main():
                 assert page.get_by_role("heading", name="MinIO", exact=True).count() == 0
                 checks.extend(["programming-category-two-tools", "native-only-tools-no-fake-docker-channel", "claude-raw-offline-material-chooser", "programming-no-auth-secrets-or-listening-ports", "python-runtime-category", "ffmpeg-media-tool-category", "minio-readonly-no-unavailable-install-card"])
                 drawer = open_install("Nginx")
-                native_option = drawer.locator("label").filter(has_text="原生 / systemd")
-                assert native_option.get_by_role("radio").is_enabled()
-                assert "官方材料" in native_option.inner_text()
-                expect(drawer.get_by_role("radio", name="本地离线材料库 · 默认", exact=False)).to_be_checked()
-                drawer.get_by_role("button", name="下一步", exact=True).click()
+                expect(drawer.get_by_role("button", name="原生安装", exact=True)).to_have_attribute("aria-pressed", "true")
+                expect(drawer.get_by_role("radio", name="平台离线材料", exact=False)).to_be_checked()
+                drawer.get_by_role("button", name="检查安装条件", exact=True).click()
                 expect(drawer.get_by_role("alert")).to_contain_text("离线归档")
-                drawer.get_by_role("radio", name="Docker 容器", exact=False).check()
+                drawer.get_by_role("button", name="Docker 安装", exact=True).click()
                 drawer.get_by_role("radio", name="目标在线拉取镜像", exact=False).check()
-                drawer.get_by_role("button", name="下一步", exact=True).click()
                 drawer.get_by_label("实例名称", exact=True).fill("nginx-test-8088")
                 assert drawer.get_by_role("button", name="新建凭据", exact=True).count() == 0
-                drawer.get_by_role("button", name="下一步", exact=True).click()
                 drawer.get_by_label("宿主机监听地址", exact=True).fill("127.0.0.1")
                 drawer.get_by_label("宿主机访问端口", exact=True).fill("0")
                 before = len(preflights)
@@ -218,12 +217,10 @@ def main():
                 close_install(drawer)
 
                 drawer = open_install("SeaweedFS")
-                drawer.get_by_role("radio", name="Docker 容器", exact=False).check()
+                drawer.get_by_role("button", name="Docker 安装", exact=True).click()
                 drawer.get_by_role("radio", name="目标在线拉取镜像", exact=False).check()
-                drawer.get_by_role("button", name="下一步", exact=True).click()
                 drawer.get_by_label("S3 Access Key", exact=True).select_option(access["id"] + ":" + access["revision"])
                 drawer.get_by_label("S3 Secret Key", exact=True).select_option(secret["id"] + ":" + secret["revision"])
-                drawer.get_by_role("button", name="下一步", exact=True).click()
                 drawer.get_by_label("宿主机访问端口", exact=True).fill("18334")
                 drawer.get_by_role("button", name="检查安装条件", exact=True).click()
                 page.wait_for_function("() => !!document.querySelector('.install-error code')")
@@ -236,8 +233,8 @@ def main():
                 close_install(drawer)
 
                 drawer = open_install("Nginx")
-                drawer.get_by_role("radio", name="Docker 容器", exact=False).check()
-                drawer.get_by_role("radio", name="本地离线材料库 · 默认", exact=False).check()
+                drawer.get_by_role("button", name="Docker 安装", exact=True).click()
+                drawer.get_by_role("radio", name="平台离线材料", exact=False).check()
                 drawer.get_by_text("上传离线镜像", exact=True).click()
                 bad_archive = b"invalid docker archive\n" + bytes(4096)
                 drawer.get_by_label("镜像归档", exact=True).set_input_files({"name": "invalid.tar", "mimeType": "application/x-tar", "buffer": bad_archive})

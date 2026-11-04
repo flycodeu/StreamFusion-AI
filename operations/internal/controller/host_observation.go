@@ -58,7 +58,34 @@ func unknownHostCapabilities() hostCapabilities {
 
 // Fixed, read-only POSIX probe. User input is never inserted into this command;
 // it does not source /etc/os-release, use sudo, write files or evaluate output.
-const hostReadOnlyCommand = `/bin/sh -c 'printf "SFOPS_HOST_V1\n"; uname -s; uname -m; if command -v docker >/dev/null 2>&1; then printf "DOCKER_PRESENT\n"; else printf "DOCKER_MISSING\n"; fi'`
+const hostReadOnlyCommand = `/bin/sh -c '
+printf "SFOPS_HOST_V1\n"; uname -s; uname -m
+if command -v docker >/dev/null 2>&1 || command -v dockerd >/dev/null 2>&1; then
+  printf "DOCKER_PRESENT\n"; exit 0
+fi
+unknown=0
+for dir in /bin /sbin /usr/bin /usr/sbin /usr/local/bin /usr/local/sbin /snap/bin; do
+  for name in docker dockerd; do
+    if [ -e "$dir/$name" ] || [ -L "$dir/$name" ]; then printf "DOCKER_PRESENT\n"; exit 0; fi
+  done
+  current=$dir
+  while [ ! -e "$current" ] && [ ! -L "$current" ]; do
+    current=${current%/*}; current=${current:-/}
+  done
+  if [ ! -d "$current" ] || [ ! -r "$current" ] || [ ! -x "$current" ]; then unknown=1; fi
+done
+for unit in docker.service snap.docker.dockerd.service; do
+  if state=$(systemctl show "$unit" --property=LoadState --value 2>/dev/null); then
+    case "$state" in
+      not-found) ;;
+      loaded|masked|bad-setting|error|merged) printf "DOCKER_PRESENT\n"; exit 0 ;;
+      *) unknown=1 ;;
+    esac
+  else
+    unknown=1
+  fi
+done
+if [ "$unknown" = 0 ]; then printf "DOCKER_MISSING\n"; else printf "DOCKER_UNKNOWN\n"; fi'`
 
 func checkedCapability(available bool, code, message string) hostCapability {
 	status := "UNAVAILABLE"
@@ -106,6 +133,7 @@ func (h *HTTP) observeHost(ctx context.Context, t target) hostCapabilities {
 	facts.ExpiresAt = time.Now().UTC().Add(hostCapabilityFreshnessTTL).Format(time.RFC3339Nano)
 	out := &limitedOutput{limit: 4096}
 	errOut := &limitedOutput{limit: 1024}
+	dockerPresent := false
 	if t.Kind == "SSH" {
 		client, closeClient, e := h.store.connectSSH(ctx, t)
 		if e != nil {
@@ -119,7 +147,7 @@ func (h *HTTP) observeHost(ctx context.Context, t target) hostCapabilities {
 		if e != nil {
 			facts.ReadOnly = checkedCapability(false, "READ_ONLY_PROBE_FAILED", "SSH已连接，但只读系统观察未成功")
 		} else {
-			applyHostReadOnly(&facts, out.String())
+			dockerPresent = applyHostReadOnly(&facts, out.String())
 		}
 	} else {
 		facts.Reachability = checkedCapability(true, "LOCAL_CONTROLLER", "本机控制器可访问")
@@ -147,8 +175,10 @@ func (h *HTTP) observeHost(ctx context.Context, t target) hostCapabilities {
 	facts.Mutation = checkedCapability(true, "EXECUTOR_AUTHORIZED", "受管执行器身份与变更授权通过")
 	if executor.DockerEngine || executor.Docker {
 		facts.Docker = checkedCapability(true, "DOCKER_ENGINE_READY", "执行器可访问Docker Engine")
-	} else {
-		facts.Docker = checkedCapability(false, "DOCKER_ENGINE_UNAVAILABLE", "Docker Engine未安装、未运行或执行器无法访问")
+	} else if dockerPresent {
+		facts.Docker = checkedCapability(false, "DOCKER_ENGINE_UNAVAILABLE", "Docker Engine未运行或执行器无法访问")
+	} else if facts.Docker.Code != "DOCKER_NOT_INSTALLED" {
+		facts.Docker = hostCapability{Status: "UNKNOWN", Code: "DOCKER_ACCESS_UNCONFIRMED", Message: "Docker安装与访问状态尚未确认", ObservedAt: Now(), Source: "DOCKER"}
 	}
 	if executor.DockerCompose || executor.Docker {
 		facts.DockerCompose = checkedCapability(true, "DOCKER_COMPOSE_READY", "Docker Compose可用，支持应用发布")
@@ -161,11 +191,12 @@ func (h *HTTP) observeHost(ctx context.Context, t target) hostCapabilities {
 	return facts
 }
 
-func applyHostReadOnly(facts *hostCapabilities, output string) {
+// The return value records positive installation evidence separately from access.
+func applyHostReadOnly(facts *hostCapabilities, output string) bool {
 	lines := strings.Split(strings.TrimSpace(strings.ReplaceAll(output, "\r\n", "\n")), "\n")
 	if len(lines) != 4 || lines[0] != "SFOPS_HOST_V1" || len(lines[1]) > 64 || len(lines[2]) > 64 {
 		facts.ReadOnly = checkedCapability(false, "READ_ONLY_RESPONSE_INVALID", "只读观察返回格式不正确")
-		return
+		return false
 	}
 	facts.ReadOnly = checkedCapability(true, "READ_ONLY_READY", "可读取系统信息")
 	facts.Platform = strings.ToLower(lines[1]) + "/" + lines[2]
@@ -173,7 +204,10 @@ func applyHostReadOnly(facts *hostCapabilities, output string) {
 		facts.Docker = checkedCapability(false, "DOCKER_NOT_INSTALLED", "未检测到Docker")
 	} else if lines[3] == "DOCKER_PRESENT" {
 		facts.Docker = hostCapability{Status: "UNKNOWN", Code: "DOCKER_ACCESS_UNCONFIRMED", Message: "已安装Docker，执行器访问能力尚未确认", ObservedAt: Now(), Source: "DOCKER"}
+	} else {
+		facts.Docker = hostCapability{Status: "UNKNOWN", Code: "DOCKER_ACCESS_UNCONFIRMED", Message: "Docker安装与访问状态尚未确认", ObservedAt: Now(), Source: "DOCKER"}
 	}
+	return lines[3] == "DOCKER_PRESENT"
 }
 
 func (h *HTTP) checkHost(w http.ResponseWriter, r *http.Request, s *session, id string) {

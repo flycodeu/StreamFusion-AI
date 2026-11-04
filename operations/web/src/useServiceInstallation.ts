@@ -21,6 +21,7 @@ import {
   type ServiceInstallPlan,
   type ServiceInstallReceipt,
   type ServiceRecipe,
+  type RuntimeMode,
 } from "./serviceInstallation";
 
 export interface ServiceInstallationProps {
@@ -28,6 +29,7 @@ export interface ServiceInstallationProps {
   recipe?: ServiceRecipe;
   host?: Host;
   method?: InstallationMethod;
+  runtimeMode?: RuntimeMode;
 }
 
 export function useServiceInstallation(
@@ -251,6 +253,7 @@ export function useServiceInstallation(
       () => props.recipe?.revision,
       () => props.host?.id,
       () => props.method,
+      () => props.runtimeMode,
     ],
     async () => {
       generation += 1;
@@ -265,7 +268,7 @@ export function useServiceInstallation(
       if (!props.open || !props.recipe || !props.host) return;
       const revision = generation;
       configuration.value = official.value ? initialOfficialConfiguration(props.recipe) :
-        initialServiceConfiguration(props.recipe, props.host.address);
+        initialServiceConfiguration(props.recipe, props.host.address, props.runtimeMode);
       readinessHost.value = undefined;
       step.value = 0;
       plan.value = undefined;
@@ -284,7 +287,7 @@ export function useServiceInstallation(
       officialNeedsImport.value = false;
       materialProgress.value = "";
       materialNeedsImport.value = false;
-      sourceType.value = official.value ? "OFFICIAL" : "ARCHIVE";
+      sourceType.value = official.value ? "OFFICIAL" : props.runtimeMode === "DOCKER" ? "REGISTRY" : "ARCHIVE";
       credentialChoices.value = { primary: "", access: "", user: "" };
       clearError();
       try {
@@ -304,7 +307,7 @@ export function useServiceInstallation(
     () => configuration.value?.runtimeMode,
     (mode, previous) => {
       if (official.value || !mode || !previous || mode === previous || !props.recipe) return;
-      sourceType.value = "ARCHIVE";
+      sourceType.value = props.runtimeMode === "DOCKER" ? "REGISTRY" : "ARCHIVE";
       materialId.value = "";
       selectedFile.value = undefined;
       archiveSHA.value = "";
@@ -638,24 +641,24 @@ export function useServiceInstallation(
     officialNeedsImport.value = false;
     void prepareOfficialMaterial();
   }
-  function validateStep() {
+  function validateStep(section = step.value) {
     const config = configuration.value;
     if (!config || !props.host || !props.recipe) return "请选择软件和目标主机";
     if (props.host.maintenance) return "主机维护中，请恢复后再安装";
     if (official.value) return !config.name.trim() || new TextEncoder().encode(config.name).length > 120 ? "实例名称须为1–120字节" : "";
     if (
-      step.value === 0 &&
+      section === 0 &&
       sourceType.value === "ARCHIVE" &&
       !selectedMaterial.value?.available
     )
       return "先选择已校验的离线归档";
     if (
-      step.value === 0 &&
+      section === 0 &&
       sourceType.value === "ONLINE" &&
       !selectedMaterial.value?.available
     )
       return "先准备官方材料，或选择已就绪的原生材料";
-    if (step.value === 1) {
+    if (section === 1) {
       if (credentialRole.value && credentialSecret.value)
         return "请先保存新凭据，或收起编辑后使用已选凭据";
       if (
@@ -685,7 +688,7 @@ export function useServiceInstallation(
       )
         return "MediaMTX账号以字母开头，仅含字母、数字和下划线，最多32位";
     }
-    if (step.value === 2) {
+    if (section === 2) {
       if (!storageDirectoryValid(config.storageRoot))
         return "存储根目录须为/opt、/srv、/var/lib、/data或/mnt下的专用规范目录";
       if (!isTool(props.recipe) && !isDockerEngine(props.recipe) && !explicitIPv4(config.bindAddress))
@@ -731,17 +734,10 @@ export function useServiceInstallation(
   }
   async function next() {
     clearError();
-    fieldError.value = validateStep();
+    fieldError.value = [0, 1, 2].map(validateStep).find(Boolean) || "";
     if (fieldError.value) return;
-    if (official.value) { await preflight(); return; }
-    if (step.value < 2) {
-      if (step.value === 1) {
-        credentialSecret.value = "";
-        credentialRole.value = undefined;
-      }
-      step.value += 1;
-      return;
-    }
+    credentialSecret.value = "";
+    credentialRole.value = undefined;
     await preflight();
   }
   async function preflight() {

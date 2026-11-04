@@ -42,6 +42,19 @@ const material = (id, mode, origin = "UPLOADED", available = true) => ({
   id, name: "jdk.tar.gz", recipeName: "Eclipse Temurin JDK", recipeKey: "java", recipeVersion: "21",
   recipeRevision: "r1", runtimeMode: mode, origin: { kind: origin }, status: "AVAILABLE", available, byteSize: 1024,
 });
+test("installation defaults distinguish a missing engine from unavailable or stale evidence", () => {
+  const service = { ...recipe, key: "redis", kind: "SERVICE" };
+  const host = (status, code, expiresAt = "2099-01-01T00:00:00Z") => ({ capabilities: { docker: { status, code }, expiresAt } });
+  for (const [facts, expected] of [
+    [host("AVAILABLE", "DOCKER_ENGINE_READY"), "DOCKER"],
+    [host("UNAVAILABLE", "DOCKER_NOT_INSTALLED"), "NATIVE"],
+    [host("UNAVAILABLE", "DOCKER_ENGINE_UNAVAILABLE"), "DOCKER"],
+    [host("UNKNOWN", "DOCKER_ACCESS_UNCONFIRMED"), undefined],
+    [host("UNAVAILABLE", "DOCKER_NOT_INSTALLED", "2000-01-01"), undefined],
+  ]) assert.equal(installation.defaultInstallationRuntime([service], facts), expected);
+  assert.equal(installation.defaultInstallationRuntime([recipe]), "NATIVE");
+  assert.equal(installation.defaultInstallationRuntime([{ ...service, runtimeModes: ["DOCKER"] }], host("UNAVAILABLE", "DOCKER_NOT_INSTALLED")), "DOCKER");
+});
 async function flush() { for (let i = 0; i < 10; i++) { await Promise.resolve(); await vue.nextTick(); } }
 function executionTimer() {
   let callback;

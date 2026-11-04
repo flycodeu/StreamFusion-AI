@@ -98,7 +98,7 @@ def main():
                 cap = {"status": "AVAILABLE", "code": "UI_FIXTURE", "message": "仅界面夹具", "observedAt": stamp, "source": "UI_FIXTURE"}
                 fixture_host = {**host, "name": "界面夹具 Ubuntu 主机", "kind": "SSH", "address": "192.0.2.26", "version": "1",
                                 "installRoot": "/opt/streamfusion-ops", "observedAt": stamp, "maintenance": False,
-                                "capabilities": {"reachability": cap, "readOnly": cap, "mutation": cap, "docker": {**cap, "status": "UNAVAILABLE"},
+                                "capabilities": {"reachability": cap, "readOnly": cap, "mutation": cap, "docker": {**cap, "status": "UNAVAILABLE", "code": "DOCKER_NOT_INSTALLED"},
                                                  "expiresAt": expiry, "platform": "linux/amd64"}}
                 nginx = next(item for item in official if item["key"] == "nginx")
                 paths = {"root": "/", "binary": "/usr/sbin/nginx", "config": "/etc/nginx", "data": "/var/www/html", "logs": "/var/log/nginx",
@@ -110,6 +110,8 @@ def main():
                                  "commands": [{"executable": "/usr/bin/apt-get", "args": ["update"]},
                                               {"executable": "/usr/bin/apt-get", "args": ["install", "--yes", "nginx=1.24.0-2ubuntu7.5"]}]}
                 rows, preflights, updates = [], [], []
+                pending_checks = []
+                hold_host_check = False
                 update_job = {"id": "old-connection", "status": "SUCCEEDED", "phase": "VERIFYING_EXECUTOR", "errorCode": "", "updatedAt": stamp}
                 upgraded = False
                 update_scenario = "auto"
@@ -130,7 +132,10 @@ def main():
                     elif path == "/software-instances" and request.method == "GET":
                         route.fulfill(json={"data": rows})
                     elif path == f"/hosts/{host['id']}/checks":
-                        route.fulfill(json={"data": fixture_host})
+                        if hold_host_check:
+                            pending_checks.append(route)
+                        else:
+                            route.fulfill(json={"data": fixture_host})
                     elif path == f"/hosts/{host['id']}/preparation":
                         data = {"hostId": host["id"], "expectedHostVersion": fixture_host["version"], "account": "ubuntu",
                                 "installRoot": fixture_host["installRoot"], "remoteJob": update_job,
@@ -214,15 +219,63 @@ def main():
                     page.set_viewport_size({"width": 1440, "height": 1000})
 
                 software_page()
+                fixture_host["capabilities"]["docker"] = dict(cap)
+                software_page()
+                drawer = open_install("nginx")
+                expect(drawer.get_by_role("button", name="Docker 安装", exact=True)).to_have_attribute("aria-pressed", "true")
+                expect(drawer.get_by_role("radio", name="目标在线拉取镜像", exact=False)).to_be_checked()
+                docker_revision = drawer.get_by_label("安装版本", exact=True).input_value()
+                assert docker_revision == next(item for item in definitions if item["key"] == "nginx")["revision"]
+                drawer.get_by_role("button", name="原生安装", exact=True).click()
+                expect(drawer.get_by_label("安装版本", exact=True)).to_have_value(nginx["revision"])
+                assert nginx["revision"] != docker_revision
+                drawer.get_by_role("button", name="Docker 安装", exact=True).click()
+                expect(drawer.get_by_label("安装版本", exact=True)).to_have_value(docker_revision)
+                checks.append("fresh-docker-default-online-and-runtime-switch-keeps-matching-recipe-revisions")
+                close(drawer)
+
+                hold_host_check = True
+                fixture_host["capabilities"]["expiresAt"] = (now - timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+                software_page()
+                before_pending = len(calls)
+                drawer = open_install("nginx")
+                expect(drawer.get_by_text("正在检测安装环境…", exact=True)).to_be_visible()
+                drawer.get_by_role("button", name="原生安装", exact=True).click()
+                assert len(pending_checks) == 1
+                fixture_host["capabilities"]["expiresAt"] = expiry
+                pending_checks.pop().fulfill(json={"data": fixture_host})
+                expect(drawer.get_by_text("正在检测安装环境…", exact=True)).not_to_be_visible()
+                expect(drawer.get_by_role("button", name="原生安装", exact=True)).to_have_attribute("aria-pressed", "true")
+                assert not any(call["path"].endswith("/preparation/install") or call["path"].startswith("/installation-materials/") for call in calls[before_pending:])
+                checks.append("expired-host-check-keeps-manual-native-choice-without-upload-or-component-update")
+                close(drawer)
+                hold_host_check = False
+                fixture_host["capabilities"]["docker"] = {**cap, "status": "UNAVAILABLE", "code": "DOCKER_NOT_INSTALLED"}
+                software_page()
+                drawer = open_install("nginx")
+                drawer.get_by_role("button", name="Docker 安装", exact=True).click()
+                drawer.get_by_label("实例名称", exact=True).fill("安装引擎后保留的软件草稿")
+                drawer.get_by_role("button", name="安装 Docker", exact=True).click()
+                engine = drawer.locator(".el-card").filter(has=page.locator(".service-install"))
+                expect(engine.get_by_label("原生安装来源", exact=True)).to_have_value("OFFICIAL")
+                expect(page.locator(".el-drawer:visible")).to_have_count(1)
+                engine.get_by_role("button", name="返回软件安装", exact=True).click()
+                expect(engine).not_to_be_visible()
+                expect(drawer.get_by_label("实例名称", exact=True)).to_have_value("安装引擎后保留的软件草稿")
+                expect(drawer.get_by_role("button", name="Docker 安装", exact=True)).to_have_attribute("aria-pressed", "true")
+                assert not preflights and not updates and not installation_submits
+                checks.append("missing-engine-opens-inline-and-returns-to-software-draft-without-installing")
+                close(drawer)
                 baseline = len(calls)
                 drawer = open_install("nginx")
-                expect(drawer.get_by_role("button", name="官方安装", exact=True)).to_have_attribute("aria-pressed", "true")
+                expect(drawer.get_by_role("button", name="原生安装", exact=True)).to_have_attribute("aria-pressed", "true")
+                expect(drawer.get_by_label("原生安装来源", exact=True)).to_have_value("OFFICIAL")
                 assert not drawer.get_by_label("可用安装包", exact=True).count()
                 assert not any(call["query"].startswith("recipeKey=") or call["path"] == "/credentials" for call in calls[baseline:])
                 drawer.get_by_label("实例名称", exact=True).fill("更新后保留的官方实例")
                 layout(drawer, "official-default")
                 preflight_before, update_before = len(preflights), len(updates)
-                drawer.get_by_role("button", name="检查官方安装条件", exact=True).click()
+                drawer.get_by_role("button", name="检查安装条件", exact=True).click()
                 expect(drawer.get_by_text("预检完成", exact=True)).to_be_visible()
                 assert len(updates) - update_before == 1 and len(preflights) - preflight_before == 2
                 assert preflights[preflight_before]["expectedHostVersion"] == "1"
@@ -250,8 +303,8 @@ def main():
                 drawer = open_install("nginx")
                 drawer.get_by_label("实例名称", exact=True).fill("sudo后保留的官方实例")
                 preflight_before, update_before = len(preflights), len(updates)
-                drawer.get_by_role("button", name="检查官方安装条件", exact=True).click()
-                update = page.get_by_role("dialog", name="正在准备安装环境", exact=True)
+                drawer.get_by_role("button", name="检查安装条件", exact=True).click()
+                update = drawer.locator(".inline-preparation")
                 password_input = update.get_by_label("ubuntu 的登录密码", exact=True)
                 expect(password_input).to_be_enabled()
                 assert len(updates) - update_before == 1 and len(preflights) - preflight_before == 1
@@ -276,9 +329,9 @@ def main():
                 drawer = open_install("nginx")
                 drawer.get_by_label("实例名称", exact=True).fill("手工兜底保留的官方实例")
                 preflight_before, update_before = len(preflights), len(updates)
-                drawer.get_by_role("button", name="检查官方安装条件", exact=True).click()
+                drawer.get_by_role("button", name="检查安装条件", exact=True).click()
                 drawer.get_by_role("button", name="更新并继续", exact=True).click()
-                update = page.get_by_role("dialog", name="更新接入组件", exact=True)
+                update = drawer.locator(".inline-preparation")
                 expect(update.get_by_role("button", name="更新并继续", exact=True)).to_be_enabled()
                 assert len(updates) == update_before and len(preflights) - preflight_before == 1
                 assert preflights[preflight_before]["expectedHostVersion"] == "5"
@@ -293,10 +346,13 @@ def main():
 
                 preflight_before = len(preflights)
                 drawer = open_install("nginx")
-                drawer.get_by_role("button", name="Ops 离线安装", exact=True).click()
-                drawer.get_by_role("radio", name="原生 / systemd", exact=False).check()
-                expect(drawer.get_by_role("radio", name="本地离线材料库 · 默认", exact=False)).to_be_checked()
-                drawer.get_by_role("button", name="下一步", exact=True).click()
+                drawer.get_by_label("原生安装来源", exact=True).select_option("OFFLINE")
+                offline_version = drawer.get_by_label("安装版本", exact=True)
+                if not offline_version.input_value():
+                    expect(drawer.get_by_role("button", name="检查安装条件", exact=True)).to_be_disabled()
+                    offline_version.select_option(offline_version.locator('option[value]:not([value=""])').first.get_attribute("value"))
+                expect(drawer.get_by_role("radio", name="平台离线材料", exact=False)).to_be_checked()
+                drawer.get_by_role("button", name="检查安装条件", exact=True).click()
                 expect(drawer.get_by_role("alert")).to_contain_text("离线归档")
                 drawer.get_by_role("radio", name="补充材料到离线库", exact=False).check()
                 expect(drawer.get_by_role("button", name="下载材料到离线库", exact=True)).to_be_enabled()
@@ -306,8 +362,8 @@ def main():
                 close(drawer)
 
                 drawer = open_install("java")
-                expect(drawer.get_by_label("官方配方", exact=True)).not_to_have_value("")
-                drawer.get_by_role("button", name="自行安装", exact=True).click()
+                expect(drawer.get_by_label("原生安装来源", exact=True)).to_have_value("OFFICIAL")
+                drawer.get_by_role("button", name="管理已有软件", exact=True).click()
                 layout(drawer, "self-install-supported")
                 drawer.get_by_role("button", name="检测并登记", exact=True).click()
                 discovery = page.get_by_role("dialog", name="自动识别软件", exact=True)
@@ -321,8 +377,8 @@ def main():
                 for key in ("maven", "codex", "claude"):
                     drawer = open_install(key)
                     if key != "maven":
-                        expect(drawer.get_by_role("button", name="检查官方安装条件", exact=True)).to_be_disabled()
-                    drawer.get_by_role("button", name="自行安装", exact=True).click()
+                        expect(drawer.get_by_label("原生安装来源", exact=True)).to_have_value("OFFLINE")
+                    drawer.get_by_role("button", name="管理已有软件", exact=True).click()
                     assert drawer.get_by_role("button", name="检测并登记", exact=True).count() == 0
                     expect(drawer.get_by_text("此软件暂不支持自动工具登记", exact=False)).to_be_visible()
                     assert drawer.locator(".self-install a").get_attribute("href").startswith("https://")
@@ -377,7 +433,7 @@ def main():
                 # browser fixtures. The isolated controller never receives them.
                 software_page()
                 drawer = open_install("nginx")
-                drawer.get_by_role("button", name="检查官方安装条件", exact=True).click()
+                drawer.get_by_role("button", name="检查安装条件", exact=True).click()
                 expect(drawer.get_by_text("预检完成", exact=True)).to_be_visible()
                 drawer.get_by_role("button", name="确认安装", exact=True).click()
                 terminal = drawer.get_by_label("安装输出", exact=True)
@@ -423,7 +479,7 @@ def main():
                 expect(detail.locator(".software-job code").filter(has_text="SERVICE_INSTALLED")).not_to_be_visible()
                 layout(detail, "software-job-clean-status")
                 detail.locator(".software-job details summary").click()
-                expect(detail.locator(".software-job code").filter(has_text="SERVICE_INSTALLED")).to_be_visible()
+                expect(detail.locator(".software-job code").filter(has_text="已完成 · 软件已安装")).to_be_visible()
                 expect(detail.locator(".software-job code").filter(has_text=installation_job["traceId"])).to_be_visible()
                 checks.append("software-detail-success-message-hidden-and-raw-job-identifiers-retained-in-diagnostics")
                 assert not api("/software-instances") and not api("/installation-materials")

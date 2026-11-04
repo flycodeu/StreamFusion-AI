@@ -1,4 +1,5 @@
 import type { SoftwareJob } from "./software";
+import type { Host } from "./hosts";
 
 export interface ServiceRecipe {
   key: string;
@@ -47,6 +48,16 @@ export interface MaterialSource {
 
 export type RuntimeMode = "DOCKER" | "NATIVE";
 export type InstallationMethod = "OFFICIAL" | "OFFLINE" | "SELF";
+
+export function defaultInstallationRuntime(recipes: ServiceRecipe[], host?: Host): RuntimeMode | undefined {
+  const native = recipes.some((item) => item.runtimeModes.includes("NATIVE"));
+  if (!recipes.some((item) => item.runtimeModes.includes("DOCKER"))) return native ? "NATIVE" : undefined;
+  if (native && recipes.some((item) => item.kind === "TOOL" || item.key === "docker")) return "NATIVE";
+  const facts = host?.capabilities;
+  if (!facts || Date.parse(facts.expiresAt) <= Date.now() || !Number.isFinite(Date.parse(facts.expiresAt))) return undefined;
+  if (facts.docker.code === "DOCKER_NOT_INSTALLED") return native ? "NATIVE" : "DOCKER";
+  return facts.docker.status === "AVAILABLE" || facts.docker.code === "DOCKER_ENGINE_UNAVAILABLE" ? "DOCKER" : undefined;
+}
 
 export interface OfficialInstallation {
   manager: string;
@@ -305,8 +316,9 @@ export function explicitIPv4(address: string) {
 export function initialServiceConfiguration(
   recipe: ServiceRecipe,
   address: string,
+  selectedRuntime?: RuntimeMode,
 ): ServiceConfiguration {
-  const runtimeMode = (
+  const runtimeMode = selectedRuntime || (
     recipe.runtimeModes.includes("NATIVE") && isTool(recipe)
       ? "NATIVE"
       : recipe.runtimeModes[0] || "DOCKER"

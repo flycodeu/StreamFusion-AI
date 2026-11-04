@@ -448,35 +448,17 @@ onUnmounted(() => {
           {{ serviceDescriptions[definition.key] || definition.name }}
         </p>
         <div class="plugin-meta">
-          <small v-if="versions.length > 1">离线版本</small><select
-            v-if="versions.length > 1"
-            :value="definition.version"
-            :aria-label="`${definition.name}版本`"
-            class="version-select"
-            @change="
-              selectedVersions[definition.key] = (
-                $event.target as HTMLSelectElement
-              ).value
-            "
-          >
-            <option
-              v-for="version in versions"
-              :key="version.version"
-              :value="version.version"
-            >
-              {{ version.version }}
-            </option></select
-          ><span v-else class="version-label">{{ definition.version }}</span
-          ><span>{{ definition.platform }}</span>
+          <span>{{ versions.length > 1 ? versions.length + ' 个可选版本' : definition.version }}</span>
+          <span>{{ definition.platform }}</span>
         </div>
         <footer>
           <span class="recipe-kind"
             >{{
-              definition.runtimeModes
+              Array.from(new Set([...versions.flatMap((item) => item.runtimeModes), ...(officialDefinitions.some((item) => item.key === definition.key) ? ["NATIVE"] : [])]))
                 .map((mode) => (mode === "NATIVE" ? "原生" : "Docker"))
                 .join(" / ")
             }}
-            · {{ officialDefinitions.some((item) => item.key === definition.key) ? '官方 / Ops 离线 / 自行安装' : 'Ops 离线 / 自行安装' }}</span
+</span
           >
           <div class="recipe-actions">
             <a
@@ -528,7 +510,10 @@ onUnmounted(() => {
   <ServiceInstallDialog
     :open="!!serviceRecipe"
     :recipe="serviceRecipe"
+    :recipes="serviceDefinitions.filter((item) => item.key === serviceRecipe?.key)"
     :official-recipes="officialDefinitions.filter((item) => item.key === serviceRecipe?.key)"
+    :docker-recipe="dockerRecipe"
+    :docker-official-recipes="officialDefinitions.filter((item) => item.key === 'docker')"
     :host="currentTarget"
     @close="serviceRecipe = undefined"
     @submitted="act(refresh)"
