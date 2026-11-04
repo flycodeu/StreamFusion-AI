@@ -38,7 +38,7 @@ interface Job {
 }
 
 const props = defineProps<{ hostId: string; initialRecipeKey?: string }>();
-const emit = defineEmits<{ error: [unknown]; preparation: [string]; openInstance: [string]; register: [hostId: string, softwareType: string]; node: [hostId: string] }>();
+const emit = defineEmits<{ error: [unknown]; preparation: [string]; openInstance: [string]; register: [hostId: string, softwareType: string]; node: [hostId: string]; git: [hostId: string] }>();
 const targets = ref<Host[]>([]);
 const serviceDefinitions = ref<ServiceRecipe[]>([]);
 const officialDefinitions = ref<ServiceRecipe[]>([]);
@@ -62,6 +62,7 @@ const categories = [
   { key: "PROGRAMMING", label: "编程软件" },
 ];
 function recipeSubtitle(d: ServiceRecipe) {
+  if (d.key === "git") return "版本控制与仓库账号";
   if (d.key === "docker") return "主机容器运行引擎";
   if (d.category === "PROGRAMMING") return "编程软件";
   if (["java", "python"].includes(d.key)) return "应用运行环境";
@@ -88,7 +89,7 @@ const catalogEntries = computed(() => {
       !["java", "python"].includes(definition.key)
     )
       continue;
-    if (category.value === "MAVEN_JDK_BUILD" && definition.key !== "maven")
+    if (category.value === "MAVEN_JDK_BUILD" && !["maven", "git"].includes(definition.key))
       continue;
     if (
       ["MEDIA_TOOLS", "PROGRAMMING"].includes(category.value) &&
@@ -461,6 +462,7 @@ onUnmounted(() => {
 </span
           >
           <div class="recipe-actions">
+            <button v-if="definition.key === 'git'" class="secondary" :disabled="!currentTarget" @click="emit('git', targetId)">账号与仓库</button>
             <a
               class="official-link"
               :href="definition.officialUrl"

@@ -219,6 +219,9 @@ func (h *HTTP) cancelPluginJob(w http.ResponseWriter, r *http.Request, s *sessio
 		return
 	}
 	_, e = tx.Exec("UPDATE jobs SET status='FAILED',phase='CANCELLED',error_code='JOB_CANCELLED',updated_at=? WHERE id=? AND status='QUEUED'", Now(), id)
+	if e == nil && req.GitRepository != nil {
+		_, e = tx.Exec("UPDATE git_repositories SET status=CASE WHEN status='PENDING' THEN 'FAILED' ELSE status END,error_code='JOB_CANCELLED',version=version+1,updated_at=? WHERE id=? AND last_job_id=?", Now(), req.GitRepository.BindingID, id)
+	}
 	if e == nil && req.NodeEnvironment != nil {
 		_, e = tx.Exec("UPDATE node_environments SET error_code='JOB_CANCELLED',version=version+1,updated_at=? WHERE id=? AND last_job_id=?", Now(), req.NodeEnvironment.Context.EnvironmentID, id)
 	}

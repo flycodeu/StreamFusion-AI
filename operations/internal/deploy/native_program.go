@@ -15,6 +15,9 @@ import (
 
 func (x *executor) prepareNativeProgram(ctx context.Context, req Request, dir, root, user string, uid, gid int, parts map[string]string) error {
 	d := req.Installation.Definition
+	if d.Native.BuildRecipe == "GIT_DEB" {
+		return x.prepareGitProgram(ctx, req, root, parts)
+	}
 	if d.Native.BuildRecipe == "DEB" {
 		return x.prepareDebProgram(ctx, req, root, parts)
 	}

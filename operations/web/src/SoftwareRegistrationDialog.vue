@@ -40,11 +40,12 @@ async function close(done?: () => void) {
   }
   if (done) done(); else emit("close");
 }
-const toolTypes: SoftwareType[] = ["JAVA", "PYTHON", "FFMPEG"];
+const toolTypes: SoftwareType[] = ["JAVA", "PYTHON", "FFMPEG", "GIT"];
 const tools: Partial<Record<SoftwareType, string>> = {
   JAVA: "java",
   PYTHON: "python",
   FFMPEG: "ffmpeg",
+  GIT: "git",
 };
 const availableTypes = computed(() =>
   Object.entries(softwareTypes).filter(

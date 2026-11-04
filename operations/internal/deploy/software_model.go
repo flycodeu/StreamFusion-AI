@@ -95,7 +95,7 @@ func (s SoftwareRequest) Validate(observation bool) error {
 			if s.Ownership.RuntimeMode == "NATIVE" && s.Locator != s.Ownership.BinaryPath || s.Ownership.RuntimeMode != "NATIVE" && s.Locator != "image:"+s.Ownership.ImageID {
 				return errors.New("SOFTWARE_TOOL_IDENTITY_INVALID")
 			}
-		} else if s.Locator != "java" && s.Locator != "python" && s.Locator != "ffmpeg" {
+		} else if s.Locator != "java" && s.Locator != "python" && s.Locator != "ffmpeg" && s.Locator != "git" {
 			return errors.New("SOFTWARE_TOOL_UNSUPPORTED")
 		}
 	default:
@@ -111,7 +111,7 @@ func (s SoftwareRequest) Validate(observation bool) error {
 }
 
 func softwareMutation(action string) bool {
-	if action == "NODE_ENVIRONMENT_CHANGE" || action == "SOFTWARE_DOCKER_ACCESS" {
+	if action == "NODE_ENVIRONMENT_CHANGE" || action == "SOFTWARE_DOCKER_ACCESS" || action == "GIT_REPOSITORY_CHANGE" {
 		return true
 	}
 	return action == "SOFTWARE_UNINSTALL" || action == "SOFTWARE_CONFIGURE" || action == "SOFTWARE_INSTALL" || action == "SOFTWARE_ADOPT" || action == "SOFTWARE_START" || action == "SOFTWARE_STOP" || action == "SOFTWARE_UNMANAGE"

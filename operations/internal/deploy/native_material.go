@@ -137,8 +137,13 @@ func extractNativePart(ctx context.Context, part serviceinstall.NativePart, arch
 		}
 		defer gz.Close()
 		input = gz
-	} else if part.Format == "TAR_XZ" {
-		cmd = exec.CommandContext(ctx, "/usr/bin/xz", "--decompress", "--stdout", "--single-stream", archive)
+	} else if part.Format == "TAR_XZ" || part.Format == "DEB" {
+		if part.Format == "DEB" {
+			cmd = exec.CommandContext(ctx, "/usr/bin/dpkg-deb", "--fsys-tarfile", archive)
+		} else {
+			cmd = exec.CommandContext(ctx, "/usr/bin/xz", "--decompress", "--stdout", "--single-stream", archive)
+		}
+		boundPackageCommand(cmd)
 		out, err := cmd.StdoutPipe()
 		if err != nil {
 			return err
@@ -174,6 +179,9 @@ func extractNativePart(ctx context.Context, part serviceinstall.NativePart, arch
 		}
 		if nextErr != nil {
 			return fail(errors.New("NATIVE_ARCHIVE_CORRUPT"))
+		}
+		if (header.Name == "." || header.Name == "./") && header.Typeflag == tar.TypeDir {
+			continue
 		}
 		name, err := nativeArchiveName(header.Name, part.StripComponents)
 		if err != nil {

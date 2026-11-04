@@ -54,6 +54,7 @@ func OfficialCatalog() []Definition {
 		{"maven", "Maven（Ubuntu 官方仓库）", "ubuntu24.04-repository", "TOOL"},
 		{"python", "Python（Ubuntu 官方仓库）", "ubuntu24.04-repository", "TOOL"},
 		{"ffmpeg", "FFmpeg（Ubuntu 官方仓库）", "ubuntu24.04-repository", "TOOL"},
+		{"git", "Git（Ubuntu 官方仓库）", "ubuntu24.04-repository", "TOOL"},
 		{"docker", "Docker Engine（官方系统包）", "29.9.2-official-ubuntu24.04", "SERVICE"},
 	} {
 		d := Definition{Key: row.key, Name: row.name, Version: row.version, Kind: row.kind, Revision: row.key + "-" + row.version + "-official-v1", Platform: "linux/amd64", OfficialURL: "https://ubuntu.com/server/docs/how-to/software/package-management/", RuntimeModes: []string{"NATIVE"}, SourceModes: []string{"OFFICIAL"}, Native: &NativeDefinition{BuildRecipe: "SYSTEM_APT", RequiredTools: []string{"/usr/bin/apt-get", "/usr/bin/apt-cache", "/usr/bin/dpkg-query", "/usr/bin/systemctl"}}}
@@ -64,6 +65,8 @@ func OfficialCatalog() []Definition {
 			d.Port = 80
 		case "mysql":
 			d.Port = 3306
+		case "git":
+			d.Native.RequiredTools = append(d.Native.RequiredTools, "/usr/bin/ssh")
 		case "docker":
 			pinned, _ := Find("docker", "29.9.2-ubuntu24.04")
 			d.Native.BuildRecipe = "SYSTEM_DOCKER_DEB"
@@ -119,6 +122,8 @@ func OfficialRecipeSpec(d Definition) (OfficialSpec, error) {
 		packages, p.Binary = []string{"python3", "python3-minimal", "python3.12", "python3.12-minimal", "python3-venv", "python3.12-venv"}, "/usr/bin/python3.12"
 	case "ffmpeg":
 		packages, p.Binary = []string{"ffmpeg"}, "/usr/bin/ffmpeg"
+	case "git":
+		packages, p.Binary = []string{"git", "git-man"}, "/usr/bin/git"
 	case "docker":
 		packages = []string{"containerd.io", "docker-ce-cli", "docker-ce", "docker-buildx-plugin", "docker-compose-plugin"}
 		p.Binary, p.Config, p.Data, p.Logs, p.Unit = "/usr/bin/dockerd", "/etc/docker", "/var/lib/docker", "", "docker.service"

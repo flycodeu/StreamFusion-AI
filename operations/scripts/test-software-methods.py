@@ -89,9 +89,9 @@ def main():
 
                 host = api("/hosts", "POST", {"name": "安装方式隔离主机", "kind": "LOCAL"}, 201)
                 definitions, official = api("/software-recipes"), api("/software-official-recipes")
-                assert len(definitions) == 17 and len(official) == 9
+                assert len(definitions) == 18 and len(official) == 10
                 assert not api("/installation-materials") and not api("/software-instances")
-                checks.append("real-catalog-17-offline-and-9-official-definitions-empty-library")
+                checks.append("real-catalog-18-offline-and-10-official-definitions-empty-library")
                 now = datetime.now(timezone.utc)
                 stamp = now.isoformat().replace("+00:00", "Z")
                 expiry = (now + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
@@ -119,6 +119,9 @@ def main():
                 installation_submits, installation_logs = [], []
                 installation_job = {"id": "ui-install-job", "status": "RUNNING", "phase": "OFFICIAL_PACKAGES_APPLY", "errorCode": "",
                                     "traceId": "UI_FIXTURE_INSTALL_OUTPUT", "updatedAt": stamp, "targetAckPending": False}
+                git_active = False
+                git_profiles, git_bindings, git_checks, git_submits = [], [], [], []
+                git_job = {"id": "ui-git-job", "status": "SUCCEEDED", "phase": "GIT_REPOSITORY_BOUND", "errorCode": "", "traceId": "UI_GIT_TRACE", "updatedAt": stamp, "targetAckPending": False}
 
                 def route_api(route):
                     nonlocal upgraded, update_job
@@ -127,6 +130,37 @@ def main():
                     calls.append({"path": path, "query": urlsplit(request.url).query, "method": request.method})
                     if path.startswith("/auth/"):
                         route.continue_()
+                    elif git_active and path == "/credentials" and request.method == "GET":
+                        route.fulfill(json={"data": [{"id": "git-key", "revision": "1", "kind": "SSH_KEY", "name": "工作 Git 密钥", "revokedAt": ""}]})
+                    elif path == "/git-accounts" and request.method == "GET":
+                        route.fulfill(json={"data": git_profiles})
+                    elif path == "/git-accounts" and request.method == "POST":
+                        data = request.post_data_json
+                        assert data["hostKeyConfirmed"] and data["credentialId"] == "git-key"
+                        assert "privateKey" not in data
+                        git_profiles.append({**data, "id": "ui-git-profile", "version": "1", "keyFingerprint": "SHA256:UI_GIT_KEY"})
+                        route.fulfill(json={"data": git_profiles[-1]})
+                    elif path == "/git-host-key":
+                        route.fulfill(json={"data": {"hostPublicKey": "ssh-ed25519 AAAA_UI_PUBLIC_KEY", "fingerprint": "SHA256:UI_GIT_HOST"}})
+                    elif path == f"/hosts/{host['id']}/git-repositories":
+                        route.fulfill(json={"data": git_bindings})
+                    elif path == f"/hosts/{host['id']}/git-repository-plans":
+                        data = request.post_data_json
+                        git_checks.append(data)
+                        route.fulfill(json={"data": {"id": "ui-git-plan", "hostId": host["id"], "action": data["action"], "change": {**git_profiles[0], "account": data["account"], "repoPath": data["repoPath"]}, "observation": {"account": data["account"], "repoPath": data["repoPath"], "branch": "main", "remoteUrl": "git@git.example.test:team/app.git", "hostKeyFingerprint": "SHA256:UI_GIT_HOST", "keyPath": "/home/flycode/.local/share/streamfusion-ops/git/ui/key"}, "expiresAt": expiry}})
+                    elif path == "/git-repository-plans/ui-git-plan/submit":
+                        assert request.post_data_json["confirmed"]
+                        git_submits.append(request.post_data_json)
+                        data = git_checks[-1]
+                        git_job["phase"] = "GIT_REPOSITORY_UNBOUND" if data["action"] == "UNBIND" else "GIT_REPOSITORY_BOUND"
+                        git_bindings[:] = [{"id": "ui-git-binding", "hostId": host["id"], "account": data["account"], "accountUid": "1000", "repoPath": data["repoPath"], "profileId": "ui-git-profile", "profileName": git_profiles[0]["name"], "version": str(len(git_submits)), "status": "RELEASED" if data["action"] == "UNBIND" else "BOUND", "lastJobId": "ui-git-job", "lastJobStatus": "SUCCEEDED", "observation": {"branch": "main", "remoteUrl": "git@git.example.test:team/app.git", "observedAt": stamp}}]
+                        route.fulfill(json={"data": {"jobId": "ui-git-job", "bindingId": "ui-git-binding"}})
+                    elif path == "/jobs/ui-git-job":
+                        route.fulfill(json={"data": git_job})
+                    elif path == "/git-repositories/ui-git-binding/test":
+                        route.fulfill(json={"data": {"ready": True, "code": "GIT_REMOTE_READABLE", "message": "仓库可读取"}})
+                    elif path == "/git-repositories/ui-git-binding/jobs":
+                        route.fulfill(json={"data": [git_job]})
                     elif path == "/hosts" and request.method == "GET":
                         route.fulfill(json={"data": [fixture_host]})
                     elif path == "/software-instances" and request.method == "GET":
@@ -482,6 +516,52 @@ def main():
                 expect(detail.locator(".software-job code").filter(has_text="已完成 · 软件已安装")).to_be_visible()
                 expect(detail.locator(".software-job code").filter(has_text=installation_job["traceId"])).to_be_visible()
                 checks.append("software-detail-success-message-hidden-and-raw-job-identifiers-retained-in-diagnostics")
+                # Git UI uses explicit API fixtures; no key or repository write is forwarded.
+                git_active = True
+                software_page()
+                git_name = next(item["name"] for item in definitions if item["key"] == "git")
+                git_card = page.locator("article.plugin-card").filter(has=page.get_by_role("heading", name=git_name, exact=True))
+                git_card.get_by_role("button", name="账号与仓库", exact=True).click()
+                git_drawer = page.get_by_role("dialog", name="Git 账号与仓库", exact=True)
+                git_drawer.get_by_role("button", name="Git 账号", exact=False).click()
+                git_drawer.get_by_role("button", name="新增账号", exact=True).click()
+                git_drawer.get_by_label("Git 账号名称", exact=True).fill("公司 Git 账号")
+                git_drawer.get_by_label("Git 服务器地址", exact=True).fill("git.example.test")
+                git_drawer.get_by_label("Git 提交姓名", exact=True).fill("开发者")
+                git_drawer.get_by_label("Git 提交邮箱", exact=True).fill("dev@example.test")
+                git_drawer.get_by_label("Git SSH 密钥凭据", exact=True).select_option("git-key:1")
+                git_drawer.get_by_role("button", name="读取候选公钥", exact=True).click()
+                expect(git_drawer.get_by_text("SHA256:UI_GIT_HOST", exact=True)).to_be_visible()
+                expect(git_drawer.get_by_role("button", name="保存账号", exact=True)).to_be_disabled()
+                assert not git_profiles
+                layout(git_drawer, "git-profile-trust")
+                git_drawer.get_by_label("已与可信来源核对主机公钥", exact=True).check()
+                git_drawer.get_by_role("button", name="保存账号", exact=True).click()
+                expect(git_drawer.get_by_text("公司 Git 账号", exact=True)).to_be_visible()
+                git_drawer.get_by_role("button", name="仓库", exact=False).click()
+                git_drawer.get_by_role("button", name="绑定仓库", exact=True).click()
+                git_drawer.get_by_label("仓库系统账号", exact=True).fill("flycode")
+                git_drawer.get_by_label("仓库目录", exact=True).fill("/home/flycode/projects/app")
+                git_drawer.get_by_role("button", name="检查配置", exact=True).click()
+                expect(git_drawer.get_by_label("Git 配置确认", exact=True)).to_be_visible()
+                assert not git_submits and git_checks[-1]["expectedProfileVersion"] == "1"
+                expect(page.locator(".el-drawer:visible")).to_have_count(1)
+                layout(git_drawer, "git-binding-confirmation")
+                git_drawer.get_by_role("button", name="确认绑定", exact=True).click()
+                expect(git_drawer.get_by_text("仓库账号已绑定", exact=True)).to_be_visible()
+                git_drawer.get_by_role("button", name="测试读取", exact=True).click()
+                expect(git_drawer.get_by_text("仓库读取正常", exact=True)).to_be_visible()
+                assert "可推送" not in git_drawer.inner_text()
+                git_drawer.get_by_role("button", name="解除绑定", exact=True).click()
+                expect(git_drawer.get_by_text("解除账号绑定，保留仓库源码和提交历史。", exact=True)).to_be_visible()
+                assert len(git_submits) == 1
+                git_drawer.get_by_role("button", name="确认解除绑定", exact=True).click()
+                expect(git_drawer.get_by_text("已解除", exact=True)).to_be_visible()
+                assert len(git_submits) == 2 and git_submits[0]["idempotencyKey"] != git_submits[1]["idempotencyKey"]
+                git_drawer.get_by_role("button", name="操作记录", exact=True).click()
+                expect(git_drawer.get_by_label("仓库操作记录", exact=True)).to_contain_text("仓库账号已解除")
+                layout(git_drawer, "git-repository-history")
+                checks.append("git-candidate-trust-explicit-single-drawer-bind-read-test-unbind-retains-history")
                 assert not api("/software-instances") and not api("/installation-materials")
                 assert not blocked and not errors, (blocked, errors)
                 checks.append("real-controller-remains-without-software-materials-or-target-execution")

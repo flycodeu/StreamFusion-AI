@@ -482,7 +482,7 @@ func (h *HTTP) deleteHost(w http.ResponseWriter, r *http.Request, s *session, id
 	}
 	defer tx.Rollback()
 	var count int
-	e = tx.QueryRow("SELECT (SELECT count(*) FROM instances WHERE target_id=?)+(SELECT count(*) FROM jobs WHERE target_id=?)+(SELECT count(*) FROM plugin_installations WHERE target_id=?)+(SELECT count(*) FROM plugin_install_plans WHERE target_id=?)+(SELECT count(*) FROM software_instances WHERE host_id=?)+(SELECT count(*) FROM software_install_plans WHERE target_id=?)+(SELECT count(*) FROM firewall_plans WHERE target_id=?)", id, id, id, id, id, id, id).Scan(&count)
+	e = tx.QueryRow("SELECT (SELECT count(*) FROM instances WHERE target_id=?)+(SELECT count(*) FROM jobs WHERE target_id=?)+(SELECT count(*) FROM plugin_installations WHERE target_id=?)+(SELECT count(*) FROM plugin_install_plans WHERE target_id=?)+(SELECT count(*) FROM software_instances WHERE host_id=?)+(SELECT count(*) FROM software_install_plans WHERE target_id=?)+(SELECT count(*) FROM firewall_plans WHERE target_id=?)+(SELECT count(*) FROM git_repositories WHERE host_id=?)+(SELECT count(*) FROM git_repository_plans WHERE host_id=?)", id, id, id, id, id, id, id, id, id).Scan(&count)
 	if e != nil {
 		h.internal(w, r, e)
 		return

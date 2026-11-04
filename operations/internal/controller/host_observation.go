@@ -21,6 +21,7 @@ type hostCapability struct {
 
 // Keep the complete additive CAPABILITIES contract in one strict decoder.
 type executorCapabilities struct {
+	GitRepositoryVersion     int          `json:"gitRepositoryVersion"`
 	DockerAccessVersion      int          `json:"dockerAccessVersion"`
 	NodeEnvironmentVersion   int          `json:"nodeEnvironmentVersion"`
 	NodeTerminalVersion      int          `json:"nodeTerminalVersion"`

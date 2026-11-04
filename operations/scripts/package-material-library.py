@@ -32,6 +32,9 @@ DEFAULT_RECIPES = (
     "node@v24.22.2",
     "npm@11.6.2",
     "pnpm@10.20.0",
+    "git@2.43.0-1ubuntu7.4",
+    "codex@0.163.0",
+    "claude@2.1.304",
 )
 
 

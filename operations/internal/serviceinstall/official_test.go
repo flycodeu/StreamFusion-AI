@@ -9,7 +9,7 @@ import (
 
 func TestOfficialCatalogRemainsSeparateAndPlansAreFrozen(t *testing.T) {
 	legacy := CatalogHash()
-	if len(Catalog()) != 17 || len(OfficialCatalog()) != 9 {
+	if len(Catalog()) != 18 || len(OfficialCatalog()) != 10 {
 		t.Fatal("catalog boundary changed")
 	}
 	for _, d := range OfficialCatalog() {

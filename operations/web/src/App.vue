@@ -249,6 +249,13 @@ const actionLabels: Record<string, string> = {
   NODE_ENVIRONMENT_PLAN_CREATED: "预检 Node 操作",
   NODE_ENVIRONMENT_CHANGE_ACCEPTED: "提交 Node 操作",
   NODE_ENVIRONMENT_CHANGE_RESULT: "Node 操作结果",
+  GIT_ACCOUNT_SAVED: "保存 Git 账号",
+  GIT_ACCOUNT_DELETED: "删除 Git 账号",
+  GIT_REPOSITORY_PLAN_CREATED: "预检仓库账号配置",
+  GIT_REPOSITORY_CHANGE_ACCEPTED: "提交仓库账号配置",
+  GIT_REPOSITORY_CHANGE_RESULT: "仓库账号配置结果",
+  GIT_REPOSITORY_NOT_STARTED: "仓库配置未执行",
+  GIT_REPOSITORY_TEST: "测试仓库读取",
   NODE_REGISTRY_CREATED: "添加 npm 镜像地址",
   NODE_REGISTRY_UPDATED: "修改 npm 镜像地址",
   NODE_REGISTRY_DELETED: "删除 npm 镜像地址",
@@ -264,6 +271,8 @@ const actionLabels: Record<string, string> = {
   ZLM_HANDOFF: "登记媒体服务",
 };
 function auditResult(action: string, result: string) {
+  if (action === "GIT_REPOSITORY_TEST" && result === "GIT_REMOTE_READABLE")
+    return { label: "成功", tone: "state-success" };
   if (["SUCCESS", "SUCCEEDED", "READY"].includes(result) || (action === "HOST_PORTS_OBSERVED" && !result))
     return { label: "成功", tone: "state-success" };
   if (action === "HOST_SOFTWARE_DISCOVERED") {

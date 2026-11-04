@@ -33,5 +33,9 @@ func bundledDefinitions() []Definition {
 			part("docker-buildx-plugin_0.38.1-1~ubuntu.24.04~noble_amd64.deb", dockerBase, "642e9a8a0d115a8a57ad7045a4c7c2561522331197f0c087a762de1b72591672", 17800928),
 			part("docker-compose-plugin_5.6.1-1~ubuntu.24.04~noble_amd64.deb", dockerBase, "9725be1df7fd5ccc6b21ac24112885896c8d134345e3f4aa20b3c2064ef4620e", 8083388),
 		}}}
-	return []Definition{redis, nginx, java, docker}
+	git := Definition{Key: "git", Name: "Git (Ubuntu 24.04)", Kind: "TOOL", Category: "BUILD_TOOLS", Version: "2.43.0-1ubuntu7.4", Revision: "git-ubuntu2404-deb-v1", Platform: "linux/amd64", OfficialURL: "https://packages.ubuntu.com/noble-updates/git", RuntimeModes: []string{"NATIVE"}, SourceModes: []string{"ARCHIVE", "ONLINE"},
+		Native: &NativeDefinition{BuildRecipe: "GIT_DEB", RequiredTools: []string{"/usr/bin/dpkg-deb", "/usr/bin/dpkg-query", "/usr/bin/ldd", "/usr/bin/ssh", "/usr/bin/perl"}, Parts: []NativePart{
+			part("git_2.43.0-1ubuntu7.4_amd64.deb", security+"main/g/git/", "c79b7948ef9860c97ec74293a90178676e63368a0711c95c28a55af4edf1adab", 3680654),
+		}}}
+	return []Definition{redis, nginx, java, docker, git}
 }

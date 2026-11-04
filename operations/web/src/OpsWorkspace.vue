@@ -291,6 +291,7 @@ const jobKindLabels: Record<string, string> = {
   SOFTWARE_UNINSTALL: "卸载软件",
   SOFTWARE_CONFIGURE: "修改软件配置",
   NODE_ENVIRONMENT_CHANGE: "更新 Node 环境",
+  GIT_REPOSITORY_CHANGE: "配置仓库账号",
 };
 const phaseLabels: Record<string, string> = {
   ...softwareJobPhaseLabels,

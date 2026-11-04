@@ -22,7 +22,7 @@ import (
 // systemd, real socket checks or a successful installation on a Linux host.
 func TestServiceInstallMatrixControlledProtocol(t *testing.T) {
 	definitions := serviceinstall.Catalog()
-	if len(definitions) != 17 {
+	if len(definitions) != 18 {
 		t.Fatalf("update the installation matrix for catalog size %d", len(definitions))
 	}
 	for _, definition := range definitions {

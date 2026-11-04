@@ -248,6 +248,8 @@ func observeSoftwareTool(ctx context.Context, s SoftwareRequest, run SoftwareCom
 		command, arg = "/usr/bin/python3", "--version"
 	case "ffmpeg":
 		command, arg = "/usr/bin/ffmpeg", "-version"
+	case "git":
+		command, arg = "/usr/bin/git", "--version"
 	}
 	data, err := softwareCommand(ctx, run, command, arg)
 	if err != nil {

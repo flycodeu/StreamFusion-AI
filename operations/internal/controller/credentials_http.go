@@ -139,6 +139,12 @@ func (h *HTTP) revokeCredential(w http.ResponseWriter, r *http.Request, s *sessi
 	err = tx.QueryRow(`SELECT count(*) FROM (
  SELECT credential_id,credential_revision FROM targets
  UNION ALL
+ SELECT credential_id,credential_revision FROM git_accounts WHERE deleted_at=''
+ UNION ALL
+ SELECT json_extract(change_json,'$.credentialId'),CAST(json_extract(change_json,'$.credentialRevision') AS INTEGER) FROM git_repositories WHERE status<>'RELEASED'
+ UNION ALL
+ SELECT json_extract(p.snapshot_json,'$.change.credentialId'),CAST(json_extract(p.snapshot_json,'$.change.credentialRevision') AS INTEGER) FROM git_repository_plans p JOIN jobs j ON j.id=p.job_id WHERE j.status IN ('QUEUED','RUNNING','UNKNOWN') OR j.target_ack_pending=1
+ UNION ALL
  SELECT rc.credential_id,rc.credential_revision FROM release_credentials rc
  WHERE rc.release_id IN (SELECT current_release_id FROM instances UNION SELECT previous_release_id FROM instances UNION SELECT release_id FROM jobs WHERE status IN ('QUEUED','RUNNING','UNKNOWN') OR target_ack_pending=1)
  UNION ALL

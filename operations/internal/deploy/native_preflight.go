@@ -46,6 +46,18 @@ func (x *executor) nativeInstallPreflight(i serviceinstall.Request) serviceinsta
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if i.Definition.Key == "git" {
+		installed, err := x.installedDockerPackages(ctx)
+		if err != nil {
+			check("PACKAGES", "NATIVE_DEPENDENCY_CHECK_UNAVAILABLE", "无法确认 Git 运行依赖，请检查系统软件包状态")
+		} else {
+			for _, name := range gitRuntimePackages {
+				if installed[name] == "" {
+					check("LIBRARY_"+name, "NATIVE_DEPENDENCY_MISSING", "Git 离线安装需要已有依赖 "+name+"；不会联网补装")
+				}
+			}
+		}
+	}
 	dependencies := []string{}
 	switch i.Definition.Key {
 	case "ffmpeg":

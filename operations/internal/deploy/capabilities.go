@@ -18,6 +18,7 @@ func inspectExecutorCapabilities(owner Owner, platform string, command func(time
 		"dockerEngineAvailable":    engineErr == nil,
 		"dockerComposeAvailable":   composeErr == nil,
 		"nativeInstallVersion":     1,
+		"gitRepositoryVersion":     GitRepositoryCapabilityVersion,
 		"nodeEnvironmentVersion":   NodeEnvironmentCapabilityVersion,
 		"nodeTerminalVersion":      1,
 		"nodeRegistryVersion":      1,

@@ -170,6 +170,7 @@ export interface ServiceInstallJob extends SoftwareJob {
 }
 
 export const serviceDescriptions: Record<string, string> = {
+  git: "版本控制工具，按仓库管理账号与提交身份。",
   docker: "主机容器运行引擎；安装后可运行 Docker 容器。",
   mysql: "关系数据库，支持独立数据目录与初始业务账号。",
   redis: "内存数据服务，使用独立认证与持久化配置。",

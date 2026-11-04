@@ -175,6 +175,13 @@ func (h *HTTP) probeBinding(w http.ResponseWriter, r *http.Request, id string) {
 }
 func (s *Store) releaseSecrets(req *deploy.Request) error {
 	req.Secrets = map[string]string{}
+	if g := req.GitRepository; g != nil && req.Action == "GIT_REPOSITORY_CHANGE" && g.Action == "BIND" {
+		secret, err := s.secret(g.CredentialID, g.CredentialRevision, "SSH_KEY")
+		if err != nil {
+			return err
+		}
+		req.Secrets["gitKey"] = string(secret)
+	}
 	if req.Installation != nil {
 		mutating := req.Action == "SOFTWARE_INSTALL" || req.Action == "SOFTWARE_INSTALL_CHECK"
 		if mutating {

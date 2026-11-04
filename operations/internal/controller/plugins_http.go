@@ -362,7 +362,7 @@ func (h *HTTP) verifyPluginInstallation(w http.ResponseWriter, r *http.Request, 
 
 func (h *HTTP) pluginJobLogs(w http.ResponseWriter, r *http.Request, id string) {
 	var raw string
-	if e := h.store.DB.QueryRow("SELECT input_json FROM jobs WHERE id=? AND (kind IN ('PLUGIN_INSTALL','PLUGIN_REMOVE') OR kind LIKE 'SOFTWARE_%' OR kind='FIREWALL_CHANGE' OR kind='NODE_ENVIRONMENT_CHANGE')", id).Scan(&raw); e != nil {
+	if e := h.store.DB.QueryRow("SELECT input_json FROM jobs WHERE id=? AND (kind IN ('PLUGIN_INSTALL','PLUGIN_REMOVE') OR kind LIKE 'SOFTWARE_%' OR kind='FIREWALL_CHANGE' OR kind='NODE_ENVIRONMENT_CHANGE' OR kind='GIT_REPOSITORY_CHANGE')", id).Scan(&raw); e != nil {
 		h.opsError(w, r, e)
 		return
 	}
@@ -371,7 +371,7 @@ func (h *HTTP) pluginJobLogs(w http.ResponseWriter, r *http.Request, id string) 
 		h.internal(w, r, errors.New("INPUT_DAMAGED"))
 		return
 	}
-	if req.NodeEnvironment != nil || req.Firewall != nil || req.Software != nil && req.Reconfiguration == nil {
+	if req.GitRepository != nil || req.NodeEnvironment != nil || req.Firewall != nil || req.Software != nil && req.Reconfiguration == nil {
 		var phase, status, code, updated string
 		if e := h.store.DB.QueryRow("SELECT phase,status,error_code,updated_at FROM jobs WHERE id=?", id).Scan(&phase, &status, &code, &updated); e != nil {
 			h.opsError(w, r, e)

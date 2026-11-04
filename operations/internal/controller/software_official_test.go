@@ -116,7 +116,7 @@ func TestOfficialInstallationFreezesCommandsAndPreservesHistory(t *testing.T) {
 		return nil, false
 	})
 	var catalog struct{ Data []serviceinstall.Definition }
-	if err := json.Unmarshal(b.call("GET", "/software-official-recipes", nil, 200).Body.Bytes(), &catalog); err != nil || len(catalog.Data) != len(serviceinstall.OfficialCatalog()) || len(serviceinstall.Catalog()) != 17 {
+	if err := json.Unmarshal(b.call("GET", "/software-official-recipes", nil, 200).Body.Bytes(), &catalog); err != nil || len(catalog.Data) != len(serviceinstall.OfficialCatalog()) || len(serviceinstall.Catalog()) != 18 {
 		t.Fatal("official catalog must be separate from frozen offline definitions", err)
 	}
 	input := map[string]any{"expectedHostVersion": "1", "recipeKey": definition.Key, "recipeVersion": definition.Version, "recipeRevision": definition.Revision, "config": serviceinstall.Config{Name: "official nginx fixture", RuntimeMode: "NATIVE", MemoryMiB: 512, HostPort: 80, BindAddress: "0.0.0.0"}, "source": map[string]string{"type": "OFFICIAL"}}

@@ -110,6 +110,7 @@ func (b Binding) Validate() error {
 }
 
 type Request struct {
+	GitRepository        *GitRepositoryRequest         `json:"gitRepository,omitempty"`
 	DockerAccess         *DockerAccessChange           `json:"dockerAccess,omitempty"`
 	NodeEnvironment      *NodeEnvironmentRequest       `json:"nodeEnvironment,omitempty"`
 	Uninstallation       *SoftwareUninstallRequest     `json:"uninstallation,omitempty"`
@@ -157,6 +158,7 @@ type Owner struct {
 	DockerBinary    string `json:"dockerBinary"`
 }
 type Result struct {
+	GitRepository        *GitRepositoryObservation   `json:"gitRepository,omitempty"`
 	DockerAccess         *DockerAccessEvidence       `json:"dockerAccess,omitempty"`
 	NodeEnvironment      *NodeEnvironmentObservation `json:"nodeEnvironment,omitempty"`
 	DockerSocketInactive bool                        `json:"dockerSocketInactive,omitempty"`

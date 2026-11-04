@@ -452,7 +452,7 @@ func (h *HTTP) reconcile(w http.ResponseWriter, r *http.Request, actor *session,
 		return
 	}
 	action := "STATUS"
-	if recover && req.Firewall == nil && req.Plugin == nil && req.Software == nil && req.Installation == nil && req.NodeEnvironment == nil {
+	if recover && req.Firewall == nil && req.Plugin == nil && req.Software == nil && req.Installation == nil && req.NodeEnvironment == nil && req.GitRepository == nil {
 		action = "RECOVER"
 	}
 	query := req
@@ -475,7 +475,7 @@ func (h *HTTP) reconcile(w http.ResponseWriter, r *http.Request, actor *session,
 			h.fail(w, r, 409, "FIREWALL_RECONCILE_REQUIRED", "防火墙结果尚未确认；等待目标恢复或从控制台核对规则，再核对原作业，不会重复执行")
 			return
 		}
-		if req.Software != nil || req.Installation != nil || req.NodeEnvironment != nil {
+		if req.Software != nil || req.Installation != nil || req.NodeEnvironment != nil || req.GitRepository != nil {
 			h.fail(w, r, 409, "SOFTWARE_RECONCILE_REQUIRED", "目标状态尚未确认；请继续核对，不会重新发送启停操作")
 			return
 		}
@@ -486,6 +486,8 @@ func (h *HTTP) reconcile(w http.ResponseWriter, r *http.Request, actor *session,
 		e = h.commitFirewallResult(id, req, result)
 	} else if req.Reconfiguration != nil {
 		e = h.commitSoftwareConfigurationResult(id, req, result)
+	} else if req.GitRepository != nil {
+		e = h.commitGitResult(id, req, result)
 	} else if req.NodeEnvironment != nil {
 		e = h.commitNodeEnvironmentResult(id, req, result)
 	} else if req.Installation != nil {

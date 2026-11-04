@@ -29,6 +29,8 @@ func installedToolCommand(key string) (string, []string, error) {
 		return "codex", []string{"--version"}, nil
 	case "CLAUDE":
 		return "claude", []string{"--version"}, nil
+	case "GIT":
+		return "git", []string{"--version"}, nil
 	}
 	return "", nil, errors.New("TOOL_RECIPE_UNSUPPORTED")
 }
@@ -71,6 +73,9 @@ func executeNativeTool(ctx context.Context, s SoftwareRequest, run SoftwareComma
 }
 
 func installedToolVersionMatches(d serviceinstall.Definition, version string) bool {
+	if d.Key == "git" {
+		return strings.TrimSpace(version) == "git version "+strings.SplitN(d.Version, "-", 2)[0]
+	}
 	if d.Key == "java" && d.Version == "8" {
 		return strings.Contains(version, `openjdk version "1.8.0_504"`) && strings.Contains(version, "build 1.8.0_504-b01") && strings.Contains(version, "Temurin")
 	}

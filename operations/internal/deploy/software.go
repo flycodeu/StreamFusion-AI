@@ -76,7 +76,13 @@ func validateSoftwareInput(req Request) error {
 	if !ID.MatchString(req.JobID) || !Hex.MatchString(req.InputHash) || !softwareMutation(req.SoftwareOperation) {
 		return errors.New("SOFTWARE_JOB_IDENTITY_INVALID")
 	}
-	if req.DockerAccess != nil {
+	if req.GitRepository != nil {
+		if err := validateGitRepositoryInput(req); err != nil {
+			return err
+		}
+	} else if req.SoftwareOperation == "GIT_REPOSITORY_CHANGE" {
+		return errors.New("GIT_REPOSITORY_INPUT_INVALID")
+	} else if req.DockerAccess != nil {
 		if err := validateDockerAccessInput(req); err != nil {
 			return err
 		}
@@ -120,6 +126,12 @@ func softwareResult(req Request) Result {
 }
 
 func (x *executor) executeSoftware(req Request, output io.Writer) error {
+	if req.Action == "GIT_REPOSITORY_CHECK" || req.Action == "GIT_REPOSITORY_OBSERVE" || req.Action == "GIT_REPOSITORY_TEST" {
+		return x.executeGitRead(req, output)
+	}
+	if req.GitRepository != nil && req.Action != "GIT_REPOSITORY_CHANGE" && req.Action != "STATUS" && req.Action != "ACK" {
+		return errors.New("GIT_REPOSITORY_INPUT_INVALID")
+	}
 	if req.Action == "SOFTWARE_DOCKER_ACCESS_CHECK" {
 		return x.readDockerAccess(req, output)
 	}
@@ -141,7 +153,7 @@ func (x *executor) executeSoftware(req Request, output io.Writer) error {
 		}
 		return json.NewEncoder(output).Encode(x.serviceInstallPreflight(*req.Installation))
 	}
-	if req.Software == nil && req.Installation == nil && req.NodeEnvironment == nil {
+	if req.Software == nil && req.Installation == nil && req.NodeEnvironment == nil && req.GitRepository == nil {
 		return errors.New("SOFTWARE_REQUEST_REQUIRED")
 	}
 	if req.Action == "SOFTWARE_OBSERVE" || req.Action == "SOFTWARE_LOGS" {

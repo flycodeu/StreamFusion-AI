@@ -449,8 +449,9 @@ try:
             discard.get_by_role("button", name="放弃修改", exact=True).click()
         java_install.wait_for(state="hidden")
         page.get_by_role("button", name="构建工具", exact=True).click()
-        assert page.locator(".plugin-card").count() == 1
+        assert page.locator(".plugin-card").count() == 2
         page.get_by_role("heading", name="Maven", exact=True).wait_for()
+        page.get_by_role("heading", name=next(entry["name"] for entry in catalog if entry["key"] == "git"), exact=True).wait_for()
         page.get_by_role("button", name="全部软件", exact=True).click()
         page.get_by_label("搜索安装软件", exact=True).fill("17")
         assert page.locator(".plugin-card").count() == 1

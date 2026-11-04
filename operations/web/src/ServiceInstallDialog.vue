@@ -59,7 +59,7 @@ const method = computed<InstallationMethod>(() => mode.value === "SELF" ? "SELF"
 const choices = computed(() => method.value === "OFFICIAL" ? props.officialRecipes || [] : variants.value.filter((item) => item.runtimeModes.includes(mode.value || "DOCKER")));
 const recipe = computed(() => choices.value.find((item) => item.revision === selectedVersion.value) || choices.value[0] || props.recipe);
 const officialRecipe = computed(() => method.value === "OFFICIAL" ? choices.value.find((item) => item.revision === selectedVersion.value) : undefined);
-const selfDetectionAvailable = computed(() => props.recipe?.kind !== "TOOL" || ["java", "python", "ffmpeg"].includes(props.recipe?.key || ""));
+const selfDetectionAvailable = computed(() => props.recipe?.kind !== "TOOL" || ["java", "python", "ffmpeg", "git"].includes(props.recipe?.key || ""));
 const steps = ["安装设置", "确认安装", "执行结果"];
 const flowProps = reactive({ open: computed(() => props.open), recipe, host, method, runtimeMode: computed(() => mode.value === "SELF" ? undefined : mode.value) });
 function selectMode(value: RuntimeMode | "SELF") {
@@ -285,7 +285,7 @@ function previous() { step.value = 0; clearError(); }
       <section v-if="method === 'SELF'" class="install-panel self-install" aria-label="自行安装">
         <h3>检测服务器已有软件</h3>
         <a :href="props.recipe?.officialUrl" target="_blank" rel="noopener noreferrer">查看官方安装说明 ↗</a>
-        <p v-if="!selfDetectionAvailable">当前工具检测支持 Java、Python 和 FFmpeg。此软件暂不支持自动工具登记，可先按官方说明在服务器使用。</p>
+        <p v-if="!selfDetectionAvailable">此软件暂不支持自动工具登记，可先按官方说明在服务器使用。</p>
         <button v-if="selfDetectionAvailable" class="primary" @click="emit('register', host.id, props.recipe?.key.toUpperCase() || 'OTHER')">检测并登记</button>
       </section>
       <div v-if="mode && mode !== 'SELF' && step < 3" class="settings-grid" :class="{ 'official-settings': method === 'OFFICIAL' }">

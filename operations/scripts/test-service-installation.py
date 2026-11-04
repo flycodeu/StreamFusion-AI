@@ -100,11 +100,11 @@ def main():
 
                 host = api("/hosts", "POST", {"name": "安装界面隔离主机", "kind": "LOCAL"}, 201)
                 definitions = api("/software-recipes")
-                assert {item["key"] for item in definitions} == {"mysql", "redis", "nginx", "seaweedfs", "mediamtx", "zlm", "java", "maven", "python", "ffmpeg", "codex", "claude", "docker"}
-                assert len(definitions) == 17
+                assert {item["key"] for item in definitions} == {"mysql", "redis", "nginx", "seaweedfs", "mediamtx", "zlm", "java", "maven", "python", "ffmpeg", "codex", "claude", "docker", "git"}
+                assert len(definitions) == 18
                 assert all(item["native"]["parts"] and ("DOCKER" not in item["runtimeModes"] or (item["digest"].startswith("sha256:") and item["imageId"].startswith("sha256:"))) for item in definitions)
                 assert not api("/installation-materials")
-                checks.append("real-thirteen-software-seventeen-definitions-supported-modes-empty-library")
+                checks.append("real-fourteen-software-eighteen-definitions-supported-modes-empty-library")
 
                 access_value, secret_value = secrets.token_hex(10), secrets.token_hex(24)
                 access = api("/credentials", "POST", {"name": "S3测试访问键", "kind": "TOKEN", "secret": access_value}, 201)
@@ -142,9 +142,9 @@ def main():
 
                 for name in ("MySQL", "Redis", "Nginx", "SeaweedFS", "MediaMTX", "ZLMediaKit", "Java", "Maven", "Python", "FFmpeg", "Codex CLI", "Claude Code", "Docker Engine (Ubuntu 24.04)"):
                     page.get_by_role("heading", name=name, exact=True).wait_for()
-                assert page.locator("article.plugin-card:not(.node-catalog-card)").count() == 13
+                assert page.locator("article.plugin-card:not(.node-catalog-card)").count() == 14
                 expect(page.locator("article.node-catalog-card")).to_have_count(1)
-                checks.append("thirteen-software-cards-visible")
+                checks.append("fourteen-software-cards-visible")
                 page.get_by_role("button", name="编程软件", exact=True).click()
                 assert page.locator("article.plugin-card:not(.node-catalog-card)").count() == 2
                 drawer = open_install("Claude Code")

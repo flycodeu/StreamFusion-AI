@@ -48,6 +48,18 @@ Linux 安装器会先运行纯只读的 `material-library-check --material-libra
 
 Redis/Nginx 的 `.deb` 原始文件组成一个材料包，安装时提取到受管目录；不替换系统已有的 Redis/Nginx 软件包。Docker Engine 使用系统软件包安装，目标 Ubuntu 24.04 amd64 主机必须已有兼容版本的 `iptables`、`nftables`、`libseccomp2`、`libc6`、`libsystemd0`。这五个固定 Docker 包不是完整操作系统离线镜像；不会联网补装这些基础依赖。它们的预检、执行和回滚限制以安装计划为准。
 
+## Git 与 AI 编程工具材料
+
+默认打包范围也包含 Git 2.43.0-1ubuntu7.4、Codex CLI 0.163.0、Claude Code 2.1.304，当前仅限 Linux amd64。版本固定，不自动跟随 latest，也不改写旧配方或历史作业。
+
+- Git：Ubuntu 官方 DEB，提取到实例私有目录；系统运行库仍须通过预检，不联网补依赖。
+- Codex CLI：[OpenAI 官方 GitHub 发布文件](https://github.com/openai/codex/releases/tag/rust-v0.163.0)，使用 `codex-x86_64-unknown-linux-musl.tar.gz`。
+- Claude Code：[Anthropic 官方安装说明](https://code.claude.com/docs/en/setup)所用发布站的 `2.1.304/linux-x64/claude`；[官方 GitHub 发布页](https://github.com/anthropics/claude-code/releases/tag/v2.1.304)另外提供压缩包及 SHASUMS256，不能用压缩包摘要代替原始可执行文件摘要。
+
+两种 CLI 都可用官方独立安装器，不必先安装 Node/npm：`curl -fsSL https://chatgpt.com/codex/install.sh | sh`、`curl -fsSL https://claude.ai/install.sh | bash`。这些是官方常规安装入口说明；Ops现行配方仍下载固定版本并核对大小和SHA-256，不盲目执行可变远程脚本。安装 CLI 不等于已配置登录、API凭据或离线模型能力。
+
+本地材料通过 `material-library-check` 后，随控制器启动导入已有材料库。大文件不进入源码 Git；发布时仍需携带 `materials/`。可用 `--recipe git@2.43.0-1ubuntu7.4 --recipe codex@0.163.0 --recipe claude@2.1.304` 单独构建三项材料。
+
 ## 定位与回滚
 
 导入错误以 `MATERIAL_LIBRARY_`、`INSTALL_MATERIAL_QUOTA` 或 `INSTALL_TRANSFER_BUSY` 开头。材料状态与引用关系仍在现有材料列表；来源文件位于状态目录的 `installation-materials`。

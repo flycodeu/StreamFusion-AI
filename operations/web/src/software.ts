@@ -6,6 +6,7 @@ import type {
   ServiceRecipe,
 } from "./serviceInstallation";
 export type SoftwareType =
+  | "GIT"
   | "NODE"
   | "JAVA"
   | "DOCKER"
@@ -142,6 +143,7 @@ export interface SoftwareDiscoveryReport {
 }
 
 export const softwareTypes: Record<SoftwareType, string> = {
+  GIT: "Git",
   NODE: "Node.js",
   DOCKER: "Docker Engine",
   JAVA: "Java",
@@ -242,6 +244,11 @@ export const softwareJobErrorMessages: Record<string, string> = {
   DOCKER_CONTAINER_DEPENDENCIES_UNCONFIRMED: "Docker Engine 当前不可访问，无法确认容器依赖。请检查 Engine 状态；若已停止，请先明确启动 Docker，再提交卸载。启动可能恢复原有容器，请先确认业务影响。",
 };
 export const softwareJobPhaseLabels: Record<string, string> = {
+  GIT_REPOSITORY_BOUND: "仓库账号已绑定",
+  GIT_REPOSITORY_UNBOUND: "仓库账号已解除",
+  GIT_REPOSITORY_APPLY: "正在配置仓库账号",
+  GIT_PREFLIGHT: "等待仓库配置检查",
+  GIT_CONFIGURING: "正在配置仓库账号",
   DOCKER_ACCESS_UPDATED: "Docker 账号权限已更新",
   TRANSFER: "传输安装文件",
   IMPORT: "导入镜像",

@@ -6,7 +6,7 @@ import (
 )
 
 func TestNodeCatalogKeepsHistoricalRecipesAndPinsMaterials(t *testing.T) {
-	if len(Catalog()) != 17 {
+	if len(Catalog()) != 18 {
 		t.Fatal("historical catalog changed")
 	}
 	for _, d := range append(NodeCatalog(), NodeEnvironmentRecipes()...) {

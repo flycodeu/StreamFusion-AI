@@ -8,6 +8,7 @@ import type { ObservationBatch } from "./observation";
 import SoftwareIcon from "./SoftwareIcon.vue";
 import SoftwareRecipes from "./SoftwareRecipes.vue";
 import NodeEnvironmentPanel from "./NodeEnvironmentPanel.vue";
+import GitManagementPanel from "./GitManagementPanel.vue";
 import SoftwareDetailsDialog from "./SoftwareDetailsDialog.vue";
 import SoftwareUninstallDialog from "./SoftwareUninstallDialog.vue";
 import SoftwareRegistrationDialog from "./SoftwareRegistrationDialog.vue";
@@ -40,6 +41,25 @@ const hostId = ref("");
 const nodeEnvironmentId = ref("");
 const nodeHostId = ref("");
 const nodeOpen = ref(false);
+const gitHostId = ref("");
+const gitOpen = ref(false);
+const gitCloseState = ref({ blocked: false, dirty: false });
+const gitHost = computed(() => hosts.value.find((host) => host.id === gitHostId.value));
+async function openGit(targetId: string) {
+  await act(async () => {
+    hosts.value = await request<Host[]>("/hosts");
+    if (disposed) return;
+    gitHostId.value = targetId;
+    gitOpen.value = true;
+  });
+}
+async function closeGit(done: () => void) {
+  if (gitCloseState.value.blocked) return;
+  if (gitCloseState.value.dirty) {
+    try { await ElMessageBox.confirm("放弃未保存的 Git 配置？", "关闭窗口", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); } catch { return; }
+  }
+  done();
+}
 const nodeCloseState = ref({ blocked: false, dirty: false });
 async function closeNode(done: () => void) {
   if (nodeCloseState.value.blocked) return;
@@ -484,6 +504,7 @@ onUnmounted(() => {
       @preparation="emit('preparation', $event)"
       @register="discoverInstalled"
       @node="openNode"
+      @git="openGit"
     />
     <div v-else role="tabpanel" aria-label="软件中心">
       <div class="software-toolbar">
@@ -686,6 +707,11 @@ onUnmounted(() => {
   <ElDrawer v-model="nodeOpen" title="Node.js" size="min(1080px, 100vw)" append-to-body :destroy-on-close="false" :close-on-click-modal="!nodeCloseState.blocked" :close-on-press-escape="!nodeCloseState.blocked" :show-close="!nodeCloseState.blocked" :before-close="closeNode">
     <p v-if="nodeHost" class="node-host-label">{{nodeHost.name}} · {{nodeHost.address || '本机'}}</p>
     <NodeEnvironmentPanel v-if="nodeHost" :host="nodeHost" :initial-environment-id="nodeEnvironmentId" @changed="act(refresh)" @close-state="nodeCloseState = $event" />
+    <p v-else class="empty">此主机已不可用，请重新选择。</p>
+  </ElDrawer>
+  <ElDrawer v-model="gitOpen" title="Git 账号与仓库" size="min(960px, 100vw)" destroy-on-close :close-on-click-modal="!gitCloseState.blocked" :close-on-press-escape="!gitCloseState.blocked" :show-close="!gitCloseState.blocked" :before-close="closeGit">
+    <p v-if="gitHost" class="node-host-label">{{ gitHost.name }} · {{ gitHost.address || '本机' }}</p>
+    <GitManagementPanel v-if="gitOpen && gitHost" :host="gitHost" @close-state="gitCloseState = $event" @changed="act(refresh)" />
     <p v-else class="empty">此主机已不可用，请重新选择。</p>
   </ElDrawer>
   <SoftwareRegistrationDialog

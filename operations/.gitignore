@@ -27,5 +27,6 @@
 /materials/*.tar.xz
 /materials/*.tgz
 /materials/*.deb
+/materials/*-native-claude
 /materials/library.json
 *.exe

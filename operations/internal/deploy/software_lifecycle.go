@@ -26,6 +26,9 @@ func (x *executor) boundSoftware(s SoftwareRequest) error {
 }
 
 func (x *executor) applySoftware(req Request, dir string) (Result, error) {
+	if req.GitRepository != nil {
+		return x.applyGitRepository(req, dir)
+	}
 	if req.DockerAccess != nil {
 		return x.changeDockerAccess(req, dir)
 	}
@@ -159,6 +162,9 @@ func (x *executor) adoptSoftware(req Request) error {
 }
 
 func (x *executor) verifySoftwareResult(req Request, result Result) error {
+	if req.GitRepository != nil {
+		return x.verifyGitRepositoryResult(req, result)
+	}
 	if req.DockerAccess != nil {
 		return x.verifyDockerAccessResult(req, result)
 	}
@@ -215,6 +221,9 @@ func (x *executor) verifySoftwareResult(req Request, result Result) error {
 }
 
 func (x *executor) reconcileSoftware(req Request, dir string) Result {
+	if req.GitRepository != nil {
+		return x.reconcileGitRepository(req, dir)
+	}
 	if req.DockerAccess != nil {
 		return x.reconcileDockerAccess(req, dir)
 	}

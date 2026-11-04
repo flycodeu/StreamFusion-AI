@@ -412,13 +412,15 @@ func knownSoftwareName(name string) string {
 		return "PYTHON"
 	case "ffmpeg":
 		return "FFMPEG"
+	case "git":
+		return "GIT"
 	}
 	return ""
 }
 
 func discoverTools(ctx context.Context, run SoftwareCommandRunner) ([]SoftwareCandidate, SoftwareDiscoveryCheck) {
 	rows := []SoftwareCandidate{}
-	for _, key := range []string{"java", "python", "ffmpeg"} {
+	for _, key := range []string{"java", "python", "ffmpeg", "git"} {
 		actual, err := ObserveSoftware(ctx, SoftwareRequest{Kind: "TOOL", Locator: key}, run)
 		if err != nil {
 			continue

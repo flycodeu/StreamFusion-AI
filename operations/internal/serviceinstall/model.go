@@ -450,6 +450,8 @@ func NativeBinaryRelative(d Definition) string {
 		return "bin/codex"
 	case "claude":
 		return "bin/claude"
+	case "git":
+		return "bin/git"
 	}
 	return ""
 }

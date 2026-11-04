@@ -4,6 +4,7 @@ import { computed } from "vue";
 const props = defineProps<{ type: string }>();
 const kind = computed(() => props.type.toUpperCase());
 const initials: Record<string, string> = {
+  GIT: "Git",
   NODE: "Js",
   DOCKER: "Dk",
   MINIO: "Mio",
@@ -76,6 +77,10 @@ const initials: Record<string, string> = {
 .icon-maven {
   background: #f9edf1;
   color: #aa3f60;
+}
+.icon-git {
+  background: #fff0e9;
+  color: #be5738;
 }
 .icon-redis {
   background: #fdf0ef;

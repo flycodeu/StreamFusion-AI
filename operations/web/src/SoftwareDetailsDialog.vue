@@ -5,6 +5,7 @@ import { hostTime, type Host } from "./hosts";
 import ServiceConfigurationPanel from "./ServiceConfigurationPanel.vue";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
 import DockerAccessPanel from "./DockerAccessPanel.vue";
+import GitManagementPanel from "./GitManagementPanel.vue";
 import { managedDockerAccess } from "./dockerAccess";
 import type { ServiceInstallReceipt } from "./serviceInstallation";
 import {
@@ -70,11 +71,12 @@ function loadLogs(source: "software" | "job") {
 const active = (item: SoftwareInstance) => item.managementMode !== "RELEASED";
 const configCloseState = ref({ blocked: false, dirty: false });
 const accessCloseBlocked = ref(false);
-const closeBlocked = computed(() => props.busy || props.pendingJob || configCloseState.value.blocked || accessCloseBlocked.value);
-watch(() => props.detail?.id, () => { configCloseState.value = { blocked: false, dirty: false }; accessCloseBlocked.value = false; });
+const gitCloseState = ref({ blocked: false, dirty: false });
+const closeBlocked = computed(() => props.busy || props.pendingJob || configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked);
+watch(() => props.detail?.id, () => { configCloseState.value = { blocked: false, dirty: false }; accessCloseBlocked.value = false; gitCloseState.value = { blocked: false, dirty: false }; });
 async function close(done: () => void) {
   if (closeBlocked.value) return;
-  if (configCloseState.value.dirty) {
+  if (configCloseState.value.dirty || gitCloseState.value.dirty) {
     try { await ElMessageBox.confirm("放弃未保存的软件配置？", "关闭详情", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); } catch { return; }
   }
   done();
@@ -362,7 +364,10 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
             </dl>
           </div>
         </ElTabPane>
+        <ElTabPane v-if="detail.softwareType === 'GIT' && host" label="Git 账号" name="git-accounts" :disabled="gitCloseState.blocked && detailTab !== 'git-accounts'" />
+        <ElTabPane v-if="detail.softwareType === 'GIT' && host" label="仓库" name="git-repositories" :disabled="gitCloseState.blocked && detailTab !== 'git-repositories'" />
       </ElTabs>
+      <GitManagementPanel v-if="detail.softwareType === 'GIT' && host" v-show="detailTab.startsWith('git-')" :host="host" :active="detailTab.startsWith('git-')" :section="detailTab === 'git-accounts' ? 'accounts' : 'repositories'" :show-tabs="false" @close-state="gitCloseState = $event" @changed="emit('changed')" />
     </div>
     <template #footer>
       <footer v-if="detail" class="software-detail-actions">
