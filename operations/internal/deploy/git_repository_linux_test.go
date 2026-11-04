@@ -83,6 +83,16 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 	}
 	pre := read("GIT_REPOSITORY_CHECK")
 	if !pre.Ready {
+		for _, leaf := range []string{home, filepath.Join(repo, ".git/config"), filepath.Join(repo, ".git/HEAD")} {
+			for path := leaf; path != "/"; path = filepath.Dir(path) {
+				if st, e := os.Lstat(path); e == nil {
+					uid, gid := nativeFileOwner(st)
+					t.Logf("fixture path=%s mode=%s uid=%d gid=%d expectedUID=%s", path, st.Mode(), uid, gid, a.Uid)
+				} else {
+					t.Logf("fixture path=%s error=%v", path, e)
+				}
+			}
+		}
 		t.Fatalf("check: %+v", pre)
 	}
 	g.ExpectedConfigHash = pre.Observation.ConfigHash
