@@ -68,6 +68,17 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 	run("-C", repo, "config", "user.email", "original@example.com")
 	run("-C", repo, "config", "core.sshCommand", "ssh -F original-config")
 	run("-C", repo, "config", "custom.keep", "unchanged")
+	// Git templates and inherited default ACLs can retain group permissions even
+	// with a private umask. Set only this fixture's owned repository paths.
+	for path, mode := range map[string]os.FileMode{home: 0700, repo: 0700, filepath.Join(repo, ".git"): 0700, filepath.Join(repo, ".git/config"): 0600, filepath.Join(repo, ".git/HEAD"): 0600} {
+		if err = os.Chmod(path, mode); err != nil {
+			t.Fatal(err)
+		}
+		st, e := os.Lstat(path)
+		if e != nil || st.Mode().Perm() != mode {
+			t.Fatalf("fixture permission: %s %v", path, e)
+		}
+	}
 	x := &executor{root: t.TempDir(), owner: Owner{ProtocolVersion: 1, ExecutorVersion: Version, ControllerID: "55555555-5555-4555-8555-555555555555", TargetID: "66666666-6666-4666-8666-666666666666"}, secrets: map[string]string{"gitKey": string(key)}}
 	read := func(action string) GitRepositoryPreflight {
 		t.Helper()
