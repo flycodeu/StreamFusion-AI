@@ -7,13 +7,14 @@ import (
 	"io"
 	"os"
 	"os/user"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 func gitTerminalBlock(binary string) []byte {
-	dir := gitQuote(filepath.Dir(binary))
+	dir := gitQuote(path.Dir(binary))
 	return []byte("# >>> streamfusion-ops git >>>\n" +
 		"if [ -x " + gitQuote(binary) + " ]; then\n  case \":$PATH:\" in *:" + dir + ":*) ;; *) PATH=" + dir + ":\"$PATH\"; export PATH ;; esac\nfi\n" +
 		"# <<< streamfusion-ops git <<<\n")
