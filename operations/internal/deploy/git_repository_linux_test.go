@@ -80,6 +80,15 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 		}
 	}
 	x := &executor{root: t.TempDir(), owner: Owner{ProtocolVersion: 1, ExecutorVersion: Version, ControllerID: "55555555-5555-4555-8555-555555555555", TargetID: "66666666-6666-4666-8666-666666666666"}, secrets: map[string]string{"gitKey": string(key)}}
+	x.softwareRun = func(limit time.Duration, command string, args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), limit)
+		defer cancel()
+		out, err := (&executor{}).softwareRunner(ctx, command, args...)
+		if err != nil {
+			t.Logf("isolated fixture command %s: %v %s", command, err, out)
+		}
+		return out, err
+	}
 	// The root executor may start from a directory inaccessible to this account.
 	t.Chdir(t.TempDir())
 	read := func(action string) GitRepositoryPreflight {
@@ -122,6 +131,10 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 		}
 		var result Result
 		if json.Unmarshal(out.Bytes(), &result) != nil || result.Status != "SUCCEEDED" {
+			var marker gitChangeMarker
+			if readJSON(filepath.Join(x.root, "jobs", req.JobID, "git-change.json"), &marker) == nil {
+				t.Logf("fixture binding=%v terminal=%t", x.gitBindingMatches(context.Background(), marker.After, a), gitTerminalPlanApplied(g, a, filepath.Join(x.root, "jobs", req.JobID)))
+			}
 			t.Fatalf("change: %s", out.String())
 		}
 		return req, result
