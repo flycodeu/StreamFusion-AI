@@ -79,6 +79,11 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 			t.Fatalf("fixture permission: %s %v", path, e)
 		}
 	}
+	if tool, err := exec.LookPath("setfacl"); err == nil {
+		if out, err := exec.Command(tool, "-m", "d:u::rwx,d:g::rwx,d:o::rx", home).CombinedOutput(); err != nil {
+			t.Fatalf("fixture default ACL: %v %s", err, out)
+		}
+	}
 	x := &executor{root: t.TempDir(), owner: Owner{ProtocolVersion: 1, ExecutorVersion: Version, ControllerID: "55555555-5555-4555-8555-555555555555", TargetID: "66666666-6666-4666-8666-666666666666"}, secrets: map[string]string{"gitKey": string(key)}}
 	x.softwareRun = func(limit time.Duration, command string, args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), limit)

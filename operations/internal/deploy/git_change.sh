@@ -33,7 +33,16 @@ if [ -n "$previous_key" ]; then
   check_hash "$private/known_hosts" "$previous_known"
 fi
 check_hash "$stage/config" "$after"
-mkdir -p -- "$private"
+directory=$HOME
+for part in .local share streamfusion-ops git "${private##*/}"; do
+  directory="$directory/$part"
+  if [ ! -e "$directory" ]; then mkdir -m 700 -- "$directory"; fi
+  [ -d "$directory" ] && [ ! -L "$directory" ] || exit 1
+  owner=$(stat -c %u -- "$directory")
+  [ "$owner" = "$uid" ] || [ "$owner" = 0 ] || exit 1
+  permissions=$(stat -c %a -- "$directory")
+  [ "$((8#$permissions & 8#22))" -eq 0 ] || exit 1
+done
 chmod 700 -- "$private"
 temporary=$(mktemp "$repo/.git/.sfops-config.XXXXXXXX")
 trap 'rm -f -- "$temporary"' EXIT

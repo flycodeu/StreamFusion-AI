@@ -80,6 +80,14 @@ func resolveGitRepository(g GitRepositoryRequest) (*user.User, error) {
 			return nil, err
 		}
 	}
+	for directory := gitPrivateDirectory(g, a); directory != a.HomeDir; directory = filepath.Dir(directory) {
+		if _, err := os.Lstat(directory); os.IsNotExist(err) {
+			continue
+		}
+		if err := gitOwnedPath(directory, uid, true); err != nil {
+			return nil, err
+		}
+	}
 	for _, name := range []string{"commondir", "gitdir", "config.worktree"} {
 		if _, err := os.Lstat(filepath.Join(g.RepoPath, ".git", name)); !os.IsNotExist(err) {
 			return nil, errors.New("GIT_WORKTREE_UNSUPPORTED")
