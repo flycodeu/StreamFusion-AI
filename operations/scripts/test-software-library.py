@@ -111,7 +111,10 @@ def main():
                 def block_target_mutations(route):
                     request = route.request
                     path = urlsplit(request.url).path.removeprefix("/ops/api/v1")
-                    if request.method not in ("GET", "HEAD", "OPTIONS") and not path.startswith("/auth/"):
+                    if request.method == "POST" and path.startswith("/hosts/") and path == f"/hosts/{host['id']}/checks":
+                        # This test host is LOCAL; capability inspection does not install anything.
+                        route.continue_()
+                    elif request.method not in ("GET", "HEAD", "OPTIONS") and not path.startswith("/auth/"):
                         blocked_mutations.append({"path": path, "method": request.method})
                         route.fulfill(status=409, json={"code": "TEST_TARGET_MUTATION_BLOCKED", "message": "Test does not execute targets"})
                     else:
@@ -181,11 +184,16 @@ def main():
                     card_for(recipe["name"]).get_by_role("button", name="安装", exact=True).click()
                     drawer = page.locator(".el-drawer:visible").last
                     drawer.wait_for()
-                    drawer.get_by_role("button", name="Ops 离线安装", exact=True).click()
+                    drawer.get_by_role("button", name="原生安装", exact=True).click()
+                    drawer.get_by_label("原生安装来源", exact=True).select_option("OFFLINE")
+                    drawer.get_by_label("安装版本", exact=True).select_option(recipe["revision"])
                     return drawer
 
                 def close_dialog(dialog):
                     dialog.get_by_role("button", name="取消", exact=True).click()
+                    discard = page.get_by_role("dialog", name="关闭窗口", exact=True)
+                    if discard.is_visible():
+                        discard.get_by_role("button", name="放弃修改", exact=True).click()
                     dialog.wait_for(state="hidden")
 
                 def screenshot_layout(subject, name):
@@ -208,16 +216,10 @@ def main():
                 for key in (() if args.uninstall_paths_only else ("redis", "nginx", "java", "docker")):
                     material = next(item for item in materials if item["recipeKey"] == key)
                     recipe = next(item for item in definitions if item["key"] == key and item["version"] == material["recipeVersion"])
-                    card = card_for(recipe["name"])
-                    if card.locator("select.version-select").count():
-                        expect(card.locator("select.version-select")).to_have_value(recipe["version"])
                     drawer = open_install(recipe)
-                    if drawer.get_by_role("radio", name="原生 / systemd", exact=False).count():
-                        drawer.get_by_role("radio", name="原生 / systemd", exact=False).check()
-                    else:
-                        drawer.get_by_role("radio", name="原生程序", exact=False).check()
-                    expect(drawer.get_by_role("radio", name="本地离线材料库 · 默认", exact=False)).to_be_checked()
+                    expect(drawer.get_by_role("radio", name="平台离线材料", exact=False)).to_be_checked()
                     expect(drawer.get_by_label("可用安装包", exact=True)).to_have_value(material["id"])
+                    drawer.locator(".source-details > summary").click()
                     contents = drawer.get_by_label("安装材料内容", exact=True)
                     expect(contents.get_by_text("本地材料已就绪", exact=True)).to_be_visible()
                     assert "由 Ops 分发" in contents.inner_text()
@@ -239,11 +241,9 @@ def main():
                         assert "/etc/docker/daemon.json" in contents.inner_text()
                         contents.get_by_text("Docker 安装位置与权限", exact=True).click()
                         screenshot_layout(drawer, "docker-materials-real")
-                        drawer.get_by_role("button", name="下一步", exact=True).click()
                         expect(drawer.get_by_label("实例名称", exact=True)).to_be_visible()
                         assert drawer.get_by_role("button", name="新建凭据", exact=True).count() == 0
                         assert drawer.locator('input[type="password"]').count() == 0
-                        drawer.get_by_role("button", name="下一步", exact=True).click()
                         assert drawer.get_by_label("宿主机访问端口", exact=True).count() == 0
                         assert drawer.get_by_label("宿主机监听地址", exact=True).count() == 0
                         assert drawer.get_by_label("内存上限（MiB）", exact=True).count() == 0
@@ -256,16 +256,18 @@ def main():
 
                 # A manual selection must survive periodic catalog/material refresh.
                 if not args.uninstall_paths_only:
-                    redis_card = card_for(next(item for item in definitions if item["key"] == "redis" and item["version"] == "7.0.15-1ubuntu0.24.04.5")["name"])
-                    redis_choice = redis_card.locator("select.version-select")
-                    other_redis = next(item for item in definitions if item["key"] == "redis" and item["version"] != redis_choice.input_value())
-                    redis_choice.select_option(other_redis["version"])
-                    refresh_button = page.locator(".catalog-search").get_by_role("button", name="刷新", exact=True)
-                    with page.expect_response(lambda response: urlsplit(response.url).path == "/ops/api/v1/installation-materials"):
-                        refresh_button.click()
-                    expect(refresh_button).to_be_enabled()
-                    expect(card_for(other_redis["name"]).locator("select.version-select")).to_have_value(other_redis["version"])
-                    checks.append("real-ui-default-bundled-version-and-explicit-version-choice-preserved-on-refresh")
+                    bundled_redis = next(item for item in definitions if item["key"] == "redis" and item["version"] == "7.0.15-1ubuntu0.24.04.5")
+                    drawer = open_install(bundled_redis)
+                    redis_choice = drawer.get_by_label("安装版本", exact=True)
+                    other_redis = next(item for item in definitions if item["key"] == "redis" and item["revision"] != bundled_redis["revision"] and "NATIVE" in item["runtimeModes"])
+                    redis_choice.select_option(other_redis["revision"])
+                    for _ in range(2):
+                        with page.expect_response(lambda response: urlsplit(response.url).path == "/ops/api/v1/installation-materials"):
+                            page.wait_for_timeout(4500)
+                    expect(redis_choice).to_have_value(other_redis["revision"])
+                    expect(drawer.get_by_label("可用安装包", exact=True)).to_have_value("")
+                    checks.append("real-ui-explicit-version-survives-catalog-refresh-without-cross-version-material")
+                    close_dialog(drawer)
 
                 # Everything below is a named browser fixture, never target state.
                 now = datetime.now(timezone.utc)
