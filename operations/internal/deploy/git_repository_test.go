@@ -98,6 +98,9 @@ func TestGitConfigUsesNativeParserAndRejectsIncludes(t *testing.T) {
 		if command != "/usr/sbin/runuser" || !strings.Contains(strings.Join(args, " "), "GIT_CONFIG_GLOBAL=/dev/null") || !strings.Contains(strings.Join(args, " "), "--no-includes") {
 			t.Fatal("Git command not isolated")
 		}
+		if !strings.Contains(strings.Join(args, " "), "/usr/bin/git -C /home/fixture config") {
+			t.Fatal("Git inherited the executor's working directory")
+		}
 		return []byte(output), nil
 	}}
 	values, err := x.gitConfigValues(context.Background(), g, &user.User{HomeDir: "/home/fixture"}, "/home/fixture/repo/.git/config", "user.name")

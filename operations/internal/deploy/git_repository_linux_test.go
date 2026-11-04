@@ -47,7 +47,7 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 	}
 	run := func(args ...string) string {
 		t.Helper()
-		out, e := exec.Command("/usr/sbin/runuser", append([]string{"-u", name, "--", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "/bin/bash", "--noprofile", "--norc", "-c", `umask 077; exec /usr/bin/git "$@"`, "sfops-git-fixture"}, args...)...).CombinedOutput()
+		out, e := exec.Command("/usr/sbin/runuser", append([]string{"-u", name, "--", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "/bin/bash", "--noprofile", "--norc", "-c", `umask 077; exec /usr/bin/git -C "$HOME" "$@"`, "sfops-git-fixture"}, args...)...).CombinedOutput()
 		if e != nil {
 			t.Fatalf("fixture git: %v %s", e, out)
 		}
@@ -80,6 +80,8 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 		}
 	}
 	x := &executor{root: t.TempDir(), owner: Owner{ProtocolVersion: 1, ExecutorVersion: Version, ControllerID: "55555555-5555-4555-8555-555555555555", TargetID: "66666666-6666-4666-8666-666666666666"}, secrets: map[string]string{"gitKey": string(key)}}
+	// The root executor may start from a directory inaccessible to this account.
+	t.Chdir(t.TempDir())
 	read := func(action string) GitRepositoryPreflight {
 		t.Helper()
 		var out bytes.Buffer
@@ -103,6 +105,7 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 	}
 	pre := read("GIT_REPOSITORY_CHECK")
 	if !pre.Ready {
+		t.Logf("fixture direct config: %s", run("-C", repo, "config", "--file", filepath.Join(repo, ".git/config"), "--no-includes", "--list"))
 		t.Fatalf("check: %+v", pre)
 	}
 	g.ExpectedConfigHash = pre.Observation.ConfigHash
@@ -250,7 +253,7 @@ func gitFixtureSSH(t *testing.T, account, repo string, signer ssh.Signer) (int, 
 						}
 						request.Reply(true, nil)
 						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-						cmd := exec.CommandContext(ctx, "/usr/sbin/runuser", "-u", account, "--", "/usr/bin/git", "upload-pack", repo)
+						cmd := exec.CommandContext(ctx, "/usr/sbin/runuser", "-u", account, "--", "/usr/bin/git", "-C", repo, "upload-pack", repo)
 						cmd.Stdin = ch
 						cmd.Stdout = ch
 						cmd.Stderr = ch.Stderr()

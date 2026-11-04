@@ -93,7 +93,7 @@ func resolveGitRepository(g GitRepositoryRequest) (*user.User, error) {
 }
 
 func (x *executor) gitCommand(ctx context.Context, g GitRepositoryRequest, a *user.User, args ...string) ([]byte, error) {
-	argv := []string{"-u", g.Account, "--", "/usr/bin/env", "-i", "HOME=" + a.HomeDir, "PATH=" + filepath.Dir(g.GitBinary) + ":/usr/bin:/bin", "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", g.GitBinary}
+	argv := []string{"-u", g.Account, "--", "/usr/bin/env", "-i", "HOME=" + a.HomeDir, "PATH=" + filepath.Dir(g.GitBinary) + ":/usr/bin:/bin", "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_OPTIONAL_LOCKS=0", g.GitBinary, "-C", a.HomeDir}
 	out, err := x.softwareRunner(ctx, "/usr/sbin/runuser", append(argv, args...)...)
 	if len(out) >= 64<<10 {
 		return nil, errors.New("GIT_OUTPUT_LIMIT")
