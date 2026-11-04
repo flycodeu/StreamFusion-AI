@@ -47,7 +47,7 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 	}
 	run := func(args ...string) string {
 		t.Helper()
-		out, e := exec.Command("/usr/sbin/runuser", append([]string{"-u", name, "--", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=" + home, "/usr/bin/git"}, args...)...).CombinedOutput()
+		out, e := exec.Command("/usr/sbin/runuser", append([]string{"-u", name, "--", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "/bin/bash", "--noprofile", "--norc", "-c", `umask 077; exec /usr/bin/git "$@"`, "sfops-git-fixture"}, args...)...).CombinedOutput()
 		if e != nil {
 			t.Fatalf("fixture git: %v %s", e, out)
 		}
@@ -81,18 +81,17 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 		}
 		return p
 	}
+	if err = os.Chmod(repo, 0770); err != nil {
+		t.Fatal(err)
+	}
+	if p := read("GIT_REPOSITORY_CHECK"); p.Ready || p.Code != "GIT_PATH_UNSAFE" {
+		t.Fatalf("group-writable repository accepted: %+v", p)
+	}
+	if err = os.Chmod(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
 	pre := read("GIT_REPOSITORY_CHECK")
 	if !pre.Ready {
-		for _, leaf := range []string{home, filepath.Join(repo, ".git/config"), filepath.Join(repo, ".git/HEAD")} {
-			for path := leaf; path != "/"; path = filepath.Dir(path) {
-				if st, e := os.Lstat(path); e == nil {
-					uid, gid := nativeFileOwner(st)
-					t.Logf("fixture path=%s mode=%s uid=%d gid=%d expectedUID=%s", path, st.Mode(), uid, gid, a.Uid)
-				} else {
-					t.Logf("fixture path=%s error=%v", path, e)
-				}
-			}
-		}
 		t.Fatalf("check: %+v", pre)
 	}
 	g.ExpectedConfigHash = pre.Observation.ConfigHash
