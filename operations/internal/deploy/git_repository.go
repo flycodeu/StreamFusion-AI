@@ -80,7 +80,7 @@ func resolveGitRepository(g GitRepositoryRequest) (*user.User, error) {
 			return nil, err
 		}
 	}
-	for directory := gitPrivateDirectory(g, a); directory != a.HomeDir; directory = filepath.Dir(directory) {
+	for directory := gitPrivateDirectory(g, a); directory != filepath.Clean(a.HomeDir); directory = filepath.Dir(directory) {
 		if _, err := os.Lstat(directory); os.IsNotExist(err) {
 			continue
 		}
