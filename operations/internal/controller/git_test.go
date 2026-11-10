@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
@@ -61,12 +63,36 @@ func gitControllerFixture(t *testing.T) (*Store, *browser, string, map[string]an
 	s, b := setup(t)
 	b.login()
 	f := &gitFixture{results: map[string]deploy.Result{}}
+	_, privateKey, _ := ed25519.GenerateKey(rand.Reader)
+	keySigner, _ := ssh.NewSignerFromKey(privateKey)
 	host, _ := installSSHFixture(t, s, b, func(req deploy.Request) ([]byte, bool) {
 		encode := func(v any) ([]byte, bool) { raw, _ := json.Marshal(v); return raw, true }
 		if req.Action == "CAPABILITIES" {
-			cap := installCompatibilityCapabilities(req)
-			cap.GitRepositoryVersion = 1
+			cap := installCompatibilityCapabilities(req, s)
+			cap.GitRepositoryVersion = deploy.GitRepositoryCapabilityVersion
+			cap.GitAccountVersion = 1
 			return encode(cap)
+		}
+		if g := req.GitAccount; g != nil {
+			if g.AuthMethod == "HTTPS" && req.Action == "GIT_ACCOUNT_CONFIGURE" && req.Secrets["gitToken"] == "" {
+				t.Error("HTTPS configuration missing token")
+			}
+			if req.Action == "GIT_ACCOUNT_REMOVE" && len(req.Secrets) != 0 {
+				t.Error("remove received token")
+			}
+			status := "CONFIGURED"
+			if req.Action == "GIT_ACCOUNT_REMOVE" {
+				status = "REMOVED"
+			}
+			return encode(deploy.GitAccountEvidence{ID: g.ID, Version: g.Version, Account: g.Account, AccountUID: "1000", Status: status, ObservedAt: Now()})
+		}
+		if k := req.GitKey; k != nil {
+			if len(req.Secrets) != 0 {
+				t.Error("key operation received secrets")
+			}
+			e := deploy.GitKeyEvidence{ID: k.ID, Account: k.Account, AccountUID: "1000", KeyPath: "/home/" + k.Account + "/.local/share/streamfusion-ops/git-keys/" + k.ID + "/key", PublicKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(keySigner.PublicKey()))), Fingerprint: ssh.FingerprintSHA256(keySigner.PublicKey())}
+			e.HostPublicKey, e.HostFingerprint = e.PublicKey, e.Fingerprint
+			return encode(e)
 		}
 		g := req.GitRepository
 		if g == nil {
@@ -86,8 +112,11 @@ func gitControllerFixture(t *testing.T) (*Store, *browser, string, map[string]an
 			return encode(deploy.GitRepositoryPreflight{Ready: true, Code: "GIT_REMOTE_READABLE", Observation: o})
 		case "GIT_REPOSITORY_CHANGE":
 			f.calls++
-			if g.Action == "BIND" && req.Secrets["gitKey"] == "" {
+			if g.Action == "BIND" && g.KeySource != "TARGET" && req.Secrets["gitKey"] == "" {
 				t.Error("binding missing key")
+			}
+			if g.KeySource == "TARGET" && len(req.Secrets) != 0 {
+				t.Error("target binding received private key")
 			}
 			if g.Action == "UNBIND" {
 				o.Status = "UNBOUND"
@@ -120,6 +149,7 @@ func gitControllerFixture(t *testing.T) (*Store, *browser, string, map[string]an
 		t.Fatal(err)
 	}
 	input := map[string]any{"name": "公司Git", "sshHost": "git.example", "sshPort": 22, "sshUser": "git", "authorName": "Work User", "authorEmail": "work@example.com", "credentialId": hostRecord.CredentialID, "credentialRevision": hostRecord.Revision, "hostPublicKey": strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))), "hostKeyConfirmed": true}
+	input["authMethod"], input["keySource"], input["hostId"], input["systemAccount"], input["keyId"], input["expectedHostVersion"] = "SSH", "TARGET", host, "ubuntu", "12345678-1234-4234-8234-123456789012", hostRecord.Version
 	a := dataOf(t, b.call("POST", "/git-accounts", input, 200))
 	if strings.Contains(jsonText(a), "PRIVATE KEY") {
 		t.Fatal("private key leaked")

@@ -11,6 +11,8 @@ private=$8
 job=$9
 previous_key=${10}
 previous_known=${11}
+key_source=${12}
+previous_path=${13}
 config="$repo/.git/config"
 check_path() {
   p=$1
@@ -29,7 +31,7 @@ check_config() {
 check_config
 check_path "$private"
 if [ -n "$previous_key" ]; then
-  check_hash "$private/key" "$previous_key"
+  check_hash "$previous_path" "$previous_key"
   check_hash "$private/known_hosts" "$previous_known"
 fi
 check_hash "$stage/config" "$after"
@@ -50,7 +52,9 @@ chmod 600 -- "$temporary"
 cat -- "$stage/config" > "$temporary"
 chmod "$mode" -- "$temporary"
 if [ "$action" = BIND ]; then
-  for name in key known_hosts; do
+  names='key known_hosts'
+  if [ "$key_source" = TARGET ]; then names=known_hosts; fi
+  for name in $names; do
     next="$private/$name.$job"
     [ ! -e "$next" ] && [ ! -L "$next" ] || exit 1
     install -m 600 -- "$stage/$name" "$next"
@@ -64,5 +68,5 @@ check_config
 mv -T -- "$temporary" "$config"
 sync -f "$config"
 if [ "$action" = UNBIND ]; then
-  rm -- "$private/key" "$private/known_hosts"
+  rm -f -- "$private/key" "$private/known_hosts"
 fi

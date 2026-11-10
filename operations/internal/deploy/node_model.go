@@ -8,6 +8,7 @@ import (
 const NodeEnvironmentCapabilityVersion = 1
 
 type NodeEnvironmentRequest struct {
+	Definition     *serviceinstall.Definition `json:"definition,omitempty"`
 	Context        serviceinstall.NodeContext `json:"context"`
 	Action         string                     `json:"action"`
 	NodeVersion    string                     `json:"nodeVersion,omitempty"`
@@ -57,6 +58,11 @@ type NodeEnvironmentPreflight struct {
 }
 
 func (n NodeEnvironmentRequest) Validate() error {
+	if n.Definition != nil {
+		if _, err := nodeEnvironmentDefinition(n); err != nil {
+			return err
+		}
+	}
 	if n.RegistryURL != "" && n.Action != "SET_NPM_REGISTRY" {
 		return errors.New("NODE_REGISTRY_UNEXPECTED")
 	}
@@ -116,5 +122,22 @@ func nodeEnvironmentDefinition(n NodeEnvironmentRequest) (serviceinstall.Definit
 	if n.Action == "INITIALIZE" || n.Action == "UPDATE_NVM" && version == "" {
 		version = n.Context.NVMVersion
 	}
-	return serviceinstall.NodeEnvironmentRecipe(n.Action, version)
+	action := n.Action
+	if n.Definition != nil && (action == "REMOVE_ENVIRONMENT" || action == "REMOVE_PNPM") {
+		version = n.Definition.Version
+		if action == "REMOVE_ENVIRONMENT" {
+			action = "UPDATE_NVM"
+		} else {
+			action = "UPDATE_PNPM"
+		}
+	}
+	base, err := serviceinstall.NodeEnvironmentRecipe(action, version)
+	if n.Definition == nil {
+		return base, err
+	}
+	d := *n.Definition
+	if err != nil || !serviceinstall.IsBuiltinCommand(d) || serviceinstall.ValidateDefinition(d) != nil || serviceinstall.Digest(serviceinstall.BareDefinition(d)) != serviceinstall.Digest(base) {
+		return serviceinstall.Definition{}, errors.New("NODE_RECIPE_UNTRUSTED")
+	}
+	return d, nil
 }

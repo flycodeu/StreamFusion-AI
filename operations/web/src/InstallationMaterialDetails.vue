@@ -15,7 +15,11 @@ const props = defineProps<{
   material?: InstallationMaterial;
   online?: boolean;
 }>();
+const customCommands = computed(() => !!props.recipe.commands && !props.recipe.commands.builtin);
 const sources = computed<MaterialSource[]>(() => {
+  if (customCommands.value) return props.material ? [{
+    name: props.material.name, url: "", sha256: props.material.sha256, byteSize: props.material.byteSize, role: "MAIN",
+  }] : [];
   if (props.material?.sources?.length) return props.material.sources;
   if (props.runtimeMode === "NATIVE") {
     if (props.recipe.sources?.length) return props.recipe.sources;
@@ -52,17 +56,17 @@ const toolLabels: Record<string, string> = {
     <header>
       <h3>将安装的内容</h3>
       <span :class="['state-tag', material?.available ? 'state-success' : 'state-muted']">
-        {{ material?.available ? "本地材料已就绪" : online ? "需要在线获取" : "本地材料未就绪" }}
+        {{ material?.available ? material.origin?.verification === 'UPLOAD_SHA256' ? '文件摘要已核验' : "本地材料已就绪" : online ? customCommands ? '按命令执行' : "需要在线获取" : "本地材料未就绪" }}
       </span>
     </header>
     <div v-for="source in sources" :key="source.name" class="material-source">
       <div class="material-source-name">
         <strong>{{ source.displayName || source.name }}</strong>
         <span v-if="source.version">{{ source.version }}</span>
-        <small>{{ source.role === "DEPENDENCY" ? "依赖组件" : runtimeMode === "DOCKER" ? "容器镜像" : "软件主件" }}</small>
+        <small>{{ customCommands ? '上传文件' : source.role === "DEPENDENCY" ? "依赖组件" : runtimeMode === "DOCKER" ? "容器镜像" : "软件主件" }}</small>
       </div>
       <p v-if="source.publisher || recipe.publisher">发布方：{{ source.publisher || recipe.publisher }}</p>
-      <a :href="source.url" target="_blank" rel="noopener noreferrer">
+      <a v-if="source.url" :href="source.url" target="_blank" rel="noopener noreferrer">
         {{ sourceHost(source.url) }} · {{ source.displayName || source.name }} 下载来源 ↗
       </a>
       <ul v-if="source.requirements?.length" class="source-requirements" aria-label="目标主机依赖">
@@ -71,8 +75,9 @@ const toolLabels: Record<string, string> = {
     </div>
     <p class="material-network">
       {{ material?.available ? `${materialOriginLabel(material)} · 由 Ops 分发` :
+        customCommands ? '使用已发布的命令配置处理材料。' :
         online && runtimeMode === "DOCKER" ? "目标服务器需要联网拉取固定镜像。" :
-        online ? "Ops 联网下载，目标服务器可离线。" :
+        online ? "目标服务器联网下载官方发行包。" :
         "请选择或上传匹配的安装材料。" }}
     </p>
     <details v-if="recipe.key === 'docker'"><summary>Docker 安装位置与权限</summary><p class="material-network">数据位于本实例 data；主机配置为 /etc/docker/daemon.json，日志由 docker.service 管理。不修改用户组。</p></details>
@@ -86,7 +91,7 @@ const toolLabels: Record<string, string> = {
         <small v-if="source.byteSize">{{ materialSize(source.byteSize) }}</small>
         <code>{{ source.sha256 }}</code>
       </div>
-      <a :href="recipe.officialUrl" target="_blank" rel="noopener noreferrer">软件官方说明 ↗</a>
+      <a v-if="recipe.officialUrl" :href="recipe.officialUrl" target="_blank" rel="noopener noreferrer">{{ customCommands ? '配置来源' : '软件官方说明' }} ↗</a>
     </details>
   </section>
 </template>

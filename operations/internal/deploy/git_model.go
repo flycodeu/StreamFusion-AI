@@ -11,7 +11,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-const GitRepositoryCapabilityVersion = 1
+const GitRepositoryCapabilityVersion = 2
 
 type GitRepositoryRequest struct {
 	Action               string `json:"action"`
@@ -21,6 +21,8 @@ type GitRepositoryRequest struct {
 	ProfileVersion       string `json:"profileVersion"`
 	CredentialID         string `json:"credentialId"`
 	CredentialRevision   string `json:"credentialRevision"`
+	KeySource            string `json:"keySource,omitempty"` // TARGET keeps the private key on the target account.
+	KeyPath              string `json:"keyPath,omitempty"`
 	Account              string `json:"account"`
 	AccountUID           string `json:"accountUid"`
 	RepoPath             string `json:"repoPath"`
@@ -74,7 +76,13 @@ func (g GitRepositoryRequest) Validate() error {
 	validText := func(s string, max int) bool {
 		return strings.TrimSpace(s) != "" && len(s) <= max && !strings.ContainsAny(s, "\x00\r\n")
 	}
-	if (g.Action != "BIND" && g.Action != "UNBIND") || !ID.MatchString(g.BindingID) || !ID.MatchString(g.ProfileID) || !ID.MatchString(g.CredentialID) || !gitRevisionPattern.MatchString(g.BindingVersion) || !gitRevisionPattern.MatchString(g.ProfileVersion) || !gitRevisionPattern.MatchString(g.CredentialRevision) || !gitAccountPattern.MatchString(g.Account) || g.Account == "root" || !gitAccountPattern.MatchString(g.SSHUser) || !validText(g.AuthorName, 200) || !validText(g.AuthorEmail, 254) || !strings.Contains(g.AuthorEmail, "@") {
+	source := g.KeySource
+	if source == "" {
+		source = "OPS"
+	}
+	credentialValid := ID.MatchString(g.CredentialID) && gitRevisionPattern.MatchString(g.CredentialRevision)
+	keyPathValid := path.IsAbs(g.KeyPath) && path.Clean(g.KeyPath) == g.KeyPath && len(g.KeyPath) <= 4096 && !strings.ContainsAny(g.KeyPath, "\x00\r\n")
+	if source != "OPS" && source != "TARGET" || (source == "OPS" && (!credentialValid || g.KeyPath != "")) || (source == "TARGET" && (!keyPathValid || g.CredentialID != "" || g.CredentialRevision != "")) || (g.Action != "BIND" && g.Action != "UNBIND") || !ID.MatchString(g.BindingID) || !ID.MatchString(g.ProfileID) || !gitRevisionPattern.MatchString(g.BindingVersion) || !gitRevisionPattern.MatchString(g.ProfileVersion) || !gitAccountPattern.MatchString(g.Account) || g.Account == "root" || !gitAccountPattern.MatchString(g.SSHUser) || !validText(g.AuthorName, 200) || !validText(g.AuthorEmail, 254) || !strings.Contains(g.AuthorEmail, "@") {
 		return errors.New("GIT_REPOSITORY_INPUT_INVALID")
 	}
 	if g.AccountUID != "" {

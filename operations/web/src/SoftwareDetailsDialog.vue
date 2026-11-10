@@ -6,13 +6,15 @@ import ServiceConfigurationPanel from "./ServiceConfigurationPanel.vue";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
 import DockerAccessPanel from "./DockerAccessPanel.vue";
 import GitManagementPanel from "./GitManagementPanel.vue";
+import SoftwareManagementPanel from "./SoftwareManagementPanel.vue";
+import SoftwareWebAccess from "./SoftwareWebAccess.vue";
+import { softwareConfigurationAvailable } from "./softwareManagement";
 import { managedDockerAccess } from "./dockerAccess";
 import type { ServiceInstallReceipt } from "./serviceInstallation";
 import {
   softwareDesiredLabels,
   softwareActualLabels,
   softwareJobStatusLabel,
-  softwareJobDiagnostic,
   softwareJobErrorMessages,
   softwareJobPhaseLabel,
   softwareObservationMessage,
@@ -23,12 +25,13 @@ import {
   softwareInstallationReady,
   softwareLifecycleAvailable,
   softwareUninstallAvailable,
-  softwareTypes,
+  softwareTypeLabel,
   softwareVersionLabel,
   softwareVersionReason,
   softwareVersionText,
   type SoftwareInstance,
   type SoftwareJob,
+  type SoftwareAction,
 } from "./software";
 const props = defineProps<{
   detail?: SoftwareInstance;
@@ -36,10 +39,6 @@ const props = defineProps<{
   busy: boolean;
   job?: SoftwareJob;
   pendingJob: boolean;
-  logs: string;
-  logSource: "software" | "job";
-  logsLimited: boolean;
-  logsAt: string;
   canAdopt: boolean;
   canChange: boolean;
 }>();
@@ -49,13 +48,15 @@ const emit = defineEmits<{
   unmanage: [SoftwareInstance];
   uninstall: [SoftwareInstance];
   adopt: [SoftwareInstance];
-  changeState: [SoftwareInstance, "START" | "STOP"];
+  changeState: [SoftwareInstance, SoftwareAction];
   readLogs: ["software" | "job"];
+  operationLogs: [string];
   reconcile: [];
   cancel: [];
   configurationSubmitted: [ServiceInstallReceipt];
   preparation: [string];
   changed: [];
+  configure: [SoftwareInstance]; closed: [];
 }>();
 const detailTab = ref("overview");
 watch(
@@ -64,22 +65,39 @@ watch(
     detailTab.value = "overview";
   },
 );
-function loadLogs(source: "software" | "job") {
-  detailTab.value = source === "software" ? "logs" : "job";
-  emit("readLogs", source);
-}
 const active = (item: SoftwareInstance) => item.managementMode !== "RELEASED";
 const configCloseState = ref({ blocked: false, dirty: false });
 const accessCloseBlocked = ref(false);
 const gitCloseState = ref({ blocked: false, dirty: false });
-const closeBlocked = computed(() => props.busy || props.pendingJob || configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked);
-watch(() => props.detail?.id, () => { configCloseState.value = { blocked: false, dirty: false }; accessCloseBlocked.value = false; gitCloseState.value = { blocked: false, dirty: false }; });
+const managementCloseState = ref({ blocked: false, dirty: false });
+const editingBlocked = computed(() => props.busy || configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked || managementCloseState.value.blocked);
+const hasManagement = computed(() => !!props.detail?.installation?.definition?.commands && props.detail.managementMode === "MANAGED" && (!!props.detail.installation.definition.management || ["NGINX", "MYSQL"].includes(props.detail.softwareType) || !props.detail.installation.definition.commands.builtin));
+watch(() => props.detail?.id, () => { configCloseState.value = { blocked: false, dirty: false }; accessCloseBlocked.value = false; gitCloseState.value = { blocked: false, dirty: false }; managementCloseState.value = { blocked: false, dirty: false }; });
 async function close(done: () => void) {
-  if (closeBlocked.value) return;
-  if (configCloseState.value.dirty || gitCloseState.value.dirty) {
-    try { await ElMessageBox.confirm("放弃未保存的软件配置？", "关闭详情", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); } catch { return; }
+  if (editingBlocked.value) return;
+  if (await confirmDiscard()) done();
+}
+async function confirmDiscard() {
+  if (configCloseState.value.dirty || gitCloseState.value.dirty || managementCloseState.value.dirty) {
+    try { await ElMessageBox.confirm("放弃未保存的软件配置？", "关闭详情", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); } catch { return false; }
   }
-  done();
+  return true;
+}
+async function loadLogs(source: "software" | "job") {
+  if (editingBlocked.value || !(await confirmDiscard())) return;
+  emit("readLogs", source);
+}
+async function operationLogs(id: string) {
+  if (editingBlocked.value || !(await confirmDiscard())) return;
+  emit("operationLogs", id);
+}
+async function operationPreparation() {
+  if (editingBlocked.value || !props.detail || !(await confirmDiscard())) return;
+  emit("preparation", props.detail.hostId);
+}
+async function editConfiguration() {
+  if (editingBlocked.value || !props.detail || !(await confirmDiscard())) return;
+  emit("configure", props.detail);
 }
 const service = (item: SoftwareInstance) => !softwareIsTool(item);
 </script>
@@ -90,8 +108,9 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
     :title="detail?.name || '软件详情'"
     size="min(820px,100vw)"
     destroy-on-close
-    :close-on-click-modal="!closeBlocked" :close-on-press-escape="!closeBlocked" :show-close="!closeBlocked" :before-close="close"
+    :close-on-click-modal="!editingBlocked" :close-on-press-escape="!editingBlocked" :show-close="!editingBlocked" :before-close="close"
     @close="emit('close')"
+    @closed="emit('closed')"
   >
     <div v-if="detail" class="software-detail">
       <div class="detail-status">
@@ -100,10 +119,13 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
         </span>
         <span>{{ softwareModes[detail.managementMode] }}</span>
         <span class="spacer"></span>
+        <button v-if="softwareConfigurationAvailable(detail)" class="secondary" :disabled="editingBlocked || !!host?.maintenance || pendingJob" @click="editConfiguration">编辑配置</button>
+        <button v-if="active(detail) && service(detail)" class="secondary"
+          :disabled="editingBlocked || !softwareLifecycleAvailable(detail)" @click="loadLogs('software')">运行日志</button>
         <button
           v-if="active(detail)"
           class="secondary"
-          :disabled="busy || !softwareLifecycleAvailable(detail)"
+          :disabled="editingBlocked || !softwareLifecycleAvailable(detail)"
           @click="emit('observe', detail)"
         >
           {{ busy ? "处理中…" : "检查状态" }}
@@ -120,15 +142,18 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
               </span>
             </dd>
             <dt>软件类型</dt>
-            <dd>{{ softwareTypes[detail.softwareType] }}</dd>
+            <dd>{{ softwareTypeLabel(detail) }}</dd>
             <template v-if="detail.installation?.official">
               <dt>安装方式</dt><dd>官方系统软件包</dd>
             </template>
             <dt>生命周期对象</dt>
             <dd>
               {{ softwareRuntimeLabels[detail.runtimeKind] }}
-              <code>{{ detail.locator }}</code>
             </dd>
+            <template v-if="detail.softwareType === 'JAVA' && detail.installationStatus === 'READY' && detail.locator.startsWith('/') && detail.locator.endsWith('/bin/java')">
+              <dt>项目 JAVA_HOME</dt>
+              <dd><code>{{ detail.locator.slice(0, -'/bin/java'.length) }}</code></dd>
+            </template>
             <dt>期望状态</dt>
             <dd>{{ softwareDesiredLabels[detail.desiredState] }}</dd>
             <dt>上次确认状态</dt>
@@ -225,19 +250,9 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
               </dd>
             </template>
           </dl>
-          <details v-if="detail.observation?.message || detail.errorCode || detail.observation?.errorCode || detail.latestAttempt?.code" class="software-diagnostics">
-            <summary>诊断信息</summary>
-            <ErrorHelpLink :code="detail.observation?.errorCode || detail.errorCode || detail.latestAttempt?.code || ''" />
-            <dl class="software-facts">
-              <dt>软件标识</dt><dd><code>{{ detail.id }}</code></dd>
-              <dt>检查结果</dt><dd><code>{{ detail.observation?.message || '—' }}</code></dd>
-              <dt>错误码</dt><dd><code>{{ detail.observation?.errorCode || detail.errorCode || '—' }}</code></dd>
-              <dt>最近检测</dt><dd><code>{{ detail.latestAttempt?.code || '—' }}</code>{{ hostTime(detail.latestAttempt?.at) }}</dd>
-              <dt>请求追踪</dt><dd><code>{{ detail.latestAttempt?.traceId || '—' }}</code></dd>
-            </dl>
-          </details>
         </ElTabPane>
-        <ElTabPane :label="detail.installation?.official ? '安装详情' : '服务配置'" name="configuration"
+        <ElTabPane v-if="detail.installation?.definition?.web && detail.installation.config" label="访问界面" name="web-access"><SoftwareWebAccess :item="detail" :host="host" :active="detailTab === 'web-access'" /></ElTabPane>
+        <ElTabPane :label="detail.installation?.official || detail.installation?.definition?.commands ? '安装详情' : '服务配置'" name="configuration"
           ><ServiceConfigurationPanel @close-state="configCloseState = $event"
             :detail="detail"
             :host="host"
@@ -245,6 +260,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
             @submitted="emit('configurationSubmitted', $event)"
             @preparation="emit('preparation', $event)"
         /></ElTabPane>
+        <ElTabPane v-if="hasManagement" :label="detail.softwareType === 'NGINX' ? '站点管理' : detail.softwareType === 'MYSQL' ? '数据库管理' : '管理操作'" name="management"><SoftwareManagementPanel :key="detail.id" :detail="detail" :active="detailTab === 'management'" :disabled="busy || pendingJob || !!host?.maintenance" @close-state="managementCloseState = $event" @submitted="receipt => receipt.jobId && emit('configurationSubmitted', { softwareInstanceId: receipt.softwareInstanceId, jobId: receipt.jobId })" @logs="operationLogs" @preparation="operationPreparation" /></ElTabPane>
         <ElTabPane v-if="managedDockerAccess(detail)" label="账号权限" name="docker-access">
           <DockerAccessPanel @close-blocked="accessCloseBlocked = $event" :detail="detail" :host="host" :active="detailTab === 'docker-access'" :disabled="busy || pendingJob || !canChange" @changed="emit('changed')" />
         </ElTabPane>
@@ -266,13 +282,6 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
             </p>
             <p v-if="softwareJobErrorMessages[job.errorCode]">{{ softwareJobErrorMessages[job.errorCode] }}</p>
             <p v-else-if="job.errorCode">执行未完成，请查看诊断信息。</p>
-            <details class="software-diagnostics">
-              <summary>诊断信息</summary>
-              <ErrorHelpLink v-if="job.errorCode" :code="job.errorCode" />
-              <code>{{ softwareJobDiagnostic(job.status, job.phase) }}</code>
-              <code v-if="job.errorCode">{{ job.errorCode }}</code>
-              <code>作业 {{ job.id }}</code><code>traceId={{ job.traceId }}</code>
-            </details>
             <div class="software-job-actions">
               <button
                 v-if="job.status === 'UNKNOWN' || job.targetAckPending"
@@ -291,54 +300,19 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
                 取消排队
               </button>
               <button
-                v-if="job.status !== 'QUEUED'"
                 class="quiet"
-                :disabled="busy"
+                :disabled="editingBlocked"
                 @click="loadLogs('job')"
               >
-                作业回执
+                查看日志
               </button>
             </div>
           </div>
           <div v-else class="empty">暂无执行记录</div>
-          <div v-if="logs && logSource === 'job'" class="software-logs">
-            <pre>{{ logs }}</pre>
-          </div>
         </ElTabPane>
-        <ElTabPane label="运行日志" name="logs">
-          <button
-            v-if="active(detail) && service(detail)"
-            class="secondary"
-            :disabled="busy || !softwareLifecycleAvailable(detail)"
-            @click="loadLogs('software')"
-          >
-            {{ busy ? "读取中…" : "读取日志" }}
-          </button>
-          <div v-if="logs && logSource === 'software'" class="software-logs">
-            <header>
-              <strong>服务日志</strong>
-              <small>
-                {{ logsLimited ? "已截取最近日志 · " : ""
-                }}{{ hostTime(logsAt) }}
-              </small>
-            </header>
-            <pre>{{ logs }}</pre>
-          </div>
-          <div v-else class="empty">
-            {{
-              service(detail) ? "点击读取最近服务日志" : "工具没有常驻服务日志"
-            }}
-          </div>
-        </ElTabPane>
-        <ElTabPane label="登记信息" name="registration">
+        <ElTabPane label="来源与归属" name="registration">
           <div class="software-identifiers">
             <dl class="software-facts">
-              <dt>登记标识</dt>
-              <dd>
-                <code>{{ detail.id }}</code>
-              </dd>
-              <dt>记录版本</dt>
-              <dd>{{ detail.version }}</dd>
               <dt>登记版本</dt>
               <dd>{{ detail.softwareVersion || "未标记" }}</dd>
               <dt>文件归属</dt>
@@ -349,54 +323,58 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
                     : detail.dataOwnership === "OPS" ? "Ops 安装文件" : "未确认"
                 }}
               </dd>
-              <dt>身份摘要</dt>
-              <dd>
-                <code>
-                  {{ detail.observation?.identityHash || "尚未确认" }}
-                </code>
-              </dd>
-              <dt>观测来源</dt>
-              <dd>{{ detail.observation?.source || "尚无观测" }}</dd>
-              <dt v-if="job">作业追踪</dt>
-              <dd v-if="job">
-                <code>{{ job.traceId }}</code>
-              </dd>
             </dl>
+            <details class="software-diagnostics"><summary>排障信息</summary>
+              <ErrorHelpLink :code="detail.observation?.errorCode || detail.errorCode || detail.latestAttempt?.code || ''" />
+              <dl class="software-facts">
+              <dt>登记标识</dt><dd><code>{{ detail.id }}</code></dd>
+              <dt>记录版本</dt><dd>{{ detail.version }}</dd>
+              <template v-if="detail.locator"><dt>运行对象</dt><dd><code>{{ detail.locator }}</code></dd></template>
+              <template v-if="detail.observation?.source"><dt>观测来源</dt><dd><code>{{ detail.observation.source }}</code></dd></template>
+              <template v-if="detail.observation?.identityHash"><dt>身份摘要</dt><dd><code>{{ detail.observation.identityHash }}</code></dd></template>
+              <template v-if="detail.observation?.message"><dt>原始检查结果</dt><dd><code>{{ detail.observation.message }}</code></dd></template>
+              <template v-if="detail.observation?.errorCode || detail.errorCode"><dt>错误码</dt><dd><code>{{ detail.observation?.errorCode || detail.errorCode }}</code></dd></template>
+              <template v-if="detail.latestAttempt?.code"><dt>最近检测</dt><dd><code>{{ detail.latestAttempt.code }}</code>{{ detail.latestAttempt.at ? hostTime(detail.latestAttempt.at) : '' }}</dd></template>
+              <template v-if="detail.latestAttempt?.traceId"><dt>请求追踪</dt><dd><code>{{ detail.latestAttempt.traceId }}</code></dd></template>
+              <dt v-if="job">作业追踪</dt><dd v-if="job"><code>{{ job.traceId }}</code></dd>
+            </dl></details>
           </div>
         </ElTabPane>
         <ElTabPane v-if="detail.softwareType === 'GIT' && host" label="Git 账号" name="git-accounts" :disabled="gitCloseState.blocked && detailTab !== 'git-accounts'" />
-        <ElTabPane v-if="detail.softwareType === 'GIT' && host" label="仓库" name="git-repositories" :disabled="gitCloseState.blocked && detailTab !== 'git-repositories'" />
       </ElTabs>
-      <GitManagementPanel v-if="detail.softwareType === 'GIT' && host" v-show="detailTab.startsWith('git-')" :host="host" :active="detailTab.startsWith('git-')" :section="detailTab === 'git-accounts' ? 'accounts' : 'repositories'" :show-tabs="false" @close-state="gitCloseState = $event" @changed="emit('changed')" />
+      <GitManagementPanel v-if="detail.softwareType === 'GIT' && host" v-show="detailTab === 'git-accounts'" :host="host" :active="detailTab === 'git-accounts'" @close-state="gitCloseState = $event" @changed="emit('changed')" />
     </div>
     <template #footer>
       <footer v-if="detail" class="software-detail-actions">
         <button
           v-if="active(detail)"
           class="quiet danger"
-          :disabled="busy || pendingJob || !!host?.maintenance"
+          :disabled="editingBlocked || pendingJob || !!host?.maintenance"
           @click="emit('unmanage', detail)"
         >
-          解除管理
+          {{ detail.managementMode === "OBSERVE" ? "移除登记" : "解除管理" }}
         </button>
         <button v-if="softwareUninstallAvailable(detail)" class="quiet danger"
-          :disabled="busy || pendingJob || !!host?.maintenance" @click="emit('uninstall', detail)">
+          :disabled="editingBlocked || pendingJob || !!host?.maintenance" @click="emit('uninstall', detail)">
           卸载软件
         </button>
         <span class="spacer"></span>
         <button
           v-if="detail.managementMode === 'OBSERVE' && service(detail)"
           class="primary"
-          :disabled="busy || pendingJob || !canAdopt"
+          :disabled="editingBlocked || pendingJob || !canAdopt"
           @click="emit('adopt', detail)"
         >
           接管生命周期
         </button>
         <template v-if="detail.managementMode === 'MANAGED' && service(detail)">
+          <button v-if="detail.runtimeKind === 'DOCKER' && detail.actualState === 'PAUSED'" class="primary" :disabled="editingBlocked || !canChange" @click="emit('changeState', detail, 'UNPAUSE')">继续</button>
+          <button v-if="detail.runtimeKind === 'DOCKER' && detail.actualState === 'RUNNING'" class="secondary" :disabled="editingBlocked || !canChange" @click="emit('changeState', detail, 'PAUSE')">暂停</button>
+          <button class="secondary" :disabled="editingBlocked || !canChange" @click="emit('changeState', detail, 'RESTART')">重启</button>
           <button
             class="secondary"
             :disabled="
-              busy ||
+              editingBlocked ||
               !canChange ||
               (detail.desiredState === 'STOPPED' &&
                 detail.actualState === 'STOPPED')
@@ -406,9 +384,10 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
             停止
           </button>
           <button
+            v-if="detail.actualState !== 'PAUSED'"
             class="primary"
             :disabled="
-              busy ||
+              editingBlocked ||
               !canChange ||
               !softwareInstallationReady(detail) ||
               (detail.desiredState === 'RUNNING' &&
@@ -473,8 +452,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
   padding: 16px;
   background: #f7f9fc;
 }
-.software-job header,
-.software-logs header {
+.software-job header {
   display: flex;
   gap: 12px;
   justify-content: space-between;
@@ -482,14 +460,8 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
   align-items: center;
   font-size: 13px;
 }
-.software-job strong,
-.software-logs strong {
+.software-job strong {
   font-weight: 500;
-}
-.software-job code {
-  display: block;
-  font: 11px/1.7 var(--mono);
-  overflow-wrap: anywhere;
 }
 .software-diagnostics {
   margin-top: 16px;
@@ -518,21 +490,8 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
   flex-wrap: wrap;
   margin-top: 12px;
 }
-.software-logs header small {
-  color: var(--muted);
-}
-.software-logs:not(:first-child),
 .software-detail :deep(.el-tab-pane) > .empty:not(:first-child) {
   margin-top: 14px;
-}
-.software-logs pre {
-  background: #edf3fa;
-  padding: 14px;
-  font: 12px/1.7 var(--mono);
-  max-height: 300px;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 .software-identifiers {
   padding: 0;

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	_ "embed"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -85,11 +84,7 @@ func nodeTerminalBlock(n serviceinstall.NodeContext) []byte {
 	// Context roots are validated before use. Bash single quotes are escaped even
 	// though controller-generated HOME paths normally contain only plain names.
 	dir := "'" + strings.ReplaceAll(path.Join(n.RootPath, "nvm"), "'", "'\"'\"'") + "'"
-	return []byte("# >>> streamfusion-ops node " + n.EnvironmentID + " >>>\n" +
-		"if [ -n \"${BASH_VERSION:-}\" ] && [ -r " + dir + "/nvm.sh ]; then\n" +
-		"  export NVM_DIR=" + dir + "\n  . \"$NVM_DIR/nvm.sh\" --no-use\n" +
-		"  if [ \"$(nvm version default 2>/dev/null)\" != N/A ]; then nvm use --silent default >/dev/null 2>&1; fi\nfi\n" +
-		"# <<< streamfusion-ops node " + n.EnvironmentID + " <<<\n")
+	return []byte(deployTemplate("node_terminal.sh.tmpl", n.EnvironmentID, dir))
 }
 func nodeTerminalContent(raw []byte, n serviceinstall.NodeContext) ([]byte, bool, error) {
 	block := nodeTerminalBlock(n)
@@ -212,8 +207,7 @@ func nodeTerminalFiles(n serviceinstall.NodeContext) (*NodeTerminalObservation, 
 	return observation, plan, nil
 }
 
-//go:embed node_terminal.sh
-var nodeTerminalScript string
+var nodeTerminalScript = deployScript("node_terminal.sh")
 
 func (x *executor) connectNodeTerminal(ctx context.Context, n serviceinstall.NodeContext, job, dir string) error {
 	return x.changeNodeTerminal(ctx, n, job, dir, false)

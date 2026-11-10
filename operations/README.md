@@ -74,7 +74,7 @@ sudo bash scripts/install-linux.sh --binary release/0.2.0/streamfusion-ops --sha
 - `cmd/streamfusion-ops/main.go`：本机命令和HTTP服务生命周期。
 - `internal/controller/`：SQLite、认证、凭据、备份、主机连接、软件纳管、端口规则、固定配方和发布作业，按职责分文件。
 - `internal/webui/web.go`：内嵌网页。
-- `web/src/`：运行总览、主机管理、端口管理、软件管理、应用实例、版本制品、发布作业、连接凭据、操作记录和系统设置。主机连接、软件登记、软件详情与安装配方独立维护。
+- `web/src/`：运行总览、主机管理、端口管理、软件中心（软件管理、软件安装、软件配置）、应用实例、版本制品、发布作业、连接凭据、日志记录和系统设置。主机连接、软件登记、软件详情与安装配方独立维护。
 - `scripts/`：构建和Linux安装/卸载。
 
 认证与业务平台独立。匿名会话10分钟；登录会话闲置30分钟、绝对8小时；连续5次失败锁定15分钟；全局每分钟最多60次密码校验。改密清除全部登录会话。写接口检查来源和CSRF；Session Cookie 为HttpOnly / SameSite Strict，HTTPS时开启Secure。日志最多20MiB×5，凭据修订最多500条，会话最多2000条。
@@ -82,7 +82,7 @@ sudo bash scripts/install-linux.sh --binary release/0.2.0/streamfusion-ops --sha
 ## 检查与故障定位
 
 ```bash
-go test ./...
+go test -timeout 15m ./...
 go vet ./...
 cd web && pnpm build
 ```
@@ -121,9 +121,9 @@ SSH连通、只读观察、执行器变更授权、Docker/Compose能力分别显
 
 主机API统一为 `/ops/api/v1/hosts`，详情/编辑/删除使用 `/{id}`，指纹发现使用 `/fingerprint`，能力检查使用 `/{id}/checks`，维护使用 `/{id}/maintenance`，插件预检使用 `/{id}/plugin-install-plans`。原 `/targets` 主机入口已移除；调用方需切换，实例和作业中的稳定 `targetId` 保持。Platform预览交接接口保持原路径。
 
-I02 当前实现本机/SSH Linux目标登记、固定 Java Compose 制品发布和应用回滚；S4另接入预览节点固定配方、维护许可与版本回退，操作见[预览节点维护](preview-nodes.md)，工程验证与负责人验收分开。Docker Engine 可从主机或软件目录发起固定官方包安装，真实系统安装仍需实机验收；项目组合发布、应用源码构建及Jenkins尚未实现。I02仍需当前项目后端和真实第二台主机验收。Linux安装范围为Ubuntu24.04/systemd/amd64，Windows仅支持本机开发运行。
+I02 当前实现本机/SSH Linux目标登记、固定 Java Compose 制品发布和应用回滚；S4另接入预览节点固定配方、维护许可与版本回退，操作见[预览节点维护](preview-nodes.md)，工程验证与负责人验收分开。Docker Engine 可从主机或软件安装页面发起固定官方包安装，Jenkins 可独立安装与配置；项目组合发布、应用源码构建及 Jenkins 流水线编排尚未实现。I02仍需当前项目后端和真实第二台主机验收。Windows仅支持本机开发运行，各 Linux 安装方案按模板声明发行版、架构和依赖。
 
-软件管理分为“软件中心”和“软件目录”。软件中心使用卡片，主机和软件详情按标签组织，底部操作固定。已有 systemd 服务与 Docker 容器可先只读登记，经普通 SSH 固定探针检查身份、状态和时间；不要求先安装执行器或 Docker。Docker 观察仍需要实际 socket 读取权限，systemd 使用明确的规范 unit 名称。Java、Python、FFmpeg 工具只检查固定系统命令，不提供启停。声明版本与实际观测版本分别展示，SSH 不通不会显示为已停止。卡片将状态、版本、主机和端口放在主视图；路径及身份依据进入详情标签，发现结果在弹窗内滚动。
+“软件中心”下设“软件管理、软件安装、软件配置”三个独立菜单。软件管理使用卡片，主机和软件详情按标签组织，底部操作固定。已有 systemd 服务与 Docker 容器可先只读登记，经普通 SSH 固定探针检查身份、状态和时间；不要求先安装执行器或 Docker。Docker 观察仍需要实际 socket 读取权限，systemd 使用明确的规范 unit 名称。Java、Python、FFmpeg 工具只检查固定系统命令，不提供启停。声明版本与实际观测版本分别展示，SSH 不通不会显示为已停止。卡片将状态、版本、主机和端口放在主视图；路径及身份依据进入详情标签，发现结果在弹窗内滚动。
 
 “自动识别”选择主机后按需读取已安装unit、容器和固定工具，候选可带入登记表单；扫描本身不创建记录或接管服务。识别MySQL/MariaDB、Redis、ZLM、MediaMTX（含rtsp-simple-server）、MinIO、SeaweedFS、Nginx、Jenkins、Java、Python、FFmpeg的明确名称或镜像仓库基名；自定义命名可手动登记。systemd通过unit文件归属读取dpkg/rpm安装包版本，明确标记来源，不能证明运行进程已加载该版本。可读时补充MainPID的程序路径及其监听端口；普通SSH权限可能无法取得，不请求sudo，也不以默认端口填补。Docker显示镜像引用和实际返回的端口信息，不进入容器执行版本命令，镜像tag不代表程序版本。常见MySQL/Redis配置只提取明确的端口、数字绑定地址和位置，作为主机级配置线索；include、自定义位置或启动参数可能覆盖它们，不能当作实际有效配置或协议健康。不会读取密码、容器环境变量或完整配置正文。
 
@@ -133,7 +133,17 @@ I02 当前实现本机/SSH Linux目标登记、固定 Java Compose 制品发布�
 
 软件 API 为 `/ops/api/v1/software-instances`，详情使用 `/{id}`，检查/接管/启停/日志/解除分别使用 `/{id}/observe`、`adopt`、`actions`、`logs`、`unmanage`。写操作沿用登录、来源、CSRF、记录版本和幂等校验。新工具安装使用统一安装计划，旧工具记录及发布引用保留。
 
-软件目录按十三种软件展示卡片，Java可选择8/17/21；分类包含服务软件、容器引擎、运行环境、构建工具、媒体工具和编程软件。首次打开优先选择随包材料已就绪的版本，手动选择后保持该选择。Java/Maven/Python/FFmpeg/Codex CLI/Claude Code为工具，安装后显示“已安装”和程序/环境路径，没有监听端口或启停按钮。Docker Java21工具沿用原JAR发布消费者；原生JDK/Maven不自动替换已有Compose发布环境。主机连接、登记和安装使用抽屉，页头和操作固定，窄屏单列。
+软件安装页面按软件展示卡片，Java可选择8/17/21；分类包含服务软件、容器引擎、运行环境、构建工具、媒体工具、编程软件、监控与标注平台。首次打开优先选择随包材料已就绪的版本，手动选择后保持该选择。Java/Maven/Python/FFmpeg/Codex CLI/Claude Code为工具，安装后显示“已安装”和程序/环境路径，没有监听端口或启停按钮。Docker Java21工具沿用原JAR发布消费者；原生JDK/Maven不自动替换已有Compose发布环境。主机连接、登记和安装使用弹窗或抽屉，窄屏单列。
+
+### 安装后配置
+
+在“软件管理”点击已受管服务的“编辑配置”：读取服务器当前值，修改后预览差异，再保存和验证。配置结果与安装作业保留在日志记录中；验证失败恢复原配置，已停止的服务保持停止。
+
+Nginx、MySQL、Redis、Jenkins、GitLab、Prometheus、Nacos、PostgreSQL 和标注平台复用“软件配置”中发布的管理模板。Nginx 提供 IPv4 入口、上传上限和连接数，并保留已有站点与 IPv6 监听；MySQL 提供入口、连接数和缓冲池，保留数据库、账号及密码；Redis 提供入口、连接数与内存，保留认证和持久化设置。其他服务按模板声明各自字段，例如 GitLab 的访问地址、Prometheus 的保留时间、Nacos 的多端口。媒体服务继续使用已有网络配置流程，工具使用对应环境或账号管理。
+
+模板的 `read-config` 返回实际值，`configure` 声明配置资源、应用步骤、验证步骤及恢复步骤；命令在 `internal/controller/scripts/service-configuration/`、`scripts/additional-software/` 和 `scripts/annotation/` 中维护。通用弹窗由模板字段生成，管理员可编辑并发布自己的管理操作，已提交任务固定使用提交时版本。升级只更新未改动的内置模板，保留管理员草稿、撤回状态、安装记录和历史任务。
+
+配置管理需要目标服务器已有 Python 3。新增内置服务配置使用执行器命令能力 9，超过 16 KiB 的共用脚本也需要能力 9；共用脚本上限 32 KiB，单步骤 16 KiB，模板总长 48 KiB。平台在执行前检查能力与授权。Docker 配置修改复用原镜像、环境、挂载和数据卷，保留旧容器供失败恢复。自行安装后只读登记的服务需先确认管理归属，页面不会直接改写它们。
 
 ## 端口管理
 
@@ -165,7 +175,7 @@ Docker 安装支持目标联网拉取固定镜像或使用平台离线材料；�
 
 “卸载软件”独立于“解除管理”：仅支持 Ops 安装且归属已确认的对象，默认保留配置、数据、日志与备份；勾选“同时删除数据”后显示精确实例路径，并要求输入软件名称。历史软件记录、安装计划、作业与审计仍保留。Docker有容器或受管依赖时拒绝卸载；停止包含 service/socket，已停止引擎需先启动核对依赖。`/var/lib/containerd` 始终保留。保留目录后的再次安装不会覆盖原数据，恢复复用需管理员另行评估。新增卸载要求目标执行器 `softwareUninstallVersion=1`；已接入主机可显式点击“更新接入组件”，打开页面不会自动升级。
 
-入口为“软件管理 → 软件目录”，选择主机后点击“安装”。固定配方包括：
+入口为“软件中心 → 软件安装”，选择主机后点击“安装”。固定配方包括：
 
 | 软件 | 原生材料 | Docker |
 |---|---|---|
@@ -216,7 +226,7 @@ API以`/ops/api/v1`为前缀：目录`GET /software-recipes`；安装`POST /host
 
 ### Node环境
 
-“软件管理 → 软件目录 → Node.js → 安装与管理”按主机和Linux账号管理nvm、Node.js、npm、pnpm；软件中心的Node实例详情打开同一管理窗口。当前安装配方面向Linux amd64，提供固定Node22/24版本及校验摘要；已安装版本保留原配方，新配方不会修改历史记录。nvm使用用户目录下的专属环境，固定命令以所选非root账号运行，不修改系统Node。新安装会为所选账号配置Bash加载nvm；已有环境可通过“接入终端”补齐。只维护Ops标记片段并备份原文件，保留其他配置；遇到其他nvm配置或异常文件时停止并说明原因。设置默认版本后，新登录Bash可直接使用node/npm；已有终端不自动切换。
+“软件中心 → 软件安装 → Node.js → 安装与管理”按主机和Linux账号管理nvm、Node.js、npm、pnpm；软件中心的Node实例详情打开同一管理窗口。当前安装配方面向Linux amd64，提供固定Node22/24版本及校验摘要；已安装版本保留原配方，新配方不会修改历史记录。nvm使用用户目录下的专属环境，固定命令以所选非root账号运行，不修改系统Node。新安装会为所选账号配置Bash加载nvm；已有环境可通过“接入终端”补齐。只维护Ops标记片段并备份原文件，保留其他配置；遇到其他nvm配置或异常文件时停止并说明原因。设置默认版本后，新登录Bash可直接使用node/npm；已有终端不自动切换。
 
 新建环境时选择账号、Node版本和来源。官方安装由目标联网取得固定官方材料；离线安装复用平台材料库，初始化nvm也使用库中材料；自行安装只检测并登记已有用户nvm或系统Node，不自动接管。外部环境可查看、重新检测和解除登记，不能通过此入口修改其版本或全局包。
 
@@ -224,7 +234,7 @@ API以`/ops/api/v1`为前缀：目录`GET /software-recipes`；安装`POST /host
 
 卸载版本会检查默认引用和运行进程；默认版本须先切换，最后一个版本可明确确认清除默认。默认保留缓存、备份，勾选删除时展示对应路径；项目目录不属于清理范围。环境内仍有版本时不能移除环境。操作沿用现有作业、主机锁、日志和幂等核对；结果不明确时保留UNKNOWN并核对原作业，不重发命令。
 
-代码按三个现有模块维护：`internal/serviceinstall/node.go`定义固定配方，`internal/deploy/node_*.go`与`node.sh`负责目标执行，`internal/controller/node_environment*.go`负责环境记录和现有作业衔接。前端入口为`NodeEnvironmentPanel.vue`、版本操作为`NodeVersionDialog.vue`，数据类型在`nodeEnvironment.ts`；没有新增运行服务或生产依赖。
+代码按三个现有模块维护：`internal/serviceinstall/node.go`定义固定配方，`internal/deploy/node_*.go`与`internal/serviceinstall/templates/node/commands.sh`负责目标执行，`internal/controller/node_environment*.go`负责环境记录和现有作业衔接。前端入口为`NodeEnvironmentPanel.vue`、版本操作为`NodeVersionDialog.vue`，数据类型在`nodeEnvironment.ts`；没有新增运行服务或生产依赖。
 
 ### 主机安装准备
 

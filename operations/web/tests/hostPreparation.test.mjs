@@ -17,7 +17,7 @@ const compiled = ts.transpileModule(source, {
 const createPanel = new Function(
   "computed", "ref", "watch", "onUnmounted", "defineProps", "defineEmits",
   "ApiError", "request", "setTimeout", "clearTimeout", "fetch", "location", "document", "URL", "navigator",
-  compiled + "\nreturn { data, busy, visibleStatus, currentPhaseIndex, statusTitle, statusSummary, transferPercent, transferSpeed, phaseState, error, sudoPassword, needsSudoPassword, canRecover, checkResult, updateRequested, openUpdate, load, install, repair, check, reconcile, download };",
+  compiled + "\nreturn { data, busy, visibleStatus, currentPhaseIndex, phaseOrder, statusTitle, statusLabel, statusSummary, transferPercent, transferSpeed, phaseState, error, sudoPassword, needsSudoPassword, canRecover, checkResult, updateRequested, openUpdate, load, install, repair, check, reconcile, download };",
 );
 
 function deferred() {
@@ -190,6 +190,7 @@ test("a successful historical connection offers an explicit update without auto 
   await h.panel.install();
   assert.equal(mutations.length, 1);
   assert.equal(mutations[0].path, "/hosts/host-a/preparation/install");
+  assert.equal(mutations[0].input.updateOnly, undefined);
   assert.equal(h.panel.updateRequested.value, false);
 });
 
@@ -346,8 +347,9 @@ test("operator-facing preparation is a single concise install flow", () => {
   assert.match(component, /bash install\.sh/);
   const ordinaryContent = component.replace(/<details[\s\S]*?<\/details>/g, "");
   assert.equal(ordinaryContent.includes("{{ error.code }}"), false);
-  assert.match(component, /<details v-if="error.code"><summary>错误详情<\/summary>/);
-  assert.match(component, /<ErrorHelpLink :code="error.code"/);
+  assert.equal(component.includes("{{ error.code }}"), false);
+  assert.equal(component.includes("traceId="), false);
+  assert.equal(component.includes("错误详情"), false);
   assert.equal(component.includes("{{ checkResult.code }}"), false);
   assert.equal(hostManagement.includes("<code>{{ detail.capabilities?.[key]?.code }}</code>"), false);
   assert.equal(hostOverview.includes("<code>{{ current.latestAttempt.code }}</code>"), false);
@@ -430,6 +432,71 @@ test("successful reconciliation clears the previous failure and refreshes host r
 });
 
 const automaticUpdate = { hostId: "host-a", expectedHostVersion: "1", currentSHA256: "a".repeat(64), packageSHA256: "b".repeat(64) };
+
+test("software preparation requests upgrade and command authorization with one transient password", async () => {
+  let latest, received;
+  const h = harness(async (path, method, input) => {
+    if (path.endsWith("/checks")) return {};
+    if (path.endsWith("/install")) {
+      received = { ...input };
+      return latest = input.sudoPassword ? { id: "ready", status: "SUCCEEDED" } : { id: "password", status: "FAILED", errorCode: "PREPARATION_SUDO_REQUIRED" };
+    }
+    return preparation("host-a", latest);
+  }, undefined, { automaticUpdate: { ...automaticUpdate, mode: "UPDATE" } });
+  await flush(); await flush();
+  assert.equal(h.panel.needsSudoPassword.value, true);
+  h.panel.sudoPassword.value = "one-use-password";
+  await h.panel.install();
+  assert.equal(received.updateOnly, true);
+  assert.equal(received.authorizeCommands, true);
+  assert.equal(received.sudoPassword, "one-use-password");
+  assert.equal(h.panel.sudoPassword.value, "");
+  assert.equal(h.emitted.filter(name => name === "updated").length, 1);
+  h.unmount();
+});
+
+for (const mode of ["AUTHORIZE", "INSTALL"]) test(`inline ${mode} requests permission once and resumes only after success`, async () => {
+  let latest = { id: "old", status: "SUCCEEDED" };
+  const calls = [];
+  const h = harness(async (path, method, input) => {
+    if (path.endsWith("/checks")) return {};
+    if (path.endsWith("/install")) {
+      calls.push({ ...input });
+      return latest = input.sudoPassword ? { id: "success", status: "SUCCEEDED" } : { id: "password", status: "FAILED", errorCode: "PREPARATION_SUDO_REQUIRED" };
+    }
+    return preparation("host-a", latest);
+  }, undefined, { automaticUpdate: { ...automaticUpdate, mode, currentSHA256: automaticUpdate.packageSHA256 } });
+  await flush(); await flush();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].updateOnly, undefined);
+  assert.equal(calls[0].authorizeOnly, mode === "AUTHORIZE" ? true : undefined);
+  assert.equal(calls[0].expectedPackageSHA256, mode === "AUTHORIZE" ? automaticUpdate.packageSHA256 : undefined);
+  assert.equal(h.emitted.includes("updated"), false);
+  assert.equal(h.panel.needsSudoPassword.value, true);
+  await h.panel.load(); assert.equal(calls.length, 1);
+  h.panel.sudoPassword.value = "transient-password";
+  await h.panel.install();
+  assert.equal(calls.length, 2);
+  assert.notEqual(calls[0].idempotencyKey, calls[1].idempotencyKey);
+  assert.equal(h.panel.sudoPassword.value, "");
+  assert.equal(h.emitted.filter(name => name === "updated").length, 1);
+  h.unmount();
+});
+
+test("an uncertain command authorization cannot become a full repair or replay", async () => {
+  let latest = { id: "old", status: "SUCCEEDED" }, installs = 0;
+  const h = harness(async path => {
+    if (path.endsWith("/checks")) return {};
+    if (path.endsWith("/install")) { installs++; return latest = { id: "authorization", status: "UNKNOWN" }; }
+    if (path.endsWith("/reconcile")) throw new TestApiError("接入文件缺失", "EXECUTOR_MISSING");
+    return preparation("host-a", latest);
+  }, undefined, { automaticUpdate: { ...automaticUpdate, mode: "AUTHORIZE", currentSHA256: automaticUpdate.packageSHA256 } });
+  await flush(); await flush(); await h.panel.reconcile(); await h.panel.install();
+  assert.equal(installs, 1);
+  assert.equal(h.panel.canRecover.value, false);
+  assert.equal(h.emitted.includes("updated"), false);
+  h.unmount();
+});
 
 test("approved automatic update sends frozen hashes once and resumes only its completed job", async () => {
   let latest = { id: "old", status: "SUCCEEDED" };
@@ -561,5 +628,32 @@ test("upload failure after sudo retry keeps the real cause and transfer progress
   assert.equal(h.panel.statusSummary.value, "组件上传超时");
   assert.equal(h.panel.transferPercent.value, 25);
   assert.equal(h.panel.transferSpeed.value, " · 102.4 KiB/s");
+  h.unmount();
+});
+
+test("completed upload stays at the transfer step until the server confirms installation", async () => {
+  let latest = { id: "upload-confirmation", status: "RUNNING", phase: "UPLOADING_EXECUTOR", result: {
+    transfer: { sentBytes: 4194304, totalBytes: 4194304, startedAt: "2026-11-10T00:00:00Z", updatedAt: "2026-11-10T00:00:10Z" },
+  } };
+  const h = harness(async () => preparation("host-a", latest), undefined, { automaticUpdate: { ...automaticUpdate, mode: "UPDATE" } });
+  await flush();
+  assert.equal(h.panel.phaseOrder.value.length, 5);
+  assert.equal(h.panel.transferPercent.value, 100);
+  assert.equal(h.panel.statusTitle.value, "上传完成，正在确认");
+  assert.equal(h.panel.statusLabel.value, "确认中");
+  assert.equal(h.panel.visibleStatus.value, "RUNNING");
+  assert.equal(h.panel.phaseState(1), "active");
+  assert.equal(h.panel.phaseState(2), "pending");
+  latest = { ...latest, phase: "INSTALLING_EXECUTOR" };
+  await h.tick();
+  assert.equal(h.panel.statusTitle.value, "安装接入组件");
+  assert.equal(h.panel.statusLabel.value, "执行中");
+  assert.equal(h.panel.phaseState(1), "done");
+  assert.equal(h.panel.phaseState(2), "active");
+  latest = { ...latest, status: "FAILED", phase: "UPLOADING_EXECUTOR", errorCode: "PREPARATION_UPLOAD_FAILED" };
+  await h.tick();
+  assert.equal(h.panel.statusTitle.value, "组件更新未完成");
+  assert.equal(h.panel.statusLabel.value, "未完成");
+  assert.equal(h.panel.phaseState(1), "failed");
   h.unmount();
 });

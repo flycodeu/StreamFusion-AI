@@ -155,6 +155,25 @@ test("actual request layer sends ciphertext, preserves CSRF and does not echo pl
   }
 });
 
+test("component installation and repair wait for the bounded server budget without lengthening ordinary requests", async (t) => {
+  const timeout = AbortSignal.timeout.bind(AbortSignal);
+  const budgets = [];
+  t.mock.method(AbortSignal, "timeout", (milliseconds) => {
+    budgets.push(milliseconds);
+    return timeout(milliseconds);
+  });
+  const issued = await challenge();
+  t.mock.method(globalThis, "fetch", async (url) => reply(url.endsWith("/auth/secure-challenge") ? issued.public : null));
+  for (const action of ["install", "repair"]) {
+    budgets.length = 0;
+    await request(`/hosts/00000000-0000-0000-0000-000000000001/preparation/${action}`, "POST", { confirmed: true });
+    assert.deepEqual(budgets, [930000, 60000]);
+  }
+  budgets.length = 0;
+  await request("/hosts");
+  assert.deepEqual(budgets, [60000]);
+});
+
 test("password and all credential writes are protected without changing their payload", async (t) => {
   const cases = [
     [

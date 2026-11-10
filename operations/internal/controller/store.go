@@ -21,7 +21,7 @@ import (
 )
 
 const Version = "0.2.0"
-const SchemaVersion = 18
+const SchemaVersion = 24
 
 //go:embed schema.sql
 var schema string
@@ -773,6 +773,179 @@ func Open(dir string) (*Store, error) {
 	}
 	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=18").Scan(&checksum); err != nil || checksum != hashToken(schemaV18) {
 		return nil, errors.New("SCHEMA_MISMATCH: 迁移18摘要不匹配")
+	}
+	if version > 0 && version <= 18 {
+		backupPath := filepath.Join(abs, "before-schema-19-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 18 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV19); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(19,?,?,?)", hashToken(schemaV19), Version, Now())
+		}
+		if e == nil {
+			var count int
+			e = tx.QueryRow("SELECT count(*) FROM pragma_foreign_key_check").Scan(&count)
+			if e == nil && count != 0 {
+				e = errors.New("SCHEMA_FOREIGN_KEY_INVALID")
+			}
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=19").Scan(&checksum); err != nil || checksum != hashToken(schemaV19) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移19摘要不匹配")
+	}
+	if version > 0 && version <= 19 {
+		backupPath := filepath.Join(abs, "before-schema-20-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 19 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV20); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(20,?,?,?)", hashToken(schemaV20), Version, Now())
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=20").Scan(&checksum); err != nil || checksum != hashToken(schemaV20) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移20摘要不匹配")
+	}
+	if version > 0 && version <= 20 {
+		backupPath := filepath.Join(abs, "before-schema-21-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 20 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV21); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(21,?,?,?)", hashToken(schemaV21), Version, Now())
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=21").Scan(&checksum); err != nil || checksum != hashToken(schemaV21) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移21摘要不匹配")
+	}
+	if version > 0 && version <= 21 {
+		backupPath := filepath.Join(abs, "before-schema-22-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 21 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV22); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(22,?,?,?)", hashToken(schemaV22), Version, Now())
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=22").Scan(&checksum); err != nil || checksum != hashToken(schemaV22) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移22摘要不匹配")
+	}
+	if version > 0 && version <= 22 {
+		backupPath := filepath.Join(abs, "before-schema-23-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 22 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if e = migrateCommandFlows(tx); e == nil {
+			_, e = tx.Exec(schemaV23)
+		}
+		if e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(23,?,?,?)", hashToken(schemaV23), Version, Now())
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=23").Scan(&checksum); err != nil || checksum != hashToken(schemaV23) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移23摘要不匹配")
+	}
+	if version > 0 && version <= 23 {
+		backupPath := filepath.Join(abs, "before-schema-24-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 23 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV24); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(24,?,?,?)", hashToken(schemaV24), Version, Now())
+		}
+		if e == nil {
+			var invalid int
+			e = tx.QueryRow("SELECT count(*) FROM pragma_foreign_key_check").Scan(&invalid)
+			if e == nil && invalid != 0 {
+				e = errors.New("SCHEMA_FOREIGN_KEY_INVALID")
+			}
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=24").Scan(&checksum); err != nil || checksum != hashToken(schemaV24) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移24摘要不匹配")
+	}
+	if err = s.seedBuiltinCommandTemplates(); err != nil {
+		return nil, err
+	}
+	if err = s.seedSoftwareManagementPresets(); err != nil {
+		return nil, err
 	}
 	if _, err = s.DB.Exec("DELETE FROM sessions WHERE expires_at<=? OR last_seen<?", time.Now().Unix(), time.Now().Add(-30*time.Minute).Unix()); err != nil {
 		return nil, err

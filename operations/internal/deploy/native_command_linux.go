@@ -30,6 +30,7 @@ func runNativeBuild(ctx context.Context, user, directory, command string, args .
 	cmd.WaitDelay = 2 * time.Second
 	output := &cappedBuffer{limit: 64 << 10}
 	cmd.Stdout, cmd.Stderr = commandOutputs(ctx, output)
+	logExecutedCommand(ctx, cmd.Path, cmd.Args[1:]...)
 	err = cmd.Run()
 	return output.Bytes(), err
 }

@@ -46,7 +46,7 @@ func installSSHFixture(t *testing.T, s *Store, b *browser, extensions ...func(de
 			if fixture.OldExecutor.Load() {
 				version = 0
 			}
-			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerAvailable": false, "dockerEngineAvailable": !fixture.NoDocker.Load(), "softwareLifecycleVersion": 1, "serviceInstallVersion": version, "nativeInstallVersion": 1, "serviceCatalogHash": serviceinstall.CatalogHash()})
+			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerAvailable": false, "dockerEngineAvailable": !fixture.NoDocker.Load(), "softwareLifecycleVersion": 1, "serviceInstallVersion": version, "nativeInstallVersion": 1, "serviceCatalogHash": serviceinstall.CatalogHash(), "commandRecipeVersion": deploy.CommandRecipeVersion, "commandTrustFingerprint": deploy.CommandPublicKeyFingerprint(s.commandPublicKey())})
 		}
 		if req.Reconfiguration != nil {
 			fixture.mu.Lock()
@@ -176,7 +176,7 @@ func TestServiceInstallPlanSubmitIdentityAckAndReplay(t *testing.T) {
 	b.login()
 	host, f := installSSHFixture(t, s, b)
 	var catalog struct{ Data []serviceinstall.Definition }
-	if err := json.Unmarshal(b.call("GET", "/software-recipes", nil, 200).Body.Bytes(), &catalog); err != nil || len(catalog.Data) != len(serviceinstall.Catalog()) {
+	if err := json.Unmarshal(b.call("GET", "/software-recipes", nil, 200).Body.Bytes(), &catalog); err != nil || len(catalog.Data) != len(serviceinstall.Catalog())+len(additionalSoftwareDefinitions())+len(annotationSoftwareDefinitions()) {
 		t.Fatal(catalog, err)
 	}
 	p := nginxPlan(t, b, host, 18088)
@@ -280,6 +280,74 @@ func TestServiceInstallUnknownHealthFailureAndCancel(t *testing.T) {
 				t.Fatal(i, f.InstallCount.Load())
 			}
 		})
+	}
+}
+
+func TestSoftwareInstallResumesOriginalJobAndRetainsLock(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	var fixture *installFixture
+	var resumes atomic.Int32
+	host, f := installSSHFixture(t, s, b, func(req deploy.Request) ([]byte, bool) {
+		switch req.Action {
+		case "RECOVER_CHECK":
+			return []byte(`{"offset":0}`), true
+		case "RECOVER":
+			resumes.Add(1)
+			fixture.mu.Lock()
+			result := fixture.Results[req.JobID]
+			fixture.mu.Unlock()
+			data, _ := json.Marshal(result)
+			return data, true
+		}
+		return nil, false
+	})
+	fixture = f
+	p := nginxPlan(t, b, host, 18094)
+	accepted := dataOf(t, b.call("POST", "/software-install-plans/"+p["id"].(string)+"/submit", map[string]any{"idempotencyKey": "resume-original-install"}, 202))
+	job := accepted["jobId"].(string)
+	var raw string
+	if err := s.DB.QueryRow("SELECT input_json FROM jobs WHERE id=?", job).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	f.Unknown.Store(true)
+	b.h.processSoftware(context.Background(), job, raw)
+	b.call("POST", "/jobs/"+job+"/resume", map[string]any{}, 200)
+	b.call("POST", "/jobs/"+job+"/resume", map[string]any{}, 409)
+	b.call("POST", "/jobs/"+job+"/cancel", map[string]any{}, 409)
+	b.h.processSoftware(context.Background(), job, raw)
+	i, err := s.readSoftware(accepted["softwareInstanceId"].(string))
+	if err != nil || i.InstallationStatus != "READY" || f.InstallCount.Load() != 1 || resumes.Load() != 1 {
+		t.Fatalf("instance=%+v initial=%d resumes=%d err=%v", i, f.InstallCount.Load(), resumes.Load(), err)
+	}
+}
+
+func TestSoftwareInstallsQueueUntilPreviousResultIsAcknowledged(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	host, f := installSSHFixture(t, s, b)
+	submit := func(port int, key string) (string, string) {
+		plan := nginxPlan(t, b, host, port)
+		job := dataOf(t, b.call("POST", "/software-install-plans/"+plan["id"].(string)+"/submit", map[string]string{"idempotencyKey": key}, 202))["jobId"].(string)
+		var raw string
+		if err := s.DB.QueryRow("SELECT input_json FROM jobs WHERE id=?", job).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		return job, raw
+	}
+	first, firstRaw := submit(18090, "first-queued-install")
+	second, secondRaw := submit(18091, "second-queued-install")
+	f.NoAck.Store(true)
+	b.h.processSoftware(context.Background(), first, firstRaw)
+	b.h.processSoftware(context.Background(), second, secondRaw)
+	if f.InstallCount.Load() != 1 {
+		t.Fatal("second install started before ACK")
+	}
+	f.NoAck.Store(false)
+	b.call("POST", "/jobs/"+first+"/reconcile", nil, 200)
+	b.h.processSoftware(context.Background(), second, secondRaw)
+	if f.InstallCount.Load() != 2 {
+		t.Fatal("second install did not start")
 	}
 }
 

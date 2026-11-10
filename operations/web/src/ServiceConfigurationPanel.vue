@@ -4,10 +4,12 @@ import { ApiError, request } from "./api";
 import { hostTime, type Host } from "./hosts";
 import ServiceNetworkFields from "./ServiceNetworkFields.vue";
 import OfficialInstallationDetails from "./OfficialInstallationDetails.vue";
+import RecipeSystemStepDetails from "./RecipeSystemStepDetails.vue";
 import {
   isTool,
   isDockerEngine,
   runtimeLabels,
+  recipeCommandSteps,
   serviceEndpoint,
   servicePortAddress,
   servicePortValue,
@@ -21,11 +23,13 @@ const props = defineProps<{
   detail: SoftwareInstance;
   host?: Host;
   disabled: boolean;
+  directEdit?: boolean;
 }>();
 const emit = defineEmits<{
   submitted: [ServiceInstallReceipt];
   preparation: [string];
   closeState: [state: { blocked: boolean; dirty: boolean }];
+  logs: [string]; cancel: [];
 }>();
 const editing = ref(false);
 const initialDraft = ref("");
@@ -43,6 +47,7 @@ const error = ref<{
 }>();
 const recipe = computed(() => props.detail.installation?.definition);
 const currentConfig = computed(() => props.detail.installation?.config);
+const commandSteps = computed(() => recipeCommandSteps(recipe.value?.commands, currentConfig.value?.runtimeMode, props.detail.installation?.source?.type));
 const networkChanged = computed(
   () =>
     !!plan.value &&
@@ -52,9 +57,9 @@ const networkChanged = computed(
         JSON.stringify(plan.value.config.ports)),
 );
 const instanceRoot = computed(() =>
-  currentConfig.value?.storageRoot
+  props.detail.installationPaths?.root || (currentConfig.value?.storageRoot
     ? `${currentConfig.value.storageRoot}/${props.detail.id}`
-    : `${props.host?.installRoot || ""}/software/${props.detail.id}`,
+    : `${props.host?.installRoot || ""}/software/${props.detail.id}`),
 );
 const now = ref(Date.now());
 const clock = setInterval(() => {
@@ -67,6 +72,7 @@ const expired = computed(
 const canEdit = computed(
   () =>
     !!recipe.value &&
+    (!recipe.value.commands || recipe.value.commands.builtin) &&
     !props.detail.installation?.official &&
     !isTool(recipe.value) &&
     !isDockerEngine(recipe.value) &&
@@ -76,7 +82,7 @@ const canEdit = computed(
 );
 
 function reset() {
-  editing.value = false;
+  editing.value = !!props.directEdit && !!canEdit.value;
   plan.value = undefined;
   submitKey.value = "";
   attempted.value = false;
@@ -199,21 +205,23 @@ async function submit() {
           <code>{{
             currentConfig.runtimeMode === "NATIVE"
               ? detail.installationEvidence?.binaryPath || "尚未返回程序路径"
-              : recipe.image
+              : recipe.commands && !recipe.commands.builtin ? detail.locator : recipe.image
           }}</code>
         </dd>
         <dt>数据目录</dt>
         <dd>
-          <code>{{ instanceRoot }}/data</code>
+          <code>{{ detail.installationPaths?.data || instanceRoot + '/data' }}</code>
         </dd>
         <dt>配置目录</dt>
         <dd>
-          <code>{{ instanceRoot }}/config</code>
+          <code>{{ detail.installationPaths?.config || instanceRoot + '/config' }}</code>
           <small v-if="isDockerEngine(recipe)">配置副本；主机实际配置 /etc/docker/daemon.json</small>
         </dd>
         <dt>日志位置</dt>
         <dd>
           <code v-if="isDockerEngine(recipe)">docker.service 的系统日志（journalctl）</code>
+          <code v-else-if="!recipe.commands?.builtin && recipe.commands?.kind === 'SYSTEMD'">{{ detail.locator }} 的系统日志</code>
+          <span v-else-if="!recipe.commands?.builtin && recipe.commands?.kind === 'TOOL'">在执行记录中查看</span>
           <code v-else-if="currentConfig.runtimeMode === 'NATIVE'"
             >{{ instanceRoot }}/logs</code
           ><span v-else>Docker 有界日志，可在运行日志中读取</span>
@@ -231,7 +239,7 @@ async function submit() {
         密钥鉴权），请由管理员限制该端口的访问来源。
       </p>
       <button
-        v-if="!editing && !isTool(recipe) && !isDockerEngine(recipe)"
+        v-if="!editing && (!recipe.commands || recipe.commands.builtin) && !isTool(recipe) && !isDockerEngine(recipe)"
         class="secondary"
         :disabled="!canEdit"
         @click="
@@ -247,12 +255,11 @@ async function submit() {
           :config="draft"
           :disabled="busy || attempted || disabled"
           :project-root="host?.installRoot"
+          :storage-editable="false"
         />
         <div v-if="error" class="install-error" role="alert">
           <strong>{{ error.message }}</strong
-          ><small>{{ error.code }} · {{ hostTime(error.at) }}</small
-          ><code v-if="error.traceId">traceId={{ error.traceId }}</code
-          ><button
+          ><details><summary>诊断信息</summary><small>{{ error.code }} · {{ hostTime(error.at) }}</small><code v-if="error.traceId">traceId={{ error.traceId }}</code></details><button
             v-if="/EXECUTOR|SUDO|DOCKER|AUTHORIZATION/.test(error.code)"
             class="quiet"
             @click="emit('preparation', detail.hostId)"
@@ -283,16 +290,16 @@ async function submit() {
           提交结果未确认，重试使用原标识；也可在执行记录查看原作业。
         </p>
         <p v-if="receipt" class="install-note">
-          配置作业已提交：{{ receipt.jobId }}。执行记录会持续更新。
+          配置任务已提交。
         </p>
         <div class="inline-actions">
           <button
             class="quiet"
             :disabled="busy || (attempted && !receipt)"
-            @click="reset"
+            @click="directEdit ? emit('cancel') : reset()"
           >
             {{ receipt ? "收起" : "取消" }}</button
-          ><span class="spacer"></span
+          ><button v-if="receipt" class="secondary" @click="emit('logs', receipt.jobId)">查看日志</button><span class="spacer"></span
           ><button
             v-if="!attempted"
             class="secondary"
@@ -311,6 +318,15 @@ async function submit() {
         </div>
       </template>
     </template>
+    <details v-if="recipe && currentConfig && commandSteps.length" class="command-snapshot">
+      <summary>安装时的命令配置</summary>
+      <article v-for="(command, index) in commandSteps" :key="index">
+        <strong>{{ ({INSTALL:'安装', VERIFY:'验证', UNINSTALL:'卸载', DELETE_DATA:'删除数据'})[command.phase] }} · {{ command.name }}</strong>
+        <small>{{ command.runAs === 'ROOT' ? '管理员' : recipe.commands?.builtin ? '安装账号' : currentConfig.account || '所选账号' }} · {{ command.timeoutSeconds }} 秒</small>
+        <RecipeSystemStepDetails v-if="command.kind === 'SYSTEM'" :recipe="recipe" :step="command" :context="{ config: currentConfig, paths: detail.installationPaths, official: detail.installation?.official, sourceMode: detail.installation?.source?.type }" />
+        <pre v-else>{{ command.script }}</pre>
+      </article>
+    </details>
   </div>
 </template>
 
@@ -357,4 +373,8 @@ async function submit() {
   font: 11px/1.7 var(--mono);
   overflow-wrap: anywhere;
 }
+.command-snapshot summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.command-snapshot article { margin-top: 14px; font-size: 12px; }
+.command-snapshot small { margin-left: 10px; color: var(--muted); }
+.command-snapshot pre { background: #f7f9fc; padding: 12px; border-radius: 5px; font: 12px/1.7 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>

@@ -1,0 +1,1 @@
+/usr/bin/apt-get --no-download --no-install-recommends -o APT::Get::AutomaticRemove=false -o DPkg::Lock::Timeout=15 -o Dpkg::Options::=--force-confold --assume-yes remove -- ${OPS_PACKAGE_ARGUMENTS}

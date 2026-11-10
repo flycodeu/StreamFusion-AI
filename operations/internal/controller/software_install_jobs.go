@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -20,13 +21,8 @@ func (h *HTTP) processSoftwareInstall(ctx context.Context, id string, req deploy
 		h.jobUnknown(id, "TARGET_MISSING")
 		return
 	}
-	h.store.mu.Lock()
-	claim, err := h.store.DB.Exec("UPDATE jobs SET status='RUNNING',phase='TARGET_EXECUTION',updated_at=? WHERE id=? AND status='QUEUED' AND EXISTS(SELECT 1 FROM targets WHERE id=? AND maintenance=0)", Now(), id, t.ID)
-	h.store.mu.Unlock()
-	if err != nil {
-		return
-	}
-	if n, _ := claim.RowsAffected(); n != 1 {
+	claimed, resume := h.claimSoftwareInstall(id, t.ID, req.DeadlineAt)
+	if !claimed {
 		return
 	}
 	archive := ""
@@ -45,7 +41,20 @@ func (h *HTTP) processSoftwareInstall(ctx context.Context, id string, req deploy
 	done := make(chan struct{})
 	go func() { defer close(done); h.pollProgress(progressCtx, t, req) }()
 	var result deploy.Result
-	err = h.store.callTarget(execCtx, t, req, archive, &result)
+	targetReq := req
+	if resume {
+		targetReq.Action = "RECOVER_CHECK"
+		var point struct{ Offset int64 }
+		checkCtx, stopCheck := context.WithTimeout(execCtx, 90*time.Second)
+		err = h.store.callTarget(checkCtx, t, targetReq, "", &point)
+		stopCheck()
+		if err == nil {
+			targetReq.Action, targetReq.ResumeOffset = "RECOVER", point.Offset
+		} else {
+			targetReq.Action, archive = "STATUS", ""
+		}
+	}
+	err = h.store.callTarget(execCtx, t, targetReq, archive, &result)
 	stop()
 	<-done
 	if err != nil || result.Status == "UNKNOWN" {
@@ -57,6 +66,79 @@ func (h *HTTP) processSoftwareInstall(ctx context.Context, id string, req deploy
 		return
 	}
 	h.ackResult(ctx, t, req, result)
+}
+
+func (h *HTTP) claimSoftwareInstall(id, hostID, deadline string) (claimed, resume bool) {
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+	tx, err := h.store.DB.Begin()
+	if err != nil {
+		return false, false
+	}
+	defer tx.Rollback()
+	locked, err := hostOperationLock(tx, hostID)
+	if err != nil || locked.ID != "" && locked.ID != id {
+		return false, false
+	}
+	var queuedPhase string
+	if err = tx.QueryRow("SELECT phase FROM jobs WHERE id=? AND status='QUEUED'", id).Scan(&queuedPhase); err != nil {
+		return false, false
+	}
+	resume = queuedPhase == "INSTALL_RESUMING"
+	expires, err := time.Parse(time.RFC3339Nano, deadline)
+	expired := !resume && (err != nil || !time.Now().Before(expires))
+	status, phase, code := "RUNNING", "TARGET_EXECUTION", ""
+	if expired {
+		status, phase, code = "FAILED", "PREFLIGHT", "INSTALL_QUEUE_EXPIRED"
+	}
+	claim, err := tx.Exec("UPDATE jobs SET status=?,phase=?,error_code=?,updated_at=? WHERE id=? AND status='QUEUED' AND EXISTS(SELECT 1 FROM targets WHERE id=? AND maintenance=0)", status, phase, code, Now(), id, hostID)
+	if err != nil {
+		return false, false
+	}
+	if n, e := claim.RowsAffected(); e != nil || n != 1 {
+		return false, false
+	}
+	if expired {
+		_, err = tx.Exec("UPDATE software_instances SET desired_state='UNCHANGED',installation_status='FAILED',error_code=?,version=version+1,updated_at=? WHERE last_job_id=?", code, Now(), id)
+		if err == nil {
+			_, err = tx.Exec("DELETE FROM operation_locks WHERE job_id=?", id)
+		}
+	} else if locked.ID == "" {
+		_, err = tx.Exec("INSERT INTO operation_locks VALUES(?,?)", "target:"+hostID, id)
+	}
+	return err == nil && tx.Commit() == nil && !expired, resume
+}
+
+func (h *HTTP) resumeSoftwareInstall(w http.ResponseWriter, r *http.Request, actor *session, id string) {
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+	tx, err := h.beginAuthorized(actor)
+	if err != nil {
+		h.internal(w, r, err)
+		return
+	}
+	defer tx.Rollback()
+	updated, err := tx.Exec(`UPDATE jobs SET status='QUEUED',phase='INSTALL_RESUMING',error_code='',updated_at=?
+		WHERE id=? AND kind='SOFTWARE_INSTALL' AND status='UNKNOWN' AND target_ack_pending=0
+		  AND EXISTS(SELECT 1 FROM targets WHERE id=jobs.target_id AND maintenance=0)
+		  AND EXISTS(SELECT 1 FROM operation_locks WHERE resource_key='target:'||jobs.target_id AND job_id=jobs.id)`, Now(), id)
+	if err != nil {
+		h.internal(w, r, err)
+		return
+	}
+	if n, _ := updated.RowsAffected(); n != 1 {
+		h.fail(w, r, http.StatusConflict, "INSTALL_RESUME_UNAVAILABLE", "当前作业不能继续安装，请先核对作业或主机状态")
+		return
+	}
+	err = auditTx(tx, actor.Username, "SOFTWARE_INSTALL_RESUMED", id, "QUEUED", r.Context().Value(traceKey{}).(string))
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		h.internal(w, r, err)
+		return
+	}
+	h.success(w, r, map[string]string{"jobId": id})
 }
 
 func installationEvidenceValid(req deploy.Request, result deploy.Result) error {

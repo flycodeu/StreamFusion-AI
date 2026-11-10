@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/streamfusion-ai/operations/internal/controller"
 	"github.com/streamfusion-ai/operations/internal/deploy"
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
@@ -77,7 +78,7 @@ func checkedMaterialLibrary(ctx context.Context, dir string) ([]string, error) {
 	seen := map[string]bool{"library.json": true}
 	var total int64
 	for _, material := range library.Materials {
-		if _, err = material.Definition(); err != nil {
+		if _, err = material.Definition(controller.ShippedInstallRecipe); err != nil {
 			return nil, err
 		}
 		if !safeLibraryInstallName(material.File) || seen[strings.ToLower(material.File)] {

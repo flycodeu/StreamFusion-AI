@@ -66,6 +66,9 @@ func (x *executor) officialUninstallInstallation(req Request) (Request, official
 }
 
 func (x *executor) uninstallOfficialSoftware(req Request, dir string) (Result, error) {
+	if c := req.Uninstallation.Installation.Definition.Commands; c != nil && c.Builtin && c.FlowVersion == 1 {
+		return x.uninstallBuiltinFlow(req, dir)
+	}
 	result := softwareResult(req)
 	original, installed, err := x.officialUninstallInstallation(req)
 	if err != nil {
@@ -91,7 +94,7 @@ func (x *executor) uninstallOfficialSoftware(req Request, dir string) (Result, e
 			return result, err
 		}
 	}
-	out, err := x.softwareRunner(ctx, "/usr/bin/apt-get", officialRemovalArgs(true, plan)...)
+	out, err := x.sourceSoftwareCommand(ctx, "docker-apt", officialRemovalArgs(true, plan)...)
 	if err != nil || validateOfficialRemovalPlan(out, plan) != nil {
 		return result, errors.New("OFFICIAL_UNINSTALL_PLAN_UNSAFE")
 	}
@@ -111,14 +114,15 @@ func (x *executor) uninstallOfficialSoftware(req Request, dir string) (Result, e
 				return result, err
 			}
 		}
-		if _, err = x.softwareRunner(ctx, "/usr/bin/systemctl", softwareSystemdAction(*req.Software, "stop")...); err != nil {
+		stop := softwareSystemdCommand(*req.Software, "stop")
+		if _, err = x.loggedSoftwareCommand(ctx, req, "OFFICIAL_STOP", stop[0], stop[1:]...); err != nil {
 			return unknown("OFFICIAL_UNINSTALL_STOP_UNCONFIRMED")
 		}
 		if !x.officialUnitState(ctx, plan.Paths.Unit, false) || req.Software.SoftwareKey == "DOCKER" && !x.softwareDockerSocketInactive(ctx) {
 			return unknown("OFFICIAL_UNINSTALL_STOP_UNCONFIRMED")
 		}
 	}
-	out, err = x.softwareRunner(ctx, "/usr/bin/apt-get", officialRemovalArgs(false, plan)...)
+	out, err = x.loggedSourceCommand(ctx, req, "OFFICIAL_PACKAGES_REMOVE", "docker-apt", officialRemovalArgs(false, plan)...)
 	x.appendServiceLog(req, "OFFICIAL_PACKAGES_REMOVE", string(out))
 	if err != nil {
 		return x.reconcileOfficialUninstall(req, dir), nil
@@ -127,7 +131,12 @@ func (x *executor) uninstallOfficialSoftware(req Request, dir string) (Result, e
 		return unknown("OFFICIAL_UNINSTALL_PROGRAM_UNCONFIRMED")
 	}
 	if req.Uninstallation.DeleteData {
-		if err = removeOfficialUninstallPaths(req.Uninstallation.Installation.Definition, plan); err != nil {
+		if _, handled, stepErr := x.runBuiltinStep(ctx, req, "DELETE_DATA", nil, map[string][]string{"OPS_OWNED_PATHS": plan.Paths.OwnedPaths}, ""); handled {
+			err = stepErr
+		} else {
+			err = removeOfficialUninstallPaths(req.Uninstallation.Installation.Definition, plan)
+		}
+		if err != nil {
 			return unknown(softwareUninstallErrorCode(err))
 		}
 	}

@@ -1,0 +1,1 @@
+/usr/bin/systemctl disable --now -- "$OPS_SERVICE_UNIT"

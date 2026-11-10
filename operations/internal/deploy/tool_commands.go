@@ -16,21 +16,13 @@ func nativeNeedsAccount(d serviceinstall.Definition) bool {
 
 func installedToolCommand(key string) (string, []string, error) {
 	switch key {
-	case "JAVA":
-		return "java", []string{"-version"}, nil
-	case "MAVEN":
-		return "mvn", []string{"-version"}, nil
-	case "PYTHON":
-		// Fail instead of claiming a usable interpreter with missing extensions.
-		return "python3", []string{"-I", "-c", "import sys,ssl,sqlite3,bz2,lzma,ctypes,venv,ensurepip; print(sys.version); print('SSL/sqlite/venv/ensurepip OK')"}, nil
-	case "FFMPEG":
-		return "ffmpeg", []string{"-hide_banner", "-encoders"}, nil
-	case "CODEX":
-		return "codex", []string{"--version"}, nil
-	case "CLAUDE":
-		return "claude", []string{"--version"}, nil
-	case "GIT":
-		return "git", []string{"--version"}, nil
+	case "JAVA", "MAVEN", "PYTHON", "FFMPEG", "CODEX", "CLAUDE", "GIT":
+		var inputs []string
+		if key == "PYTHON" {
+			inputs = []string{deployScript("verify/python-extensions.py")}
+		}
+		command := deployCommand("tool-"+strings.ToLower(key), inputs...)
+		return command[0], command[1:], nil
 	}
 	return "", nil, errors.New("TOOL_RECIPE_UNSUPPORTED")
 }
@@ -45,11 +37,12 @@ func nativeToolCommand(ctx context.Context, s SoftwareRequest, run SoftwareComma
 		if !strings.Contains(string(out), "libx264") {
 			return nil, errors.New("FFMPEG_H264_ENCODER_UNAVAILABLE")
 		}
-		version, err := executeNativeTool(ctx, s, run, o.BinaryPath, "-version")
+		versionArgs := deployCommand("tool-ffmpeg-version")
+		version, err := executeNativeTool(ctx, s, run, o.BinaryPath, versionArgs...)
 		if err != nil {
 			return nil, err
 		}
-		probe, err := executeNativeTool(ctx, s, run, path.Join(path.Dir(o.BinaryPath), "ffprobe"), "-version")
+		probe, err := executeNativeTool(ctx, s, run, path.Join(path.Dir(o.BinaryPath), "ffprobe"), versionArgs...)
 		if err != nil || !strings.Contains(string(probe), "ffprobe version") {
 			return nil, errors.New("FFPROBE_UNAVAILABLE")
 		}
@@ -62,12 +55,12 @@ func executeNativeTool(ctx context.Context, s SoftwareRequest, run SoftwareComma
 	if s.SoftwareKey == "CODEX" || s.SoftwareKey == "CLAUDE" {
 		// No inherited credentials, project hooks, root HOME or auto-updater.
 		home := path.Join(path.Dir(path.Dir(s.Ownership.BinaryPath)), "data")
-		probe := []string{"-u", nativeUserName(s.ID), "--", "/usr/bin/env", "-i", "--chdir=" + home, "PATH=/usr/bin:/bin", "HOME=" + home, "CODEX_HOME=" + home, "CLAUDE_CONFIG_DIR=" + home, "DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "LC_ALL=C", binary}
-		return softwareCommand(ctx, run, "/usr/sbin/runuser", append(probe, args...)...)
+		probe := deployCommand("tool-sandbox-ai", nativeUserName(s.ID), "--chdir="+home, "HOME="+home, "CODEX_HOME="+home, "CLAUDE_CONFIG_DIR="+home, binary)
+		return softwareCommand(ctx, run, probe[0], append(probe[1:], args...)...)
 	}
 	if s.SoftwareKey == "PYTHON" || s.SoftwareKey == "FFMPEG" {
-		probe := []string{"-u", nativeUserName(s.ID), "--", "/usr/bin/env", "-i", "--chdir=/", "PATH=/usr/bin:/bin", "HOME=/nonexistent", "LC_ALL=C", binary}
-		return softwareCommand(ctx, run, "/usr/sbin/runuser", append(probe, args...)...)
+		probe := deployCommand("tool-sandbox-standard", nativeUserName(s.ID), binary)
+		return softwareCommand(ctx, run, probe[0], append(probe[1:], args...)...)
 	}
 	return softwareCommand(ctx, run, binary, args...)
 }

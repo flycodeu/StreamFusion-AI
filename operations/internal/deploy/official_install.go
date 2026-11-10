@@ -3,8 +3,10 @@ package deploy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -38,43 +40,72 @@ func (x *executor) installOfficialSoftware(req Request, dir string) (Result, err
 	ctx, cancel := context.WithTimeout(context.Background(), nativeDeadline(req))
 	defer cancel()
 	marker := officialInstallation{JobID: req.JobID, InputHash: req.InputHash, SoftwareID: i.SoftwareID, ConfigHash: Digest(i.Config), Plan: *i.Official}
-	if err := atomicJSON(filepath.Join(dir, "official-update.json"), marker); err != nil {
+	updateFile := filepath.Join(dir, "official-update.json")
+	var previous officialInstallation
+	var progress Result
+	refreshed := readJSON(updateFile, &previous) == nil && Digest(previous) == Digest(marker) &&
+		readJSON(filepath.Join(dir, "progress.json"), &progress) == nil &&
+		progress.JobID == req.JobID && progress.InputHash == req.InputHash && progress.Phase == "OFFICIAL_PLAN_VERIFY"
+	if err := atomicJSON(updateFile, marker); err != nil {
 		return result, err
 	}
+	phase := "OFFICIAL_REFRESH"
+	failed := func(code string) (Result, error) {
+		x.appendServiceLog(req, phase, "[preparation failed: "+code+"]")
+		result.Status, result.Phase, result.ErrorCode = "FAILED", code, code
+		return result, nil
+	}
 	unknown := func(code string) (Result, error) { result.ErrorCode = code; return result, nil }
-	if err := x.checkpoint(req, "OFFICIAL_REFRESH"); err != nil {
+	if !refreshed {
+		if err := x.checkpoint(req, phase); err != nil {
+			return unknown("OFFICIAL_RECONCILE_REQUIRED")
+		}
+		refresh := i.Official.Commands[0]
+		refreshOutput, refreshErr := x.loggedSoftwareCommand(ctx, req, phase, refresh.Executable, refresh.Args...)
+		if refreshErr != nil {
+			var exit *exec.ExitError
+			if ctx.Err() != nil {
+				x.appendServiceLog(req, phase, "[apt-get update interrupted: "+ctx.Err().Error()+"]")
+			} else if errors.As(refreshErr, &exit) {
+				x.appendServiceLog(req, phase, fmt.Sprintf("[apt-get update exited with code %d]", exit.ExitCode()))
+			}
+			if i.Definition.Key != "docker" && (ctx.Err() != nil || temporaryInstallNetwork(refreshOutput)) {
+				result.Phase = "INSTALL_TRANSFER_INTERRUPTED"
+				return unknown("OFFICIAL_REFRESH_INTERRUPTED")
+			}
+			return failed("OFFICIAL_REFRESH_FAILED")
+		}
+		x.appendServiceLog(req, phase, "[apt-get update exited with code 0]")
+	}
+	phase = "OFFICIAL_PLAN_VERIFY"
+	if err := x.checkpoint(req, phase); err != nil {
 		return unknown("OFFICIAL_RECONCILE_REQUIRED")
 	}
+	x.appendServiceLog(req, phase, "[checking package versions, dependencies and origins]")
 	var files []string
-	refresh := i.Official.Commands[0]
-	_, refreshErr := x.loggedSoftwareCommand(ctx, req, "OFFICIAL_REFRESH", refresh.Executable, refresh.Args...)
-	if refreshErr != nil {
-		return unknown("OFFICIAL_REFRESH_FAILED")
-	}
 	if i.Definition.Key == "docker" {
 		var err error
 		files, err = x.prepareOfficialDocker(ctx, req, dir)
 		if err != nil {
-			return unknown(err.Error())
+			return failed(err.Error())
 		}
 	}
 	installed, err := x.installedDockerPackages(ctx)
 	if err != nil {
-		return unknown(officialPackageStateCode(err))
+		return failed(officialPackageStateCode(err))
 	}
 	spec, _ := serviceinstall.OfficialRecipeSpec(i.Definition)
 	if err = officialInstallAbsent(spec, installed); err != nil {
-		return unknown(err.Error())
+		return failed(err.Error())
 	}
 	plan, err := x.officialCandidatePlan(ctx, i.Definition, installed)
 	if err != nil {
-		return unknown(err.Error())
+		return failed(err.Error())
 	}
 	if Digest(plan) != Digest(i.Official) {
 		// Refreshing indexes is a completed, bounded preparation. No package
 		// apply marker exists, so a changed plan is a final rejection.
-		result.Status, result.Phase, result.ErrorCode = "FAILED", "OFFICIAL_PLAN_CHANGED", "OFFICIAL_PLAN_CHANGED"
-		return result, nil
+		return failed("OFFICIAL_PLAN_CHANGED")
 	}
 	command := i.Official.Commands[1]
 	if i.Definition.Key == "docker" {
@@ -92,7 +123,7 @@ func (x *executor) installOfficialSoftware(req Request, dir string) (Result, err
 			packages = append(packages, dockerPackage{Name: p.Name, Version: p.Version})
 		}
 		if simulateErr != nil || validateDockerAptPlan(out, packages, false) != nil {
-			return unknown("OFFICIAL_DOCKER_PLAN_CHANGED")
+			return failed("OFFICIAL_DOCKER_PLAN_CHANGED")
 		}
 	} else {
 		exact := []string{}
@@ -102,9 +133,10 @@ func (x *executor) installOfficialSoftware(req Request, dir string) (Result, err
 		out, simulateErr := x.softwareRunner(ctx, "/usr/bin/apt-get", officialAptSimulateArgs(exact)...)
 		actual, parseErr := parseOfficialAptPlan(out, spec.Packages, installed)
 		if simulateErr != nil || parseErr != nil || Digest(actual) != Digest(i.Official.Packages) {
-			return unknown("OFFICIAL_PLAN_CHANGED")
+			return failed("OFFICIAL_PLAN_CHANGED")
 		}
 	}
+	x.appendServiceLog(req, phase, "[package plan verified]")
 	if err = x.checkpoint(req, "OFFICIAL_PACKAGES_APPLY"); err != nil {
 		return unknown("OFFICIAL_RECONCILE_REQUIRED")
 	}
@@ -122,7 +154,7 @@ func (x *executor) installOfficialSoftware(req Request, dir string) (Result, err
 	// once in the original transaction; reconciliation only observes it.
 	if marker.Plan.Paths.Unit != "" {
 		start := i.Official.Commands[len(i.Official.Commands)-1]
-		if _, err = x.softwareRunner(ctx, start.Executable, start.Args...); err != nil {
+		if _, err = x.loggedSoftwareCommand(ctx, req, "OFFICIAL_START", start.Executable, start.Args...); err != nil {
 			return unknown("OFFICIAL_SERVICE_START_UNCONFIRMED")
 		}
 	}
@@ -327,9 +359,9 @@ func (x *executor) reconcileOfficialSoftware(req Request, dir string) Result {
 	result := softwareResult(req)
 	result.ErrorCode = "OFFICIAL_RECONCILE_REQUIRED"
 	var marker officialInstallation
-	if readJSON(filepath.Join(dir, "official-apply.json"), &marker) != nil {
+	if err := readJSON(filepath.Join(dir, "official-apply.json"), &marker); err != nil {
 		var preparation officialInstallation
-		if readJSON(filepath.Join(dir, "official-update.json"), &preparation) == nil && preparation.JobID == req.JobID && preparation.InputHash == req.InputHash {
+		if os.IsNotExist(err) && readJSON(filepath.Join(dir, "official-update.json"), &preparation) == nil && preparation.JobID == req.JobID && preparation.InputHash == req.InputHash {
 			result.Status, result.Phase, result.ErrorCode = "FAILED", "OFFICIAL_PREPARATION_INTERRUPTED", "OFFICIAL_PREPARATION_INTERRUPTED"
 		}
 		return result
@@ -349,18 +381,10 @@ func (x *executor) reconcileOfficialSoftware(req Request, dir string) Result {
 
 func officialVersionArguments(key string) []string {
 	switch key {
-	case "java":
-		return []string{"-version"}
-	case "maven":
-		return []string{"-version"}
-	case "python":
-		return []string{"-I", "--version"}
-	case "ffmpeg":
-		return []string{"-version"}
-	case "nginx":
-		return []string{"-v"}
+	case "java", "maven", "python", "ffmpeg", "nginx":
+		return deployCommand("verify-version-" + key)
 	default:
-		return []string{"--version"}
+		return deployCommand("verify-version-default")
 	}
 }
 
@@ -377,17 +401,18 @@ func (x *executor) officialHealth(ctx context.Context, req Request, s SoftwareRe
 	}
 	p := req.Installation.Official.Paths
 	if req.Installation.Definition.Key == "docker" {
-		out, err := x.softwareRunner(ctx, "/usr/bin/docker", "info", "--format", "{{.ServerVersion}}\t{{.DockerRootDir}}")
+		out, err := x.sourceSoftwareCommand(ctx, "verify-docker-info")
 		if err != nil || strings.TrimSpace(string(out)) != "29.9.2\t/var/lib/docker" {
 			return "", errors.New("OFFICIAL_DOCKER_HEALTH_MISMATCH")
 		}
 		return "29.9.2", nil
 	}
-	probe := map[string][]string{"redis": {"/usr/bin/redis-cli", "-h", "127.0.0.1", "-p", "6379", "PING"}, "mysql": {"/usr/bin/mysql", "--protocol=socket", "--batch", "--skip-column-names", "--execute", "SELECT VERSION()"}, "nginx": {"/usr/sbin/nginx", "-t"}}[req.Installation.Definition.Key]
-	if len(probe) == 0 {
+	switch req.Installation.Definition.Key {
+	case "redis", "mysql", "nginx":
+	default:
 		return "", errors.New("OFFICIAL_HEALTH_UNSUPPORTED")
 	}
-	out, err := x.softwareRunner(ctx, probe[0], probe[1:]...)
+	out, err := x.sourceSoftwareCommand(ctx, "verify-official-"+req.Installation.Definition.Key)
 	if err != nil {
 		return "", errors.New("OFFICIAL_PROTOCOL_PROBE_FAILED")
 	}

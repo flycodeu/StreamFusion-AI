@@ -4,12 +4,16 @@ import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, prepare, request, send, setCSRF } from "./api";
 import OpsWorkspace from "./OpsWorkspace.vue";
 import SoftwareManagement from "./SoftwareManagement.vue";
+import SoftwareCommandTemplates from "./SoftwareCommandTemplates.vue";
+import SoftwareLogs from "./SoftwareLogs.vue";
+import SoftwareLogDialog from "./SoftwareLogDialog.vue";
+import type { LogSelection } from "./jobs";
 import HostManagement from "./HostManagement.vue";
 import PortManagement from "./PortManagement.vue";
 import HostOverview from "./HostOverview.vue";
 import ErrorReference from "./ErrorReference.vue";
-import ErrorHelpLink from "./ErrorHelpLink.vue";
-import { errorHelp } from "./errorHelp";
+import SystemMonitor from "./SystemMonitor.vue";
+import { errorHelp, showErrorHelp } from "./errorHelp";
 
 interface Status {
   status: string;
@@ -66,6 +70,16 @@ const nav = [
     label: "软件管理",
     icon: "M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z",
   },
+  {
+    id: "software-install",
+    label: "软件安装",
+    icon: "M12 3v12 M7 10l5 5 5-5 M4 17v4h16v-4",
+  },
+  {
+    id: "commands",
+    label: "软件配置",
+    icon: "M4 4h16v16H4z M7 8l3 3-3 3 M12 15h5",
+  },
   { id: "instances", label: "应用实例", icon: "M5 5h14v14H5z M9 9h6v6H9z" },
   { id: "artifacts", label: "版本制品", icon: "M4 7h16v13H4z M8 4h8v3H8z" },
   { id: "jobs", label: "发布作业", icon: "M6 3h12v4H6z M6 11h12 M6 16h8" },
@@ -77,7 +91,7 @@ const nav = [
   },
   {
     id: "audit",
-    label: "操作记录",
+    label: "日志记录",
     icon: "M7 3h10v3H7z M7 5H4v16h16V5h-3 M8 11h8 M8 16h5",
   },
   {
@@ -90,19 +104,49 @@ const title = computed(
   () => nav.find((item) => item.id === active.value)?.label,
 );
 const active = ref("overview");
+const commandsVisited = ref(false);
+watch(active, (page) => {
+  if (page === "commands") commandsVisited.value = true;
+});
 const preparationHostId = ref("");
 const dockerHostId = ref("");
-watch(active, (page) => { if (page !== "software") dockerHostId.value = ""; });
+watch(active, (page) => { if (!["software", "software-install"].includes(page)) dockerHostId.value = ""; });
 function showHostPreparation(hostId: string) {
   preparationHostId.value = hostId;
   active.value = "hosts";
 }
 const navigationOpen = ref(false);
 const navigationGroups = [
-  { label: "工作空间", items: nav.slice(0, 4) },
-  { label: "应用交付", items: nav.slice(4, 7) },
-  { label: "控制器", items: nav.slice(7) },
-];
+  { label: "工作空间", ids: ["overview", "hosts", "ports"] },
+  { label: "软件中心", ids: ["software", "software-install", "commands"] },
+  { label: "应用交付", ids: ["instances", "artifacts", "jobs"] },
+  { label: "控制器", ids: ["credentials", "audit", "settings"] },
+].map((group) => ({ ...group, items: nav.filter((item) => group.ids.includes(item.id)) }));
+const logTab = ref<"jobs" | "runtime" | "audit">("jobs");
+const logTabs = [
+  { id: "jobs", label: "执行记录" },
+  { id: "runtime", label: "运行日志" },
+  { id: "audit", label: "操作记录" },
+] as const;
+const logJobId = ref("");
+const logSoftwareId = ref("");
+const logDialogSelection = ref<LogSelection>();
+const controllerDataPage = (page: string) =>
+  page === "credentials" || (page === "audit" && logTab.value === "audit");
+function openLogs(selection: LogSelection) {
+  if (selection.jobId || selection.softwareId) {
+    logDialogSelection.value = selection;
+  } else {
+    logJobId.value = "";
+    logSoftwareId.value = "";
+    logTab.value = "jobs";
+    active.value = "audit";
+  }
+}
+function selectLog(id: string, source: "jobs" | "runtime") {
+  if (source === "jobs") logJobId.value = id;
+  else logSoftwareId.value = id;
+}
 const loggedIn = ref(false);
 const busy = ref(false);
 const connected = ref(false);
@@ -112,7 +156,6 @@ const loginError = ref("");
 const diagnostic = ref<ApiError | null>(null);
 const status = ref<Status>();
 const settings = ref<Settings>();
-const nameDraft = ref("");
 const audits = ref<Audit[]>([]);
 const nextCursor = ref("");
 const credentials = ref<Credential[]>([]);
@@ -286,6 +329,7 @@ function auditResult(action: string, result: string) {
   return { label: labels[result] || "待核对", tone: "state-muted" };
 }
 function report(e: unknown) {
+  if (e instanceof ApiError && e.code === "HOST_CHECK_BUSY") return;
   if (e instanceof ApiError) {
     diagnostic.value = e;
     if (e.code === "AUTH_REQUIRED") {
@@ -293,6 +337,7 @@ function report(e: unknown) {
       password.value = "";
       void prepare();
     }
+    return;
   }
   ElMessage.error(e instanceof Error ? e.message : "操作失败");
 }
@@ -331,7 +376,6 @@ async function load() {
     loadAudit(),
   ]);
   settings.value = config;
-  nameDraft.value = config.name;
   credentials.value = items;
 }
 async function login() {
@@ -361,16 +405,6 @@ async function logout() {
     loggedIn.value = false;
     diagnostic.value = null;
     await prepare();
-  });
-}
-async function saveName() {
-  await execute(async () => {
-    await request("/settings", "PUT", {
-      name: nameDraft.value,
-      version: settings.value?.version,
-    });
-    await load();
-    ElMessage.success("名称已保存");
   });
 }
 function openCredential(item: Credential | null = null) {
@@ -462,7 +496,7 @@ function poll() {
   timer = setTimeout(async () => {
     if (loggedIn.value && !document.hidden) {
       try {
-        if (["credentials", "audit", "settings"].includes(active.value)) {
+        if (controllerDataPage(active.value)) {
           await load();
         } else {
           await refreshStatus();
@@ -486,13 +520,14 @@ watch(
 );
 watch(loggedIn, (value) => {
   if (!value) {
+    logDialogSelection.value = undefined;
     showLoginPassword.value = false;
     loginCapsLock.value = false;
     focusLoginInput();
   }
 });
-watch(active, (page) => {
-  if (loggedIn.value && ["credentials", "audit", "settings"].includes(page)) {
+watch([active, logTab], ([page]) => {
+  if (loggedIn.value && controllerDataPage(page)) {
     void load().catch(report);
   }
 });
@@ -829,8 +864,8 @@ onUnmounted(() => {
         </section>
       </div>
       <template v-else>
-        <details v-if="diagnostic" class="error diagnostic">
-          <summary>
+        <div v-if="diagnostic" class="error diagnostic" role="alert">
+          <div class="diagnostic-heading">
             <span>{{ diagnostic.message }}</span>
             <button
               type="button"
@@ -840,20 +875,16 @@ onUnmounted(() => {
             >
               ×
             </button>
-          </summary>
-          <div>
-            {{ diagnostic.code }} · {{ displayTime(diagnostic.timestamp) }}
           </div>
-          <code>traceId: {{ diagnostic.traceId }}</code>
-          <ErrorHelpLink :code="diagnostic.code" />
-        </details>
+        </div>
+        <SoftwareCommandTemplates v-if="commandsVisited" v-show="active === 'commands'" :active="active === 'commands'" />
         <HostManagement
           v-if="active === 'hosts'"
           :preparation-host-id="preparationHostId"
           @error="report"
           @preparation-opened="preparationHostId = ''"
           @credential-saved="load"
-          @docker="(hostId) => { dockerHostId = hostId; active = 'software'; }"
+          @docker="(hostId) => { dockerHostId = hostId; active = 'software-install'; }"
         />
         <PortManagement
           v-else-if="active === 'ports'"
@@ -861,10 +892,13 @@ onUnmounted(() => {
           @preparation="showHostPreparation"
         />
         <SoftwareManagement
-          v-else-if="active === 'software'"
+          v-else-if="active === 'software' || active === 'software-install'"
+          :view="active === 'software-install' ? 'install' : 'manage'"
           :docker-host-id="dockerHostId"
           @error="report"
           @preparation="showHostPreparation"
+          @navigate="active = $event === 'install' ? 'software-install' : 'software'"
+          @logs="openLogs"
         />
         <OpsWorkspace
           v-else-if="['instances', 'artifacts', 'jobs'].includes(active)"
@@ -951,6 +985,13 @@ onUnmounted(() => {
           <div v-else class="empty">尚未保存凭据</div>
         </section>
         <section v-else-if="active === 'audit'" class="content panel-card">
+          <div class="log-record-tabs" role="tablist" aria-label="日志类型">
+            <button v-for="entry in logTabs"
+              :key="entry.id" role="tab" :aria-selected="logTab === entry.id" :class="{ active: logTab === entry.id }"
+              @click="logTab = entry.id">{{ entry.label }}</button>
+          </div>
+          <SoftwareLogs v-if="logTab !== 'audit'" :mode="logTab" :job-id="logJobId" :software-id="logSoftwareId" @selected="selectLog" />
+          <template v-else>
           <div class="section-head">
             <h2>操作记录</h2>
             <button
@@ -1003,31 +1044,26 @@ onUnmounted(() => {
           >
             更早记录
           </button>
+          </template>
         </section>
-        <section v-else class="content settings">
-          <div class="settings-meta">
-            <div>
-              <span>控制器 ID</span>
-              <code>{{ settings?.controllerId || "—" }}</code>
-            </div>
-            <div>
-              <span>监听地址</span>
+        <section v-else-if="active === 'settings'" class="content settings">
+          <div class="settings-meta" aria-label="服务信息">
+            <article class="settings-info-card">
+              <span class="settings-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4M7 8h.01M11 8h6"/></svg></span>
+              <div><span>监听地址</span>
               <code>{{ status?.listen || "—" }}</code>
-            </div>
-            <div>
-              <span>服务版本</span>
+              </div>
+            </article>
+            <article class="settings-info-card">
+              <span class="settings-card-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5"/></svg></span>
+              <div><span>服务版本</span>
               <code>v{{ status?.release || "—" }}</code>
-            </div>
+              </div>
+            </article>
           </div>
-          <form class="settings-form" @submit.prevent="saveName">
-            <label
-              >控制器名称<input
-                v-model="nameDraft"
-                maxlength="60"
-                required /></label
-            ><button class="secondary" :disabled="busy">保存名称</button>
-          </form>
-          <div class="section-head"><h2>备份与账户</h2></div>
+          <SystemMonitor @error="report" />
+          <div class="section-head"><h2>设置与维护</h2></div>
+          <div class="settings-actions">
           <div class="setting-action">
             <div>
               <strong>状态备份</strong>
@@ -1048,13 +1084,17 @@ onUnmounted(() => {
               修改密码
             </button>
           </div>
-          <div class="section-head"><h2>错误说明</h2></div>
-          <ErrorReference />
+          <div class="setting-action">
+            <strong>错误说明</strong>
+            <button class="secondary" @click="showErrorHelp('')">查看文档</button>
+          </div>
+          </div>
         </section>
       </template>
     </main>
-    <ElDialog v-model="errorHelp.open" title="错误说明" width="min(820px, 94vw)" align-center destroy-on-close>
-      <div style="max-height: 70dvh; overflow: auto"><ErrorReference :initial-code="errorHelp.code" /></div>
+    <SoftwareLogDialog :selection="logDialogSelection" @close="logDialogSelection = undefined" />
+    <ElDialog v-model="errorHelp.open" title="错误说明" width="min(1180px, 96vw)" align-center destroy-on-close append-to-body>
+      <ErrorReference :initial-code="errorHelp.code" />
     </ElDialog>
     <ElDialog
       v-model="credentialDialog"

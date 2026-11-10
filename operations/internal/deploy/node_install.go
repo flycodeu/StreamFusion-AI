@@ -181,7 +181,7 @@ func (x *executor) installNodeVersion(req Request, dir string) (Result, error) {
 	if i.Node.MakeDefault {
 		def = i.Definition.Version
 	}
-	out, err := runNode(ctx, *i.Node, "install", i.Definition.Version, "", material, req.JobID, def, x.softwareRunner)
+	out, err := x.runNodeTemplate(ctx, req, *i.Node, "install", i.Definition.Version, "", material, def)
 	x.appendServiceLog(req, "NODE_INSTALL", string(out))
 	if err != nil {
 		result.ErrorCode = "NODE_RESULT_UNCONFIRMED"
@@ -253,6 +253,9 @@ type nodeUninstallMarker struct {
 }
 
 func (x *executor) uninstallNodeVersion(req Request, dir string) (Result, error) {
+	if builtinFlow(req) {
+		return x.uninstallNodeVersionFlow(req, dir)
+	}
 	result := softwareResult(req)
 	i := req.Uninstallation.Installation
 	n := i.Node
@@ -284,13 +287,13 @@ func (x *executor) uninstallNodeVersion(req Request, dir string) (Result, error)
 	if err = atomicJSON(filepath.Join(dir, "node-uninstall.json"), nodeUninstallMarker{req.JobID, req.InputHash, *before}); err != nil {
 		return result, err
 	}
-	out, err := runNode(ctx, *n, "uninstall", i.Definition.Version, "", "", req.JobID, clear, x.softwareRunner)
+	out, err := x.runNodeTemplate(ctx, req, *n, "uninstall", i.Definition.Version, "", "", clear)
 	x.appendServiceLog(req, "NODE_UNINSTALL", string(out))
 	if err != nil {
 		return result, nil
 	}
 	if req.Uninstallation.DeleteData {
-		if _, err = runNode(ctx, *n, "clean-version", i.Definition.Version, "", "", req.JobID, "", x.softwareRunner); err != nil {
+		if _, err = x.runNodeTemplate(ctx, req, *n, "clean-version", i.Definition.Version, "", "", ""); err != nil {
 			return result, nil
 		}
 	}

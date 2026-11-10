@@ -3,6 +3,7 @@ package deploy
 import (
 	"context"
 	"errors"
+	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -26,6 +27,12 @@ func (x *executor) boundSoftware(s SoftwareRequest) error {
 }
 
 func (x *executor) applySoftware(req Request, dir string) (Result, error) {
+	if req.Management != nil {
+		return x.applyManagement(req, dir)
+	}
+	if softwareControlAction(req.Action) {
+		return x.applySoftwareControl(req, dir)
+	}
 	if req.GitRepository != nil {
 		return x.applyGitRepository(req, dir)
 	}
@@ -106,19 +113,22 @@ func (x *executor) applySoftware(req Request, dir string) (Result, error) {
 		if err = atomicJSON(filepath.Join(dir, "software-command.json"), s); err != nil {
 			return result, err
 		}
+		logged, closeLog := x.installationLogContext(ctx, req, "SOFTWARE_CONTROL")
 		if s.Kind == "SYSTEMD" {
 			action := "start"
 			if req.Action == "SOFTWARE_STOP" {
 				action = "stop"
 			}
-			_, err = x.softwareRunner(ctx, "/usr/bin/systemctl", softwareSystemdAction(s, action)...)
+			command := softwareSystemdCommand(s, action)
+			_, err = x.softwareRunner(logged, command[0], command[1:]...)
 		} else {
-			args := []string{"container", "start", "--", s.Locator}
+			action := "start"
 			if req.Action == "SOFTWARE_STOP" {
-				args = []string{"container", "stop", "--time", "20", "--", s.Locator}
+				action = "stop"
 			}
-			_, err = x.softwareRunner(ctx, "/usr/bin/docker", args...)
+			_, err = x.sourceSoftwareCommand(logged, "docker-"+action, s.Locator)
 		}
+		closeLog()
 		// Use a fresh bounded observation even if the command consumed its
 		// deadline; a timeout itself cannot prove the requested state.
 		observeCtx, observeCancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -162,6 +172,28 @@ func (x *executor) adoptSoftware(req Request) error {
 }
 
 func (x *executor) verifySoftwareResult(req Request, result Result) error {
+	if req.Management != nil {
+		return x.verifyManagementEvidence(req, result)
+	}
+	if !x.builtinResultConfirmed(req, result) {
+		return errors.New("COMMAND_STEP_RECONCILE_REQUIRED")
+	}
+	if i := commandInstallation(req); i != nil && !serviceinstall.IsBuiltinCommand(i.Definition) {
+		if req.Uninstallation != nil {
+			if req.Uninstallation.DataDirectory != "" {
+				return x.verifyMigratedDataUninstall(req, result)
+			}
+			var evidence SoftwareUninstallEvidence
+			if result.Uninstallation == nil || readJSON(filepath.Join(x.root, "jobs", req.JobID, "command-uninstall.json"), &evidence) != nil || !reflect.DeepEqual(evidence, *result.Uninstallation) {
+				return errors.New("SOFTWARE_UNINSTALL_RECEIPT_MISMATCH")
+			}
+			if _, err := os.Lstat(x.softwareFile(i.SoftwareID)); !os.IsNotExist(err) {
+				return errors.New("SOFTWARE_BINDING_STILL_PRESENT")
+			}
+			return nil
+		}
+		return x.verifyOwnedInstallation(req, result)
+	}
 	if req.GitRepository != nil {
 		return x.verifyGitRepositoryResult(req, result)
 	}
@@ -211,6 +243,9 @@ func (x *executor) verifySoftwareResult(req Request, result Result) error {
 	if result.Software == nil || s.IdentityHash != result.Software.IdentityHash || s.Kind != result.Software.Kind || s.Locator != result.Software.Locator {
 		return errors.New("SOFTWARE_IDENTITY_DRIFT")
 	}
+	if softwareControlAction(req.SoftwareOperation) && !validLifecycleEvidence(req, result) {
+		return errors.New("SOFTWARE_CONTROL_RECEIPT_INVALID")
+	}
 	if req.SoftwareOperation == "SOFTWARE_START" && result.Software.State != "RUNNING" || req.SoftwareOperation == "SOFTWARE_STOP" && result.Software.State != "STOPPED" {
 		return errors.New("SOFTWARE_ACTUAL_STATE_DRIFT")
 	}
@@ -221,6 +256,26 @@ func (x *executor) verifySoftwareResult(req Request, result Result) error {
 }
 
 func (x *executor) reconcileSoftware(req Request, dir string) Result {
+	if req.Management != nil {
+		return x.reconcileManagement(req, dir)
+	}
+	result := x.reconcileSoftwareObjects(req, dir)
+	if !x.confirmBuiltinObservation(req, result) || !x.builtinResultConfirmed(req, result) {
+		result.Status, result.ErrorCode = "UNKNOWN", "COMMAND_STEP_RECONCILE_REQUIRED"
+	}
+	return result
+}
+
+func (x *executor) reconcileSoftwareObjects(req Request, dir string) Result {
+	if req.Management != nil {
+		return x.reconcileManagement(req, dir)
+	}
+	if softwareControlAction(req.SoftwareOperation) {
+		return x.reconcileSoftwareControl(req, dir)
+	}
+	if i := commandInstallation(req); i != nil && !serviceinstall.IsBuiltinCommand(i.Definition) {
+		return x.reconcileCommands(req, dir)
+	}
 	if req.GitRepository != nil {
 		return x.reconcileGitRepository(req, dir)
 	}
@@ -285,10 +340,14 @@ func ownedDockerEngine(s SoftwareRequest) bool {
 }
 
 func softwareSystemdAction(s SoftwareRequest, action string) []string {
+	return softwareSystemdCommand(s, action)[1:]
+}
+
+func softwareSystemdCommand(s SoftwareRequest, action string) []string {
 	if action == "stop" && ownedDockerEngine(s) {
-		return []string{"stop", "--", "docker.service", "docker.socket"}
+		return deployCommand("systemd-docker-stop")
 	}
-	return []string{action, "--", s.Locator}
+	return deployCommand("systemd-action", action, s.Locator)
 }
 
 func (x *executor) softwareDockerSocketInactive(ctx context.Context) bool {

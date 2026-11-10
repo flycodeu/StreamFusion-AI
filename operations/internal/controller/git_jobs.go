@@ -172,8 +172,10 @@ func (h *HTTP) startGitJob(id string, req deploy.Request) bool {
 		if e != nil || a.Version != p.Change.ProfileVersion {
 			code = "GIT_PROFILE_CHANGED"
 		}
-		if tx.QueryRow("SELECT count(*) FROM credential_refs WHERE id=? AND revision=? AND revoked_at IS NULL", p.Change.CredentialID, p.Change.CredentialRevision).Scan(&count) != nil || count != 1 {
-			code = "GIT_CREDENTIAL_UNAVAILABLE"
+		if e == nil {
+			if err := validateGitProfileKey(tx, a, p.HostID, p.Change); err != nil {
+				code = err.Error()
+			}
 		}
 	}
 	if code != "" {

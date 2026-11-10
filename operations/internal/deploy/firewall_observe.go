@@ -83,6 +83,8 @@ func (x *executor) firewallSnapshot() FirewallSnapshot {
 	ports, docker, dockerCode, err := ObserveHostPorts(ctx, x.softwareRunner)
 	if err == nil {
 		s.Ports, s.DockerPorts, s.DockerCode = ports, docker, dockerCode
+	} else {
+		s.PortCode = err.Error()
 	}
 	if _, e := os.Stat("/usr/bin/docker"); os.IsNotExist(e) {
 		s.DockerCode = "DOCKER_NOT_INSTALLED"

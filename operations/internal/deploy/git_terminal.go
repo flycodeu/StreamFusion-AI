@@ -15,9 +15,7 @@ import (
 
 func gitTerminalBlock(binary string) []byte {
 	dir := gitQuote(path.Dir(binary))
-	return []byte("# >>> streamfusion-ops git >>>\n" +
-		"if [ -x " + gitQuote(binary) + " ]; then\n  case \":$PATH:\" in *:" + dir + ":*) ;; *) PATH=" + dir + ":\"$PATH\"; export PATH ;; esac\nfi\n" +
-		"# <<< streamfusion-ops git <<<\n")
+	return []byte(deployTemplate("git_terminal.sh.tmpl", gitQuote(binary), dir))
 }
 
 func gitTerminalFiles(g GitRepositoryRequest, a *user.User) (nodeTerminalPlan, error) {

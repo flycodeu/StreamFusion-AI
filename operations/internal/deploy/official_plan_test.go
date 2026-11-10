@@ -156,6 +156,12 @@ func TestOfficialRecoveryDoesNotReplayPreparationOrPackageCommands(t *testing.T)
 	if result.Status != "UNKNOWN" {
 		t.Fatalf("partial packages should stay unknown: %+v", result)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "official-apply.json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if result := x.reconcileOfficialSoftware(req, dir); result.Status != "UNKNOWN" {
+		t.Fatal("corrupt apply marker was treated as absent")
+	}
 	marker.InputHash = strings.Repeat("c", 64)
 	if err := writeMarker("official-apply.json", marker); err != nil {
 		t.Fatal(err)

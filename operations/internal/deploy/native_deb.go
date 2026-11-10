@@ -70,7 +70,10 @@ func (x *executor) prepareDebProgram(ctx context.Context, req Request, root stri
 }
 
 func redisDebWrapper(root, name string) string {
-	return "#!/bin/sh\nexec " + posixSingleQuote(debLoader) + " --argv0 " + posixSingleQuote(name) + " --library-path " + posixSingleQuote(filepath.Join(root, "runtime/lib")) + " " + posixSingleQuote(filepath.Join(root, "runtime/redis", name)) + " \"$@\"\n"
+	return deployTemplate("native/redis-wrapper.sh.tmpl",
+		posixSingleQuote(debLoader), posixSingleQuote(name),
+		posixSingleQuote(filepath.Join(root, "runtime/lib")),
+		posixSingleQuote(filepath.Join(root, "runtime/redis", name)))
 }
 
 // Package maintainer scripts, system config, units, links and documentation are

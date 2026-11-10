@@ -174,7 +174,7 @@ def main():
                     page.get_by_role("button", name="软件管理", exact=True).click()
 
                 def catalog():
-                    page.get_by_role("tab", name="软件目录", exact=True).click()
+                    page.get_by_role("button", name="软件安装", exact=True).click()
                     page.locator(".plugin-card").first.wait_for()
 
                 def card_for(name):

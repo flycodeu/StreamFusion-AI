@@ -18,7 +18,20 @@ func (h *HTTP) nodeEnvironmentRoute(w http.ResponseWriter, r *http.Request, s *s
 		return true
 	}
 	if route == "/node-environment-recipes" && r.Method == "GET" {
-		h.success(w, r, map[string]any{"node": serviceinstall.NodeCatalog(), "tools": serviceinstall.NodeEnvironmentRecipes()})
+		all, err := h.store.publishedDefinitions()
+		if err != nil {
+			h.internal(w, r, err)
+			return true
+		}
+		nodes, tools := []serviceinstall.Definition{}, []serviceinstall.Definition{}
+		for _, d := range all {
+			if d.Key == "node" {
+				nodes = append(nodes, d)
+			} else if nodeRecipe(d) {
+				tools = append(tools, d)
+			}
+		}
+		h.success(w, r, map[string]any{"node": nodes, "tools": tools})
 		return true
 	}
 	p := strings.Split(strings.Trim(route, "/"), "/")
@@ -70,6 +83,16 @@ func (h *HTTP) nodeEnvironmentRoute(w http.ResponseWriter, r *http.Request, s *s
 }
 
 func (h *HTTP) nodeError(w http.ResponseWriter, r *http.Request, err error) {
+	var compatibility *installCompatibilityError
+	if errors.As(err, &compatibility) {
+		code, message := installTargetError(err)
+		h.fail(w, r, 409, code, message)
+		return
+	}
+	if err != nil && commandErrorMessages[err.Error()] != "" {
+		h.fail(w, r, 409, err.Error(), commandErrorMessages[err.Error()])
+		return
+	}
 	code := "NODE_OPERATION_UNAVAILABLE"
 	messages := map[string]string{
 		"NODE_CAPABILITY_REQUIRED":           "主机已接入，需更新接入组件以管理 Node；更新后重新检查即可",
@@ -95,6 +118,7 @@ func (h *HTTP) nodeError(w http.ResponseWriter, r *http.Request, err error) {
 		"NODE_ENVIRONMENT_DRIFT":             "服务器环境已被修改，请重新检测",
 		"NODE_ENVIRONMENT_READ_ONLY":         "这是自行安装的环境，只支持检测和解除登记",
 		"NODE_PLAN_STALE":                    "计划已变化或过期，请重新预检",
+		"NODE_RECIPE_UNAVAILABLE":            "此版本的安装配置尚未发布，请先在安装配置中发布",
 		"NODE_MATERIAL_MISSING":              "所选版本离线材料未就绪，请选择已有材料或补充材料",
 		"NODE_MATERIAL_MISMATCH":             "材料与所选软件版本不一致，请重新选择",
 		"NODE_CLEAR_DEFAULT_REQUIRED":        "这是最后一个默认版本，请明确确认清空环境默认版本",
@@ -480,13 +504,5 @@ func (h *HTTP) releaseNodeEnvironment(w http.ResponseWriter, r *http.Request, s 
 }
 
 func validNodeErrorCode(code string) bool {
-	if !strings.HasPrefix(code, "NODE_") || len(code) > 96 {
-		return false
-	}
-	for _, c := range code {
-		if c != '_' && (c < 'A' || c > 'Z') && (c < '0' || c > '9') {
-			return false
-		}
-	}
-	return true
+	return strings.HasPrefix(code, "NODE_") && validDiagnosticCode(code)
 }

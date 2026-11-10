@@ -1,0 +1,1 @@
+material="$OPS_ARTIFACT_PATH"

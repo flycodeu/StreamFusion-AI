@@ -1,0 +1,4 @@
+
+printf '%%s  %%s\n' '%s' "$material" | sha256sum --check --status
+mkdir -p -- "$OPS_INSTALL_ROOT/runtime"
+tar -xzf "$material" --strip-components=%d -C "$OPS_INSTALL_ROOT/runtime"

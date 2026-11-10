@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElDialog, ElTabs, ElTabPane, ElMessage } from "element-plus";
 import { request, ApiError } from "./api";
+import type { PageResult } from "./jobs";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
 import { findErrorReference } from "./errorReference";
 import { hostTime, type Host } from "./hosts";
@@ -31,6 +32,7 @@ type Snapshot = {
   }[];
   dockerPorts: string;
   dockerCode?: string;
+  portCode?: string;
   managedRules: Rule[];
   protectedPorts: number[];
   managementSource?: string;
@@ -167,11 +169,11 @@ async function refresh() {
   try {
     const [all, entries] = await Promise.all([
       request<Host[]>("/hosts"),
-      request<Job[]>("/jobs"),
+      request<PageResult<Job>>(`/jobs?limit=100&kind=FIREWALL_CHANGE${selected ? `&hostId=${encodeURIComponent(selected)}` : ""}`),
     ]);
     if (disposed || rev !== generation) return;
     hosts.value = all;
-    jobs.value = entries;
+    jobs.value = entries.items;
     if (!hostId.value && all.length) {
       hostId.value = all[0]!.id;
       return;
@@ -372,7 +374,7 @@ onUnmounted(() => {
               ? "防火墙读取需要当前受管执行器；仍可查看可读的监听端口"
               : view.code === "UFW_NOT_INSTALLED"
                 ? "目标未安装 UFW"
-                : findErrorReference(view.code)?.name || view.code
+                : findErrorReference(view.code)?.name || '检测未完成，请查看技术详情'
         }}</span
         ><button
           v-if="view.code.includes('EXECUTOR')"
@@ -391,6 +393,10 @@ onUnmounted(() => {
       <div class="port-panel">
         <ElTabs v-model="tab">
           <ElTabPane label="监听端口" name="ports">
+            <p v-if="snapshot?.portCode" class="port-notice">
+              {{ findErrorReference(snapshot.portCode)?.name || "暂时无法读取监听端口" }}
+              <ErrorHelpLink :code="snapshot.portCode" />
+            </p>
             <div class="port-filter">
               <input
                 v-model="search"
@@ -419,7 +425,7 @@ onUnmounted(() => {
                     <td>
                       <code>{{ p.address }}</code>
                     </td>
-                    <td>{{ p.process || "不可读" }}</td>
+                    <td>{{ p.process || "程序不可见" }}</td>
                     <td>
                       {{
                         snapshot?.protectedPorts?.includes(p.port) &&
@@ -526,7 +532,6 @@ onUnmounted(() => {
                   <tr>
                     <th>状态</th>
                     <th>时间</th>
-                    <th>作业</th>
                     <th>结果</th>
                     <th>操作</th>
                   </tr>
@@ -536,12 +541,10 @@ onUnmounted(() => {
                     <td>{{ states[j.status] || '状态待确认' }}</td>
                     <td>{{ hostTime(j.updatedAt) }}</td>
                     <td>
-                      <code>{{ j.id.slice(0, 8) }}</code>
-                    </td>
-                    <td>
                       <details><summary>{{ j.errorCode ? (findErrorReference(j.errorCode)?.name || '执行未完成') : j.phase === 'FIREWALL_AWAITING_CONFIRM' ? '等待确认规则' : (states[j.status] || '结果待确认') }}</summary>
                         <ErrorHelpLink v-if="j.errorCode" :code="j.errorCode" />
                         <code>{{ j.errorCode || j.phase }}</code>
+                        <code>作业 {{ j.id }}</code>
                         <code>traceId={{ j.traceId }}</code>
                       </details>
                     </td>

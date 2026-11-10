@@ -10,7 +10,7 @@
 python .\scripts\package-material-library.py --ops .\streamfusion-ops.exe --source "$env:USERPROFILE\Downloads" --out D:\packages\sfops-materials --download
 ```
 
-默认包含 Ubuntu 24.04 Redis 7.0.15、Nginx 1.24.0、Eclipse Temurin JDK 8u504-b01、Docker Engine 29.9.2，以及 nvm 0.40.8、Node.js 22.23.4/24.22.2、npm 11.6.2、pnpm 10.20.0 的固定配方。`--download` 只补下载目录内缺少的固定原始包；已有但校验不符的文件会被拒绝。若完全离线，准备全部原始包并省略该参数。输出目录必须不存在。Node包供“Node环境”入口复用，npm仍随所选Node版本安装，独立npm材料用于明确更新。
+默认包含 Ubuntu 24.04 Redis 7.0.15、Nginx 1.24.0、Eclipse Temurin JDK 8u504-b01 和 JDK 21.0.12.1+1、Docker Engine 29.9.2，以及 nvm 0.40.8、Node.js 22.23.4/24.22.2、npm 11.6.2、pnpm 10.20.0 的固定配方。`--download` 只补下载目录内缺少的固定原始包，已有但校验不符的文件会被拒绝。若完全离线，准备全部原始包并省略该参数。输出目录必须不存在。Node 包供“Node 环境”入口复用，npm 随所选 Node 版本安装，独立 npm 材料用于明确更新。
 
 指定子集或补充固定配方的 Docker-save 镜像：
 
@@ -65,3 +65,8 @@ Redis/Nginx 的 `.deb` 原始文件组成一个材料包，安装时提取到受
 导入错误以 `MATERIAL_LIBRARY_`、`INSTALL_MATERIAL_QUOTA` 或 `INSTALL_TRANSFER_BUSY` 开头。材料状态与引用关系仍在现有材料列表；来源文件位于状态目录的 `installation-materials`。
 
 停用自动导入可移走发布程序旁材料目录或取消显式目录参数；已导入材料仍可按既有删除入口清理，受计划、作业与受管实例引用保护。不要直接删除状态数据库或手动改写已有包。
+
+
+## ytlabel Python 3.12 兼容材料
+
+`ytlabel-4.0-python312-linux-amd64.tar.gz` 对应 `custom-ytlabel-py312-native-offline / 4.0-python312`，包含固定上游源码、42份PyPI wheel及逐文件SHA256SUMS。仅OpenCV调整为4.10.0.84、psutil调整为5.9.8；实际依赖清单由安装步骤生成并保留。该包使用目标已有Python3.12及系统库，实测Ubuntu24.04 amd64；不能用于原3.9/3.10配方。完整离线安装、依赖校验、首页与SocketIO已在独立环境验证。

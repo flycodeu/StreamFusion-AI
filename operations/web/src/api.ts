@@ -12,6 +12,7 @@ export class ApiError extends Error {
     readonly traceId: string,
     readonly timestamp: string,
     readonly status?: number,
+    readonly data?: unknown,
   ) {
     super(message);
   }
@@ -33,6 +34,7 @@ export async function request<T>(
       body.traceId,
       body.timestamp,
       response.status,
+      body.data,
     );
   return body.data as T;
 }
@@ -45,11 +47,11 @@ export async function send(
   method = method.toUpperCase();
   const timeout = AbortSignal.timeout(
     /\/preparation\/(install|repair)$/.test(path)
-      ? 390000
+      ? 930000
       : /^\/installation-materials\/[^/]+\/confirm$/.test(path) ||
       path === "/installation-materials/official"
       ? 900000
-      : path.endsWith("/recover")
+      : /\/(recover|reconcile)$/.test(path)
         ? 300000
         : 60000,
   );

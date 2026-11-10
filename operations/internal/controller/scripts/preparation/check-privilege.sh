@@ -1,0 +1,1 @@
+printf 'SFOPS_PRIVILEGE_READY\n'

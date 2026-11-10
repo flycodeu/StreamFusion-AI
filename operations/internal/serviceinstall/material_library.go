@@ -12,8 +12,8 @@ import (
 	"strings"
 )
 
-// MaterialLibrary is a release sidecar, not a recipe extension mechanism. Every
-// entry must resolve to an unchanged recipe already compiled into this binary.
+// MaterialLibrary contains bytes for existing recipes. The controller may
+// resolve published templates; a manifest never supplies executable definitions.
 type MaterialLibrary struct {
 	SchemaVersion int                   `json:"schemaVersion"`
 	Materials     []LibraryMaterialFile `json:"materials"`
@@ -30,13 +30,26 @@ type LibraryMaterialFile struct {
 	ByteSize       int64  `json:"byteSize"`
 }
 
-func (m LibraryMaterialFile) Definition() (Definition, error) {
-	d, err := Find(m.RecipeKey, m.RecipeVersion)
-	if err != nil || d.Revision != m.RecipeRevision || !slices.Contains(d.RuntimeModes, m.RuntimeMode) || m.RuntimeMode != "NATIVE" && m.RuntimeMode != "DOCKER" || !sha.MatchString(m.SHA256) || m.ByteSize < 1 || m.ByteSize > ArchiveLimit {
+var ErrMaterialLibraryTemplateUnavailable = errors.New("MATERIAL_LIBRARY_TEMPLATE_UNAVAILABLE")
+
+func (m LibraryMaterialFile) Definition(resolvers ...func(string, string) (Definition, error)) (Definition, error) {
+	if !sha.MatchString(m.SHA256) || m.ByteSize < 1 || m.ByteSize > ArchiveLimit || m.RuntimeMode != "NATIVE" && m.RuntimeMode != "DOCKER" {
 		return Definition{}, errors.New("MATERIAL_LIBRARY_RECIPE_INVALID")
 	}
 	if !LibraryFileName(m.File) || strings.TrimSpace(m.Name) == "" || len(m.Name) > 160 || strings.ContainsAny(m.Name, "\r\n\x00") {
 		return Definition{}, errors.New("MATERIAL_LIBRARY_FILE_INVALID")
+	}
+	resolve := Find
+	if len(resolvers) > 0 && resolvers[0] != nil {
+		resolve = resolvers[0]
+	}
+	d, err := resolve(m.RecipeKey, m.RecipeVersion)
+	d = BareDefinition(d)
+	if len(resolvers) > 0 && resolvers[0] != nil && strings.HasPrefix(m.RecipeKey, "custom-") && (errors.Is(err, ErrMaterialLibraryTemplateUnavailable) || err == nil && d.Key == m.RecipeKey && (d.Version != m.RecipeVersion || d.Revision != m.RecipeRevision)) {
+		return Definition{}, ErrMaterialLibraryTemplateUnavailable
+	}
+	if err != nil || d.Key != m.RecipeKey || d.Version != m.RecipeVersion || d.Revision != m.RecipeRevision || !slices.Contains(d.RuntimeModes, m.RuntimeMode) || d.Commands != nil && !slices.Contains(d.SourceModes, "ARCHIVE") {
+		return Definition{}, errors.New("MATERIAL_LIBRARY_RECIPE_INVALID")
 	}
 	return d, nil
 }
@@ -48,8 +61,8 @@ func LibraryFileName(name string) bool {
 // CopyLibraryMaterial snapshots an untrusted sidecar file before validation.
 // The checked source cannot be a link, change identity, or exceed its declared
 // size; the private output is never an install script and is not executed.
-func CopyLibraryMaterial(ctx context.Context, root, output string, m LibraryMaterialFile) error {
-	if _, err := m.Definition(); err != nil {
+func CopyLibraryMaterial(ctx context.Context, root, output string, m LibraryMaterialFile, resolvers ...func(string, string) (Definition, error)) error {
+	if _, err := m.Definition(resolvers...); err != nil {
 		return err
 	}
 	r, err := os.OpenRoot(root)

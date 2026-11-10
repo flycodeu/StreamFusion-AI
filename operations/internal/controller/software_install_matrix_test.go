@@ -60,7 +60,11 @@ func TestServiceInstallMatrixControlledProtocol(t *testing.T) {
 					if err := json.Unmarshal([]byte(jsonText(publicPlan)), &plan); err != nil {
 						t.Fatal(err)
 					}
-					if serviceinstall.Digest(plan.Definition) != serviceinstall.Digest(definition) || serviceinstall.Digest(plan.Config) != serviceinstall.Digest(config) || plan.Source.Type != source["type"] {
+					published, err := s.findInstallRecipe(definition.Key, definition.Version)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if serviceinstall.Digest(plan.Definition) != serviceinstall.Digest(published) || serviceinstall.Digest(plan.Config) != serviceinstall.Digest(config) || plan.Source.Type != source["type"] {
 						t.Fatal("plan changed the selected recipe, runtime or configuration")
 					}
 					matrixCheckPlanPathsAndPorts(t, plan)

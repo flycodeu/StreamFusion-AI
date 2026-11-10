@@ -4,7 +4,7 @@ import { request } from "./api";
 import { ElMessage } from "element-plus";
 import type { ObservationAttempt } from "./observation";
 import { hostTime, type Host } from "./hosts";
-import { softwareState, type SoftwareInstance } from "./software";
+import { softwareIsHistoryOnly, softwareState, type SoftwareInstance } from "./software";
 import SoftwareIcon from "./SoftwareIcon.vue";
 
 interface Metrics {
@@ -57,7 +57,7 @@ const selected = computed(() =>
 const current = computed(() => metrics.value[selectedId.value]);
 const softwareOnHost = computed(() =>
   software.value.filter(
-    (s) => s.hostId === selectedId.value && s.managementMode !== "RELEASED",
+    (s) => s.hostId === selectedId.value && s.managementMode !== "RELEASED" && !softwareIsHistoryOnly(s),
   ),
 );
 const available = (m?: Metrics) => !!m && ["READY", "PARTIAL"].includes(m.code);
@@ -248,7 +248,7 @@ onUnmounted(() => {
       <article>
         <span>软件实例</span>
         <strong>
-          {{ software.filter((s) => s.managementMode !== "RELEASED").length }}
+          {{ software.filter((s) => s.managementMode !== "RELEASED" && !softwareIsHistoryOnly(s)).length }}
         </strong>
       </article>
       <article>

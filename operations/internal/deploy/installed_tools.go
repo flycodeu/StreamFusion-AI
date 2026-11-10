@@ -120,6 +120,12 @@ func observeInstalledTool(ctx context.Context, s SoftwareRequest, run SoftwareCo
 		return observeNodeTool(ctx, s, run)
 	}
 	o := s.Ownership
+	if o.CommandTemplateHash != "" {
+		if err := verifyNativeBinary(ctx, o, run); err != nil {
+			return nil, err
+		}
+		return &SoftwareObservation{SoftwareMetadata: SoftwareMetadata{VersionSource: "TEMPLATE", VersionStatus: "DECLARED", ExecutablePath: o.BinaryPath}, Kind: "TOOL", Locator: s.Locator, IdentityHash: Digest([]string{"TOOL", s.Locator, o.BinaryHash}), State: "INSTALLED", Version: s.ExpectedVersion, ObservedAt: stamp()}, nil
+	}
 	command, args, err := installedToolCommand(s.SoftwareKey)
 	if err != nil {
 		return nil, err

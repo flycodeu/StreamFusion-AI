@@ -26,6 +26,18 @@ func installationLogFixture(t *testing.T) (*executor, Request, string) {
 	}
 	return x, req, filepath.Join(dir, "service-install.log")
 }
+
+func TestExecutedCommandDisplayRedactsBeforeShellQuoting(t *testing.T) {
+	x, req, file := installationLogFixture(t)
+	x.secrets = map[string]string{"secret": "private'quoted"}
+	ctx, closeLog := x.installationLogContext(context.Background(), req, "INSTALL")
+	logExecutedCommand(ctx, "/usr/bin/example", "--token=private'quoted", "ordinary argument")
+	closeLog()
+	raw, err := os.ReadFile(file)
+	if err != nil || strings.Contains(string(raw), "private") || !strings.Contains(string(raw), "/usr/bin/example") || !strings.Contains(string(raw), "ordinary argument") {
+		t.Fatalf("command log: %s %v", raw, err)
+	}
+}
 func TestInstallationStreamingRedactsAcrossWritesAndDropsOversizedLines(t *testing.T) {
 	x, req, file := installationLogFixture(t)
 	x.secrets = map[string]string{"password": "known-private-value", "multiline": "line-one-private\nline-two-private"}

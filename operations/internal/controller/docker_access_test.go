@@ -34,7 +34,7 @@ func newDockerAccessFixture(t *testing.T) (*Store, *browser, string, string, *do
 			if f.old.Load() {
 				cap = 0
 			}
-			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerEngineAvailable": true, "softwareLifecycleVersion": 1, "nativeInstallVersion": 1, "serviceInstallVersion": serviceinstall.CapabilityVersion, "dockerAccessVersion": cap})
+			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerEngineAvailable": true, "softwareLifecycleVersion": 1, "nativeInstallVersion": 1, "serviceInstallVersion": serviceinstall.CapabilityVersion, "dockerAccessVersion": cap, "commandRecipeVersion": deploy.CommandRecipeVersion, "commandTrustFingerprint": deploy.CommandPublicKeyFingerprint(s.commandPublicKey())})
 		}
 		if req.Action == "SOFTWARE_DOCKER_ACCESS_CHECK" {
 			f.checks.Add(1)

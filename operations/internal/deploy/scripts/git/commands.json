@@ -1,0 +1,4 @@
+{
+  "git-config-unset": ["config", "--file", "$1", "--unset-all", "--", "$2"],
+  "git-config-add": ["config", "--file", "$1", "--add", "--", "$2", "$3"]
+}

@@ -15,8 +15,9 @@ import (
 )
 
 type softwareBinding struct {
-	Software SoftwareRequest `json:"software"`
-	JobID    string          `json:"jobId"`
+	Software  SoftwareRequest                   `json:"software"`
+	JobID     string                            `json:"jobId"`
+	Resources []serviceinstall.ResolvedResource `json:"resources,omitempty"`
 }
 
 func (x *executor) softwareRunner(ctx context.Context, command string, args ...string) ([]byte, error) {
@@ -55,7 +56,7 @@ func (x *executor) softwareRunner(ctx context.Context, command string, args ...s
 		commandPath = "/usr/sbin:/usr/bin:/sbin:/bin"
 	}
 	cmd.Env = []string{"PATH=" + commandPath, "HOME=/root", "LC_ALL=C", "SYSTEMD_COLORS=0", "SYSTEMD_PAGER="}
-	if command == "/usr/sbin/runuser" || command == "/usr/bin/gpasswd" {
+	if command == "/usr/sbin/runuser" || command == "/usr/bin/gpasswd" || command == "/usr/bin/env" {
 		boundPackageCommand(cmd)
 	}
 	if command == "/usr/bin/apt-get" || command == "/usr/bin/dpkg" {
@@ -68,6 +69,7 @@ func (x *executor) softwareRunner(ctx context.Context, command string, args ...s
 	}
 	buffer := &cappedBuffer{limit: limit}
 	cmd.Stdout, cmd.Stderr = commandOutputs(ctx, buffer)
+	logExecutedCommand(ctx, command, args...)
 	err = cmd.Run()
 	return buffer.Bytes(), err
 }
@@ -76,7 +78,13 @@ func validateSoftwareInput(req Request) error {
 	if !ID.MatchString(req.JobID) || !Hex.MatchString(req.InputHash) || !softwareMutation(req.SoftwareOperation) {
 		return errors.New("SOFTWARE_JOB_IDENTITY_INVALID")
 	}
-	if req.GitRepository != nil {
+	if req.Management != nil {
+		if err := validateManagementInput(req); err != nil {
+			return err
+		}
+	} else if req.SoftwareOperation == "SOFTWARE_OPERATION" {
+		return errors.New("MANAGEMENT_INPUT_REQUIRED")
+	} else if req.GitRepository != nil {
 		if err := validateGitRepositoryInput(req); err != nil {
 			return err
 		}
@@ -115,6 +123,11 @@ func validateSoftwareInput(req Request) error {
 	}
 	frozen := req
 	frozen.Action, frozen.InputHash, frozen.ResultHash, frozen.Secrets = req.SoftwareOperation, "", "", nil
+	frozen.CommandSignature = ""
+	if req.ResumeOffset != 0 && (req.Action != "RECOVER" || req.Installation == nil || req.ResumeOffset < 0) {
+		return errors.New("INSTALL_RESUME_OFFSET_INVALID")
+	}
+	frozen.ResumeOffset = 0
 	if Digest(frozen) != req.InputHash {
 		return errors.New("INPUT_HASH_MISMATCH")
 	}
@@ -126,6 +139,28 @@ func softwareResult(req Request) Result {
 }
 
 func (x *executor) executeSoftware(req Request, output io.Writer) error {
+	if commandDefinition(req) != nil {
+		if err := x.verifyCommandRequest(req); err != nil {
+			return err
+		}
+	} else if req.Software != nil && req.Software.Ownership != nil && req.Software.Ownership.CommandTemplateHash != "" {
+		// Custom ownership is established only by a signed installation. An
+		// ordinary executor caller cannot forge it to adopt protected objects.
+		if req.Action == "SOFTWARE_ADOPT" || req.SoftwareOperation == "SOFTWARE_ADOPT" {
+			return errors.New("COMMAND_ADOPTION_FORBIDDEN")
+		}
+		if req.Action == "SOFTWARE_OBSERVE" || req.Action == "SOFTWARE_LOGS" {
+			if err := x.boundSoftware(*req.Software); err != nil {
+				return err
+			}
+		}
+	}
+	if req.Action == "SOFTWARE_OPERATION_CHECK" {
+		if err := validateManagementInput(req); err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(x.managementPreflight(req))
+	}
 	if req.Action == "GIT_REPOSITORY_CHECK" || req.Action == "GIT_REPOSITORY_OBSERVE" || req.Action == "GIT_REPOSITORY_TEST" {
 		return x.executeGitRead(req, output)
 	}
@@ -138,7 +173,7 @@ func (x *executor) executeSoftware(req Request, output io.Writer) error {
 	if req.Action == "NODE_ENVIRONMENT_CHECK" || req.Action == "NODE_ENVIRONMENT_OBSERVE" || req.Action == "NODE_ENVIRONMENT_DISCOVER" {
 		return x.executeNodeRead(req, output)
 	}
-	if (req.Installation != nil || req.Reconfiguration != nil || req.NodeEnvironment != nil || req.Uninstallation != nil) && (req.Action == "PROGRESS" || req.Action == "SOFTWARE_INSTALL_LOGS") {
+	if (req.Installation != nil || req.Reconfiguration != nil || req.NodeEnvironment != nil || req.Uninstallation != nil || req.Management != nil || req.Software != nil) && (req.Action == "PROGRESS" || req.Action == "SOFTWARE_INSTALL_LOGS") {
 		return x.readServiceInstallation(req, output)
 	}
 	if req.Action == "SOFTWARE_CONFIGURE_CHECK" {
@@ -180,7 +215,7 @@ func (x *executor) executeSoftware(req Request, output io.Writer) error {
 	if err := validateSoftwareInput(req); err != nil {
 		return err
 	}
-	if req.Action != req.SoftwareOperation && req.Action != "STATUS" && req.Action != "ACK" {
+	if req.Action != req.SoftwareOperation && req.Action != "STATUS" && req.Action != "ACK" && !(req.Installation != nil && (req.Action == "RECOVER" || req.Action == "RECOVER_CHECK")) {
 		return errors.New("ACTION_NOT_ALLOWED")
 	}
 	lock, err := targetLock(x.root)
@@ -197,6 +232,19 @@ func (x *executor) softwareLocked(req Request, output io.Writer) error {
 	pendingFile := filepath.Join(x.root, "pending.json")
 	var intent Request
 	err := readJSON(intentFile, &intent)
+	resuming := req.Action == "RECOVER"
+	if resuming || req.Action == "RECOVER_CHECK" {
+		offset, resumeErr := x.installResumeOffset(req, dir)
+		if resumeErr != nil {
+			return resumeErr
+		}
+		if !resuming {
+			return json.NewEncoder(output).Encode(map[string]int64{"offset": offset})
+		}
+		if offset != req.ResumeOffset {
+			return errors.New("INSTALL_RESUME_OFFSET_CHANGED")
+		}
+	}
 	if req.Action == "STATUS" || req.Action == "ACK" {
 		if err != nil {
 			if !os.IsNotExist(err) {
@@ -240,7 +288,7 @@ func (x *executor) softwareLocked(req Request, output io.Writer) error {
 		}
 		return x.ackSoftware(req, intent, result, dir, output)
 	}
-	if err == nil {
+	if err == nil && !resuming {
 		if intent.InputHash != req.InputHash {
 			return errors.New("IDEMPOTENCY_CONFLICT")
 		}
@@ -250,39 +298,63 @@ func (x *executor) softwareLocked(req Request, output io.Writer) error {
 		}
 		return json.NewEncoder(output).Encode(result)
 	}
-	if !os.IsNotExist(err) {
+	if err != nil && !os.IsNotExist(err) {
 		return errors.New("TARGET_INTENT_DAMAGED")
 	}
-	if _, err = os.Lstat(pendingFile); !os.IsNotExist(err) {
-		return errors.New("TARGET_PENDING")
-	}
 	deadline, err := time.Parse(time.RFC3339, req.DeadlineAt)
-	if err != nil || time.Now().After(deadline) {
+	if !resuming && (err != nil || time.Now().After(deadline)) {
 		return errors.New("DEADLINE_EXCEEDED")
 	}
-	if err = os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	if err = atomicJSON(pendingFile, req); err != nil {
-		return err
-	}
-	if err = atomicJSON(intentFile, req); err != nil {
-		return err
-	}
-	if err = x.checkpoint(req, "SOFTWARE_PREFLIGHT"); err != nil {
-		return err
+	if intent.JobID == "" {
+		if _, err = os.Lstat(pendingFile); !os.IsNotExist(err) {
+			return errors.New("TARGET_PENDING")
+		}
+		if err = os.MkdirAll(dir, 0700); err != nil {
+			return err
+		}
+		frozen := req
+		frozen.Action, frozen.ResumeOffset = req.SoftwareOperation, 0
+		if err = atomicJSON(pendingFile, frozen); err != nil {
+			return err
+		}
+		if err = atomicJSON(intentFile, frozen); err != nil {
+			return err
+		}
+		if err = x.checkpoint(req, "SOFTWARE_PREFLIGHT"); err != nil {
+			return err
+		}
 	}
 	result := softwareResult(req)
+	if resuming {
+		if err := x.prepareBuiltinResume(req, dir); err != nil {
+			return err
+		}
+		req.Action = req.SoftwareOperation
+		req.DeadlineAt = time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
+	}
 	result, err = x.applySoftware(req, dir)
 	if err != nil {
 		result = softwareResult(req)
 		result.Status, result.Phase, result.ErrorCode = "FAILED", "SOFTWARE_REJECTED", err.Error()
+		if req.Installation != nil && req.Installation.Definition.Key != "docker" && !serviceinstall.IsNode(req.Installation.Definition) &&
+			(err.Error() == "NATIVE_MATERIAL_TRANSFER_FAILED" || err.Error() == "SERVICE_ARCHIVE_TRANSFER_FAILED" || err.Error() == "SERVICE_IMAGE_PULL_INTERRUPTED") {
+			result.Status, result.Phase = "UNKNOWN", "INSTALL_TRANSFER_INTERRUPTED"
+		}
+		if req.Installation != nil && err.Error() == "NATIVE_DOWNLOAD_INTERRUPTED" {
+			result.Status, result.Phase = "UNKNOWN", "INSTALL_TRANSFER_INTERRUPTED"
+		}
+		if commandInstallation(req) != nil && (err.Error() == "COMMAND_STEP_INTERRUPTED" || err.Error() == "COMMAND_STEP_RECONCILE_REQUIRED") {
+			result.Status, result.Phase = "UNKNOWN", "COMMAND_STEP_UNCONFIRMED"
+		}
 		if req.Reconfiguration != nil {
 			// configureSoftware returns an error only before its durable stop
 			// boundary. Later uncertainty is UNKNOWN and never reaches here.
 			// This receipt proves no live configuration was applied; it does not
 			// claim that the previous service was observed healthy.
 			result.Phase = "CONFIGURATION_NOT_APPLIED"
+		}
+		if req.Management != nil {
+			result.Phase = "OPERATION_NOT_APPLIED"
 		}
 	}
 	if err = atomicJSON(resultFile, result); err != nil {

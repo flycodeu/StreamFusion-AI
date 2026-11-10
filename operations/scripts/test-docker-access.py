@@ -117,7 +117,7 @@ def main():
                     if path.startswith("/auth/"): route.continue_()
                     elif path == "/hosts": route.fulfill(json={"data": [fixture_host]})
                     elif path == "/software-instances": route.fulfill(json={"data": rows})
-                    elif path == "/jobs": route.fulfill(json={"data": list(jobs.values())})
+                    elif path == "/jobs": route.fulfill(json={"data": {"items": list(jobs.values()), "nextCursor": ""}})
                     elif path == f"/software-instances/{engine['id']}/docker-access":
                         if supported: route.fulfill(json={"data": {"softwareId": engine["id"], "expectedVersion": engine["version"], "expectedHostVersion": fixture_host["version"], "sshAccount": "ubuntu", "lastJobId": engine["lastJobId"], "observation": observation}})
                         else: route.fulfill(status=409, json={"code": "EXECUTOR_DOCKER_ACCESS_UNSUPPORTED", "msg": "接入组件需要更新", "timestamp": stamp, "traceId": "UI_FIXTURE_OLD_COMPONENT"})
@@ -273,7 +273,7 @@ def main():
                 assert len(requests) == 4
                 checks.append("explicit-unqueued-rejection-unlocks-check-preserves-account-and-requires-new-confirmation")
                 assert not blocked and not errors, (blocked, errors)
-                assert not api("/software-instances") and not api("/jobs")
+                assert not api("/software-instances") and not api("/jobs")["items"]
                 result["status"] = "PASS"
                 (output / "requests.json").write_text(json.dumps({"calls": calls, "permissionRequests": requests, "componentUpdates": updates}, ensure_ascii=False, indent=2), encoding="utf8")
                 browser.close()

@@ -58,6 +58,10 @@ func (h *HTTP) withSoftwareRunner(ctx context.Context, t target, observe func(de
 				return nil, commandCtx.Err()
 			}
 			if e != nil {
+				if command == "/usr/bin/ss" {
+					diagnostic, _ := errOut.Result()
+					return diagnostic, e
+				}
 				return nil, e
 			}
 			return out.Result()
@@ -71,6 +75,10 @@ func (h *HTTP) withSoftwareRunner(ctx context.Context, t target, observe func(de
 			return nil, overflow
 		}
 		if e != nil {
+			if command == "/usr/bin/ss" {
+				diagnostic, _ := errOut.Result()
+				return diagnostic, e
+			}
 			return nil, e
 		}
 		return out.Result()
@@ -119,14 +127,14 @@ func (h *HTTP) observeSoftware(w http.ResponseWriter, r *http.Request, s *sessio
 		h.fail(w, r, 409, "INSTALLATION_NOT_BOUND", "安装尚无已确认容器，请先查看或核对安装作业")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	release, e := h.acquireObservation(ctx, i.HostID, false)
+	release, e := h.waitForObservation(r.Context(), i.HostID)
 	if e != nil {
-		h.fail(w, r, 429, "HOST_CHECK_BUSY", "主机正在检测，请稍后重试")
+		h.fail(w, r, 408, "HOST_CHECK_TIMEOUT", "主机检测等待超时，请稍后重新检查")
 		return
 	}
 	defer release()
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
 	t, e := h.store.readTarget(i.HostID)
 	if e != nil {
 		h.opsError(w, r, e)
@@ -146,6 +154,9 @@ func (h *HTTP) observeSoftware(w http.ResponseWriter, r *http.Request, s *sessio
 		return
 	}
 	i, e = h.store.readSoftware(id)
+	if e == nil {
+		i, e = h.store.softwareWebView(i)
+	}
 	if e != nil {
 		h.internal(w, r, e)
 		return
@@ -233,7 +244,7 @@ func (h *HTTP) softwareLogs(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	if i.Installation != nil {
 		for _, ref := range installCredentials(i.Installation.Config) {
-			if secret, err := h.store.secret(ref.ID, ref.Revision, ref.Kind); err == nil {
+			if secret, err := h.store.installSecret(ref); err == nil {
 				out.Log = strings.ReplaceAll(out.Log, string(secret), "[REDACTED]")
 			}
 		}

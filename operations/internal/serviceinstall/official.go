@@ -1,6 +1,7 @@
 package serviceinstall
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"regexp"
@@ -90,7 +91,7 @@ func FindOfficial(key, version string) (Definition, error) {
 
 func IsOfficial(d Definition) bool {
 	expected, err := FindOfficial(d.Key, d.Version)
-	return err == nil && reflect.DeepEqual(expected, d)
+	return err == nil && reflect.DeepEqual(expected, BareDefinition(d))
 }
 
 func OfficialRecipeSpec(d Definition) (OfficialSpec, error) {
@@ -133,7 +134,7 @@ func OfficialRecipeSpec(d Definition) (OfficialSpec, error) {
 }
 
 func (c Config) validateOfficial(d Definition) error {
-	expected := Config{Name: c.Name, RuntimeMode: "NATIVE", HostPort: d.Port, MemoryMiB: 512}
+	expected := Config{Name: c.Name, RuntimeMode: "NATIVE", HostPort: d.Port, MemoryMiB: 512, Parameters: c.Parameters, ParameterCredentials: c.ParameterCredentials}
 	if d.Port != 0 {
 		expected.BindAddress = "127.0.0.1"
 	}
@@ -150,7 +151,11 @@ var officialPackageName = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]{0,100}$`)
 var officialPackageVersion = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.+:~_-]{0,150}$`)
 
 func OfficialInstallCommands(d Definition, packages []OfficialPackage) []OfficialCommand {
-	args := []string{"--assume-yes", "--no-remove", "--no-upgrade", "--no-install-recommends", "-o", "DPkg::Lock::Timeout=15", "-o", "APT::Get::AllowUnauthenticated=false", "-o", "Acquire::AllowInsecureRepositories=false", "install", "--"}
+	var fixed struct{ Refresh, Install, Start OfficialCommand }
+	if err := json.Unmarshal([]byte(commandScript("builtin/official-plan.json")), &fixed); err != nil {
+		panic(err)
+	}
+	args := fixed.Install.Args
 	if d.Native != nil && d.Native.BuildRecipe == "SYSTEM_DOCKER_DEB" {
 		for _, part := range d.Native.Parts {
 			args = append(args, "./"+part.Name)
@@ -165,10 +170,12 @@ func OfficialInstallCommands(d Definition, packages []OfficialPackage) []Officia
 			args = append(args, p.Name+"="+p.Version)
 		}
 	}
-	commands := []OfficialCommand{{Executable: "/usr/bin/apt-get", Args: []string{"-o", "DPkg::Lock::Timeout=15", "-o", "APT::Update::Error-Mode=any", "-o", "Acquire::AllowInsecureRepositories=false", "update"}}, {Executable: "/usr/bin/apt-get", Args: args}}
+	fixed.Install.Args = args
+	commands := []OfficialCommand{fixed.Refresh, fixed.Install}
 	spec, err := OfficialRecipeSpec(d)
 	if err == nil && spec.Paths.Unit != "" {
-		commands = append(commands, OfficialCommand{Executable: "/usr/bin/systemctl", Args: []string{"enable", "--now", "--", spec.Paths.Unit}})
+		fixed.Start.Args = append(fixed.Start.Args, spec.Paths.Unit)
+		commands = append(commands, fixed.Start)
 	}
 	return commands
 }

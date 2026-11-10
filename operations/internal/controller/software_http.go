@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/streamfusion-ai/operations/internal/deploy"
@@ -25,6 +27,9 @@ func (h *HTTP) softwareRoute(w http.ResponseWriter, r *http.Request, s *session,
 	}
 	if len(p) == 2 && r.Method == "GET" {
 		i, e := h.store.readSoftware(p[1])
+		if e == nil {
+			i, e = h.store.softwareWebView(i)
+		}
 		if e != nil {
 			h.opsError(w, r, e)
 		} else {
@@ -72,6 +77,14 @@ func (h *HTTP) listSoftware(w http.ResponseWriter, r *http.Request) {
 		h.internal(w, r, e)
 		return
 	}
+	rows.Close()
+	for index := range out {
+		out[index], e = h.store.softwareWebView(out[index])
+		if e != nil {
+			h.internal(w, r, e)
+			return
+		}
+	}
 	h.success(w, r, out)
 }
 
@@ -90,15 +103,28 @@ func (h *HTTP) registerSoftware(w http.ResponseWriter, r *http.Request, s *sessi
 	}
 	in.Name = strings.TrimSpace(in.Name)
 	in.Locator = strings.TrimSpace(in.Locator)
-	allowed := map[string]bool{"JAVA": true, "MAVEN": true, "MEDIAMTX": true, "MINIO": true, "CODEX": true, "CLAUDE": true, "SEAWEEDFS": true, "MYSQL": true, "REDIS": true, "ZLM": true, "PYTHON": true, "FFMPEG": true, "NGINX": true, "JENKINS": true, "OTHER": true}
+	allowed := map[string]bool{"JAVA": true, "MAVEN": true, "MEDIAMTX": true, "MINIO": true, "CODEX": true, "CLAUDE": true, "GIT": true, "SEAWEEDFS": true, "MYSQL": true, "REDIS": true, "ZLM": true, "PYTHON": true, "FFMPEG": true, "NGINX": true, "JENKINS": true, "LABEL_STUDIO": true, "OTHER": true}
 	probe := deploy.SoftwareRequest{Kind: in.Kind, Locator: in.Locator, SoftwareKey: in.Type, ExpectedVersion: in.Version}
 	if !validName(in.Name) || !deploy.ID.MatchString(in.HostID) || !allowed[in.Type] || probe.Validate(true) != nil {
-		h.fail(w, r, 400, "SOFTWARE_CONFIG_INVALID", "请选择软件、主机和有效的服务标识；工具仅支持java、python、ffmpeg")
+		h.fail(w, r, 400, "SOFTWARE_CONFIG_INVALID", "请选择软件、主机和有效的运行标识")
 		return
 	}
-	if in.Kind == "TOOL" && !((in.Type == "JAVA" && in.Locator == "java") || (in.Type == "PYTHON" && in.Locator == "python") || (in.Type == "FFMPEG" && in.Locator == "ffmpeg")) {
+	if in.Kind == "TOOL" && strings.ToLower(in.Type) != in.Locator {
 		h.fail(w, r, 400, "SOFTWARE_TOOL_MISMATCH", "工具类型和固定命令不一致")
 		return
+	}
+	var javaPath, checkedHostVersion string
+	if in.Kind == "TOOL" && in.Type == "JAVA" {
+		target, err := h.store.readTarget(in.HostID)
+		if err == nil && !target.Maintenance {
+			ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+			_ = h.withSoftwareRunner(ctx, target, func(run deploy.SoftwareCommandRunner) error {
+				javaPath = deploy.CanonicalJavaPath(ctx, run)
+				return nil
+			})
+			cancel()
+			checkedHostVersion = target.Version
+		}
 	}
 	h.store.mu.Lock()
 	defer h.store.mu.Unlock()
@@ -112,8 +138,19 @@ func (h *HTTP) registerSoftware(w http.ResponseWriter, r *http.Request, s *sessi
 		h.fail(w, r, 409, "HOST_UNAVAILABLE", "主机不存在或处于维护中")
 		return
 	}
+	if javaPath != "" {
+		var currentVersion string
+		if e = tx.QueryRow("SELECT CAST(version AS TEXT) FROM targets WHERE id=?", in.HostID).Scan(&currentVersion); e != nil {
+			h.internal(w, r, e)
+			return
+		}
+		if currentVersion != checkedHostVersion {
+			h.fail(w, r, 409, "HOST_CHANGED", "主机配置已变化，请刷新后重新登记")
+			return
+		}
+	}
 	var count int
-	if e = tx.QueryRow("SELECT count(*) FROM software_instances WHERE host_id=? AND runtime_kind=? AND locator=? AND management_mode<>'RELEASED'", in.HostID, in.Kind, in.Locator).Scan(&count); e != nil {
+	if e = tx.QueryRow("SELECT count(*) FROM software_instances WHERE host_id=? AND runtime_kind=? AND (locator=? OR locator=? OR (?='TOOL' AND locator='/usr/bin/'||CASE WHEN ?='python' THEN 'python3' ELSE ? END)) AND management_mode<>'RELEASED'", in.HostID, in.Kind, in.Locator, javaPath, in.Kind, in.Locator, in.Locator).Scan(&count); e != nil {
 		h.internal(w, r, e)
 		return
 	}

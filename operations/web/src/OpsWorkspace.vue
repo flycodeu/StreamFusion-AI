@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, watch, computed } from "vue";
 import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
 import { request, upload } from "./api";
+import type { PageResult } from "./jobs";
 import PreviewConfigForm from "./PreviewConfigForm.vue";
 import { previewDefaults, type PreviewConfig } from "./preview";
 import ZLMConfigForm from "./ZLMConfigForm.vue";
@@ -343,7 +344,7 @@ async function refresh() {
     request<Host[]>("/hosts"),
     request<Artifact[]>("/artifacts"),
     request<Instance[]>("/instances"),
-    request<Job[]>("/jobs"),
+    request<PageResult<Job>>("/jobs?limit=100"),
     request<Binding[]>("/bindings"),
     request<Credential[]>("/credentials"),
     request<RuntimeInstallation[]>("/plugin-installations"),
@@ -358,11 +359,11 @@ async function refresh() {
   }
   artifacts.value = a;
   instances.value = i;
-  jobs.value = j;
+  jobs.value = j.items;
   bindings.value = b;
   credentials.value = c;
   runtimeInstallations.value = environments;
-  if (detail.value) detail.value = j.find((x) => x.id === detail.value?.id);
+  if (detail.value) detail.value = j.items.find((x) => x.id === detail.value?.id);
 }
 function poll() {
   timer = setTimeout(async () => {
@@ -1433,19 +1434,13 @@ function credentialSelected(
           {{ plan.kind === "ROLLBACK" ? "回滚" : "发布" }} ·
           {{ planInstance?.name }}
         </dd>
-        <dt>候选</dt>
-        <dd>
-          <code>{{ plan.candidate.id }}</code>
-        </dd>
-        <dt>恢复基线</dt>
-        <dd>
-          <code>{{ plan.baseline?.id || "停止未成功的候选" }}</code>
-        </dd>
+        <dt>版本来源</dt>
+        <dd>{{ artifacts.find((item) => item.id === plan?.candidate.artifactId)?.name || '所选制品' }}</dd>
+        <dt>失败处理</dt><dd>{{ plan.baseline ? '恢复上一成功版本' : '停止未成功的候选' }}</dd>
         <template v-if="plan.candidate.runtimeEnvironment">
           <dt>冻结运行环境</dt>
           <dd>
-            Java {{ plan.candidate.runtimeEnvironment.pluginVersion }} ·
-            <code>{{ plan.candidate.runtimeEnvironment.imageDigest }}</code>
+            Java {{ plan.candidate.runtimeEnvironment.pluginVersion }}
           </dd>
         </template>
         <dt>端口</dt>
@@ -1477,6 +1472,7 @@ function credentialSelected(
         <dt>有效期</dt>
         <dd>{{ time(plan.expiresAt) }}</dd>
       </dl>
+      <details><summary>版本技术详情</summary><dl class="plan-detail"><dt>候选</dt><dd><code>{{ plan.candidate.id }}</code></dd><dt>镜像</dt><dd><code>{{ plan.candidate.imageId }}</code></dd><dt>恢复基线</dt><dd><code>{{ plan.baseline?.id || "停止未成功的候选" }}</code></dd><template v-if="plan.candidate.runtimeEnvironment"><dt>运行环境摘要</dt><dd><code>{{ plan.candidate.runtimeEnvironment.imageDigest }}</code></dd></template></dl></details>
       <div class="dialog-footer">
         <button
           type="button"
@@ -1500,12 +1496,8 @@ function credentialSelected(
               ? "上一成功"
               : "历史候选"
         }}</strong
-        ><code>{{ r.id }}</code
-        ><small>{{ r.imageId }}</small>
-        <small v-if="r.runtimeEnvironment"
-          >Java {{ r.runtimeEnvironment.pluginVersion }} ·
-          {{ r.runtimeEnvironment.imageDigest }}</small
-        >
+        ><span v-if="r.runtimeEnvironment">Java {{ r.runtimeEnvironment.pluginVersion }}</span>
+        <details><summary>版本详情</summary><code>{{ r.id }}</code><small>{{ r.imageId }}</small><code v-if="r.runtimeEnvironment">{{ r.runtimeEnvironment.imageDigest }}</code></details>
         <details v-if="r.config.preview">
           <summary>冻结的节点配置</summary>
           <pre class="log-output">{{ JSON.stringify(r.config, null, 2) }}</pre>
@@ -1531,10 +1523,6 @@ function credentialSelected(
         结果尚未确认，相关变更已锁定
       </div>
       <dl class="plan-detail">
-        <dt>作业</dt>
-        <dd>
-          <code>{{ detail.id }}</code>
-        </dd>
         <dt>状态</dt>
         <dd>
           {{ statusLabels[detail.status] }} ·
@@ -1544,6 +1532,7 @@ function credentialSelected(
         <dd>{{ time(detail.updatedAt) }}</dd>
       </dl>
       <details><summary>诊断信息</summary><dl class="plan-detail">
+        <dt>作业</dt><dd><code>{{ detail.id }}</code></dd>
         <dt>状态 / 阶段</dt><dd><code>{{ softwareJobDiagnostic(detail.status, detail.phase, phaseLabels) }}</code></dd>
         <dt>错误码</dt><dd>{{ detail.errorCode || "—" }}</dd>
         <dt>追踪</dt>

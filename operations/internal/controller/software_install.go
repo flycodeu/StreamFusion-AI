@@ -78,6 +78,9 @@ func parseInstallPlan(raw string) (softwareInstallPlan, error) {
 }
 
 func (h *HTTP) softwareInstallRoute(w http.ResponseWriter, r *http.Request, s *session, path string) bool {
+	if h.commandTemplateRoute(w, r, s, path) {
+		return true
+	}
 	if h.softwareConfigurationRoute(w, r, s, path) {
 		return true
 	}
@@ -85,11 +88,21 @@ func (h *HTTP) softwareInstallRoute(w http.ResponseWriter, r *http.Request, s *s
 		return true
 	}
 	if path == "/software-recipes" && r.Method == "GET" {
-		h.success(w, r, serviceinstall.Catalog())
+		recipes, err := h.store.publishedRecipes()
+		if err != nil {
+			h.internal(w, r, err)
+		} else {
+			h.success(w, r, recipes)
+		}
 		return true
 	}
 	if path == "/software-official-recipes" && r.Method == "GET" {
-		h.success(w, r, serviceinstall.OfficialCatalog())
+		recipes, err := h.store.publishedOfficialRecipes()
+		if err != nil {
+			h.internal(w, r, err)
+		} else {
+			h.success(w, r, recipes)
+		}
 		return true
 	}
 	p := strings.Split(strings.Trim(path, "/"), "/")
@@ -110,18 +123,33 @@ type installCredential struct{ ID, Revision, Kind string }
 
 func installCredentials(c serviceinstall.Config) []installCredential {
 	refs := []installCredential{}
+	seen := map[string]bool{}
 	for _, v := range []installCredential{{c.CredentialID, c.CredentialRevision, "PASSWORD"}, {c.UserCredentialID, c.UserCredentialRevision, "PASSWORD"}, {c.AccessKeyCredentialID, c.AccessKeyCredentialRevision, "TOKEN"}} {
-		if v.ID != "" {
+		key := serviceinstall.SecretKey(v.ID, v.Revision)
+		if v.ID != "" && !seen[key] {
 			refs = append(refs, v)
+			seen[key] = true
+		}
+	}
+	for _, ref := range c.CredentialReferences() {
+		if !seen[serviceinstall.SecretKey(ref.ID, ref.Revision)] {
+			refs = append(refs, installCredential{ID: ref.ID, Revision: ref.Revision})
 		}
 	}
 	return refs
 }
 
+func (s *Store) installSecret(ref installCredential) ([]byte, error) {
+	if ref.Kind == "" {
+		return s.parameterSecret(serviceinstall.CredentialReference{ID: ref.ID, Revision: ref.Revision})
+	}
+	return s.secret(ref.ID, ref.Revision, ref.Kind)
+}
+
 func (s *Store) checkInstallSecrets(d serviceinstall.Definition, c serviceinstall.Config) error {
 	values := map[string]string{}
 	for _, ref := range installCredentials(c) {
-		secret, err := s.secret(ref.ID, ref.Revision, ref.Kind)
+		secret, err := s.installSecret(ref)
 		if err != nil {
 			return errors.New("INSTALL_CREDENTIAL_UNAVAILABLE")
 		}
@@ -133,7 +161,7 @@ func (s *Store) checkInstallSecrets(d serviceinstall.Definition, c serviceinstal
 func checkInstallCredentialTx(tx *sql.Tx, c serviceinstall.Config) error {
 	for _, ref := range installCredentials(c) {
 		var n int
-		if err := tx.QueryRow("SELECT count(*) FROM credential_refs WHERE id=? AND CAST(revision AS TEXT)=? AND kind=? AND revoked_at IS NULL", ref.ID, ref.Revision, ref.Kind).Scan(&n); err != nil {
+		if err := tx.QueryRow("SELECT count(*) FROM credential_refs WHERE id=? AND CAST(revision AS TEXT)=? AND (kind=? OR ?='') AND revoked_at IS NULL", ref.ID, ref.Revision, ref.Kind, ref.Kind).Scan(&n); err != nil {
 			return err
 		}
 		if n != 1 {
@@ -147,7 +175,7 @@ type installCompatibilityError struct{ message string }
 
 func (e *installCompatibilityError) Error() string { return "EXECUTOR_UPGRADE_REQUIRED" }
 
-func (h *HTTP) installTargetReady(ctx context.Context, t target, config serviceinstall.Config, selected ...serviceinstall.Definition) error {
+func (h *HTTP) installTargetReady(ctx context.Context, t target, config serviceinstall.Config, source serviceinstall.Source, selected ...serviceinstall.Definition) error {
 	var capability executorCapabilities
 	if err := h.store.callTarget(ctx, t, deploy.Request{Action: "CAPABILITIES"}, "", &capability); err != nil {
 		return err
@@ -167,6 +195,20 @@ func (h *HTTP) installTargetReady(ctx context.Context, t target, config servicei
 	if capability.Platform != "linux/amd64" {
 		return errors.New("INSTALL_PLATFORM_UNSUPPORTED")
 	}
+	if len(selected) > 0 && selected[0].Commands != nil {
+		if capability.CommandRecipeVersion < deploy.RequiredCommandRecipeVersion(selected[0]) {
+			return &installCompatibilityError{message: "命令安装需要更新接入组件，请先完成主机安装准备"}
+		}
+		if capability.CommandTrustFingerprint != deploy.CommandPublicKeyFingerprint(h.store.commandPublicKey()) {
+			return errors.New("COMMAND_TRUST_REQUIRED")
+		}
+		if config.Mode() == "DOCKER" && !capability.DockerEngine {
+			return errors.New("DOCKER_ENGINE_UNAVAILABLE")
+		}
+		if !serviceinstall.IsBuiltinCommand(selected[0]) {
+			return nil
+		}
+	}
 	if len(selected) > 0 && serviceinstall.IsNode(selected[0]) && capability.NodeEnvironmentVersion != deploy.NodeEnvironmentCapabilityVersion {
 		return errors.New("NODE_CAPABILITY_REQUIRED")
 	}
@@ -181,6 +223,9 @@ func (h *HTTP) installTargetReady(ctx context.Context, t target, config servicei
 	case "NATIVE":
 		if capability.NativeInstallVersion != 1 {
 			return errors.New("NATIVE_INSTALL_UPGRADE_REQUIRED")
+		}
+		if source.TargetDownload(config) && capability.NativeDownloadVersion != 1 {
+			return &installCompatibilityError{message: "在线原生安装需要更新接入组件，请更新后重试"}
 		}
 	default:
 		return errors.New("INSTALL_RUNTIME_UNSUPPORTED")
@@ -208,28 +253,33 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		h.fail(w, r, 400, "INVALID_INPUT", err.Error())
 		return
 	}
-	d, err := serviceinstall.Find(in.Key, in.Version)
+	d, err := h.store.findInstallRecipe(in.Key, in.Version)
 	if in.Key == "nvm" || in.Key == "npm" || in.Key == "pnpm" {
 		h.nodeError(w, r, errors.New("NODE_ENVIRONMENT_ACTION_REQUIRED"))
 		return
 	}
-	if in.Source.Type == "OFFICIAL" && in.Key != "node" {
-		d, err = serviceinstall.FindOfficial(in.Key, in.Version)
-	} else if serviceinstall.IsOfficial(d) {
+	if err == nil && serviceinstall.IsOfficial(d) && in.Source.Type != "OFFICIAL" {
 		err = errors.New("INSTALL_SOURCE_INVALID")
 	}
 	if err != nil || d.Revision != in.Revision {
-		h.fail(w, r, 400, "INSTALL_RECIPE_INVALID", "请选择当前内置配方版本")
+		h.fail(w, r, 400, "INSTALL_RECIPE_INVALID", "安装配置已变化，请重新选择已发布的版本")
 		return
 	}
 	if err = in.Config.Validate(d); err != nil {
-		h.fail(w, r, 400, err.Error(), "请核对实例名、明确IPv4、端口、内存与该软件的凭据参数")
+		h.fail(w, r, 400, "INSTALL_PARAMETERS_INVALID", "请检查安装参数格式和必填项")
 		return
 	}
+	if len(d.Parameters) != 0 {
+		in.Config.Parameters, err = serviceinstall.ResolveParameters(d.Parameters, in.Config.Parameters, in.Config.ParameterCredentials)
+		if err != nil {
+			h.fail(w, r, 400, "INSTALL_PARAMETERS_INVALID", "请检查安装参数格式和必填项")
+			return
+		}
+	}
 	source := installSource{Source: serviceinstall.Source{Type: in.Source.Type}, MaterialID: in.Source.MaterialID}
-	if source.Type == "ARCHIVE" || (source.Type == "ONLINE" && in.Config.Mode() == "NATIVE") {
+	if source.Type == "ARCHIVE" || (source.Type == "ONLINE" && in.Config.Mode() == "NATIVE" && source.MaterialID != "") {
 		m, e := h.store.readInstallationMaterial(source.MaterialID)
-		if e != nil || !m.Available || m.RuntimeMode != in.Config.Mode() || serviceinstall.Digest(m.Definition) != serviceinstall.Digest(d) {
+		if e != nil || !m.Available || m.RuntimeMode != in.Config.Mode() || !sameMaterialDefinition(m.Definition, d) {
 			h.fail(w, r, 409, "INSTALL_MATERIAL_NOT_READY", "离线材料缺失、未校验或不匹配所选版本")
 			return
 		}
@@ -264,13 +314,20 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		h.fail(w, r, 409, "HOST_MAINTENANCE", "主机维护中，请恢复后预检")
 		return
 	}
+	if locked, e := hostOperationLock(h.store.DB, t.ID); e != nil {
+		h.internal(w, r, e)
+		return
+	} else if locked.blocksInstall() {
+		h.operationBlocked(w, r, locked)
+		return
+	}
 	if err = checkInstalledTool(h.store.DB, t.ID, d, in.Config); err != nil {
 		h.fail(w, r, 409, "TOOL_ALREADY_INSTALLED", "该Docker工具已有安装记录，请在工具安装记录中使用或核对；原生安装可选择独立目录")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	if err = h.installTargetReady(ctx, t, in.Config, d); err != nil {
+	if err = h.installTargetReady(ctx, t, in.Config, source.Source, d); err != nil {
 		code, message := installTargetError(err)
 		h.fail(w, r, 409, code, message)
 		return
@@ -313,6 +370,12 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		}
 		p.Checks = append(p.Checks, installCheck{check.Key, status, check.Message})
 	}
+	available, err := h.confirmedFailedInstallResources(ctx, t, installationResources(t.InstallRoot, p.SoftwareID, d, in.Config))
+	if err != nil {
+		code, message := installTargetError(err)
+		h.fail(w, r, 409, code, message)
+		return
+	}
 	h.store.mu.Lock()
 	defer h.store.mu.Unlock()
 	tx, err := h.beginAuthorized(s)
@@ -338,15 +401,16 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		h.fail(w, r, 409, err.Error(), "预检期间凭据变化，请重新检查")
 		return
 	}
-	var n int
-	if err = tx.QueryRow("SELECT count(*) FROM operation_locks WHERE resource_key=?", "target:"+t.ID).Scan(&n); err != nil {
+	locked, err := hostOperationLock(tx, t.ID)
+	if err != nil {
 		h.internal(w, r, err)
 		return
 	}
-	if n > 0 {
-		h.fail(w, r, 409, "OPERATION_LOCKED", "主机存在未决作业，请先核对")
+	if locked.blocksInstall() {
+		h.operationBlocked(w, r, locked)
 		return
 	}
+	var n int
 	if err = tx.QueryRow("SELECT count(*) FROM software_install_plans WHERE target_id=? AND status='DRAFT' AND expires_at>?", t.ID, time.Now().UTC().Format(time.RFC3339)).Scan(&n); err != nil {
 		h.internal(w, r, err)
 		return
@@ -357,6 +421,10 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 	}
 	if err = reserveInstallPorts(tx, t.ID, s.AdminID, "", d, in.Config); err != nil {
 		h.fail(w, r, 409, "INSTALL_PORT_RESERVED", "同主机有效计划已预留该协议端口，请修改后重检")
+		return
+	}
+	if err = reserveManagementResources(tx, t.ID, p.SoftwareID, "", installationResources(t.InstallRoot, p.SoftwareID, d, in.Config), resourceClaimExemptions{AbsentInstallations: available}); err != nil {
+		h.fail(w, r, 409, err.Error(), "安装目录、端口或服务与现有软件及待执行操作冲突，请调整后重检")
 		return
 	}
 	_, err = tx.Exec("INSERT INTO software_install_plans(id,actor_id,target_id,material_id,snapshot_json,status,expires_at,created_at) VALUES(?,?,?,nullif(?,''),?,'DRAFT',?,?)", p.ID, s.AdminID, t.ID, source.MaterialID, p.snapshot(), p.ExpiresAt, Now())
@@ -429,7 +497,14 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		h.fail(w, r, 409, "INSTALL_PLAN_STALE", "主机已变化或维护中，请重新预检")
 		return
 	}
-	if p.Source.Type == "ARCHIVE" || (p.Source.Type == "ONLINE" && p.Config.Mode() == "NATIVE") {
+	if locked, e := hostOperationLock(h.store.DB, t.ID); e != nil {
+		h.internal(w, r, e)
+		return
+	} else if locked.blocksInstall() {
+		h.operationBlocked(w, r, locked)
+		return
+	}
+	if p.Source.Type == "ARCHIVE" || (p.Source.Type == "ONLINE" && p.Config.Mode() == "NATIVE" && !p.Source.Source.TargetDownload(p.Config)) {
 		m, e := h.store.readInstallationMaterial(p.Source.MaterialID)
 		if e != nil || !m.Available || m.SHA256 != p.Source.SHA256 || m.ByteSize != p.Source.ByteSize {
 			h.fail(w, r, 409, "INSTALL_MATERIAL_NOT_READY", "安装材料已变化或缺失")
@@ -447,7 +522,7 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	if err = h.installTargetReady(ctx, t, p.Config, p.Definition); err != nil {
+	if err = h.installTargetReady(ctx, t, p.Config, p.Source.Source, p.Definition); err != nil {
 		code, message := installTargetError(err)
 		h.fail(w, r, 409, code, message)
 		return
@@ -473,6 +548,12 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 	}
 	if err = validateInstallPreflightPaths(t.InstallRoot, &p, checked); err != nil {
 		h.fail(w, r, 409, "INSTALL_PREFLIGHT_MISMATCH", "执行器返回的目标路径不匹配，请重新预检")
+		return
+	}
+	available, err := h.confirmedFailedInstallResources(ctx, t, installationResources(t.InstallRoot, p.SoftwareID, p.Definition, p.Config))
+	if err != nil {
+		code, message := installTargetError(err)
+		h.fail(w, r, 409, code, message)
 		return
 	}
 	h.store.mu.Lock()
@@ -502,6 +583,13 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	current, err := scanHost(tx.QueryRow("SELECT "+hostColumns+" FROM targets WHERE id=?", p.TargetID))
+	if p.Definition.Commands != nil {
+		var currentDefinition string
+		if e := tx.QueryRow("SELECT published_json FROM command_templates WHERE recipe_key=?", commandTemplateKey(p.Definition.Key, p.Definition.Version)).Scan(&currentDefinition); e != nil || currentDefinition != jsonText(p.Definition) {
+			h.fail(w, r, 409, "INSTALL_PLAN_STALE", "命令配置已更新或下架，请重新选择配置并检查安装条件")
+			return
+		}
+	}
 	if err != nil {
 		h.opsError(w, r, err)
 		return
@@ -538,15 +626,16 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 			return
 		}
 	}
-	var count int
-	if err = tx.QueryRow("SELECT count(*) FROM operation_locks WHERE resource_key=?", "target:"+p.TargetID).Scan(&count); err != nil {
+	locked, err := hostOperationLock(tx, p.TargetID)
+	if err != nil {
 		h.internal(w, r, err)
 		return
 	}
-	if count > 0 {
-		h.fail(w, r, 409, "OPERATION_LOCKED", "主机有未决作业，请先核对")
+	if locked.blocksInstall() {
+		h.operationBlocked(w, r, locked)
 		return
 	}
+	var count int
 	if err = tx.QueryRow("SELECT count(*) FROM jobs WHERE status IN ('QUEUED','RUNNING','UNKNOWN')").Scan(&count); err != nil {
 		h.internal(w, r, err)
 		return
@@ -559,12 +648,21 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		h.fail(w, r, 409, "TOOL_ALREADY_INSTALLED", "该Docker工具已有安装记录，请查看原工具及发布引用")
 		return
 	}
+	if err = reserveManagementResources(tx, p.TargetID, p.SoftwareID, p.ID, installationResources(current.InstallRoot, p.SoftwareID, p.Definition, p.Config), resourceClaimExemptions{AbsentInstallations: available}); err != nil {
+		h.fail(w, r, 409, err.Error(), "安装资源已被其他软件或待执行操作占用，请重新检查安装条件")
+		return
+	}
 	job, now := uuid.NewString(), Now()
 	req := deploy.Request{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: h.storeIDTx(tx), TargetID: p.TargetID, JobID: job, TraceID: r.Context().Value(traceKey{}).(string), Action: "SOFTWARE_INSTALL", SoftwareOperation: "SOFTWARE_INSTALL", Installation: p.request(), DeadlineAt: time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)}
 	req.InputHash = deploy.Digest(req)
 	_, err = tx.Exec("INSERT INTO jobs(id,actor_id,kind,target_id,software_plan_id,idempotency_key,request_hash,status,phase,input_json,trace_id,created_at,updated_at) VALUES(?,?,'SOFTWARE_INSTALL',?,?,?,?,'QUEUED','PREFLIGHT',?,?,?,?)", job, s.AdminID, p.TargetID, id, in.Key, hash, jsonText(req), req.TraceID, now, now)
 	if err == nil {
-		_, err = tx.Exec("INSERT INTO operation_locks VALUES(?,?),(?,?)", "target:"+p.TargetID, job, "software:"+p.SoftwareID, job)
+		_, err = tx.Exec("INSERT INTO operation_locks VALUES(?,?)", "software:"+p.SoftwareID, job)
+	}
+	if err == nil && locked.ID == "" {
+		// Preserve the head of the host's queue. The worker takes the same
+		// lock for subsequent installs only after the preceding ACK.
+		_, err = tx.Exec("INSERT INTO operation_locks SELECT ?,? WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE target_id=? AND status='QUEUED' AND kind='SOFTWARE_INSTALL' AND id<>?)", "target:"+p.TargetID, job, p.TargetID, job)
 	}
 	if err == nil {
 		_, err = tx.Exec("INSERT INTO software_instances(id,name,host_id,software_type,software_version,runtime_kind,locator,management_mode,desired_state,actual_state,binding_revision,last_job_id,data_ownership,install_plan_id,installation_json,installation_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'OBSERVE',?,'UNKNOWN',1,?,'OPS',?,?,'INSTALLING',?,?)", p.SoftwareID, p.Config.Name, p.TargetID, strings.ToUpper(p.Definition.Key), p.Definition.Version, installationRuntimeKind(p.Definition, p.Config), "pending:"+p.SoftwareID, installationDesiredState(p.Definition), job, id, jsonText(req.Installation), now, now)
@@ -619,6 +717,18 @@ func installPreflightError(err error) (string, string) {
 }
 
 func installTargetError(err error) (string, string) {
+	var retryConflict *installRetryConflictError
+	if errors.As(err, &retryConflict) {
+		return retryConflict.Error(), retryConflict.message
+	}
+	if err != nil && err.Error() == "MANAGEMENT_RESOURCE_CONFLICT" {
+		return "MANAGEMENT_RESOURCE_CONFLICT", "上次安装的服务或端口尚未确认空闲，请先核对原安装记录"
+	}
+	if err != nil {
+		if message, ok := commandErrorMessages[err.Error()]; ok {
+			return err.Error(), message
+		}
+	}
 	if err != nil && err.Error() == "NODE_CAPABILITY_REQUIRED" {
 		return "NODE_CAPABILITY_REQUIRED", "主机已接入，需更新接入组件以管理 Node；更新后重新检查即可"
 	}
@@ -652,16 +762,13 @@ func (h *HTTP) installPreflightRejection(p serviceinstall.Preflight, c servicein
 		if check.Status == "PASS" {
 			continue
 		}
-		if (strings.HasPrefix(check.Code, "SERVICE_") || strings.HasPrefix(check.Code, "OFFICIAL_") || strings.HasPrefix(check.Code, "NATIVE_") || strings.HasPrefix(check.Code, "DOCKER_")) && len(check.Code) < 90 && !strings.ContainsAny(check.Code, " \r\n\t:") {
+		if (strings.HasPrefix(check.Code, "SERVICE_") || strings.HasPrefix(check.Code, "OFFICIAL_") || strings.HasPrefix(check.Code, "NATIVE_") || strings.HasPrefix(check.Code, "DOCKER_") || strings.HasPrefix(check.Code, "COMMAND_")) && len(check.Code) < 90 && !strings.ContainsAny(check.Code, " \r\n\t:") {
 			code = check.Code
 		}
 		if validNodeErrorCode(check.Code) {
 			code = check.Code
 		}
-		text := check.Key + ": " + check.Message
-		if check.Code != "" {
-			text += " (" + check.Code + ")"
-		}
+		text := check.Message
 		parts = append(parts, text)
 		if len(parts) >= 8 {
 			break
@@ -672,7 +779,7 @@ func (h *HTTP) installPreflightRejection(p serviceinstall.Preflight, c servicein
 		message = "端口、目录或依赖未通过检查，请修改参数后重新预检"
 	}
 	for _, ref := range installCredentials(c) {
-		if secret, err := h.store.secret(ref.ID, ref.Revision, ref.Kind); err == nil {
+		if secret, err := h.store.installSecret(ref); err == nil {
 			message = strings.ReplaceAll(message, string(secret), "[REDACTED]")
 		}
 	}

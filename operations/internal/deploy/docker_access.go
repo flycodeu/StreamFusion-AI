@@ -247,11 +247,12 @@ func (x *executor) changeDockerAccess(req Request, dir string) (Result, error) {
 	}
 	desired := change.Action == "GRANT"
 	if actual.Member != desired {
-		option := "-d"
+		name := "docker-access-revoke"
 		if desired {
-			option = "-a"
+			name = "docker-access-grant"
 		}
-		_, _ = x.softwareRunner(ctx, "/usr/bin/gpasswd", option, change.Account, "docker")
+		command := deployCommand(name, change.Account)
+		_, _ = x.softwareRunner(ctx, command[0], command[1:]...)
 	}
 	// Even a failed/timeout command may have changed the group file. Observe
 	// positively on a fresh deadline; never infer failure means no modification.

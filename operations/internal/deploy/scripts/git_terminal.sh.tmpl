@@ -1,0 +1,5 @@
+# >>> streamfusion-ops git >>>
+if [ -x %[1]s ]; then
+  case ":$PATH:" in *:%[2]s:*) ;; *) PATH=%[2]s:"$PATH"; export PATH ;; esac
+fi
+# <<< streamfusion-ops git <<<

@@ -1,0 +1,11 @@
+bind %s
+port %d
+protected-mode yes
+daemonize no
+aclfile %s/users.acl
+dir %s
+appendonly yes
+appendfsync everysec
+maxmemory %dmb
+maxmemory-policy noeviction
+logfile ""

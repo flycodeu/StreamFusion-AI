@@ -49,6 +49,7 @@ type FirewallSnapshot struct {
 	RawRules         string         `json:"rawRules"`
 	AddedRules       string         `json:"addedRules"`
 	Ports            []HostPort     `json:"ports"`
+	PortCode         string         `json:"portCode,omitempty"`
 	DockerPorts      string         `json:"dockerPorts"`
 	DockerCode       string         `json:"dockerCode,omitempty"`
 	ManagedRules     []FirewallRule `json:"managedRules"`
@@ -103,7 +104,15 @@ func ParseHostPorts(raw string) ([]HostPort, error) {
 		}
 		host, p, err := net.SplitHostPort(f[4])
 		if err != nil {
-			continue
+			// Older iproute2 prints unbracketed IPv6 listener addresses.
+			last := strings.LastIndexByte(f[4], ':')
+			if last < 0 {
+				continue
+			}
+			host, p = f[4][:last], f[4][last+1:]
+			if ip, parseErr := netip.ParseAddr(host); parseErr != nil || !ip.Is6() {
+				continue
+			}
 		}
 		n, err := strconv.Atoi(p)
 		if err != nil || n < 1 || n > 65535 {

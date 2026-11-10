@@ -104,7 +104,7 @@ func reserveInstallPorts(tx *sql.Tx, targetID, actorID, excludeID string, d serv
 	if len(wanted) == 0 {
 		return nil
 	}
-	rows, err := tx.Query(`SELECT id,actor_id,snapshot_json,'INSTALL' FROM software_install_plans WHERE target_id=? AND status='DRAFT' AND expires_at>? UNION ALL SELECT id,actor_id,snapshot_json,'CONFIGURE' FROM software_configuration_plans WHERE target_id=? AND status='DRAFT' AND expires_at>?`, targetID, time.Now().UTC().Format(time.RFC3339), targetID, time.Now().UTC().Format(time.RFC3339))
+	rows, err := tx.Query(`SELECT id,actor_id,snapshot_json,'INSTALL' FROM software_install_plans WHERE target_id=? AND status='DRAFT' AND expires_at>? UNION ALL SELECT id,actor_id,snapshot_json,'CONFIGURE' FROM software_configuration_plans WHERE target_id=? AND status='DRAFT' AND expires_at>? UNION ALL SELECT p.id,p.actor_id,p.snapshot_json,'SUBMITTED' FROM software_install_plans p JOIN jobs j ON j.software_plan_id=p.id WHERE p.target_id=? AND j.status IN ('QUEUED','RUNNING','UNKNOWN')`, targetID, time.Now().UTC().Format(time.RFC3339), targetID, time.Now().UTC().Format(time.RFC3339), targetID)
 	if err != nil {
 		return err
 	}
@@ -146,7 +146,7 @@ func reserveInstallPorts(tx *sql.Tx, targetID, actorID, excludeID string, d serv
 		conflict := false
 		for _, a := range wanted {
 			for _, b := range serviceinstall.PortMappings(frozen.Definition, frozen.Config) {
-				if a.HostPort == b.HostPort && a.Protocol == b.Protocol && a.BindAddress == b.BindAddress {
+				if a.HostPort == b.HostPort && a.Protocol == b.Protocol && (a.BindAddress == b.BindAddress || a.BindAddress == "0.0.0.0" || b.BindAddress == "0.0.0.0") {
 					conflict = true
 				}
 			}
@@ -154,7 +154,7 @@ func reserveInstallPorts(tx *sql.Tx, targetID, actorID, excludeID string, d serv
 		if !conflict {
 			continue
 		}
-		if p.actor != actorID {
+		if p.actor != actorID || p.kind == "SUBMITTED" {
 			return errors.New("INSTALL_PORT_RESERVED")
 		}
 		table := "software_install_plans"

@@ -83,6 +83,11 @@ case "$action" in
     install -m 600 -- "$material/nvm.sh" "$NVM_DIR/nvm.sh"
     install -m 700 -- "$material/nvm-exec" "$NVM_DIR/nvm-exec"
     ;;
+  prepare-install)
+    check_tree "$NVM_DIR/.cache/bin/node-$version-linux-x64"
+    check_tree "$NVM_DIR/versions/node/$version"
+    [ ! -e "$NVM_DIR/versions/node/$version" ] || fail NODE_ALREADY_INSTALLED
+    ;;
   install)
     load_nvm
     [ ! -e "$NVM_DIR/versions/node/$version" ] || fail NODE_ALREADY_INSTALLED

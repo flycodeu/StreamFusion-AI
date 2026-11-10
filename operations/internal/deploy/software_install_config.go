@@ -3,7 +3,6 @@ package deploy
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -81,9 +80,9 @@ func (x *executor) prepareServiceAt(req Request, root, outputConfig string, init
 			}
 		}
 	}
-	args := []string{"container", "create", "--pull", "never", "--name", serviceName(i.SoftwareID), "--restart", "unless-stopped", "--security-opt", "no-new-privileges:true", "--memory", strconv.Itoa(c.MemoryMiB) + "m", "--cpus", "2", "--pids-limit", "512", "--log-driver", "json-file", "--log-opt", "max-size=10m", "--log-opt", "max-file=3"}
+	args := deployCommand("docker-create-base", serviceName(i.SoftwareID), strconv.Itoa(c.MemoryMiB)+"m")[1:]
 	for _, mapping := range serviceinstall.PortMappings(i.Definition, c) {
-		args = append(args, "--publish", fmt.Sprintf("%s:%d:%d/%s", mapping.BindAddress, mapping.HostPort, mapping.ContainerPort, strings.ToLower(mapping.Protocol)))
+		args = append(args, deployCommand("docker-publish", fmt.Sprintf("%s:%d:%d/%s", mapping.BindAddress, mapping.HostPort, mapping.ContainerPort, strings.ToLower(mapping.Protocol)))...)
 	}
 	labels := serviceLabels(x.installOwnership(req))
 	keys := make([]string, 0, len(labels))
@@ -92,21 +91,21 @@ func (x *executor) prepareServiceAt(req Request, root, outputConfig string, init
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		args = append(args, "--label", key+"="+labels[key])
+		args = append(args, deployCommand("docker-label", key+"="+labels[key])...)
 	}
 	mount := func(source, target string, readonly bool) {
-		value := source + ":" + target
+		suffix := ""
 		if readonly {
-			value += ":ro"
+			suffix = ":ro"
 		}
-		args = append(args, "--volume", value)
+		args = append(args, deployCommand("docker-mount", source, target, suffix)...)
 	}
 	// The user/group is queried from the exact verified image, not guessed
 	// from a moving Dockerfile or imposed uniformly across different services.
 	gid := 0
 	if i.Definition.Key == "mysql" || i.Definition.Key == "redis" || i.Definition.Key == "seaweedfs" {
 		user := map[string]string{"mysql": "mysql", "redis": "redis", "seaweedfs": "seaweed"}[i.Definition.Key]
-		out, runErr := x.serviceDocker(req, "SERVICE_CONFIGURE", 15*time.Second, "run", "--rm", "--pull", "never", "--network", "none", "--read-only", "--entrypoint", "id", i.Definition.ImageID, "-g", user)
+		out, runErr := x.serviceDockerSource(req, "SERVICE_CONFIGURE", 15*time.Second, "docker-user-group", i.Definition.ImageID, user)
 		gid, err = strconv.Atoi(strings.TrimSpace(string(out)))
 		if runErr != nil || err != nil || gid < 1 || gid > 65535 {
 			return nil, errors.New("SERVICE_IMAGE_USER_UNAVAILABLE")
@@ -122,44 +121,44 @@ func (x *executor) prepareServiceAt(req Request, root, outputConfig string, init
 			return nil, err
 		}
 		quote := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
-		if err = write("health.cnf", "[client]\nuser=root\npassword=\""+quote.Replace(secret)+"\"\nprotocol=socket\n", true); err != nil {
+		if err = write("health.cnf", deployTemplate("docker/mysql-health.cnf.tmpl", quote.Replace(secret)), true); err != nil {
 			return nil, err
 		}
-		mount(filepath.Join(config, "root-password"), "/run/secrets/mysql-root", true)
-		mount(filepath.Join(config, "health.cnf"), "/run/secrets/mysql-health.cnf", true)
-		mount(data, "/var/lib/mysql", false)
-		args = append(args, "--env", "MYSQL_ROOT_PASSWORD_FILE=/run/secrets/mysql-root", "--env", "MYSQL_ROOT_HOST=localhost")
+		mount(filepath.Join(config, "root-password"), deployCommand("docker-mount-mysql-root")[0], true)
+		mount(filepath.Join(config, "health.cnf"), deployCommand("docker-mount-mysql-health")[0], true)
+		mount(data, deployCommand("docker-mount-mysql-data")[0], false)
+		args = append(args, deployCommand("docker-mysql-root-env")...)
 		if c.Database != "" {
-			args = append(args, "--env", "MYSQL_DATABASE="+c.Database)
+			args = append(args, deployCommand("docker-mysql-database", c.Database)...)
 		}
 		if c.Username != "" {
 			if err = write("user-password", userSecret, true); err != nil {
 				return nil, err
 			}
-			mount(filepath.Join(config, "user-password"), "/run/secrets/mysql-user", true)
-			args = append(args, "--env", "MYSQL_USER="+c.Username, "--env", "MYSQL_PASSWORD_FILE=/run/secrets/mysql-user")
+			mount(filepath.Join(config, "user-password"), deployCommand("docker-mount-mysql-user")[0], true)
+			args = append(args, deployCommand("docker-mysql-user", c.Username)...)
 		}
-		command = []string{"mysqld", "--mysqlx=0", "--port=3306", "--bind-address=0.0.0.0"}
+		command = deployCommand("docker-runtime-mysql")
 	case "redis":
 		hash := sha256.Sum256([]byte(secret))
-		if err = write("users.acl", "user default on #"+hex.EncodeToString(hash[:])+" ~* &* +@all\n", true); err != nil {
+		if err = write("users.acl", deployTemplate("docker/redis-users.acl.tmpl", hex.EncodeToString(hash[:])), true); err != nil {
 			return nil, err
 		}
-		conf := fmt.Sprintf("bind 0.0.0.0\nport 6379\nprotected-mode yes\naclfile /run/secrets/redis-users.acl\ndir /data\nappendonly yes\nappendfsync everysec\nmaxmemory %dmb\nmaxmemory-policy noeviction\n", c.MemoryMiB*3/4)
+		conf := deployTemplate("docker/redis.conf.tmpl", c.MemoryMiB*3/4)
 		if err = write("redis.conf", conf, false); err != nil {
 			return nil, err
 		}
-		mount(filepath.Join(config, "users.acl"), "/run/secrets/redis-users.acl", true)
-		mount(filepath.Join(config, "redis.conf"), "/usr/local/etc/redis/redis.conf", true)
-		mount(data, "/data", false)
-		command = []string{"redis-server", "/usr/local/etc/redis/redis.conf"}
+		mount(filepath.Join(config, "users.acl"), deployCommand("docker-mount-redis-users")[0], true)
+		mount(filepath.Join(config, "redis.conf"), deployCommand("docker-mount-redis-config")[0], true)
+		mount(data, deployCommand("docker-mount-data")[0], false)
+		command = deployCommand("docker-runtime-redis")
 	case "nginx":
-		conf := "events {}\nhttp { server { listen 80; server_name _; root /usr/share/nginx/html; location = /__sfops_health { default_type text/plain; return 200 \"" + i.SoftwareID + "\"; } location / { index index.html; } } }\n"
+		conf := deployTemplate("docker/nginx.conf.tmpl", i.SoftwareID)
 		if err = write("nginx.conf", conf, false); err != nil {
 			return nil, err
 		}
 		if initialize {
-			if err = serviceFile(filepath.Join(data, "index.html"), []byte("<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><title>Nginx</title><h1>Nginx is running</h1></html>"), 0, false); err != nil {
+			if err = serviceFile(filepath.Join(data, "index.html"), []byte(deployScript("docker/nginx-index.html")), 0, false); err != nil {
 				return nil, err
 			}
 		}
@@ -168,12 +167,11 @@ func (x *executor) prepareServiceAt(req Request, root, outputConfig string, init
 		if err = os.Chmod(data, 0755); err != nil {
 			return nil, err
 		}
-		mount(filepath.Join(config, "nginx.conf"), "/etc/nginx/nginx.conf", true)
-		mount(data, "/usr/share/nginx/html", true)
-		command = []string{"nginx", "-g", "daemon off;"}
+		mount(filepath.Join(config, "nginx.conf"), deployCommand("docker-mount-nginx-config")[0], true)
+		mount(data, deployCommand("docker-mount-nginx-data")[0], true)
+		command = deployCommand("docker-runtime-nginx")
 	case "seaweedfs":
-		identity := map[string]any{"identities": []any{map[string]any{"name": "ops-managed", "credentials": []any{map[string]string{"accessKey": accessKey, "secretKey": secret}}, "actions": []string{"Admin", "Read", "List", "Tagging", "Write"}}}}
-		content, _ := json.Marshal(identity)
+		content := seaweedS3Configuration(accessKey, secret)
 		if err = serviceFile(filepath.Join(outputConfig, "s3.json"), content, gid, true); err != nil {
 			return nil, err
 		}
@@ -184,9 +182,9 @@ func (x *executor) prepareServiceAt(req Request, root, outputConfig string, init
 				}
 			}
 		}
-		mount(filepath.Join(config, "s3.json"), "/etc/seaweedfs/s3.json", true)
-		mount(data, "/data", false)
-		command = []string{"server", "-dir=/data/volume", "-master.dir=/data/master", "-volume.max=8", "-master.volumeSizeLimitMB=1024", "-ip=127.0.0.1", "-ip.bind=127.0.0.1", "-master.telemetry=false", "-volume.port=8081", "-filer", "-s3", "-s3.ip.bind=0.0.0.0", "-s3.port=8333", "-s3.port.iceberg=0", "-s3.port.lance=0", "-s3.config=/etc/seaweedfs/s3.json"}
+		mount(filepath.Join(config, "s3.json"), deployCommand("docker-mount-seaweedfs-config")[0], true)
+		mount(data, deployCommand("docker-mount-data")[0], false)
+		command = deployCommand("docker-runtime-seaweedfs")
 	case "mediamtx":
 		content := mediaMTXConfiguration(*i, secret, false)
 		if err = write("mediamtx.yml", string(content), true); err != nil {
@@ -195,16 +193,16 @@ func (x *executor) prepareServiceAt(req Request, root, outputConfig string, init
 		if err = os.Chmod(data, 0755); err != nil {
 			return nil, err
 		}
-		mount(filepath.Join(config, "mediamtx.yml"), "/mediamtx.yml", true)
-		mount(data, "/data", false)
+		mount(filepath.Join(config, "mediamtx.yml"), deployCommand("docker-mount-mediamtx-config")[0], true)
+		mount(data, deployCommand("docker-mount-data")[0], false)
 	case "zlm":
-		if err = write("config.ini", zlmConfiguration(*i, secret, "/data", false), true); err != nil {
+		if err = write("config.ini", zlmConfiguration(*i, secret, deployCommand("docker-mount-data")[0], false), true); err != nil {
 			return nil, err
 		}
-		mount(filepath.Join(config, "config.ini"), "/opt/media/conf/config.ini", true)
-		mount(data, "/data", false)
-		args = append(args, "--entrypoint", "/opt/media/bin/MediaServer")
-		command = []string{"-c", "/opt/media/conf/config.ini", "-l", "1", "--log-dir", "/data/logs", "--log-size", "10", "--log-slice", "3", "-m", "3"}
+		mount(filepath.Join(config, "config.ini"), deployCommand("docker-mount-zlm-config")[0], true)
+		mount(data, deployCommand("docker-mount-data")[0], false)
+		args = append(args, deployCommand("docker-zlm-entrypoint")...)
+		command = deployCommand("docker-runtime-zlm")
 	default:
 		return nil, errors.New("SERVICE_RECIPE_UNSUPPORTED")
 	}

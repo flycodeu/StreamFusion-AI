@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElDrawer, ElMessage, ElMessageBox } from "element-plus";
 import { request } from "./api";
-import { hostTime, type Host } from "./hosts";
+import type { Host } from "./hosts";
 import ObservationBatchPanel from "./ObservationBatchPanel.vue";
 import type { ObservationBatch } from "./observation";
 import SoftwareIcon from "./SoftwareIcon.vue";
@@ -10,11 +10,13 @@ import SoftwareRecipes from "./SoftwareRecipes.vue";
 import NodeEnvironmentPanel from "./NodeEnvironmentPanel.vue";
 import GitManagementPanel from "./GitManagementPanel.vue";
 import SoftwareDetailsDialog from "./SoftwareDetailsDialog.vue";
+import SoftwareWebAccess from "./SoftwareWebAccess.vue";
 import SoftwareUninstallDialog from "./SoftwareUninstallDialog.vue";
 import SoftwareRegistrationDialog from "./SoftwareRegistrationDialog.vue";
 import SoftwareDiscoveryDialog from "./SoftwareDiscoveryDialog.vue";
+import SoftwareConfigurationDialog from "./SoftwareConfigurationDialog.vue";
+import { softwareConfigurationAvailable } from "./softwareManagement";
 import {
-  softwareDesiredLabels,
   softwareModes,
   softwareRuntimeLabels,
   softwareState,
@@ -22,19 +24,29 @@ import {
   softwareIsDockerEngine,
   softwareInstallationReady,
   softwareLifecycleAvailable,
-  softwareTypes,
+  softwareTypeLabel,
   softwareVersionLabel,
   softwareVersionReason,
   softwareVersionText,
+  softwareHasInstallationRecord,
+  softwareIsHistoryOnly,
+  softwareUninstallAvailable,
   type SoftwareInstance,
   type SoftwareJob,
   type SoftwareMutationResult,
+  type SoftwareAction,
   type SoftwareRegistrationDraft,
 } from "./software";
 
-const emit = defineEmits<{ error: [unknown]; preparation: [string] }>();
-const props = defineProps<{ dockerHostId?: string }>();
-const tab = ref<"instances" | "recipes">("instances");
+const emit = defineEmits<{
+  error: [unknown];
+  preparation: [string];
+  navigate: [view: "manage" | "install"];
+  logs: [target: { jobId?: string; softwareId?: string }];
+}>();
+const props = withDefaults(defineProps<{ view?: "manage" | "install"; dockerHostId?: string }>(), {
+  view: "manage",
+});
 const rows = ref<SoftwareInstance[]>([]);
 const hosts = ref<Host[]>([]);
 const hostId = ref("");
@@ -83,12 +95,12 @@ async function discoverInstalled(targetId: string) {
     if (disposed) return;
     hosts.value = latestHosts;
     hostId.value = targetId;
-    tab.value = "instances";
+    emit("navigate", "manage");
     discovery.value = true;
   });
 }
 watch(() => props.dockerHostId, (id) => {
-  if (id) { hostId.value = id; tab.value = "recipes"; }
+  if (id) hostId.value = id;
 }, { immediate: true });
 const query = ref("");
 const mode = ref("ACTIVE");
@@ -110,14 +122,17 @@ const dependentContainers = (item?: SoftwareInstance) => rows.value.filter((othe
   other.hostId === item?.hostId && other.runtimeKind === "DOCKER" && other.managementMode !== "RELEASED",
 ).map((other) => other.name);
 const registrationPrefill = ref<SoftwareRegistrationDraft>();
+const configurationItem = ref<SoftwareInstance>(), queuedConfiguration = ref<SoftwareInstance>();
+function editConfiguration(item: SoftwareInstance) {
+  if (detailId.value) { queuedConfiguration.value = item; selectDetail(""); }
+  else configurationItem.value = item;
+}
+function detailClosed() { if (queuedConfiguration.value) { configurationItem.value = queuedConfiguration.value; queuedConfiguration.value = undefined; } }
 const detailId = ref("");
 const job = ref<SoftwareJob>();
-const logs = ref("");
-const logSource = ref<"software" | "job">("software");
-const logsLimited = ref(false);
-const logsAt = ref("");
 let disposed = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
+let refreshing: Promise<void> | undefined;
 let generation = 0;
 let detailRevision = 0;
 let batchGeneration = 0;
@@ -130,9 +145,6 @@ function selectDetail(id: string) {
   detailRevision += 1;
   detailId.value = id;
   job.value = undefined;
-  logs.value = "";
-  logsLimited.value = false;
-  logsAt.value = "";
   return detailRevision;
 }
 
@@ -140,13 +152,14 @@ const visible = computed(() => {
   const term = query.value.trim().toLocaleLowerCase();
   return rows.value.filter(
     (item) =>
+      !softwareIsHistoryOnly(item) &&
       (!hostId.value || item.hostId === hostId.value) &&
       (mode.value === "ALL" ||
         (mode.value === "ACTIVE"
           ? item.managementMode !== "RELEASED"
           : item.managementMode === mode.value)) &&
       (!term ||
-        `${item.name} ${softwareTypes[item.softwareType]} ${item.locator}`
+        `${item.name} ${softwareTypeLabel(item)} ${item.locator}`
           .toLocaleLowerCase()
           .includes(term)),
   );
@@ -159,9 +172,10 @@ const detailHost = computed(() =>
 );
 const pendingJob = computed(
   () =>
-    !!job.value &&
-    (["QUEUED", "RUNNING", "UNKNOWN"].includes(job.value.status) ||
-      job.value.targetAckPending),
+    (!!detail.value?.lastJobId && job.value?.id !== detail.value.lastJobId) ||
+    (!!job.value &&
+      (["QUEUED", "RUNNING", "UNKNOWN"].includes(job.value.status) ||
+        job.value.targetAckPending)),
 );
 const active = (item: SoftwareInstance) => item.managementMode !== "RELEASED";
 const service = (item: SoftwareInstance) => !softwareIsTool(item);
@@ -181,11 +195,21 @@ const canChange = (item: SoftwareInstance) =>
   !hosts.value.find((host) => host.id === item.hostId)?.maintenance &&
   !pendingJob.value;
 
-async function refresh() {
-  if (loading.value) return;
+function refresh(): Promise<void> {
+  if (disposed) return Promise.resolve();
+  if (!refreshing) refreshing = loadSnapshot().finally(() => { refreshing = undefined; });
+  return refreshing;
+}
+async function refreshView() {
+  try { await refresh(); }
+  catch (error) { if (!disposed) emit("error", error); }
+}
+async function loadSnapshot() {
+  if (disposed || loading.value) return;
   loading.value = true;
   const currentGeneration = generation;
   const currentBatchGeneration = batchGeneration;
+  const revision = detailRevision;
   try {
     const [items, targetHosts] = await Promise.all([
       request<SoftwareInstance[]>("/software-instances"),
@@ -200,24 +224,24 @@ async function refresh() {
     if (!disposed && currentBatchGeneration === batchGeneration)
       batch.value = latestBatch || undefined;
     const selected = detail.value;
-    const revision = detailRevision;
-    if (selected?.lastJobId) {
+    if (selected?.lastJobId && currentDetail(selected.id, revision)) {
       const refreshedJob = await request<SoftwareJob>(
         "/jobs/" + selected.lastJobId,
       );
-      if (currentDetail(selected.id, revision)) job.value = refreshedJob;
+      if (currentDetail(selected.id, revision) && detail.value?.lastJobId === selected.lastJobId)
+        job.value = refreshedJob;
     }
   } finally {
     loading.value = false;
   }
 }
 async function act(action: () => Promise<void>) {
-  if (busy.value) return;
+  if (disposed || busy.value) return;
   busy.value = true;
   try {
     await action();
   } catch (error) {
-    emit("error", error);
+    if (!disposed) emit("error", error);
   } finally {
     busy.value = false;
   }
@@ -231,20 +255,34 @@ function update(item: SoftwareInstance) {
 async function showDetails(item: SoftwareInstance) {
   if(item.softwareType === "NODE") { await openNode(item.hostId, item.nodeEnvironmentId || ""); return; }
   const revision = selectDetail(item.id);
-  if (item.lastJobId)
-    await act(async () => {
-      const selectedJob = await request<SoftwareJob>("/jobs/" + item.lastJobId);
-      if (currentDetail(item.id, revision)) job.value = selectedJob;
-    });
+  if (!item.lastJobId) return;
+  try {
+    const selectedJob = await request<SoftwareJob>("/jobs/" + item.lastJobId);
+    if (currentDetail(item.id, revision) && detail.value?.lastJobId === item.lastJobId)
+      job.value = selectedJob;
+  } catch (error) {
+    if (currentDetail(item.id, revision) && detail.value?.lastJobId === item.lastJobId)
+      emit("error", error);
+  }
 }
 async function saved(item: SoftwareInstance) {
   update(item);
-  tab.value = "instances";
+  emit("navigate", "manage");
   mode.value = "ACTIVE";
   query.value = "";
   hostId.value = item.hostId;
   await showDetails(item);
   ElMessage.success("已登记为只读软件");
+}
+async function openInstance(id: string) {
+  const item = await request<SoftwareInstance>(`/software-instances/${id}`);
+  if (disposed) return;
+  update(item);
+  hostId.value = item.hostId;
+  mode.value = "ACTIVE";
+  query.value = "";
+  emit("navigate", "manage");
+  await showDetails(item);
 }
 function openRegistration(prefill?: SoftwareRegistrationDraft) {
   registrationPrefill.value = prefill;
@@ -287,25 +325,33 @@ async function observe(item: SoftwareInstance) {
   if (busy.value || !softwareLifecycleAvailable(item)) return;
   if (detailId.value !== item.id) selectDetail(item.id);
   await act(async () => {
+    const revision = generation;
     const updated = await request<SoftwareInstance>(
       `/software-instances/${item.id}/observe`,
       "POST",
       {},
     );
-    update(updated);
+    if (!disposed && revision === generation) update(updated);
   });
 }
 async function mutationDone(result: SoftwareMutationResult, revision: number) {
+  generation += 1;
   const acceptedJob = result.jobId
     ? await request<SoftwareJob>("/jobs/" + result.jobId)
     : undefined;
-  if (currentDetail(result.softwareInstanceId, revision))
+  if (currentDetail(result.softwareInstanceId, revision)) {
+    detailRevision += 1;
     job.value = acceptedJob;
+  }
+  // Let a pre-submission read settle before fetching the committed snapshot.
+  if (refreshing) await refreshing.catch(() => {});
   await refresh();
 }
 async function configurationSubmitted(receipt: SoftwareMutationResult) {
+  if (disposed) return;
   const revision = detailRevision;
-  await act(() => mutationDone(receipt, revision));
+  try { await mutationDone(receipt, revision); }
+  catch (error) { if (!disposed) emit("error", error); }
 }
 async function adopt(item: SoftwareInstance) {
   try {
@@ -340,17 +386,18 @@ async function adopt(item: SoftwareInstance) {
     ),
   );
 }
-async function changeState(item: SoftwareInstance, action: "START" | "STOP") {
+async function changeState(item: SoftwareInstance, action: SoftwareAction) {
   if (action === "START" && !softwareInstallationReady(item)) return;
-  if (action === "STOP") {
+  if (["STOP", "RESTART", "PAUSE"].includes(action)) {
+    const verb = { STOP: "停止", RESTART: "重启", PAUSE: "暂停" }[action as "STOP" | "RESTART" | "PAUSE"];
     try {
       await ElMessageBox.confirm(
         softwareIsDockerEngine(item)
-          ? `停止主机 Docker Engine“${item.name}”？此主机已登记 ${dependentContainers(item).length} 个容器${dependentContainers(item).length ? `（${dependentContainers(item).join("、")}）` : ""}。容器服务可能中断，未登记容器也可能受影响。`
-          : `停止“${item.name}”？使用该服务的业务可能受到影响。`,
-        "停止服务",
+          ? `${verb}主机 Docker Engine“${item.name}”？此主机已登记 ${dependentContainers(item).length} 个容器${dependentContainers(item).length ? `（${dependentContainers(item).join("、")}）` : ""}。容器服务可能中断，未登记容器也可能受影响。`
+          : `${verb}“${item.name}”？使用该服务的业务可能受到影响。`,
+        `${verb}服务`,
         {
-          confirmButtonText: "停止服务",
+          confirmButtonText: `${verb}服务`,
           cancelButtonText: "取消",
           type: "warning",
         },
@@ -377,12 +424,14 @@ async function changeState(item: SoftwareInstance, action: "START" | "STOP") {
   );
 }
 async function unmanage(item: SoftwareInstance) {
+  const readOnly = item.managementMode === "OBSERVE";
+  const title = readOnly ? "移除登记" : "解除管理";
   try {
     await ElMessageBox.confirm(
-      `解除“${item.name}”的管理？服务保持当前运行状态，远端文件和数据保留。`,
-      "解除管理",
+      readOnly ? `将“${item.name}”移出软件列表？` : `解除“${item.name}”的管理？服务保持当前运行状态，远端文件和数据保留。`,
+      title,
       {
-        confirmButtonText: "解除管理",
+        confirmButtonText: title,
         cancelButtonText: "取消",
         type: "warning",
       },
@@ -405,33 +454,18 @@ async function unmanage(item: SoftwareInstance) {
       revision,
     );
     ElMessage.success(
-      item.managementMode === "MANAGED" ? "解除管理已提交" : "已解除管理",
+      readOnly ? "已移除登记" : "解除管理已提交",
     );
   });
 }
-async function readLogs(source: "software" | "job") {
+function readLogs(source: "software" | "job") {
   const item = detail.value;
   if (!item) return;
   if (source === "software" && !softwareLifecycleAvailable(item)) return;
-  const revision = detailRevision;
-  const selectedJobId = job.value?.id;
-  if (source === "job" && !selectedJobId) return;
-  await act(async () => {
-    const path =
-      source === "job"
-        ? "/jobs/" + selectedJobId + "/logs"
-        : `/software-instances/${item.id}/logs`;
-    const result = await request<{
-      text: string;
-      limited?: boolean;
-      observedAt?: string;
-    }>(path);
-    if (!currentDetail(item.id, revision)) return;
-    logs.value = result.text || "暂无日志";
-    logsLimited.value = !!result.limited;
-    logsAt.value = result.observedAt || "";
-    logSource.value = source;
-  });
+  const target = source === "job" ? { jobId: job.value?.id } : { softwareId: item.id };
+  if (source === "job" && !target.jobId) return;
+  selectDetail("");
+  emit("logs", target);
 }
 async function reconcile() {
   if (!job.value) return;
@@ -455,14 +489,17 @@ function poll() {
       !busy.value &&
       !registration.value &&
       !discovery.value &&
-      tab.value === "instances"
+      props.view === "manage"
     )
-      await act(refresh);
+      await refreshView();
     if (!disposed) poll();
   }, 5000);
 }
+watch(() => props.view, (view) => {
+  if (view === "manage") void refreshView();
+});
 onMounted(async () => {
-  await act(refresh);
+  await refreshView();
   if (!disposed) poll();
 });
 onUnmounted(() => {
@@ -472,47 +509,26 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="content software-management" aria-label="软件管理">
-    <div class="software-tabs" role="tablist" aria-label="软件管理视图">
-      <button
-        role="tab"
-        aria-label="软件中心"
-        :aria-selected="tab === 'instances'"
-        :class="{ active: tab === 'instances' }"
-        @click="tab = 'instances'"
-      >
-        软件中心
-        <span class="tab-count">
-          {{ rows.filter((item) => item.managementMode !== "RELEASED").length }}
-        </span>
-      </button>
-      <button
-        role="tab"
-        :aria-selected="tab === 'recipes'"
-        :class="{ active: tab === 'recipes' }"
-        @click="tab = 'recipes'"
-      >
-        软件目录
-      </button>
-    </div>
+  <section class="content software-management" :aria-label="view === 'install' ? '软件安装' : '软件管理'">
     <SoftwareRecipes
-      v-if="tab === 'recipes'"
+      v-if="view === 'install'"
       :host-id="hostId"
       :initial-recipe-key="dockerHostId ? 'docker' : undefined"
-      @open-instance="(id) => { const item = rows.find((row) => row.id === id); if (item) { tab = 'instances'; showDetails(item); } }"
+      @open-instance="(id) => openInstance(id).catch((error) => emit('error', error))"
+      @logs="(jobId) => emit('logs', { jobId })"
       @error="emit('error', $event)"
       @preparation="emit('preparation', $event)"
       @register="discoverInstalled"
       @node="openNode"
       @git="openGit"
     />
-    <div v-else role="tabpanel" aria-label="软件中心">
+    <div v-if="view === 'manage'" class="software-instances" aria-label="已安装软件">
       <div class="software-toolbar">
         <div class="software-filters">
           <input
             v-model="query"
             type="search"
-            placeholder="搜索软件或服务标识"
+            placeholder="搜索软件"
             aria-label="搜索软件或服务标识"
           />
           <select v-model="hostId" aria-label="筛选软件主机">
@@ -541,6 +557,11 @@ onUnmounted(() => {
           >
             一键检测（{{ detectionCount }}）
           </button>
+          <ObservationBatchPanel
+            :batch="batch"
+            :busy="busy"
+            @cancel="cancelDetection"
+          />
           <button
             class="secondary"
             :disabled="busy || !hosts.length"
@@ -551,7 +572,7 @@ onUnmounted(() => {
           <button
             class="secondary"
             :disabled="busy || loading"
-            @click="act(refresh)"
+            @click="refreshView"
           >
             刷新
           </button>
@@ -564,25 +585,12 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
-      <div
-        v-if="query || hostId || mode !== 'ACTIVE'"
-        class="software-count"
-        aria-live="polite"
-      >
-        {{ visible.length }} 项软件
-        <span v-if="loading">· 加载中…</span>
-      </div>
-      <ObservationBatchPanel
-        :batch="batch"
-        :busy="busy"
-        @cancel="cancelDetection"
-      />
       <div v-if="!rows.length" class="empty software-empty">
         <strong>{{ loading ? "正在加载软件" : "尚未添加软件" }}</strong>
         <span v-if="!loading">
           {{
             hosts.length
-              ? "登记已有服务，或从软件目录安装"
+              ? "登记已有服务，或安装新软件"
               : "先在主机管理添加服务器"
           }}
         </span>
@@ -594,8 +602,8 @@ onUnmounted(() => {
           >
             登记已有
           </button>
-          <button class="secondary" @click="tab = 'recipes'">
-            浏览软件目录
+          <button class="secondary" @click="emit('navigate', 'install')">
+            安装软件
           </button>
         </div>
       </div>
@@ -616,11 +624,11 @@ onUnmounted(() => {
             </span>
           </header>
           <div class="software-identity">
-            <SoftwareIcon :type="item.softwareType" />
+            <SoftwareIcon :type="item.installation?.definition?.catalogKey || item.softwareType" />
             <div>
               <h3>{{ item.name }}</h3>
               <span>
-                {{ softwareTypes[item.softwareType] }} ·
+                {{ softwareTypeLabel(item) }} ·
                 {{ softwareRuntimeLabels[item.runtimeKind] }}
               </span>
             </div>
@@ -646,38 +654,8 @@ onUnmounted(() => {
                 softwareVersionReason(item.observation, item.runtimeKind)
               }}
             </dd>
-            <dt>期望状态</dt>
-            <dd>{{ softwareDesiredLabels[item.desiredState] }}</dd>
-            <dt>监听端口</dt>
-            <dd>
-              {{
-                softwareIsTool(item)
-                  ? "无需监听"
-                  : item.observation?.listeningPorts?.join("、") || "未获取"
-              }}
-            </dd>
           </dl>
           <footer class="software-card-footer">
-            <span
-              v-if="
-                item.freshness === 'STALE' ||
-                (item.latestAttempt?.code &&
-                  !['READY', 'NOT_CHECKED'].includes(item.latestAttempt.code))
-              "
-              :title="
-                item.latestAttempt?.code
-                  ? `${item.latestAttempt.code} · ${hostTime(item.latestAttempt.at)}`
-                  : '上次确认结果待更新'
-              "
-              >待更新</span
-            >
-            <span :title="hostTime(item.observation?.observedAt)">
-              {{
-                item.observation?.observedAt
-                  ? `检查于 ${new Date(item.observation.observedAt).toLocaleTimeString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}`
-                  : "尚无检查"
-              }}
-            </span>
             <div class="software-row-actions">
               <button
                 v-if="active(item)"
@@ -690,6 +668,10 @@ onUnmounted(() => {
               <button class="quiet" :disabled="busy" @click="showDetails(item)">
                 详情
               </button>
+              <SoftwareWebAccess :item="item" :host="hosts.find(host => host.id === item.hostId)" compact />
+              <button v-if="softwareConfigurationAvailable(item)" class="quiet" :disabled="busy || !!hosts.find(host => host.id === item.hostId)?.maintenance" @click="editConfiguration(item)">编辑配置</button>
+              <button v-if="softwareHasInstallationRecord(item)" class="quiet" :disabled="busy" @click="emit('logs', { jobId: item.installationJobId || item.lastJobId })">安装日志</button>
+              <button v-if="softwareUninstallAvailable(item)" class="quiet danger" :disabled="busy || !!hosts.find(host => host.id === item.hostId)?.maintenance" @click="uninstallItem = item; uninstallOpen = true">卸载</button>
               <button
                 v-if="item.managementMode === 'OBSERVE' && service(item)"
                 class="quiet"
@@ -709,7 +691,7 @@ onUnmounted(() => {
     <NodeEnvironmentPanel v-if="nodeHost" :host="nodeHost" :initial-environment-id="nodeEnvironmentId" @changed="act(refresh)" @close-state="nodeCloseState = $event" />
     <p v-else class="empty">此主机已不可用，请重新选择。</p>
   </ElDrawer>
-  <ElDrawer v-model="gitOpen" title="Git 账号与仓库" size="min(960px, 100vw)" destroy-on-close :close-on-click-modal="!gitCloseState.blocked" :close-on-press-escape="!gitCloseState.blocked" :show-close="!gitCloseState.blocked" :before-close="closeGit">
+  <ElDrawer v-model="gitOpen" title="Git 账号配置" size="min(960px, 100vw)" destroy-on-close :close-on-click-modal="!gitCloseState.blocked" :close-on-press-escape="!gitCloseState.blocked" :show-close="!gitCloseState.blocked" :before-close="closeGit">
     <p v-if="gitHost" class="node-host-label">{{ gitHost.name }} · {{ gitHost.address || '本机' }}</p>
     <GitManagementPanel v-if="gitOpen && gitHost" :host="gitHost" @close-state="gitCloseState = $event" @changed="act(refresh)" />
     <p v-else class="empty">此主机已不可用，请重新选择。</p>
@@ -737,10 +719,6 @@ onUnmounted(() => {
     :busy="busy"
     :job="job"
     :pending-job="pendingJob"
-    :logs="logs"
-    :log-source="logSource"
-    :logs-limited="logsLimited"
-    :logs-at="logsAt"
     :can-adopt="!!detail && canAdopt(detail)"
     :can-change="!!detail && canChange(detail)"
     @close="selectDetail('')"
@@ -750,15 +728,20 @@ onUnmounted(() => {
     @uninstall="(item) => { uninstallItem = item; uninstallOpen = true; }"
     @change-state="changeState"
     @read-logs="readLogs"
+    @operation-logs="id => { selectDetail(''); emit('logs', { jobId: id }); }"
     @reconcile="reconcile"
     @cancel="cancel"
     @configuration-submitted="configurationSubmitted"
     @changed="act(refresh)"
     @preparation="emit('preparation', $event)"
+    @configure="editConfiguration"
+    @closed="detailClosed"
   />
+  <SoftwareConfigurationDialog :item="configurationItem" :host="hosts.find(host => host.id === configurationItem?.hostId)" @close="configurationItem = undefined" @submitted="configurationSubmitted" @logs="id => emit('logs', { jobId: id })" @preparation="emit('preparation', $event)" />
   <SoftwareUninstallDialog :open="uninstallOpen" :item="uninstallItem"
     :dependent-containers="dependentContainers(uninstallItem)"
     @close="uninstallOpen = false" @submitted="configurationSubmitted" />
+
 </template>
 
 <style scoped>
@@ -767,17 +750,8 @@ onUnmounted(() => {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 0 24px 24px;
+  padding: 24px;
   box-shadow: var(--card-shadow);
-}
-.tab-count {
-  display: inline-block;
-  margin-left: 7px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: #f0f3f7;
-  color: #7e8b9d;
-  font: 11px var(--mono);
 }
 .software-identity {
   display: flex;
@@ -797,36 +771,18 @@ onUnmounted(() => {
   width: 30px;
   height: 30px;
 }
-.software-tabs {
-  display: flex;
-  gap: 28px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 24px;
-}
 :global(.software-confirm .el-message-box__message) {
   overflow-wrap: anywhere;
 }
-.software-tabs button {
-  padding: 20px 0 16px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--muted);
-  font-size: 14px;
-}
-.software-tabs button.active {
-  color: var(--accent);
-  border-color: var(--accent);
-  font-weight: 600;
-}
 .software-toolbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
   gap: 14px;
   align-items: center;
 }
 .software-filters {
   display: grid;
+  flex: 1 1 470px;
   grid-template-columns: minmax(140px, 240px) 132px 132px;
   gap: 10px;
 }
@@ -836,6 +792,7 @@ onUnmounted(() => {
   gap: 10px;
   justify-content: flex-end;
   flex-wrap: wrap;
+  margin-left: auto;
 }
 .software-toolbar-actions select {
   width: 120px;
@@ -857,15 +814,10 @@ onUnmounted(() => {
   width: auto;
   margin: 0;
 }
-.software-count {
-  color: var(--muted);
-  font-size: 12px;
-  margin: 14px 0 0;
-}
 .software-empty,
 .software-cards,
-.software-management [role="tabpanel"] > .empty {
-  margin-top: 18px;
+.software-instances > .empty {
+  margin-top: 16px;
 }
 .software-empty {
   display: grid;
@@ -976,23 +928,13 @@ onUnmounted(() => {
   padding: 5px 7px;
 }
 @media (max-width: 1250px) {
-  .software-toolbar {
-    grid-template-columns: 1fr;
-  }
   .software-filters {
     grid-template-columns: minmax(140px, 1fr) 150px 150px;
   }
 }
 @media (max-width: 650px) {
   .software-management {
-    padding: 0 14px 16px;
-  }
-  .software-tabs {
-    gap: 24px;
-    margin-bottom: 18px;
-  }
-  .software-tabs button {
-    font-size: 13px;
+    padding: 16px 14px;
   }
   .software-filters {
     grid-template-columns: 1fr 1fr;

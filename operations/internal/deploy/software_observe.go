@@ -56,7 +56,7 @@ func ObserveSoftware(ctx context.Context, s SoftwareRequest, run SoftwareCommand
 	if err != nil {
 		return nil, err
 	}
-	if s.Kind == "SYSTEMD" && s.Ownership != nil && s.Ownership.RuntimeMode == "NATIVE" {
+	if s.Kind == "SYSTEMD" && s.Ownership != nil && s.Ownership.RuntimeMode == "NATIVE" && s.Ownership.BinaryPath != "" {
 		if err = verifyNativeBinary(ctx, s.Ownership, run); err != nil {
 			return nil, err
 		}
@@ -65,6 +65,9 @@ func ObserveSoftware(ctx context.Context, s SoftwareRequest, run SoftwareCommand
 	}
 	if s.IdentityHash != "" && actual.IdentityHash != s.IdentityHash {
 		return nil, errors.New("SOFTWARE_IDENTITY_DRIFT")
+	}
+	if s.Ownership != nil && s.Ownership.CommandTemplateHash != "" && actual.Version == "" {
+		actual.Version, actual.VersionSource, actual.VersionStatus = s.ExpectedVersion, "TEMPLATE", "DECLARED"
 	}
 	return actual, nil
 }
@@ -216,7 +219,8 @@ func observeSoftwareContainer(ctx context.Context, s SoftwareRequest, run Softwa
 		return nil, errors.New("SOFTWARE_CONTAINER_RESPONSE_INVALID")
 	}
 	if s.Ownership != nil {
-		if !serviceOwnershipMatches(s, name, imageID, labels) {
+		custom := s.Ownership.CommandTemplateHash != "" && id == s.Locator && imageID == s.Ownership.ImageID
+		if !custom && !serviceOwnershipMatches(s, name, imageID, labels) {
 			return nil, errors.New("SOFTWARE_OWNERSHIP_MISMATCH")
 		}
 	} else {
@@ -233,6 +237,8 @@ func observeSoftwareContainer(ctx context.Context, s SoftwareRequest, run Softwa
 	switch state {
 	case "running":
 		actualState = "RUNNING"
+	case "paused":
+		actualState = "PAUSED"
 	case "created", "exited":
 		actualState = "STOPPED"
 	case "dead":
@@ -241,17 +247,27 @@ func observeSoftwareContainer(ctx context.Context, s SoftwareRequest, run Softwa
 	return &SoftwareObservation{SoftwareMetadata: SoftwareMetadata{VersionSource: "IMAGE_REFERENCE", VersionStatus: "IMAGE_ONLY"}, Kind: s.Kind, Locator: id, IdentityHash: Digest([]string{s.Kind, id, imageID}), State: actualState, Version: image, ObservedAt: stamp()}, nil
 }
 
-func observeSoftwareTool(ctx context.Context, s SoftwareRequest, run SoftwareCommandRunner) (*SoftwareObservation, error) {
-	command, arg := "/usr/bin/java", "-version"
-	switch s.Locator {
-	case "python":
-		command, arg = "/usr/bin/python3", "--version"
-	case "ffmpeg":
-		command, arg = "/usr/bin/ffmpeg", "-version"
-	case "git":
-		command, arg = "/usr/bin/git", "--version"
+// Resolve the system Java launcher through alternatives to compare it with a
+// registered JDK path. A failed lookup is not proof of a match.
+func CanonicalJavaPath(ctx context.Context, run SoftwareCommandRunner) string {
+	data, err := softwareCommand(ctx, run, "/usr/bin/readlink", "-e", "--", "/usr/bin/java")
+	file := strings.TrimSpace(string(data))
+	if err != nil || len(file) > 512 || !path.IsAbs(file) || path.Clean(file) != file || strings.ContainsAny(file, "\r\n\x00") || path.Base(file) != "java" {
+		return ""
 	}
-	data, err := softwareCommand(ctx, run, command, arg)
+	return file
+}
+
+func observeSoftwareTool(ctx context.Context, s SoftwareRequest, run SoftwareCommandRunner) (*SoftwareObservation, error) {
+	key := "java"
+	switch s.Locator {
+	case "python", "ffmpeg", "git":
+		key = s.Locator
+	case "codex", "claude":
+		return observeUserCLI(ctx, s, run)
+	}
+	command := deployCommand("verify-observe-" + key)
+	data, err := softwareCommand(ctx, run, command[0], command[1:]...)
 	if err != nil {
 		return nil, errors.New("SOFTWARE_TOOL_UNAVAILABLE")
 	}
@@ -259,7 +275,28 @@ func observeSoftwareTool(ctx context.Context, s SoftwareRequest, run SoftwareCom
 	if len(version) == 0 || len(version) > 512 {
 		return nil, errors.New("SOFTWARE_TOOL_VERSION_INVALID")
 	}
-	return &SoftwareObservation{SoftwareMetadata: SoftwareMetadata{VersionSource: "VERSION_COMMAND", ExecutablePath: command}, Kind: s.Kind, Locator: s.Locator, IdentityHash: Digest([]string{s.Kind, command, version}), State: "INSTALLED", Version: version, ObservedAt: stamp()}, nil
+	return &SoftwareObservation{SoftwareMetadata: SoftwareMetadata{VersionSource: "VERSION_COMMAND", ExecutablePath: command[0]}, Kind: s.Kind, Locator: s.Locator, IdentityHash: Digest([]string{s.Kind, command[0], version}), State: "INSTALLED", Version: version, ObservedAt: stamp()}, nil
+}
+
+// Probe only the connected account, with the same privileges as its SSH
+// session. Do not source shell profiles or search other users' directories.
+var userCLIProbe = deployScript("observe/user-cli.sh")
+
+func observeUserCLI(ctx context.Context, s SoftwareRequest, run SoftwareCommandRunner) (*SoftwareObservation, error) {
+	data, err := softwareCommand(ctx, run, "/bin/sh", "-c", userCLIProbe, "ops-cli-version", s.Locator)
+	if err != nil {
+		return nil, errors.New("SOFTWARE_TOOL_UNAVAILABLE")
+	}
+	version := strings.TrimSpace(strings.SplitN(string(data), "\n", 2)[0])
+	if len(version) > 512 || !userCLIVersion[s.Locator].MatchString(version) {
+		return nil, errors.New("SOFTWARE_TOOL_VERSION_INVALID")
+	}
+	return &SoftwareObservation{SoftwareMetadata: SoftwareMetadata{VersionSource: "VERSION_COMMAND"}, Kind: s.Kind, Locator: s.Locator, IdentityHash: Digest([]string{s.Kind, s.Locator, version}), State: "INSTALLED", Version: version, ObservedAt: stamp()}, nil
+}
+
+var userCLIVersion = map[string]*regexp.Regexp{
+	"codex":  regexp.MustCompile(`^codex(-cli)? [0-9]+\.[0-9]+\.[0-9]+([+-][^[:space:]]+)?$`),
+	"claude": regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+ \(Claude Code\)$`),
 }
 
 // ReadSoftwareLogs follows no arbitrary path and never runs docker exec. The

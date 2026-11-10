@@ -510,7 +510,7 @@ onUnmounted(() => {
                   来源：{{
                     observationSources[
                       detail.capabilities?.[key]?.source || "NONE"
-                    ] || detail.capabilities?.[key]?.source
+                    ] || '其他检查方式'
                   }}
                 </span>
                 <time>

@@ -2,7 +2,9 @@ package controller
 
 import (
 	"context"
+	"crypto/ed25519"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"path/filepath"
 	"strings"
@@ -91,10 +93,19 @@ func nodeFixture(t *testing.T, s *Store, b *browser) (string, *nodeControllerFix
 			if f.noCapability.Load() {
 				cap = 0
 			}
-			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "nodeEnvironmentVersion": cap, "nodeTerminalVersion": terminal, "nodeRegistryVersion": registry, "nativeInstallVersion": 1, "softwareLifecycleVersion": 1, "softwareUninstallVersion": 1, "serviceInstallVersion": serviceinstall.CapabilityVersion})
+			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "nodeEnvironmentVersion": cap, "nodeTerminalVersion": terminal, "nodeRegistryVersion": registry, "nativeInstallVersion": 1, "softwareLifecycleVersion": 1, "softwareUninstallVersion": 1, "serviceInstallVersion": serviceinstall.CapabilityVersion, "commandRecipeVersion": deploy.CommandRecipeVersion, "commandTrustFingerprint": deploy.CommandPublicKeyFingerprint(s.commandPublicKey())})
 		}
 		if req.NodeEnvironment == nil && (req.Installation == nil || req.Installation.Node == nil) && (req.Uninstallation == nil || req.Uninstallation.Installation.Node == nil) {
 			return nil, false
+		}
+		if commandRequest(req) {
+			signature, err := base64.StdEncoding.DecodeString(req.CommandSignature)
+			if err != nil || !ed25519.Verify(s.commandSigningKey().Public().(ed25519.PublicKey), []byte("streamfusion-ops/command-plan/v1\n"+deploy.CommandRequestDigest(req)), signature) {
+				t.Error("target received unsigned or altered Node commands")
+			}
+			if req.JobID != "" && req.InputHash != deploy.CommandRequestDigest(req) {
+				t.Error("Node command signature changed the frozen job hash")
+			}
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()

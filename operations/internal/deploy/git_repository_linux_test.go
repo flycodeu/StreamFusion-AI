@@ -24,6 +24,12 @@ import (
 )
 
 func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
+	for _, targetKey := range []bool{false, true} {
+		t.Run(fmt.Sprintf("targetKey=%t", targetKey), func(t *testing.T) { testGitRepositoryLifecycle(t, targetKey) })
+	}
+}
+
+func testGitRepositoryLifecycle(t *testing.T, targetKey bool) {
 	if os.Geteuid() != 0 || os.Getenv("SFOPS_TEST_NODE_LINUX") != "1" {
 		t.Skip("requires isolated Linux account fixture with SFOPS_TEST_NODE_LINUX=1")
 	}
@@ -60,6 +66,34 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 	g.Account = name
 	g.AccountUID = a.Uid
 	g.RepoPath = repo
+	if targetKey {
+		if err = os.Chmod(home, 0700); err != nil {
+			t.Fatal(err)
+		}
+		k := GitKeyRequest{ID: g.ProfileID, Account: name}
+		var first, repeated bytes.Buffer
+		x := &executor{}
+		if err = x.executeGitKey(Request{Action: "GIT_KEY_PREPARE", GitKey: &k}, &first); err != nil {
+			t.Fatal(err)
+		}
+		if err = x.executeGitKey(Request{Action: "GIT_KEY_PREPARE", GitKey: &k}, &repeated); err != nil || first.String() != repeated.String() {
+			t.Fatal("key retry changed identity", err)
+		}
+		var evidence GitKeyEvidence
+		if json.Unmarshal(first.Bytes(), &evidence) != nil || strings.Contains(first.String(), "PRIVATE KEY") {
+			t.Fatal("invalid public evidence")
+		}
+		key, err = os.ReadFile(evidence.KeyPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		signer, err = ssh.ParsePrivateKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		g.KeySource, g.KeyPath, g.KeyFingerprint = "TARGET", evidence.KeyPath, evidence.Fingerprint
+		g.CredentialID, g.CredentialRevision = "", ""
+	}
 	port, hostKey := gitFixtureSSH(t, name, remote, signer)
 	g.SSHHost = "127.0.0.1"
 	g.SSHPort = port
@@ -85,6 +119,9 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 		}
 	}
 	x := &executor{root: t.TempDir(), owner: Owner{ProtocolVersion: 1, ExecutorVersion: Version, ControllerID: "55555555-5555-4555-8555-555555555555", TargetID: "66666666-6666-4666-8666-666666666666"}, secrets: map[string]string{"gitKey": string(key)}}
+	if targetKey {
+		x.secrets = nil
+	}
 	x.softwareRun = func(limit time.Duration, command string, args ...string) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), limit)
 		defer cancel()
@@ -168,7 +205,11 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 		t.Fatal("binding changed unrelated configuration")
 	}
 	for _, file := range []string{"key", "known_hosts", "original.config"} {
-		st, e := os.Stat(filepath.Join(gitPrivateDirectory(g, a), file))
+		path := filepath.Join(gitPrivateDirectory(g, a), file)
+		if file == "key" {
+			path = gitPrivateKeyPath(g, a)
+		}
+		st, e := os.Stat(path)
 		if e != nil || st.Mode().Perm() != 0600 {
 			t.Fatal("binding material not private", file, e)
 		}
@@ -204,6 +245,12 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 	}
 	if _, e := os.Lstat(filepath.Join(gitPrivateDirectory(g, a), "key")); !os.IsNotExist(e) {
 		t.Fatal("private key survived unbinding")
+	}
+	if targetKey {
+		kept, e := os.ReadFile(g.KeyPath)
+		if e != nil || !bytes.Equal(kept, key) {
+			t.Fatal("target key was removed or changed by unbind", e)
+		}
 	}
 	// All durable controller-side files must remain free of the private key.
 	_ = filepath.WalkDir(x.root, func(path string, d os.DirEntry, e error) error {

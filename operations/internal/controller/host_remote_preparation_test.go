@@ -58,7 +58,7 @@ func TestHostPreparationEncryptedRequestAndVersionGuards(t *testing.T) {
 }
 
 func TestHostPreparationSSHResultsIdempotencyAndRecovery(t *testing.T) {
-	for _, scenario := range []string{"success", "sudo-required", "interrupted", "wrong-digest", "arm64", "host-changed", "root", "invalid-reply-once", "invalid-reply-always"} {
+	for _, scenario := range []string{"success", "ubuntu-distro", "unexpected-system-output", "sudo-required", "interrupted", "wrong-digest", "arm64", "host-changed", "root", "invalid-reply-once", "invalid-reply-always"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, b := setup(t)
 			b.login()
@@ -112,6 +112,12 @@ func TestHostPreparationSSHResultsIdempotencyAndRecovery(t *testing.T) {
 			}
 			handler := func(command string) *hostSSHResponse {
 				switch {
+				case command == hostReadOnlyCommand && scenario == "unexpected-system-output":
+					return &hostSSHResponse{Stdout: "SFOPS_HOST_V1\nLinux\nx86_64\nDOCKER_PRESENT\nwarning: unexpected login output\n"}
+				case command == hostReadOnlyCommand && scenario == "ubuntu-distro":
+					return &hostSSHResponse{Stdout: "SFOPS_HOST_V1\r\nLinux\r\nx86_64\r\nDOCKER_PRESENT\r\nDISTRO ubuntu 24.04\r\n"}
+				case strings.Contains(command, "SFOPS_PRIVILEGE_READY") && scenario == "sudo-required":
+					return &hostSSHResponse{Stderr: "sudo: a password is required\n", Exit: 1}
 				case command == executorSSHCommand(target) && strings.HasPrefix(scenario, "invalid-reply-"):
 					if capabilityCalls.Add(1) == 1 || scenario == "invalid-reply-always" {
 						return &hostSSHResponse{Stdout: `{"owner":`}
@@ -160,7 +166,7 @@ func TestHostPreparationSSHResultsIdempotencyAndRecovery(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			code, uncertain := b.h.runHostPreparation(ctx, actor, job, target, archive, material.Binary.Hash, password, false)
-			want := map[string]string{"success": "PREPARATION_READY", "root": "PREPARATION_READY", "sudo-required": "PREPARATION_SUDO_REQUIRED", "arm64": "PREPARATION_PLATFORM_UNSUPPORTED", "host-changed": "PREPARATION_HOST_CHANGED", "interrupted": "PREPARATION_RESULT_UNKNOWN", "wrong-digest": "EXECUTOR_HASH_MISMATCH", "invalid-reply-once": "PREPARATION_READY", "invalid-reply-always": "EXECUTOR_RESPONSE_INVALID"}[scenario]
+			want := map[string]string{"success": "PREPARATION_READY", "ubuntu-distro": "PREPARATION_READY", "unexpected-system-output": "READ_ONLY_RESPONSE_INVALID", "root": "PREPARATION_READY", "sudo-required": "PREPARATION_SUDO_REQUIRED", "arm64": "PREPARATION_PLATFORM_UNSUPPORTED", "host-changed": "PREPARATION_HOST_CHANGED", "interrupted": "PREPARATION_RESULT_UNKNOWN", "wrong-digest": "EXECUTOR_HASH_MISMATCH", "invalid-reply-once": "PREPARATION_READY", "invalid-reply-always": "EXECUTOR_RESPONSE_INVALID"}[scenario]
 			if code != want || uncertain != (scenario == "interrupted" || scenario == "wrong-digest" || scenario == "invalid-reply-always") {
 				t.Fatalf("code=%s uncertain=%v, expected %s", code, uncertain, want)
 			}
@@ -170,7 +176,7 @@ func TestHostPreparationSSHResultsIdempotencyAndRecovery(t *testing.T) {
 			if (scenario == "success" || scenario == "root") && !receivedPassword.Load() {
 				t.Fatal("password was not passed only through stdin")
 			}
-			if scenario == "arm64" && uploads.Load() != 0 || (scenario == "arm64" || scenario == "host-changed") && privileged.Load() != 0 {
+			if (scenario == "arm64" || scenario == "sudo-required" || scenario == "unexpected-system-output") && uploads.Load() != 0 || (scenario == "arm64" || scenario == "sudo-required" || scenario == "unexpected-system-output" || scenario == "host-changed") && privileged.Load() != 0 {
 				t.Fatal("rejected host reached installation")
 			}
 			status := "FAILED"
@@ -200,7 +206,7 @@ func TestHostPreparationSSHResultsIdempotencyAndRecovery(t *testing.T) {
 			if err := s.DB.QueryRow("SELECT phase FROM jobs WHERE id=?", job).Scan(&finalPhase); err != nil {
 				t.Fatal(err)
 			}
-			wantPhase := map[string]string{"success": "VERIFYING_EXECUTOR", "root": "VERIFYING_EXECUTOR", "sudo-required": "INSTALLING_EXECUTOR", "arm64": "CONNECTING", "host-changed": "UPLOADING_EXECUTOR", "interrupted": "INSTALLING_EXECUTOR", "wrong-digest": "VERIFYING_EXECUTOR", "invalid-reply-once": "VERIFYING_EXECUTOR", "invalid-reply-always": "VERIFYING_EXECUTOR"}[scenario]
+			wantPhase := map[string]string{"success": "VERIFYING_EXECUTOR", "ubuntu-distro": "VERIFYING_EXECUTOR", "unexpected-system-output": "CONNECTING", "root": "VERIFYING_EXECUTOR", "sudo-required": "CONNECTING", "arm64": "CONNECTING", "host-changed": "UPLOADING_EXECUTOR", "interrupted": "INSTALLING_EXECUTOR", "wrong-digest": "VERIFYING_EXECUTOR", "invalid-reply-once": "VERIFYING_EXECUTOR", "invalid-reply-always": "VERIFYING_EXECUTOR"}[scenario]
 			if finalPhase != wantPhase {
 				t.Fatalf("finalization erased progress phase: got %s want %s", finalPhase, wantPhase)
 			}

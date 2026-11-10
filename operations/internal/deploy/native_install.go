@@ -3,7 +3,6 @@ package deploy
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 	"io"
 	"os"
@@ -61,7 +60,7 @@ func (x *executor) installNative(req Request, dir string) (Result, error) {
 		if _, err = x.softwareRunner(ctx, "/usr/bin/id", "-u", user); err == nil {
 			return result, errors.New("NATIVE_ACCOUNT_ALREADY_EXISTS")
 		}
-		if _, err = x.softwareRunner(ctx, "/usr/sbin/useradd", "--system", "--no-create-home", "--home-dir", "/nonexistent", "--shell", "/usr/sbin/nologin", "--user-group", "--", user); err != nil {
+		if _, err = x.sourceSoftwareCommand(ctx, "native-user-create", user); err != nil {
 			return result, errors.New("NATIVE_ACCOUNT_CREATE_FAILED")
 		}
 		idOut, idErr := x.softwareRunner(ctx, "/usr/bin/id", "-u", user)
@@ -127,7 +126,7 @@ func (x *executor) installNative(req Request, dir string) (Result, error) {
 	if err = atomicJSON(filepath.Join(dir, "native-owned.json"), owner); err != nil {
 		return result, err
 	}
-	if _, err = x.softwareRunner(ctx, "/usr/bin/systemctl", "daemon-reload"); err != nil {
+	if _, err = x.sourceSoftwareCommand(ctx, "systemd-reload"); err != nil {
 		return result, nil
 	}
 	s := x.nativeSoftware(req, owner, "")
@@ -146,7 +145,7 @@ func (x *executor) installNative(req Request, dir string) (Result, error) {
 	if err = x.checkpoint(req, "NATIVE_START"); err != nil {
 		return result, nil
 	}
-	_, startErr := x.softwareRunner(ctx, "/usr/bin/systemctl", "enable", "--now", "--", s.Locator)
+	_, startErr := x.loggedSourceCommand(ctx, req, "NATIVE_START", "native-service-start", s.Locator)
 	if startErr == nil {
 		if version, healthErr := x.waitServiceHealth(req, s, 2*time.Minute); healthErr == nil {
 			return x.ownedInstallResult(req, s, version, "READY", "SUCCEEDED"), nil
@@ -269,32 +268,32 @@ func renderNativeUnit(req Request, root, user string) string {
 	capabilities := ""
 	for _, port := range serviceinstall.PortMappings(i.Definition, i.Config) {
 		if port.HostPort < 1024 {
-			capabilities = "AmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\n"
+			capabilities = deployScript("native/bind-service.capabilities")
 			break
 		}
 	}
 	if capabilities == "" {
-		capabilities = "CapabilityBoundingSet=\n"
+		capabilities = deployScript("native/no-service.capabilities")
 	}
-	return fmt.Sprintf("[Unit]\nDescription=StreamFusion %s %s\nAfter=network-online.target\nWants=network-online.target\n[Service]\nType=simple\nUser=%s\nGroup=%s\nWorkingDirectory=%s/data\nExecStart=%s\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=30\nKillMode=control-group\nNoNewPrivileges=true\nPrivateTmp=true\nProtectSystem=strict\nProtectHome=true\nReadWritePaths=%s/data %s/logs\nUMask=0027\nLimitNOFILE=65536\nMemoryMax=%dM\n%sLogRateLimitIntervalSec=30s\nLogRateLimitBurst=2000\nStandardOutput=journal\nStandardError=journal\n[Install]\nWantedBy=multi-user.target\n", i.Definition.Name, i.SoftwareID, user, user, root, line, root, root, i.Config.MemoryMiB, capabilities)
+	return deployTemplate("native/service.unit.tmpl", i.Definition.Name, i.SoftwareID, user, user, root, line, root, root, i.Config.MemoryMiB, capabilities)
 }
 func nativeServiceArguments(i serviceinstall.Request, root string) []string {
 	config := filepath.Join(root, "config")
 	data := filepath.Join(root, "data")
 	switch i.Definition.Key {
 	case "mediamtx":
-		return []string{filepath.Join(config, "mediamtx.yml")}
+		return deployCommand("native-args-mediamtx", filepath.Join(config, "mediamtx.yml"))
 	case "mysql":
-		return []string{"--defaults-file=" + filepath.Join(config, "my.cnf")}
+		return deployCommand("native-args-mysql", "--defaults-file="+filepath.Join(config, "my.cnf"))
 	case "redis":
-		return []string{filepath.Join(config, "redis.conf")}
+		return deployCommand("native-args-redis", filepath.Join(config, "redis.conf"))
 	case "nginx":
-		return []string{"-p", root + "/", "-c", filepath.Join(config, "nginx.conf"), "-g", "daemon off;"}
+		return deployCommand("native-args-nginx", root+"/", filepath.Join(config, "nginx.conf"))
 	case "zlm":
-		return []string{"-c", filepath.Join(config, "config.ini"), "-s", filepath.Join(root, "runtime/dtls.pem"), "-l", "1", "--log-dir", filepath.Join(root, "logs"), "--log-size", "10", "--log-slice", "3", "-m", "3"}
+		return deployCommand("native-args-zlm", filepath.Join(config, "config.ini"), filepath.Join(root, "runtime/dtls.pem"), filepath.Join(root, "logs"))
 	case "seaweedfs":
 		p := func(key string) string { return strconv.Itoa(serviceinstall.PortValue(i.Definition, i.Config, key)) }
-		return []string{"server", "-dir=" + data + "/volume", "-master.dir=" + data + "/master", "-volume.max=8", "-master.volumeSizeLimitMB=1024", "-ip=127.0.0.1", "-ip.bind=127.0.0.1", "-master.telemetry=false", "-master.port=" + p("master"), "-master.port.grpc=" + p("masterGrpc"), "-volume.port=" + p("volume"), "-volume.port.grpc=" + p("volumeGrpc"), "-filer", "-filer.port=" + p("filer"), "-filer.port.grpc=" + p("filerGrpc"), "-s3", "-s3.ip.bind=" + i.Config.BindAddress, "-s3.port=" + p("main"), "-s3.port.grpc=" + p("s3Grpc"), "-s3.port.iceberg=0", "-s3.port.lance=0", "-s3.config=" + filepath.Join(config, "s3.json")}
+		return deployCommand("native-args-seaweedfs", "-dir="+data+"/volume", "-master.dir="+data+"/master", "-master.port="+p("master"), "-master.port.grpc="+p("masterGrpc"), "-volume.port="+p("volume"), "-volume.port.grpc="+p("volumeGrpc"), "-filer.port="+p("filer"), "-filer.port.grpc="+p("filerGrpc"), "-s3.ip.bind="+i.Config.BindAddress, "-s3.port="+p("main"), "-s3.port.grpc="+p("s3Grpc"), "-s3.config="+filepath.Join(config, "s3.json"))
 	}
 	return nil
 }

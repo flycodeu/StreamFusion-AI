@@ -58,17 +58,16 @@ func (x *executor) serviceHealth(ctx context.Context, req Request, s SoftwareReq
 	if err != nil {
 		return "", err
 	}
-	var command []string
 	switch i.Definition.Key {
 	case "mysql":
 		// The vendor entrypoint temporarily starts MySQL without networking.
 		// PID1 must have exec'd the final mysqld before authentication can be
 		// accepted as installed, otherwise initialization can still be underway.
-		out, runErr := softwareCommand(ctx, x.softwareRunner, "/usr/bin/docker", "container", "exec", s.Locator, "cat", "/proc/1/comm")
+		probe := deployCommand("verify-docker-mysql-init", s.Locator)
+		out, runErr := softwareCommand(ctx, x.softwareRunner, probe[0], probe[1:]...)
 		if runErr != nil || strings.TrimSpace(string(out)) != "mysqld" {
 			return "", errors.New("SERVICE_INITIALIZING")
 		}
-		command = []string{"mysql", "--defaults-extra-file=/run/secrets/mysql-health.cnf", "--batch", "--skip-column-names", "--execute", "SELECT VERSION()"}
 	case "redis":
 		probeCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		conn, dialErr := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(probeCtx, "tcp", net.JoinHostPort(i.Config.BindAddress, strconv.Itoa(i.Config.HostPort)))
@@ -83,35 +82,33 @@ func (x *executor) serviceHealth(ctx context.Context, req Request, s SoftwareReq
 		if err != nil {
 			return "", errors.New("SERVICE_AUTHENTICATION_FAILED")
 		}
-		command = []string{"redis-server", "--version"}
 	case "nginx":
 		body, getErr := serviceHTTP(ctx, "http://"+net.JoinHostPort(i.Config.BindAddress, strconv.Itoa(i.Config.HostPort))+"/__sfops_health", nil)
 		if getErr != nil || string(body) != i.SoftwareID {
 			return "", errors.New("SERVICE_SITE_HEALTH_FAILED")
 		}
-		if _, testErr := softwareCommand(ctx, x.softwareRunner, "/usr/bin/docker", "container", "exec", s.Locator, "nginx", "-t"); testErr != nil {
+		probe := deployCommand("verify-docker-nginx-config", s.Locator)
+		if _, testErr := softwareCommand(ctx, x.softwareRunner, probe[0], probe[1:]...); testErr != nil {
 			return "", errors.New("SERVICE_CONFIG_TEST_FAILED")
 		}
-		command = []string{"nginx", "-v"}
 	case "seaweedfs":
 		if err = serviceS3Authentication(ctx, net.JoinHostPort(i.Config.BindAddress, strconv.Itoa(i.Config.HostPort)), accessKey, secret); err != nil {
 			return "", err
 		}
-		command = []string{"/usr/bin/weed", "version"}
 	case "mediamtx":
 		if err = checkMediaMTX(ctx, *i, secret); err != nil {
 			return "", err
 		}
-		command = []string{"/mediamtx", "--version"}
 	case "zlm":
 		if err = checkZLM(ctx, *i, secret); err != nil {
 			return "", err
 		}
-		command = []string{"/opt/media/bin/MediaServer", "--version"}
 	default:
 		return "", errors.New("SERVICE_RECIPE_UNSUPPORTED")
 	}
-	out, err := softwareCommand(ctx, x.softwareRunner, "/usr/bin/docker", append([]string{"container", "exec", s.Locator}, command...)...)
+	command := deployCommand("verify-" + i.Definition.Key + "-docker")
+	docker := deployCommand("verify-docker-exec", s.Locator)
+	out, err := softwareCommand(ctx, x.softwareRunner, docker[0], append(docker[1:], command...)...)
 	if err != nil || len(strings.TrimSpace(string(out))) == 0 || i.Definition.Key != "zlm" && !strings.Contains(string(out), i.Definition.Version) {
 		return "", errors.New("SERVICE_VERSION_MISMATCH")
 	}
@@ -243,10 +240,11 @@ func (x *executor) nativeServiceHealth(ctx context.Context, req Request, s Softw
 	}
 	root := serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config)
 	binary := filepath.Join(root, nativeBinaryRelative(i.Definition))
-	args := []string{"--version"}
+	args := deployCommand("verify-version-default")
 	switch i.Definition.Key {
 	case "mysql":
-		out, err := softwareCommand(ctx, x.softwareRunner, filepath.Join(root, "runtime/mysql/bin/mysql"), "--defaults-extra-file="+filepath.Join(root, "config/health.cnf"), "--batch", "--skip-column-names", "--execute", "SELECT VERSION()")
+		command := deployCommand("verify-mysql-native", filepath.Join(root, "runtime/mysql/bin/mysql"), "--defaults-extra-file="+filepath.Join(root, "config/health.cnf"))
+		out, err := softwareCommand(ctx, x.softwareRunner, command[0], command[1:]...)
 		if err != nil || !strings.Contains(string(out), i.Definition.Version) {
 			return "", errors.New("SERVICE_AUTHENTICATION_FAILED")
 		}
@@ -283,15 +281,16 @@ func (x *executor) nativeServiceHealth(ctx context.Context, req Request, s Softw
 		if err != nil || string(body) != i.SoftwareID {
 			return "", errors.New("SERVICE_SITE_HEALTH_FAILED")
 		}
-		if _, err = softwareCommand(ctx, x.softwareRunner, binary, "-p", root+"/", "-c", filepath.Join(root, "config/nginx.conf"), "-t"); err != nil {
+		command := deployCommand("verify-nginx-native-config", binary, root+"/", filepath.Join(root, "config/nginx.conf"))
+		if _, err = softwareCommand(ctx, x.softwareRunner, command[0], command[1:]...); err != nil {
 			return "", errors.New("SERVICE_CONFIG_TEST_FAILED")
 		}
-		args = []string{"-v"}
+		args = deployCommand("verify-version-nginx")
 	case "seaweedfs":
 		if err = serviceS3Authentication(ctx, net.JoinHostPort(i.Config.BindAddress, strconv.Itoa(i.Config.HostPort)), access, secret); err != nil {
 			return "", err
 		}
-		args = []string{"version"}
+		args = deployCommand("verify-version-seaweedfs")
 	case "mediamtx":
 		if err = checkMediaMTX(ctx, *i, secret); err != nil {
 			return "", err

@@ -10,38 +10,39 @@ import (
 )
 
 type softwareInstance struct {
-	NodeDataPaths        []string                 `json:"nodeDataPaths,omitempty"`
-	NodeEnvironmentID    string                   `json:"nodeEnvironmentId,omitempty"`
-	InstallationPaths    *installPaths            `json:"installationPaths,omitempty"`
-	ConfigurationJobID   string                   `json:"configurationJobId,omitempty"`
-	Installation         *serviceinstall.Request  `json:"installation,omitempty"`
-	InstallationStatus   string                   `json:"installationStatus"`
-	InstallationJobID    string                   `json:"installationJobId,omitempty"`
-	InstallationEvidence *serviceinstall.Evidence `json:"installationEvidence,omitempty"`
-	ControllerID         string                   `json:"-"`
-	ID                   string                   `json:"id"`
-	Name                 string                   `json:"name"`
-	HostID               string                   `json:"hostId"`
-	HostName             string                   `json:"hostName"`
-	SoftwareType         string                   `json:"softwareType"`
-	SoftwareVersion      string                   `json:"softwareVersion"`
-	RuntimeKind          string                   `json:"runtimeKind"`
-	Locator              string                   `json:"locator"`
-	ManagementMode       string                   `json:"managementMode"`
-	DesiredState         string                   `json:"desiredState"`
-	ActualState          string                   `json:"actualState"`
-	Observation          softwareObservation      `json:"observation"`
-	Freshness            string                   `json:"freshness"`
-	Version              string                   `json:"version"`
-	LastJobID            string                   `json:"lastJobId"`
-	ErrorCode            string                   `json:"errorCode"`
-	DataOwnership        string                   `json:"dataOwnership"`
-	CreatedAt            string                   `json:"createdAt"`
-	UpdatedAt            string                   `json:"updatedAt"`
-	IdentityHash         string                   `json:"-"`
-	BindingRevision      int64                    `json:"-"`
-	Attempt              observationAttempt       `json:"latestAttempt"`
-	ObservationRevision  int64                    `json:"observationRevision"`
+	ConfigurationAvailable bool                     `json:"configurationAvailable"`
+	NodeDataPaths          []string                 `json:"nodeDataPaths,omitempty"`
+	NodeEnvironmentID      string                   `json:"nodeEnvironmentId,omitempty"`
+	InstallationPaths      *installPaths            `json:"installationPaths,omitempty"`
+	ConfigurationJobID     string                   `json:"configurationJobId,omitempty"`
+	Installation           *serviceinstall.Request  `json:"installation,omitempty"`
+	InstallationStatus     string                   `json:"installationStatus"`
+	InstallationJobID      string                   `json:"installationJobId,omitempty"`
+	InstallationEvidence   *serviceinstall.Evidence `json:"installationEvidence,omitempty"`
+	ControllerID           string                   `json:"-"`
+	ID                     string                   `json:"id"`
+	Name                   string                   `json:"name"`
+	HostID                 string                   `json:"hostId"`
+	HostName               string                   `json:"hostName"`
+	SoftwareType           string                   `json:"softwareType"`
+	SoftwareVersion        string                   `json:"softwareVersion"`
+	RuntimeKind            string                   `json:"runtimeKind"`
+	Locator                string                   `json:"locator"`
+	ManagementMode         string                   `json:"managementMode"`
+	DesiredState           string                   `json:"desiredState"`
+	ActualState            string                   `json:"actualState"`
+	Observation            softwareObservation      `json:"observation"`
+	Freshness              string                   `json:"freshness"`
+	Version                string                   `json:"version"`
+	LastJobID              string                   `json:"lastJobId"`
+	ErrorCode              string                   `json:"errorCode"`
+	DataOwnership          string                   `json:"dataOwnership"`
+	CreatedAt              string                   `json:"createdAt"`
+	UpdatedAt              string                   `json:"updatedAt"`
+	IdentityHash           string                   `json:"-"`
+	BindingRevision        int64                    `json:"-"`
+	Attempt                observationAttempt       `json:"latestAttempt"`
+	ObservationRevision    int64                    `json:"observationRevision"`
 }
 
 type softwareObservation struct {
@@ -102,6 +103,12 @@ func scanSoftware(row interface{ Scan(...any) error }) (softwareInstance, error)
 			}
 			s.InstallationEvidence = &evidence
 		}
+		if (installed.Definition.Commands != nil && !serviceinstall.IsBuiltinCommand(installed.Definition)) && installed.Config.Mode() == "NATIVE" {
+			s.InstallationPaths.Bin = ""
+			if s.InstallationEvidence != nil && s.InstallationEvidence.BinaryPath != "" {
+				s.InstallationPaths.Bin = path.Dir(s.InstallationEvidence.BinaryPath)
+			}
+		}
 	}
 	s.Observation.SoftwareObservation = &deploy.SoftwareObservation{State: "UNKNOWN"}
 	if err = json.Unmarshal([]byte(raw), &s.Observation); err != nil {
@@ -150,7 +157,16 @@ func softwareRequest(s softwareInstance) *deploy.SoftwareRequest {
 		} else if s.RuntimeKind == "TOOL" {
 			req.Ownership.RuntimeMode = "DOCKER"
 		}
-
+		if s.Installation.Definition.Commands != nil && !serviceinstall.IsBuiltinCommand(s.Installation.Definition) {
+			req.ExpectedVersion = s.Installation.Definition.Version
+			req.Ownership.CommandTemplateHash = deploy.Digest(s.Installation.Definition)
+			req.Ownership.RuntimeMode = s.Installation.Config.Mode()
+			if s.InstallationEvidence != nil {
+				req.Ownership.ImageID = s.InstallationEvidence.ImageID
+				req.Ownership.BinaryPath = s.InstallationEvidence.BinaryPath
+				req.Ownership.BinaryHash = s.InstallationEvidence.BinaryHash
+			}
+		}
 	}
 	return req
 }

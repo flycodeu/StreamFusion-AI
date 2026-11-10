@@ -1,0 +1,1 @@
+/usr/bin/systemctl stop -- ${OPS_SERVICE_UNITS}

@@ -1,0 +1,1 @@
+rm -rf -- ${OPS_OWNED_PATHS}

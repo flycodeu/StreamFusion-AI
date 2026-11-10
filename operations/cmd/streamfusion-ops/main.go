@@ -116,6 +116,20 @@ func run(args []string) error {
 		}
 		return deploy.InitTarget(*root, *cid, *tid, *socket, *dockerBinary)
 	}
+	if args[0] == "target-trust" {
+		f := flag.NewFlagSet("target-trust", flag.ContinueOnError)
+		root := f.String("root", "", "已有受管目标目录")
+		cid := f.String("controller-id", "", "控制器ID")
+		tid := f.String("target-id", "", "目标ID")
+		key := f.String("public-key", "", "允许发布命令模板的控制器Ed25519公钥")
+		if err := f.Parse(args[1:]); err != nil {
+			return err
+		}
+		if f.NArg() != 0 {
+			return errors.New("NO_POSITIONAL_ARGUMENTS")
+		}
+		return deploy.TrustCommandController(*root, *cid, *tid, *key)
+	}
 	if args[0] == "target-upgrade" {
 		f := flag.NewFlagSet("target-upgrade", flag.ContinueOnError)
 		root := f.String("root", "", "已有受管目标目录")
@@ -437,6 +451,10 @@ func importMaterialLibrary(store *controller.Store, selected string, explicit bo
 	defer cancel()
 	result, err := store.ImportInstallationMaterialLibrary(ctx, selected)
 	if outputErr := json.NewEncoder(output).Encode(result); outputErr != nil {
+		return outputErr
+	}
+	if !explicit && errors.Is(err, serviceinstall.ErrMaterialLibraryTemplateUnavailable) {
+		_, outputErr := fmt.Fprintln(output, "离线材料对应的安装方案已更新或撤回，已保留现有材料。")
 		return outputErr
 	}
 	return err

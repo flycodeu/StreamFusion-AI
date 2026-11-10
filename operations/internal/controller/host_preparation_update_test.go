@@ -159,6 +159,14 @@ func TestPreparationAutomaticUpdateLocksFreezesAndNeverInitializes(t *testing.T)
 			var uploads, privileged atomic.Int32
 			handler := func(command string) *hostSSHResponse {
 				switch {
+				case strings.Contains(command, "SFOPS_PRIVILEGE_READY"):
+					if scenario == "sudo-denied" {
+						return &hostSSHResponse{Exit: 1, Stderr: "sudo: user is not allowed to execute this command\n"}
+					}
+					if scenario == "sudo-required" && !strings.HasPrefix(command, "/usr/bin/sudo -S") {
+						return &hostSSHResponse{Exit: 1, Stderr: "sudo: a password is required\n"}
+					}
+					return nil
 				case strings.HasPrefix(command, "sha256sum -- "):
 					return &hostSSHResponse{Stdout: current.Load().(string) + "  " + target.InstallRoot + "/executor\n"}
 				case strings.Contains(command, "&& cat >"):
@@ -239,14 +247,14 @@ func TestPreparationAutomaticUpdateLocksFreezesAndNeverInitializes(t *testing.T)
 			if scenario == "sudo-denied" && result["errorCode"] != "PREPARATION_SUDO_DENIED" {
 				t.Fatal("denied permission mislabeled as password challenge", result)
 			}
-			if scenario == "success" || scenario == "sudo-required" || scenario == "sudo-denied" || scenario == "interrupted" {
+			if scenario == "success" || scenario == "interrupted" {
 				if privileged.Load() != 1 {
 					t.Fatal("missing dispatch")
 				}
 			} else if privileged.Load() != 0 {
 				t.Fatal("changed state reached privileged installation")
 			}
-			if (scenario == "changed-before-start" || scenario == "unknown-history") && uploads.Load() != 0 {
+			if (scenario == "changed-before-start" || scenario == "unknown-history" || scenario == "sudo-required" || scenario == "sudo-denied") && uploads.Load() != 0 {
 				t.Fatal("untrusted update uploaded")
 			}
 			var locked int
@@ -267,7 +275,7 @@ func TestPreparationAutomaticUpdateLocksFreezesAndNeverInitializes(t *testing.T)
 				input.Key = uuid.NewString()
 				input.SudoPassword = "only-this-request-password"
 				retried := dataOf(t, b.call("POST", path, input, 200))
-				if retried["status"] != "SUCCEEDED" || retried["id"] == result["id"] || privileged.Load() != 2 {
+				if retried["status"] != "SUCCEEDED" || retried["id"] == result["id"] || privileged.Load() != 1 || uploads.Load() != 1 {
 					t.Fatal("password challenge did not resume through new ordinary job", retried)
 				}
 				var raw string

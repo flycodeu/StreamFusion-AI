@@ -1,0 +1,54 @@
+{
+  "api": true,
+  "apiAddress": %s,
+  "authInternalUsers": [
+    {
+      "ips": [],
+      "pass": %s,
+      "permissions": [
+        {
+          "action": "api"
+        },
+        {
+          "action": "publish"
+        },
+        {
+          "action": "read"
+        }
+      ],
+      "user": %s
+    }
+  ],
+  "authMethod": "internal",
+  "hls": %t,
+  "hlsAddress": %s,
+  "logDestinations": [
+    "stdout"
+  ],
+  "logLevel": "info",
+  "metrics": false,
+  "moq": false,
+  "paths": {
+    "all_others": {}
+  },
+  "playback": false,
+  "pprof": false,
+  "readTimeout": "10s",
+  "rtmp": %t,
+  "rtmpAddress": %s,
+  "rtsp": true,
+  "rtspAddress": %s,
+  "rtspTransports": [
+    "tcp"
+  ],
+  "srt": %t,
+  "srtAddress": %s,
+  "webrtc": %t,
+  "webrtcAdditionalHosts": [
+    %s
+  ],
+  "webrtcAddress": %s,
+  "webrtcLocalTCPAddress": "",
+  "webrtcLocalUDPAddress": %s,
+  "writeTimeout": "10s"
+}

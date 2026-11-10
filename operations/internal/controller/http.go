@@ -48,6 +48,10 @@ type HTTP struct {
 	targetPackageDir string
 	observationMu    sync.Mutex
 	observationHosts map[string]struct{}
+	systemMu         sync.Mutex
+	systemCachedAt   time.Time
+	systemCache      systemMetrics
+	systemCPU        cpuCounter
 }
 type Envelope struct {
 	Code      string `json:"code"`
@@ -174,7 +178,7 @@ func (h *HTTP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self' http: https:; frame-ancestors 'none'; base-uri 'self'")
 	w.Header().Set("Cache-Control", "no-store")
 	if !h.validHost(r.Host) {
 		h.fail(w, r, 403, "HOST_REJECTED", "访问地址不在允许范围")
@@ -327,7 +331,11 @@ func (h *HTTP) updateSettings(w http.ResponseWriter, r *http.Request, s *session
 func (h *HTTP) status(w http.ResponseWriter, r *http.Request) {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
-	h.success(w, r, map[string]any{"status": "UP", "release": Version, "schemaVersion": SchemaVersion, "goVersion": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH, "listen": h.origin.Host, "stateDirectory": h.store.Dir, "startedAt": h.started.UTC().Format(time.RFC3339), "uptimeSeconds": int64(time.Since(h.started).Seconds()), "heapBytes": mem.HeapAlloc, "goroutines": runtime.NumGoroutine()})
+	data := map[string]any{"status": "UP", "release": Version, "schemaVersion": SchemaVersion, "goVersion": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH, "listen": h.origin.Host, "stateDirectory": h.store.Dir, "startedAt": h.started.UTC().Format(time.RFC3339), "uptimeSeconds": int64(time.Since(h.started).Seconds()), "heapBytes": mem.HeapAlloc, "goroutines": runtime.NumGoroutine()}
+	if r.URL.Query().Get("system") == "1" {
+		data["system"] = h.systemSnapshot()
+	}
+	h.success(w, r, data)
 }
 func (h *HTTP) audit(w http.ResponseWriter, r *http.Request) {
 	limit := 50

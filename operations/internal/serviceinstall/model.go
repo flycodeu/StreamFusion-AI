@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"path"
 	"reflect"
 	"regexp"
@@ -26,27 +25,36 @@ var storagePath = regexp.MustCompile(`^/[a-zA-Z0-9_./-]+$`)
 // Config contains only public options and immutable credential references.
 // Passwords and S3 access keys are resolved into Request.Secrets at transport.
 type Config struct {
-	RuntimeMode                 string         `json:"runtimeMode,omitempty"`
-	StorageRoot                 string         `json:"storageRoot,omitempty"`
-	Ports                       map[string]int `json:"ports,omitempty"`
-	Name                        string         `json:"name"`
-	BindAddress                 string         `json:"bindAddress"`
-	HostPort                    int            `json:"hostPort"`
-	MemoryMiB                   int            `json:"memoryMiB"`
-	CredentialID                string         `json:"credentialId,omitempty"`
-	CredentialRevision          string         `json:"credentialRevision,omitempty"`
-	AccessKeyCredentialID       string         `json:"accessKeyCredentialId,omitempty"`
-	AccessKeyCredentialRevision string         `json:"accessKeyCredentialRevision,omitempty"`
-	Database                    string         `json:"database,omitempty"`
-	Username                    string         `json:"username,omitempty"`
-	UserCredentialID            string         `json:"userCredentialId,omitempty"`
-	UserCredentialRevision      string         `json:"userCredentialRevision,omitempty"`
+	Parameters                  map[string]string              `json:"parameters,omitempty"`
+	ParameterCredentials        map[string]CredentialReference `json:"parameterCredentials,omitempty"`
+	Account                     string                         `json:"account,omitempty"`
+	RuntimeMode                 string                         `json:"runtimeMode,omitempty"`
+	StorageRoot                 string                         `json:"storageRoot,omitempty"`
+	Ports                       map[string]int                 `json:"ports,omitempty"`
+	Name                        string                         `json:"name"`
+	BindAddress                 string                         `json:"bindAddress"`
+	HostPort                    int                            `json:"hostPort"`
+	MemoryMiB                   int                            `json:"memoryMiB"`
+	CredentialID                string                         `json:"credentialId,omitempty"`
+	CredentialRevision          string                         `json:"credentialRevision,omitempty"`
+	AccessKeyCredentialID       string                         `json:"accessKeyCredentialId,omitempty"`
+	AccessKeyCredentialRevision string                         `json:"accessKeyCredentialRevision,omitempty"`
+	Database                    string                         `json:"database,omitempty"`
+	Username                    string                         `json:"username,omitempty"`
+	UserCredentialID            string                         `json:"userCredentialId,omitempty"`
+	UserCredentialRevision      string                         `json:"userCredentialRevision,omitempty"`
 }
 
 type Source struct {
 	Type     string `json:"type"`
 	SHA256   string `json:"sha256,omitempty"`
 	ByteSize int64  `json:"byteSize,omitempty"`
+}
+
+// TargetDownload distinguishes target-side fetching from historical ONLINE
+// requests that already pin a controller-side material archive.
+func (s Source) TargetDownload(c Config) bool {
+	return c.Mode() == "NATIVE" && s.Type == "ONLINE" && s.SHA256 == "" && s.ByteSize == 0
 }
 
 type Request struct {
@@ -115,6 +123,9 @@ func Digest(value any) string {
 func CatalogHash() string { return Digest(Catalog()) }
 
 func ValidateDefinition(d Definition) error {
+	if d.Commands != nil {
+		return d.ValidateCommands()
+	}
 	if IsOfficial(d) {
 		return nil
 	}
@@ -171,7 +182,7 @@ func (c ChangeRequest) Validate() error {
 	if err := c.Previous.Validate(); err != nil {
 		return err
 	}
-	if IsOfficial(c.Previous.Definition) || c.ExpectedBindingRevision != c.Previous.BindingRevision || c.Config.StorageRoot != c.Previous.Config.StorageRoot || c.Config.Mode() != c.Previous.Config.Mode() || c.Previous.Definition.Kind == "TOOL" || c.Previous.Definition.Key == "docker" {
+	if c.Previous.Definition.Commands != nil && !IsBuiltinCommand(c.Previous.Definition) || IsOfficial(c.Previous.Definition) || c.ExpectedBindingRevision != c.Previous.BindingRevision || c.Config.StorageRoot != c.Previous.Config.StorageRoot || c.Config.Mode() != c.Previous.Config.Mode() || c.Previous.Definition.Kind == "TOOL" || c.Previous.Definition.Key == "docker" {
 		return errors.New("SERVICE_CONFIGURATION_BOUNDARY_INVALID")
 	}
 	if c.Previous.Definition.Key == "mysql" {
@@ -186,10 +197,18 @@ func (c ChangeRequest) Validate() error {
 func credential(id, rev string) bool { return uuid.MatchString(id) && revision.MatchString(rev) }
 
 func (c Config) Validate(d Definition) error {
+	if err := c.validateWebURL(d); err != nil {
+		return err
+	}
+	if _, err := ResolveParameters(d.Parameters, c.Parameters, c.ParameterCredentials); err != nil {
+		return err
+	}
+	if d.Commands != nil && !IsBuiltinCommand(d) {
+		return c.validateCommands(d)
+	}
 	if IsOfficial(d) {
 		return c.validateOfficial(d)
 	}
-	ip := net.ParseIP(c.BindAddress)
 	if strings.TrimSpace(c.Name) != c.Name || len(c.Name) < 1 || len(c.Name) > 120 || strings.ContainsAny(c.Name, "\r\n\x00") || !ValidStorageRoot(c.StorageRoot) || (c.Mode() != "NATIVE" && c.Mode() != "DOCKER") || c.MemoryMiB < 128 || c.MemoryMiB > 16384 {
 		return errors.New("SERVICE_CONFIG_INVALID")
 	}
@@ -205,7 +224,7 @@ func (c Config) Validate(d Definition) error {
 		if c.HostPort != 0 || len(c.Ports) > 0 {
 			return errors.New("TOOL_PORT_UNEXPECTED")
 		}
-	} else if ip == nil || ip.To4() == nil || ip.IsUnspecified() || ip.IsMulticast() || c.HostPort < 1 || c.HostPort > 65535 {
+	} else if !validListenAddress(c.BindAddress, d.Web != nil) || c.HostPort < 1 || c.HostPort > 65535 {
 		return errors.New("SERVICE_CONFIG_INVALID")
 	}
 	allowed := map[string]PortDescriptor{}
@@ -271,6 +290,15 @@ func (c Config) Validate(d Definition) error {
 }
 
 func (s Source) ValidateFor(d Definition, c Config) error {
+	if d.Commands != nil && !IsBuiltinCommand(d) {
+		if !slices.Contains(d.SourceModes, s.Type) {
+			return errors.New("SERVICE_SOURCE_INVALID")
+		}
+		if s.Type == "ONLINE" && s.SHA256 == "" && s.ByteSize == 0 {
+			return nil
+		}
+		return s.Validate()
+	}
 	if d.Key == "node" || d.Key == "nvm" || d.Key == "npm" || d.Key == "pnpm" {
 		if c.Mode() != "NATIVE" {
 			return errors.New("NODE_RUNTIME_INVALID")
@@ -344,6 +372,12 @@ func SecretKey(id, rev string) string { return id + ":" + rev }
 // ValidateSecrets is shared by HTTP preflight and the target executor. Values
 // remain transport-only; callers must never serialize this map into a plan.
 func ValidateSecrets(d Definition, c Config, values map[string]string) error {
+	if err := ValidateCredentialValues(c.CredentialReferences(), values); err != nil {
+		return err
+	}
+	if d.Commands != nil && !IsBuiltinCommand(d) {
+		return nil
+	}
 	if IsOfficial(d) {
 		if len(values) != 0 {
 			return errors.New("OFFICIAL_SECRET_UNEXPECTED")
@@ -380,6 +414,23 @@ func ValidateSecrets(d Definition, c Config, values map[string]string) error {
 func (e Evidence) ValidateFor(r Request) error {
 	if e.SoftwareID != r.SoftwareID || e.BindingRevision != r.BindingRevision || e.RecipeKey != r.Definition.Key || e.RecipeRevision != r.Definition.Revision || e.ConfigHash != Digest(r.Config) || !sha.MatchString(e.IdentityHash) {
 		return errors.New("SERVICE_INSTALL_RECEIPT_MISMATCH")
+	}
+	if r.Definition.Commands != nil && !IsBuiltinCommand(r.Definition) {
+		if e.Kind != r.Definition.Commands.Kind || e.Locator == "" {
+			return errors.New("SERVICE_INSTALL_RECEIPT_MISMATCH")
+		}
+		if e.Kind == "DOCKER" {
+			if !sha.MatchString(e.Locator) || e.ContainerID != e.Locator || !strings.HasPrefix(e.ImageID, "sha256:") || !sha.MatchString(strings.TrimPrefix(e.ImageID, "sha256:")) {
+				return errors.New("SERVICE_INSTALL_RECEIPT_MISMATCH")
+			}
+		} else if e.Kind == "SYSTEMD" && r.Definition.Commands.BinaryPath == "" {
+			if e.BinaryPath != "" || e.BinaryHash != "" {
+				return errors.New("NATIVE_RECEIPT_INVALID")
+			}
+		} else if !path.IsAbs(e.BinaryPath) || !sha.MatchString(e.BinaryHash) || e.Kind == "TOOL" && e.Locator != e.BinaryPath {
+			return errors.New("NATIVE_RECEIPT_INVALID")
+		}
+		return nil
 	}
 	kind := e.Kind
 	locator := e.Locator

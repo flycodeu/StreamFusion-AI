@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
+import { ElPopover } from "element-plus";
 import { hostTime } from "./hosts";
 import { observationPending, type ObservationBatch } from "./observation";
 import { findErrorReference } from "./errorReference";
-import ErrorHelpLink from "./ErrorHelpLink.vue";
 const props = defineProps<{ batch?: ObservationBatch; busy: boolean }>();
 const emit = defineEmits<{ cancel: [] }>();
+const open = ref(false);
 const completed = computed(
   () =>
     props.batch?.items.filter((i) => !["QUEUED", "RUNNING"].includes(i.status))
@@ -27,20 +28,37 @@ const labels: Record<string, string> = {
 };
 </script>
 <template>
-  <details v-if="batch" class="observation-batch">
-    <summary>
-      <span>最近检测</span>
+  <ElPopover
+    v-if="batch"
+    v-model:visible="open"
+    trigger="click"
+    placement="bottom-end"
+    :width="'min(520px, calc(100vw - 32px))'"
+    :popper-options="{ modifiers: [{ name: 'preventOverflow', options: { padding: 16 } }] }"
+    :show-arrow="false"
+  >
+    <template #reference>
+      <button class="secondary detection-trigger" aria-label="检测记录" :aria-expanded="open">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
+        </svg>
+        {{ observationPending(batch) ? `检测中 ${completed} / ${batch.items.length}` : "检测记录" }}
+      </button>
+    </template>
+    <section class="observation-batch" aria-label="最近检测结果">
+      <header class="batch-heading">
+        <strong>检测记录</strong>
+        <button class="quiet" aria-label="关闭检测记录" @click="open = false">×</button>
+      </header>
+      <div class="batch-summary">
       <strong>{{ completed }} / {{ batch.items.length }}</strong>
       <span>{{ observationPending(batch) ? "进行中" : "已结束" }}</span>
       <span v-if="failed" class="batch-warning">未确认 {{ failed }}</span>
       <span v-if="skipped">跳过 {{ skipped }}</span>
-      <span class="spacer"></span>
-      <small>{{ hostTime(batch.createdAt) }}</small>
-    </summary>
-    <div class="batch-detail-head">
-      <code :title="batch.traceId">批次 {{ batch.id.slice(0, 8) }}</code>
+      </div>
+      <small class="batch-time">{{ hostTime(batch.createdAt) }}</small>
+    <div v-if="observationPending(batch)" class="batch-detail-head">
       <button
-        v-if="observationPending(batch)"
         class="quiet"
         :disabled="busy"
         @click="emit('cancel')"
@@ -52,72 +70,77 @@ const labels: Record<string, string> = {
       <div v-for="item in batch.items" :key="item.objectId" class="batch-item">
         <strong>{{ item.name }}</strong>
         <span>{{ labels[item.status] || "状态待确认" }}</span>
-        <details v-if="item.errorCode"><summary>{{ findErrorReference(item.errorCode)?.name || "检测未完成" }}</summary><code>{{ item.errorCode }}</code><ErrorHelpLink :code="item.errorCode" /></details>
+        <span v-if="item.errorCode">{{ findErrorReference(item.errorCode)?.name || "检测未完成，请重新检查" }}</span>
         <small v-if="item.observedAt">{{ hostTime(item.observedAt) }}</small>
       </div>
     </div>
-  </details>
+    </section>
+  </ElPopover>
 </template>
 <style scoped>
-.observation-batch {
-  border: 1px solid var(--border, #dce3ec);
-  border-radius: 8px;
-  margin: 0 0 18px;
-  background: var(--panel, #fff);
+.detection-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 38px;
+  margin: 0;
+  white-space: nowrap;
 }
-summary {
-  cursor: pointer;
+.batch-heading {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  color: var(--text);
+}
+.batch-heading button {
+  padding: 2px 6px;
+  font-size: 20px;
+}
+.batch-summary {
+  display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  padding: 12px 16px;
+  gap: 10px;
   font-size: 13px;
 }
-summary strong {
+.batch-summary strong {
   font-variant-numeric: tabular-nums;
+}
+.batch-time {
+  display: block;
+  margin: 8px 0 12px;
+  color: var(--muted);
 }
 .batch-warning {
   color: #a16616;
 }
 .batch-detail-head {
   display: flex;
-  justify-content: space-between;
-  padding: 8px 16px;
+  justify-content: flex-end;
+  padding: 8px 0;
   border-top: 1px solid #e7ebf0;
 }
 .batch-items {
-  max-height: 280px;
+  max-height: min(360px, 50vh);
   overflow: auto;
-  padding: 0 16px 12px;
 }
 .batch-item {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) 80px minmax(80px, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   padding: 10px 0;
   border-top: 1px solid #edf0f4;
   font-size: 12px;
 }
-.batch-item code {
+.batch-item > * {
   overflow-wrap: anywhere;
 }
-.batch-item summary { padding: 0; font-size: 12px; }
-.batch-item small {
-  color: #788599;
+.batch-item > span:nth-of-type(2) {
+  grid-column: 1 / -1;
 }
-@media (max-width: 600px) {
-  summary {
-    gap: 8px;
-  }
-  summary .spacer {
-    display: none;
-  }
-  summary small {
-    flex-basis: 100%;
-  }
-  .batch-item {
-    grid-template-columns: 1fr 70px;
-  }
+.batch-item small {
+  grid-column: 1 / -1;
+  color: #788599;
 }
 </style>

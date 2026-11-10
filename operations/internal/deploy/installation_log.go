@@ -15,6 +15,7 @@ const installationLogLimit = 128 << 10
 const installationLogLineLimit = 16 << 10
 
 type installationOutputKey struct{}
+type commandAlreadyLoggedKey struct{}
 
 // Commands keep their bounded return buffer for existing parsers. Only callers
 // which already expose installation output attach this additional log writer.
@@ -46,14 +47,34 @@ func commandOutputs(ctx context.Context, captured io.Writer) (io.Writer, io.Writ
 	shared := &synchronizedCommandOutput{writer: captured}
 	return io.MultiWriter(shared, streams.stdout), io.MultiWriter(shared, streams.stderr)
 }
+
+// Show the actual argv only where installation output is already enabled.
+// Redact before quoting so quotes inside a secret cannot defeat redaction.
+func logExecutedCommand(ctx context.Context, command string, args ...string) {
+	if logged, _ := ctx.Value(commandAlreadyLoggedKey{}).(bool); logged {
+		return
+	}
+	streams, _ := ctx.Value(installationOutputKey{}).(*installationLogStreams)
+	if streams == nil {
+		return
+	}
+	words := append([]string{command}, args...)
+	for i, value := range words {
+		words[i] = posixSingleQuote(streams.stdout.x.redactSoftwareSecrets(value))
+	}
+	streams.stdout.x.appendServiceLog(streams.stdout.req, streams.stdout.phase, "$ "+strings.Join(words, " "))
+}
 func (x *executor) loggedSoftwareCommand(ctx context.Context, req Request, phase, command string, args ...string) ([]byte, error) {
+	if out, handled, err := x.builtinCommand(ctx, req, phase, args); handled {
+		return out, err
+	}
 	ctx, closeLog := x.installationLogContext(ctx, req, phase)
 	defer closeLog()
 	return x.softwareRunner(ctx, command, args...)
 }
 func (x *executor) installationLogContext(ctx context.Context, req Request, phase string) (context.Context, func()) {
 	streams := &installationLogStreams{stdout: &installationLogWriter{x: x, req: req, phase: phase}, stderr: &installationLogWriter{x: x, req: req, phase: phase}}
-	x.appendServiceLog(req, phase, "[command started]")
+	x.appendServiceLog(req, phase, "开始执行")
 	return context.WithValue(ctx, installationOutputKey{}, streams), func() { streams.stdout.Close(); streams.stderr.Close() }
 }
 

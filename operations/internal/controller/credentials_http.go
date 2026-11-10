@@ -141,6 +141,10 @@ func (h *HTTP) revokeCredential(w http.ResponseWriter, r *http.Request, s *sessi
  UNION ALL
  SELECT credential_id,credential_revision FROM git_accounts WHERE deleted_at=''
  UNION ALL
+ SELECT c.credential_id,c.credential_revision FROM software_management_credentials c JOIN software_instances i ON i.id=c.software_id WHERE i.management_mode='MANAGED'
+ UNION ALL
+ SELECT json_extract(p.value,'$.id'),CAST(json_extract(p.value,'$.revision') AS INTEGER) FROM software_instances i,json_each(i.installation_json,'$.config.parameterCredentials') p WHERE i.management_mode='MANAGED'
+ UNION ALL
  SELECT json_extract(change_json,'$.credentialId'),CAST(json_extract(change_json,'$.credentialRevision') AS INTEGER) FROM git_repositories WHERE status<>'RELEASED'
  UNION ALL
  SELECT json_extract(p.snapshot_json,'$.change.credentialId'),CAST(json_extract(p.snapshot_json,'$.change.credentialRevision') AS INTEGER) FROM git_repository_plans p JOIN jobs j ON j.id=p.job_id WHERE j.status IN ('QUEUED','RUNNING','UNKNOWN') OR j.target_ack_pending=1

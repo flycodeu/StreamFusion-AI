@@ -108,3 +108,51 @@ func TestBundledRecipesAreAdditionalFrozenOfficialBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestLibraryMaterialUsesTrustedResolverAndKeepsBuiltinMaterialIdentity(t *testing.T) {
+	content := []byte("published custom archive")
+	d := CommandExamples()[0]
+	d.Key, d.Revision, d.SourceModes = "custom-library", "3", []string{"ARCHIVE"}
+	m := libraryFixture(content)
+	m.RecipeKey, m.RecipeVersion, m.RecipeRevision = d.Key, d.Version, d.Revision
+	resolve := func(key, version string) (Definition, error) { return d, nil }
+	if _, err := m.Definition(); err == nil {
+		t.Fatal("custom recipe resolved without a trusted resolver")
+	}
+	if actual, err := m.Definition(resolve); err != nil || Digest(actual) != Digest(d) {
+		t.Fatal("published custom definition changed", err)
+	}
+	root, output := t.TempDir(), filepath.Join(t.TempDir(), "snapshot")
+	if err := os.WriteFile(filepath.Join(root, m.File), content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CopyLibraryMaterial(context.Background(), root, output, m, resolve); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*LibraryMaterialFile){
+		func(m *LibraryMaterialFile) { m.RecipeKey = "custom-other" },
+		func(m *LibraryMaterialFile) { m.RecipeVersion = "missing" },
+		func(m *LibraryMaterialFile) { m.RecipeRevision = "2" },
+		func(m *LibraryMaterialFile) { m.RuntimeMode = "DOCKER" },
+		func(m *LibraryMaterialFile) { m.File = "../outside" },
+	} {
+		invalid := m
+		mutate(&invalid)
+		if _, err := invalid.Definition(resolve); err == nil {
+			t.Fatal("resolver bypassed manifest validation", invalid)
+		}
+	}
+	for _, builtin := range BuiltinCommandCatalog() {
+		if builtin.Key == "java" && builtin.Version == "8" {
+			builtin.Commands.Revision++
+			builtin.Commands.Steps[0].Script += "\nprintf edited\n"
+			entry := libraryFixture(content)
+			got, err := entry.Definition(func(string, string) (Definition, error) { return builtin, nil })
+			if err != nil || Digest(got) != Digest(mustFindLibraryRecipe(t)) {
+				t.Fatal("command revision changed builtin material identity", err)
+			}
+			return
+		}
+	}
+	t.Fatal("builtin Java fixture missing")
+}

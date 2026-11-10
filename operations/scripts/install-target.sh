@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 umask 077
-binary= sha256= root= controller_id= target_id= account= controller_unit=
+binary= sha256= root= controller_id= target_id= account= controller_unit= command_public_key=
 docker_binary=/usr/bin/docker
 docker_socket=/var/run/docker.sock
 apply=false
@@ -9,13 +9,14 @@ authorize_only=false
 fail(){ printf 'SFOPS_ERROR=%s\n' "${2:-PREPARATION_INSTALL_FAILED}" >&2; echo "$1" >&2; exit 1; }
 while (($#)); do
   case "$1" in
-    --binary|--sha256|--root|--controller-id|--target-id|--account|--controller-unit|--docker-binary|--docker-socket)
+    --binary|--sha256|--root|--controller-id|--target-id|--account|--controller-unit|--docker-binary|--docker-socket|--command-public-key)
       (($#>=2)) || fail '参数缺少值'
       case "$1" in
         --binary) binary=$2;; --sha256) sha256=$2;; --root) root=$2;;
         --controller-id) controller_id=$2;; --target-id) target_id=$2;;
         --account) account=$2;; --controller-unit) controller_unit=$2;;
         --docker-binary) docker_binary=$2;; --docker-socket) docker_socket=$2;;
+        --command-public-key) command_public_key=$2;;
       esac
       shift 2;;
     --apply) apply=true;shift;;
@@ -67,6 +68,9 @@ if $authorize_only; then
   "$binary" target-verify --root "$root" --controller-id "$controller_id" --target-id "$target_id"
 else
   "$binary" target-init --root "$root" --controller-id "$controller_id" --target-id "$target_id" --docker-binary "$docker_binary" --docker-socket "$docker_socket"
+fi
+if [[ -n $command_public_key ]]; then
+  "$binary" target-trust --root "$root" --controller-id "$controller_id" --target-id "$target_id" --public-key "$command_public_key"
 fi
 if [[ $account != root && ! -e $policy ]]; then
   tmp=$(mktemp /etc/sudoers.d/.sfops-XXXXXX)

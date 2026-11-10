@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
 import { ApiError, request } from "./api";
-import ErrorHelpLink from "./ErrorHelpLink.vue";
 import { type Host } from "./hosts";
 import type { AutomaticPreparationUpdate } from "./preparationUpdate";
 interface PreparationJob {
@@ -36,20 +35,23 @@ const copied = ref("");
 const job = computed(() => data.value?.remoteJob);
 const blocked = computed(() => ["RUNNING", "UNKNOWN"].includes(job.value?.status || ""));
 const recoverableCodes = ["EXECUTOR_PATH_UNSAFE", "EXECUTOR_PATH_UNREADABLE", "EXECUTOR_HASH_UNAVAILABLE", "EXECUTOR_MISSING", "EXECUTOR_NOT_EXECUTABLE", "PREPARATION_SUDO_REQUIRED"];
-const canRecover = computed(() => job.value?.status === "UNKNOWN" && recoverableCodes.includes(checkResult.value?.code || ""));
+const canRecover = computed(() => !["AUTHORIZE", "UPDATE"].includes(props.automaticUpdate?.mode || "") && job.value?.status === "UNKNOWN" && recoverableCodes.includes(checkResult.value?.code || ""));
 const missingFiles = computed(() => checkResult.value?.code === "EXECUTOR_MISSING");
 const phaseLabels: Record<string, string> = {
   CONNECTING: "连接服务器", UPLOADING_EXECUTOR: "传输接入组件",
   INSTALLING_EXECUTOR: "安装接入组件", VERIFYING_EXECUTOR: "验证接入结果",
+  AUTHORIZING_INSTALLATION: "配置安装权限",
 };
-const phaseOrder = ["CONNECTING", "UPLOADING_EXECUTOR", "INSTALLING_EXECUTOR", "VERIFYING_EXECUTOR"];
+const phaseOrder = computed(() => ["CONNECTING", "UPLOADING_EXECUTOR", "INSTALLING_EXECUTOR", "VERIFYING_EXECUTOR", ...(props.automaticUpdate?.mode === "UPDATE" ? ["AUTHORIZING_INSTALLATION"] : [])]);
 const visibleStatus = computed(() => installing.value && installationIntent.value && !installationIntent.value.jobId ? "RUNNING" : job.value?.status || (installing.value ? "RUNNING" : ""));
 const statusTone = computed(() => ({ RUNNING: "running", UNKNOWN: "unknown", SUCCEEDED: "success", FAILED: "failed" }[visibleStatus.value] || "running"));
-const statusLabel = computed(() => ({ RUNNING: "执行中", UNKNOWN: "待确认", SUCCEEDED: "已完成", FAILED: "未完成" }[visibleStatus.value] || "执行中"));
-const currentPhaseIndex = computed(() => installing.value && installationIntent.value && !installationIntent.value.jobId ? 0 : phaseOrder.indexOf(job.value?.phase || ""));
-const showPhaseTrack = computed(() => Boolean(visibleStatus.value));
+const statusLabel = computed(() => confirmingUpload.value ? "确认中" : ({ RUNNING: "执行中", UNKNOWN: "待确认", SUCCEEDED: "已完成", FAILED: "未完成" }[visibleStatus.value] || "执行中"));
+const currentPhaseIndex = computed(() => installing.value && installationIntent.value && !installationIntent.value.jobId ? 0 : phaseOrder.value.indexOf(job.value?.phase || ""));
+const showPhaseTrack = computed(() => Boolean(visibleStatus.value) && props.automaticUpdate?.mode !== "AUTHORIZE");
 const statusTitle = computed(() => {
   if (job.value?.errorCode === "PREPARATION_SUDO_REQUIRED" && visibleStatus.value === "FAILED") return "需要验证权限";
+  if (confirmingUpload.value) return "上传完成，正在确认";
+  if (props.automaticUpdate?.mode === "AUTHORIZE") return ({ RUNNING: "正在配置安装权限", UNKNOWN: "授权结果待确认", SUCCEEDED: "安装权限已就绪" }[visibleStatus.value] || "安装权限未就绪");
   if (props.updateOnly || updateRequested.value) {
     if (visibleStatus.value === "RUNNING") return installing.value && installationIntent.value && !installationIntent.value.jobId ? "准备更新接入组件" : phaseLabels[job.value?.phase || ""] || "正在更新接入组件";
     if (visibleStatus.value === "UNKNOWN") return "更新结果待确认";
@@ -74,6 +76,7 @@ const statusSummary = computed(() => {
 });
 const transfer = computed(() => job.value?.result?.transfer);
 const transferPercent = computed(() => transfer.value?.totalBytes ? Math.min(100, Math.floor(transfer.value.sentBytes / transfer.value.totalBytes * 100)) : 0);
+const confirmingUpload = computed(() => visibleStatus.value === "RUNNING" && job.value?.phase === "UPLOADING_EXECUTOR" && !!transfer.value?.totalBytes && transfer.value.sentBytes >= transfer.value.totalBytes);
 function transferSize(bytes: number) { return `${(bytes / 1048576).toFixed(1)} MiB`; }
 const transferSpeed = computed(() => {
   const value = transfer.value;
@@ -161,7 +164,7 @@ watch([() => props.host.id, () => props.host.version], () => {
   hostGeneration++; generation++; operation++;
   installAbort?.abort(); clearTimeout(polling); data.value = undefined;
   busy.value = false; installing.value = false; repairing.value = false; pollFailures = 0; installationIntent.value = undefined;
-  updateRequested.value = !!props.updateOnly; explicitUpdate = false; automaticStarted = false;
+  updateRequested.value = !!props.updateOnly || !!props.automaticUpdate; explicitUpdate = false; automaticStarted = false;
   checkResult.value = undefined; copied.value = "";
   sudoPassword.value = ""; needsSudoPassword.value = false; error.value = undefined;
   mode.value = props.host.kind === "SSH" ? "online" : "offline";
@@ -171,10 +174,11 @@ watch([() => props.host.id, () => props.host.version], () => {
     automaticStarted = true;
     const expected = props.automaticUpdate;
     if (expected.hostId !== props.host.id || data.value.hostId !== expected.hostId || data.value.expectedHostVersion !== expected.expectedHostVersion || data.value.package.sha256 !== expected.packageSHA256) {
-      report(new Error("主机或更新材料已变化，请重新预检"));
+      report(new Error("主机或安装材料已变化，请重新预检"));
       return;
     }
-    if (blocked.value || props.host.maintenance || needsSudoPassword.value) return;
+    if (blocked.value || props.host.maintenance) return;
+    needsSudoPassword.value = false;
     await install();
   });
 }, { immediate: true });
@@ -219,13 +223,17 @@ function openUpdate() {
 async function install() {
   if (!data.value || busy.value || blocked.value) return;
   const hostId = props.host.id;
-  explicitUpdate = updateRequested.value;
+  explicitUpdate = updateRequested.value || !!props.automaticUpdate;
   const active = beginOperation();
   installing.value = true; pollFailures = 0; checkResult.value = undefined;
   installAbort = new AbortController();
   installationIntent.value ??= { key: crypto.randomUUID(), previousJobId: job.value?.id };
   const input = { expectedVersion: data.value.expectedHostVersion, idempotencyKey: installationIntent.value.key, confirmed: true, sudoPassword: sudoPassword.value,
-    ...(props.automaticUpdate ? { updateOnly: true, expectedCurrentSHA256: props.automaticUpdate.currentSHA256, expectedPackageSHA256: props.automaticUpdate.packageSHA256 } : {}) };
+    ...(props.automaticUpdate && props.automaticUpdate.mode !== "INSTALL" ? {
+      ...(props.automaticUpdate.mode === "AUTHORIZE" ? { authorizeOnly: true } : { updateOnly: true }),
+      ...(props.automaticUpdate.mode === "UPDATE" ? { authorizeCommands: true } : {}),
+      expectedCurrentSHA256: props.automaticUpdate.currentSHA256, expectedPackageSHA256: props.automaticUpdate.packageSHA256,
+    } : {}) };
   sudoPassword.value = ""; schedulePoll(1000);
   try {
     const result = await request<PreparationJob>(`/hosts/${hostId}/preparation/install`, "POST", input, installAbort.signal);
@@ -353,7 +361,7 @@ async function check() {
 <template>
   <div class="host-preparation">
     <header v-if="!automaticUpdate" class="preparation-heading"><h3>{{ updateOnly ? '更新接入组件' : '服务器接入' }}</h3><button class="quiet" :disabled="busy" @click="load()">重新加载</button></header>
-    <div v-if="error" class="preparation-error" role="alert"><strong>页面暂时未更新</strong><p>{{ error.message }}</p><details v-if="error.code"><summary>错误详情</summary><code>{{ error.code }} · {{ error.timestamp }}</code><code v-if="error.traceId">traceId={{ error.traceId }}</code><ErrorHelpLink :code="error.code" /></details><button class="secondary" :disabled="busy" @click="load()">重新加载</button></div>
+    <div v-if="error" class="preparation-error" role="alert"><strong>页面暂时未更新</strong><p>{{ error.message }}</p><button class="secondary" :disabled="busy" @click="load()">重新加载</button></div>
     <p v-if="!data && busy">读取安装信息…</p>
     <template v-if="data">
       <section v-if="!automaticUpdate" class="target-overview" aria-label="安装信息">
@@ -363,17 +371,17 @@ async function check() {
       <section v-if="visibleStatus" class="operation-status" :class="`status-${statusTone}`" aria-live="polite">
         <div class="status-heading"><h3>{{ statusTitle }}</h3><span class="state-tag" :class="`state-${statusTone === 'success' ? 'success' : statusTone === 'failed' ? 'error' : 'muted'}`">{{ statusLabel }}</span></div>
         <p v-if="statusSummary && (visibleStatus === 'UNKNOWN' || visibleStatus === 'FAILED')" class="status-summary">{{ statusSummary }}</p>
-        <div v-if="showPhaseTrack" class="phase-track" aria-label="接入进度">
-          <div v-for="(phase, index) in phaseOrder" :key="phase" class="phase-item" :class="`phase-${phaseState(index)}`"><span class="phase-dot">{{ phaseState(index) === 'done' ? '✓' : index + 1 }}</span><span>{{ phaseLabels[phase] }}</span></div>
-        </div>
+        <ol v-if="showPhaseTrack" class="phase-track" :style="{ '--phase-count': phaseOrder.length }" aria-label="接入进度">
+          <li v-for="(phase, index) in phaseOrder" :key="phase" class="phase-item" :class="`phase-${phaseState(index)}`" :aria-current="currentPhaseIndex === index && visibleStatus !== 'SUCCEEDED' ? 'step' : undefined"><span class="phase-dot" aria-hidden="true">{{ phaseState(index) === 'done' ? '✓' : index + 1 }}</span><span>{{ phaseLabels[phase] }}</span></li>
+        </ol>
         <div v-if="transfer && job?.phase === 'UPLOADING_EXECUTOR'" class="transfer-progress" aria-label="组件上传进度">
           <progress :value="transferPercent" max="100" aria-label="已发送比例" />
-          <span>已发送 {{ transferSize(transfer.sentBytes) }} / {{ transferSize(transfer.totalBytes) }} · {{ transferPercent }}%{{ transferSpeed }}</span>
+          <span>{{ confirmingUpload ? '已上传' : '已发送' }} {{ transferSize(transfer.sentBytes) }} / {{ transferSize(transfer.totalBytes) }} · {{ transferPercent }}%{{ confirmingUpload ? '' : transferSpeed }}</span>
         </div>
         <div v-if="!automaticUpdate || visibleStatus === 'UNKNOWN' || visibleStatus === 'FAILED'" class="status-actions">
           <button v-if="job?.status === 'UNKNOWN'" class="primary" :disabled="busy" @click="reconcile">{{ busy ? '正在检查…' : '检查安装结果' }}</button>
           <button v-if="job?.status === 'SUCCEEDED'" class="secondary" :disabled="busy" @click="check">重新检查</button>
-          <button v-if="job?.status === 'SUCCEEDED' && !updateRequested" class="secondary" :disabled="busy || !data.package.available || host.maintenance" @click="openUpdate">更新接入组件</button>
+          <button v-if="job?.status === 'SUCCEEDED' && !updateRequested" class="secondary" :disabled="busy || !data.package.available || host.maintenance" @click="openUpdate">{{ updateOnly ? '更新接入组件' : '更新组件与授权' }}</button>
           <button v-if="job?.status === 'RUNNING'" class="secondary" :disabled="busy" @click="load()">立即刷新进度</button>
         </div>
       </section>
@@ -387,11 +395,11 @@ async function check() {
         <button v-if="!checkResult.ready && job?.status === 'UNKNOWN' && !canRecover" class="secondary" :disabled="busy" @click="reconcile">重新检查</button>
       </section>
       <section v-if="!blocked && (job?.status !== 'SUCCEEDED' || updateRequested)" class="install-workspace">
-        <header class="install-heading"><div><h3>{{ updateRequested ? '更新接入组件' : mode === 'online' ? '安装接入组件' : '离线安装' }}</h3></div><div v-if="!automaticUpdate" class="method-switch"><button :class="{ active: mode === 'online' }" :disabled="busy || host.kind !== 'SSH'" @click="mode = 'online'">在线</button><button :class="{ active: mode === 'offline' }" :disabled="busy" @click="mode = 'offline'">离线</button></div></header>
+        <header class="install-heading"><div><h3>{{ automaticUpdate ? '安装权限' : updateRequested ? updateOnly ? '更新接入组件' : '更新组件与授权' : mode === 'online' ? '安装接入组件' : '离线安装' }}</h3></div><div v-if="!automaticUpdate" class="method-switch"><button :class="{ active: mode === 'online' }" :disabled="busy || host.kind !== 'SSH'" @click="mode = 'online'">在线</button><button :class="{ active: mode === 'offline' }" :disabled="busy" @click="mode = 'offline'">离线</button></div></header>
         <div v-if="mode === 'online'" class="install-card">
           <form @submit.prevent="install">
             <label v-if="data.account !== 'root' && needsSudoPassword" class="password-field">{{ data.account }} 的登录密码 <span>用于 sudo 提权，仅本次使用</span><input v-model="sudoPassword" type="password" autocomplete="off" maxlength="1024" :disabled="busy" :aria-label="`${data.account} 的登录密码`" placeholder="请输入该账号的系统密码" /></label>
-            <div class="install-action"><button class="primary" type="submit" :disabled="busy || !data.package.available || host.maintenance">{{ busy ? '正在处理…' : automaticUpdate && needsSudoPassword ? '验证并继续' : updateRequested ? '更新并继续' : '开始安装' }}</button><button v-if="updateRequested && !updateOnly" class="quiet" type="button" :disabled="busy" @click="updateRequested = false">取消更新</button></div>
+            <div class="install-action"><button class="primary" type="submit" :disabled="busy || !data.package.available || host.maintenance">{{ busy ? '正在处理…' : automaticUpdate ? '验证并继续' : updateRequested ? updateOnly ? '更新并继续' : '更新并授权' : '开始安装' }}</button><button v-if="updateRequested && !updateOnly && !automaticUpdate" class="quiet" type="button" :disabled="busy" @click="updateRequested = false">取消更新</button></div>
           </form><p v-if="host.maintenance" class="maintenance-note">主机正在维护，请先退出维护模式。</p>
         </div>
         <div v-else class="install-card offline-card">
@@ -401,14 +409,13 @@ async function check() {
           <button class="secondary check-button" :disabled="busy" @click="check">检查安装结果</button>
         </div>
       </section>
-      <details v-if="job?.errorCode || checkResult && !checkResult.ready" class="preparation-diagnostic"><summary>错误详情</summary><code>{{ checkResult && !checkResult.ready ? checkResult.code : job?.errorCode }}</code><code v-if="job?.traceId">traceId={{ job.traceId }}</code><ErrorHelpLink :code="(checkResult && !checkResult.ready ? checkResult.code : job?.errorCode) || ''" /></details>
       <p v-if="!data.package.available" class="material-error" role="alert">{{ data.package.message }}</p>
     </template>
   </div>
 </template>
 
 <style scoped>
-.host-preparation { display:grid; gap:16px; padding:8px 0 6px; min-width:0; color:var(--text); }
+.host-preparation { container-type:inline-size; display:grid; gap:16px; padding:8px 0 6px; min-width:0; color:var(--text); }
 .transfer-progress { display:grid; gap:6px; margin-top:16px; color:var(--muted); font-size:12px; }
 .transfer-progress progress { width:100%; height:6px; accent-color:var(--primary); }
 .host-preparation header { display:flex; align-items:center; justify-content:space-between; gap:16px; }
@@ -425,15 +432,16 @@ small { font-size:11px; line-height:1.6; color:var(--muted); overflow-wrap:anywh
 .target-meta { display:grid; grid-template-columns:1fr 1fr; min-width:0; }
 .target-meta>span { display:grid; gap:5px; align-content:center; min-width:0; padding:14px 16px; font-size:12px; color:#2d3c50; overflow-wrap:anywhere; }
 .target-meta>span+span { border-left:1px solid var(--border); }
-.operation-status { --status:#315a97; display:grid; gap:13px; padding:18px 20px; border:1px solid var(--border); border-left:3px solid var(--status); border-radius:8px; background:var(--surface,#fff); box-shadow:var(--card-shadow); }
+.operation-status { --status:#315a97; display:grid; gap:13px; min-width:0; padding:18px 20px; border:1px solid var(--border); border-left:3px solid var(--status); border-radius:8px; background:var(--surface,#fff); box-shadow:var(--card-shadow); }
 .status-running { --status:#315a97; }
 .status-unknown { --status:#a66b18; }
 .status-success { --status:#397454; }
 .status-failed { --status:#a0443d; }
 .status-heading { display:flex; align-items:center; justify-content:space-between!important; gap:10px; }
-.status-heading h3 { font-size:15px; }
+.status-heading h3 { min-width:0; font-size:15px; }
+.status-heading .state-tag { flex-shrink:0; }
 .status-summary { margin:0; color:var(--text-secondary,#475569); }
-.phase-track { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:0; padding-top:3px; }
+.phase-track { display:grid; grid-template-columns:repeat(var(--phase-count),minmax(0,1fr)); gap:0; margin:0; padding:3px 0 0; list-style:none; }
 .phase-item { display:grid; grid-template-columns:24px minmax(0,1fr); align-items:center; gap:7px; position:relative; min-width:0; color:#8792a2; font-size:11px; }
 .phase-item::after { content:""; position:absolute; left:24px; right:7px; top:11px; height:1px; background:#d7dde5; }
 .phase-item:last-child::after { display:none; }
@@ -473,6 +481,11 @@ form { display:grid; gap:17px; }
 .repair-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .preparation-error,.material-error { display:grid; gap:7px; padding:14px 16px; background:#fff5f3; border:1px solid #efd2c9; border-radius:6px; font-size:12px; }
 .preparation-error p { margin:0; }.preparation-error button { justify-self:start; }
-@media(max-width:720px) { .target-overview { grid-template-columns:1fr; }.install-location { border-right:0; border-bottom:1px solid var(--border); }.phase-track { grid-template-columns:1fr 1fr; gap:12px 0; }.phase-item:nth-child(2)::after { display:none; } }
+@container(max-width:560px) {
+  .phase-track { grid-template-columns:minmax(0,1fr); }
+  .phase-item { min-height:34px; padding:6px 0; }
+  .phase-item::after { left:10px; right:auto; top:28px; bottom:-6px; width:1px; height:auto; }
+}
+@media(max-width:720px) { .target-overview { grid-template-columns:1fr; }.install-location { border-right:0; border-bottom:1px solid var(--border); } }
 @media(max-width:550px) { .host-preparation { gap:14px; }.preparation-heading,.install-heading { align-items:flex-start!important; }.operation-status,.install-workspace { padding:16px; }.status-heading h3 { font-size:15px; }.status-summary { font-size:12px; }.install-heading { flex-direction:column; }.method-switch { width:100%; }.method-switch button { flex:1; }.offline-intro,.verification-result { align-items:flex-start; flex-direction:column; gap:9px; }.target-meta { grid-template-columns:1fr; }.target-meta>span+span { border-left:0; border-top:1px solid var(--border); } }
 </style>

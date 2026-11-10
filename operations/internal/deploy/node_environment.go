@@ -2,7 +2,6 @@ package deploy
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,8 +17,7 @@ import (
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
-//go:embed node.sh
-var nodeScript string
+var nodeScript = serviceinstall.NodeCommandScript
 
 type nodeEnvironmentOwner struct{ ControllerID, TargetID, EnvironmentID, Account, AccountUID, RootPath string }
 
@@ -328,33 +326,36 @@ func (x *executor) nodePreflight(req Request) NodeEnvironmentPreflight {
 func nodePlanCommands(n NodeEnvironmentRequest) []serviceinstall.OfficialCommand {
 	root := n.Context.RootPath
 	base := serviceinstall.NodeVersionRoot(n.Context, n.NodeVersion)
+	command := func(name string, args ...string) serviceinstall.OfficialCommand {
+		argv := deployCommand(name, args...)
+		return serviceinstall.OfficialCommand{Executable: argv[0], Args: argv[1:]}
+	}
 	switch n.Action {
 	case "SET_NPM_REGISTRY":
-		return []serviceinstall.OfficialCommand{{Executable: path.Join(base, "bin/npm"), Args: []string{"config", "set", "registry", n.RegistryURL, "--location=user"}}}
+		return []serviceinstall.OfficialCommand{command("node-plan-registry", path.Join(base, "bin/npm"), n.RegistryURL)}
 	case "OBSERVE", "DISCOVER", "CONNECT_TERMINAL":
 		return []serviceinstall.OfficialCommand{}
 	case "INITIALIZE", "UPDATE_NVM":
-		return []serviceinstall.OfficialCommand{{Executable: "install", Args: []string{"-m", "600", "nvm.sh", path.Join(root, "nvm/nvm.sh")}}, {Executable: "install", Args: []string{"-m", "700", "nvm-exec", path.Join(root, "nvm/nvm-exec")}}}
+		return []serviceinstall.OfficialCommand{command("node-plan-nvm-script", path.Join(root, "nvm/nvm.sh")), command("node-plan-nvm-exec", path.Join(root, "nvm/nvm-exec"))}
 	case "SET_DEFAULT":
-		return []serviceinstall.OfficialCommand{{Executable: "nvm", Args: []string{"alias", "default", n.NodeVersion}}}
+		return []serviceinstall.OfficialCommand{command("node-plan-default", n.NodeVersion)}
 	case "REMOVE_ENVIRONMENT":
 		if n.DeleteData {
-			return []serviceinstall.OfficialCommand{{Executable: "rm", Args: []string{"-rf", "--", root}}}
+			return []serviceinstall.OfficialCommand{command("node-plan-remove-environment", root)}
 		}
-		return []serviceinstall.OfficialCommand{{Executable: "rm", Args: []string{"-f", "--", path.Join(root, "nvm/nvm.sh"), path.Join(root, "nvm/nvm-exec")}}}
+		return []serviceinstall.OfficialCommand{command("node-plan-remove-manager", path.Join(root, "nvm/nvm.sh"), path.Join(root, "nvm/nvm-exec"))}
 	default:
-		args := []string{path.Join(base, "lib/node_modules/npm/bin/npm-cli.js"), "install", "--global", "--offline", "--ignore-scripts", "--no-audit", "--no-fund", "--prefix", base, "--"}
+		action, name := "install", "pnpm"
 		if n.Action == "REMOVE_PNPM" {
-			args[1] = "uninstall"
-			args = append(args, "pnpm")
+			action = "uninstall"
 		} else {
 			d, err := nodeEnvironmentDefinition(n)
 			if err != nil || d.Native == nil || len(d.Native.Parts) == 0 {
 				return []serviceinstall.OfficialCommand{}
 			}
-			args = append(args, d.Native.Parts[0].Name)
+			name = d.Native.Parts[0].Name
 		}
-		return []serviceinstall.OfficialCommand{{Executable: path.Join(base, "bin/node"), Args: args}}
+		return []serviceinstall.OfficialCommand{command("node-plan-package", path.Join(base, "bin/node"), path.Join(base, "lib/node_modules/npm/bin/npm-cli.js"), action, base, name)}
 	}
 }
 func nodeErrorMessage(code string) string {
@@ -475,6 +476,9 @@ func (x *executor) nodeMaterial(ctx context.Context, req Request, dir string, d 
 }
 
 func (x *executor) applyNodeEnvironment(req Request, dir string) (Result, error) {
+	if builtinFlow(req) {
+		return x.applyNodeEnvironmentFlow(req, dir)
+	}
 	result := softwareResult(req)
 	n := req.NodeEnvironment
 	preflight := x.nodePreflight(req)
@@ -484,7 +488,7 @@ func (x *executor) applyNodeEnvironment(req Request, dir string) (Result, error)
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 	material := ""
-	if d, err := nodeEnvironmentDefinition(*n); err == nil {
+	if d, err := nodeEnvironmentDefinition(*n); err == nil && n.Action != "REMOVE_PNPM" && n.Action != "REMOVE_ENVIRONMENT" {
 		var cleanup func()
 		material, cleanup, err = x.nodeMaterial(ctx, req, dir, d, n.Source)
 		if err != nil {
@@ -545,14 +549,25 @@ func (x *executor) applyNodeEnvironment(req Request, dir string) (Result, error)
 		return result, errors.New("NODE_ACTION_INVALID")
 	}
 	option := ""
-	if n.DeleteData {
+	if n.DeleteData && n.Definition == nil {
 		option = "delete-data"
 	}
-	out, err := runNode(ctx, n.Context, action, n.NodeVersion, pkg, material, req.JobID, option, x.softwareRunner)
+	out, err := x.runNodeTemplate(ctx, req, n.Context, action, n.NodeVersion, pkg, material, option)
 	x.appendServiceLog(req, "NODE_CHANGE", string(out))
 	if err != nil {
 		result.ErrorCode = "NODE_RESULT_UNCONFIRMED"
 		return result, nil
+	}
+	if n.DeleteData && n.Definition != nil {
+		if _, _, err = x.runBuiltinStep(ctx, req, "DELETE_DATA", map[string]string{"OPS_NODE_ROOT": n.Context.RootPath}, nil, n.Context.Account); err != nil {
+			return result, nil
+		}
+	}
+	if n.Definition != nil && n.Action != "REMOVE_PNPM" && n.Action != "REMOVE_ENVIRONMENT" {
+		if _, _, err = x.runBuiltinStep(ctx, req, "NODE_VERIFY", map[string]string{"OPS_NODE_ROOT": n.Context.RootPath, "OPS_NODE_VERSION": n.NodeVersion}, nil, n.Context.Account); err != nil {
+			result.ErrorCode = "COMMAND_VERIFY_FAILED"
+			return result, nil
+		}
 	}
 	if n.Action == "INITIALIZE" {
 		if err = os.MkdirAll(filepath.Dir(x.nodeOwnerFile(n.Context.EnvironmentID)), 0700); err != nil {

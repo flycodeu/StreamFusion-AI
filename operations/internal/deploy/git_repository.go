@@ -35,6 +35,12 @@ func (x *executor) gitBindingFile(id string) string {
 func gitPrivateDirectory(g GitRepositoryRequest, account *user.User) string {
 	return filepath.Join(account.HomeDir, ".local/share/streamfusion-ops/git", g.BindingID)
 }
+func gitPrivateKeyPath(g GitRepositoryRequest, account *user.User) string {
+	if g.KeySource == "TARGET" {
+		return g.KeyPath
+	}
+	return filepath.Join(gitPrivateDirectory(g, account), "key")
+}
 func gitQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 
 func gitOwnedPath(name string, uid int, directory bool) error {
@@ -86,6 +92,26 @@ func resolveGitRepository(g GitRepositoryRequest) (*user.User, error) {
 		}
 		if err := gitOwnedPath(directory, uid, true); err != nil {
 			return nil, err
+		}
+	}
+	if g.KeySource == "TARGET" {
+		if !gitTargetKeyValid(g, a) {
+			return nil, errors.New("GIT_KEY_IDENTITY_MISMATCH")
+		}
+		if err := gitOwnedPath(g.KeyPath, uid, false); err != nil {
+			return nil, err
+		}
+		st, err := os.Stat(g.KeyPath)
+		if err != nil || st.Mode().Perm() != 0600 || st.Size() > 32<<10 {
+			return nil, errors.New("GIT_KEY_UNAVAILABLE")
+		}
+		key, err := os.ReadFile(g.KeyPath)
+		if err != nil {
+			return nil, errors.New("GIT_KEY_UNAVAILABLE")
+		}
+		signer, err := ssh.ParsePrivateKey(key)
+		if err != nil || ssh.FingerprintSHA256(signer.PublicKey()) != g.KeyFingerprint {
+			return nil, errors.New("GIT_KEY_IDENTITY_MISMATCH")
 		}
 	}
 	for _, name := range []string{"commondir", "gitdir", "config.worktree"} {
@@ -164,7 +190,11 @@ func gitKnownHosts(g GitRepositoryRequest) []byte {
 }
 
 func gitSSHCommand(g GitRepositoryRequest, directory string) string {
-	args := []string{"/usr/bin/ssh", "-F", "/dev/null", "-o", "StrictHostKeyChecking=yes", "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "BatchMode=yes", "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no", "-o", "UpdateHostKeys=no", "-o", "GlobalKnownHostsFile=/dev/null", "-o", "ConnectTimeout=10", "-o", "UserKnownHostsFile=" + filepath.Join(directory, "known_hosts"), "-o", "HostName=" + g.SSHHost, "-p", strconv.Itoa(g.SSHPort), "-l", g.SSHUser, "-i", filepath.Join(directory, "key")}
+	keyPath := filepath.Join(directory, "key")
+	if g.KeySource == "TARGET" {
+		keyPath = g.KeyPath
+	}
+	args := deployCommand("git-repository-ssh", "UserKnownHostsFile="+filepath.Join(directory, "known_hosts"), "HostName="+g.SSHHost, strconv.Itoa(g.SSHPort), g.SSHUser, keyPath)
 	for i := range args {
 		args[i] = gitQuote(args[i])
 	}
@@ -207,6 +237,7 @@ func (x *executor) observeGitRepository(ctx context.Context, g GitRepositoryRequ
 	}
 	hostKey, _, _, _, _ := ssh.ParseAuthorizedKey([]byte(g.HostPublicKey))
 	o := &GitRepositoryObservation{BindingID: g.BindingID, BindingVersion: g.BindingVersion, ProfileID: g.ProfileID, ProfileVersion: g.ProfileVersion, Account: g.Account, AccountUID: a.Uid, RepoPath: g.RepoPath, ConfigHash: nodeBytesSHA(raw), RemoteURL: remote[0], Branch: branch, GitVersion: strings.TrimSpace(strings.TrimPrefix(string(version), "git version ")), KeyFingerprint: g.KeyFingerprint, KeyPath: filepath.Join(gitPrivateDirectory(g, a), "key"), HostKeyFingerprint: ssh.FingerprintSHA256(hostKey), AuthorName: g.AuthorName, AuthorEmail: g.AuthorEmail, Status: "UNBOUND", ObservedAt: stamp()}
+	o.KeyPath = gitPrivateKeyPath(g, a)
 	if g.Action == "BIND" {
 		plan, e := gitTerminalFiles(g, a)
 		if e != nil {
@@ -259,7 +290,7 @@ func gitSameRepository(a, b GitRepositoryRequest) bool {
 }
 
 func (x *executor) executeGitRead(req Request, output io.Writer) error {
-	if req.GitRepository == nil || req.GitRepository.Validate() != nil || gitRequestConflict(req) {
+	if req.GitRepository == nil || req.GitRepository.Validate() != nil || req.GitKey != nil || gitRequestConflict(req) {
 		return errors.New("GIT_REPOSITORY_INPUT_INVALID")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)

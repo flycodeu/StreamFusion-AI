@@ -57,6 +57,20 @@ test("error help opens a local reference without navigating or changing page dat
   assert.deepEqual({ ...help.errorHelp }, { open: true, code: "NEW_UNLISTED_CODE" });
 });
 
+test("error guidance points to current configuration, log and task recovery entries", () => {
+  const configuration = reference.findErrorReference("COMMAND_STEP_INVALID");
+  const failedStep = reference.findErrorReference("COMMAND_STEP_FAILED");
+  const pendingStep = reference.findErrorReference("COMMAND_STEP_RECONCILE_REQUIRED");
+  const docker = reference.findErrorReference("DOCKER_NOT_READY");
+  assert.equal(configuration.category, "软件配置");
+  assert.match(configuration.steps.join(" "), /软件配置/);
+  assert.match(failedStep.steps.join(" "), /日志记录 → 执行记录/);
+  assert.match(pendingStep.steps.join(" "), /软件安装.*查看进度/);
+  assert.match(docker.steps.join(" "), /软件安装.*Docker Engine/);
+  const instructions = reference.errorReference.flatMap(entry => entry.steps).join(" ");
+  assert.doesNotMatch(instructions, /在安装配置中|重新打开安装配置|在原安装记录中|软件管理的安装入口|或 UNKNOWN 作业/);
+});
+
 async function goSources(directory) {
   let text = "";
   for (const entry of await readdir(directory, { withFileTypes: true })) {

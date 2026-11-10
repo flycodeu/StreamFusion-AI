@@ -2,11 +2,11 @@ package deploy
 
 import (
 	"encoding/json"
-	"fmt"
-	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 	"net"
 	"strconv"
 	"strings"
+
+	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
 func mediaMTXConfiguration(i serviceinstall.Request, secret string, native bool) []byte {
@@ -24,12 +24,25 @@ func mediaMTXConfiguration(i serviceinstall.Request, secret string, native bool)
 		user = "ops"
 	}
 	address := func(key string) string { return net.JoinHostPort(host, strconv.Itoa(ports[key])) }
-	cfg := map[string]any{"logLevel": "info", "logDestinations": []string{"stdout"}, "readTimeout": "10s", "writeTimeout": "10s", "authMethod": "internal", "authInternalUsers": []any{map[string]any{"user": user, "pass": secret, "ips": []string{}, "permissions": []any{map[string]string{"action": "api"}, map[string]string{"action": "publish"}, map[string]string{"action": "read"}}}}, "api": true, "apiAddress": net.JoinHostPort("0.0.0.0", strconv.Itoa(ports["api"])), "metrics": false, "pprof": false, "playback": false, "moq": false, "rtsp": true, "rtspTransports": []string{"tcp"}, "rtspAddress": address("main"), "rtmp": ports["rtmp"] > 0, "rtmpAddress": address("rtmp"), "hls": ports["hls"] > 0, "hlsAddress": address("hls"), "webrtc": ports["webrtc"] > 0, "webrtcAddress": address("webrtc"), "webrtcLocalUDPAddress": address("webrtcUdp"), "webrtcAdditionalHosts": []string{c.BindAddress}, "webrtcLocalTCPAddress": "", "srt": ports["srt"] > 0, "srtAddress": address("srt"), "paths": map[string]any{"all_others": map[string]any{}}}
+	apiHost := "0.0.0.0"
 	if native {
-		cfg["apiAddress"] = net.JoinHostPort("127.0.0.1", strconv.Itoa(ports["api"]))
+		apiHost = "127.0.0.1"
 	}
-	data, _ := json.MarshalIndent(cfg, "", "  ")
-	return data
+	return []byte(deployTemplate("config/mediamtx.json.tmpl",
+		configurationJSONString(net.JoinHostPort(apiHost, strconv.Itoa(ports["api"]))), configurationJSONString(secret), configurationJSONString(user),
+		ports["hls"] > 0, configurationJSONString(address("hls")),
+		ports["rtmp"] > 0, configurationJSONString(address("rtmp")), configurationJSONString(address("main")),
+		ports["srt"] > 0, configurationJSONString(address("srt")),
+		ports["webrtc"] > 0, configurationJSONString(c.BindAddress), configurationJSONString(address("webrtc")), configurationJSONString(address("webrtcUdp"))))
+}
+
+func configurationJSONString(value string) string {
+	data, _ := json.Marshal(value)
+	return string(data)
+}
+
+func seaweedS3Configuration(access, secret string) []byte {
+	return []byte(deployTemplate("config/seaweedfs-s3.json.tmpl", configurationJSONString(access), configurationJSONString(secret)))
 }
 
 func zlmConfiguration(i serviceinstall.Request, secret, data string, native bool) string {
@@ -41,7 +54,7 @@ func zlmConfiguration(i serviceinstall.Request, secret, data string, native bool
 	if native {
 		bind = i.Config.BindAddress
 	}
-	return fmt.Sprintf("[api]\napiDebug=0\nsecret=%s\nsnapRoot=%s/snap\ndownloadRoot=%s\n[http]\nport=%d\nsslport=0\nrootPath=%s/www\nallow_ip_range=\n[rtsp]\nport=%d\nsslport=0\n[rtmp]\nport=%d\nsslport=0\n[rtc]\nport=%d\ntcpPort=0\nexternIP=%s\n[srt]\nport=%d\n[rtp_proxy]\nport=%d\n[record]\nappName=record\nfilePath=%s/record\n[protocol]\nenable_mp4=0\nenable_hls=1\n[hls]\nfilePath=%s/hls\n[general]\nlisten_ip=%s\nenableVhost=0\n[shell]\nport=0\n[hook]\nenable=0\n", secret, data, data, ports["main"], data, ports["rtsp"], ports["rtmp"], ports["rtc"], i.Config.BindAddress, ports["srt"], max(ports["rtpTcp"], ports["rtpUdp"]), data, data, bind)
+	return deployTemplate("config/zlm.ini.tmpl", secret, data, data, ports["main"], data, ports["rtsp"], ports["rtmp"], ports["rtc"], i.Config.BindAddress, ports["srt"], max(ports["rtpTcp"], ports["rtpUdp"]), data, data, bind)
 }
 
 func safeOptionSecret(value string) string {

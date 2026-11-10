@@ -9,7 +9,7 @@ import (
 func TestInstallationProgressAcceptsActualCheckpointsButNotForeignOrFinalResults(t *testing.T) {
 	req := deploy.Request{ControllerID: "controller", TargetID: "host", JobID: "job", InputHash: "hash"}
 	base := deploy.Result{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID, JobID: req.JobID, InputHash: req.InputHash, Phase: "OFFICIAL_PACKAGES_APPLY", Status: "UNKNOWN"}
-	for _, phase := range []string{"TRANSFER", "SERVICE_IMAGE_PULL", "OFFICIAL_REFRESH", "OFFICIAL_PACKAGES_APPLY", "DOCKER_PACKAGES_APPLY", "NATIVE_REDIS_BUILD", "NATIVE_START", "SERVICE_HEALTH"} {
+	for _, phase := range []string{"TRANSFER", "SERVICE_IMAGE_PULL", "OFFICIAL_REFRESH", "OFFICIAL_PLAN_VERIFY", "OFFICIAL_PACKAGES_APPLY", "DOCKER_PACKAGES_APPLY", "NATIVE_REDIS_BUILD", "NATIVE_START", "SERVICE_HEALTH", "MANAGEMENT_EXECUTE", "MANAGEMENT_VERIFY", "MANAGEMENT_ROLLBACK"} {
 		got := base
 		got.Phase = phase
 		if !validJobProgress(req, got) {

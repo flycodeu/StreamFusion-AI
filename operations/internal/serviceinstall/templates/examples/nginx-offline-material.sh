@@ -1,0 +1,1 @@
+docker load --input "$OPS_ARTIFACT_PATH"

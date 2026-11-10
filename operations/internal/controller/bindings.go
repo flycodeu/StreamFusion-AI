@@ -175,7 +175,32 @@ func (h *HTTP) probeBinding(w http.ResponseWriter, r *http.Request, id string) {
 }
 func (s *Store) releaseSecrets(req *deploy.Request) error {
 	req.Secrets = map[string]string{}
-	if g := req.GitRepository; g != nil && req.Action == "GIT_REPOSITORY_CHANGE" && g.Action == "BIND" {
+	if req.Management != nil {
+		required := req.Action == "SOFTWARE_OPERATION" || req.Action == "SOFTWARE_OPERATION_CHECK"
+		if required {
+			if err := s.checkManagementCredentials(*req.Management); err != nil {
+				return err
+			}
+		}
+		for _, ref := range req.Management.CredentialReferences() {
+			secret, err := s.parameterSecret(ref)
+			if err != nil {
+				if required {
+					return err
+				}
+				continue
+			}
+			req.Secrets[serviceinstall.SecretKey(ref.ID, ref.Revision)] = string(secret)
+		}
+	}
+	if g := req.GitAccount; g != nil && req.Action == "GIT_ACCOUNT_CONFIGURE" && g.AuthMethod == "HTTPS" {
+		secret, err := s.secret(g.CredentialID, g.CredentialRevision, "TOKEN")
+		if err != nil {
+			return err
+		}
+		req.Secrets["gitToken"] = string(secret)
+	}
+	if g := req.GitRepository; g != nil && g.KeySource != "TARGET" && req.Action == "GIT_REPOSITORY_CHANGE" && g.Action == "BIND" {
 		secret, err := s.secret(g.CredentialID, g.CredentialRevision, "SSH_KEY")
 		if err != nil {
 			return err
@@ -183,14 +208,14 @@ func (s *Store) releaseSecrets(req *deploy.Request) error {
 		req.Secrets["gitKey"] = string(secret)
 	}
 	if req.Installation != nil {
-		mutating := req.Action == "SOFTWARE_INSTALL" || req.Action == "SOFTWARE_INSTALL_CHECK"
+		mutating := req.Action == "SOFTWARE_INSTALL" || req.Action == "SOFTWARE_INSTALL_CHECK" || req.Action == "RECOVER"
 		if mutating {
 			if err := s.checkInstallSecrets(req.Installation.Definition, req.Installation.Config); err != nil {
 				return err
 			}
 		}
 		for _, ref := range installCredentials(req.Installation.Config) {
-			secret, err := s.secret(ref.ID, ref.Revision, ref.Kind)
+			secret, err := s.installSecret(ref)
 			if err != nil {
 				if mutating {
 					return err
@@ -209,7 +234,7 @@ func (s *Store) releaseSecrets(req *deploy.Request) error {
 				}
 			}
 			for _, ref := range installCredentials(config) {
-				secret, err := s.secret(ref.ID, ref.Revision, ref.Kind)
+				secret, err := s.installSecret(ref)
 				if err != nil {
 					if required {
 						return err
@@ -223,13 +248,13 @@ func (s *Store) releaseSecrets(req *deploy.Request) error {
 	// Lifecycle stop/detach and receipt acknowledgement do not require the
 	// initialization credential to remain available. Resolve it best-effort
 	// solely to redact any known values from target output.
-	if req.Software != nil && req.Software.Ownership != nil {
+	if req.Management == nil && req.Software != nil && req.Software.Ownership != nil {
 		var raw string
 		if err := s.DB.QueryRow("SELECT installation_json FROM software_instances WHERE id=?", req.Software.ID).Scan(&raw); err == nil {
 			var installed serviceinstall.Request
 			if deploy.StrictJSON([]byte(raw), &installed) == nil {
 				for _, ref := range installCredentials(installed.Config) {
-					if secret, err := s.secret(ref.ID, ref.Revision, ref.Kind); err == nil {
+					if secret, err := s.installSecret(ref); err == nil {
 						req.Secrets[ref.ID+":"+ref.Revision] = string(secret)
 					}
 				}

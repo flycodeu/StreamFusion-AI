@@ -150,6 +150,47 @@ func TestHostSoftwareDiscoveryPreservesPartialSourcesAndRejectsOversize(t *testi
 	}
 }
 
+func TestJavaDiscoveryAndRegistrationMatchResolvedJDK(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	const java21 = "/usr/lib/jvm/java-21-openjdk-amd64/bin/java"
+	const java8 = "/opt/jdk8/bin/java"
+	var resolved atomic.Value
+	resolved.Store(java21)
+	f := hostSSHServer(t, s, b, false, false, func(command string) ([]byte, bool) {
+		if strings.Contains(command, "'/usr/bin/readlink' '-e' '--' '/usr/bin/java'") {
+			return []byte(resolved.Load().(string) + "\n"), true
+		}
+		return discoveryFixtureResponse(command)
+	})
+	host := f.create(t, b, "java host")["id"].(string)
+	if _, err := s.DB.Exec(`INSERT INTO software_instances
+		(id,name,host_id,software_type,runtime_kind,locator,management_mode,created_at,updated_at)
+		VALUES('java-21','OpenJDK 21',?,'JAVA','TOOL',?,'MANAGED',?,?)`, host, java21, Now(), Now()); err != nil {
+		t.Fatal(err)
+	}
+	registration := map[string]string{"name": "java", "hostId": host, "runtimeKind": "TOOL", "locator": "java", "softwareType": "JAVA"}
+	b.call("POST", "/software-instances", registration, 409)
+	check := func(wantID, wantPath string) {
+		t.Helper()
+		for _, item := range readDiscovery(t, b, host, "1").Candidates {
+			if item.Locator == "java" {
+				if item.RegisteredID != wantID || item.ExecutablePath != wantPath {
+					t.Fatal(item)
+				}
+				return
+			}
+		}
+		t.Fatal("Java missing from discovery")
+	}
+	check("java-21", java21)
+	resolved.Store(java8)
+	check("", java8)
+	registerTestSoftware(t, b, host, "TOOL", "java", "JAVA")
+	resolved.Store(java21)
+	check("java-21", java21)
+}
+
 func TestHostSoftwareDiscoveryDistinguishesEmptyFromUnavailable(t *testing.T) {
 	for _, empty := range []bool{true, false} {
 		name := "unavailable"

@@ -47,10 +47,36 @@ func TestHostDockerReadOnlyProbe(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			out, err := exec.CommandContext(ctx, shell, "-c", prefix+script).CombinedOutput()
-			if err != nil || !strings.HasSuffix(strings.TrimSpace(string(out)), tc.want) {
+			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+			if err != nil || len(lines) < 4 || strings.TrimSpace(lines[3]) != tc.want {
 				t.Fatalf("probe: %s, error=%v", out, err)
 			}
 		})
+	}
+}
+
+func TestHostReadOnlyRecordsDistributionSeparatelyFromArchitecture(t *testing.T) {
+	facts := unknownHostCapabilities()
+	applyHostReadOnly(&facts, "SFOPS_HOST_V1\nLinux\nx86_64\nDOCKER_MISSING\nDISTRO centos 9\n")
+	if facts.Distribution != "centos" || facts.DistributionVersion != "9" || facts.Platform != "linux/x86_64" {
+		t.Fatal(facts)
+	}
+}
+
+func TestHostReadOnlyRejectsUnexpectedFifthLine(t *testing.T) {
+	for _, line := range []string{"warning: unexpected login output", "DISTRO ubuntu bad/version", "DISTRO"} {
+		facts := unknownHostCapabilities()
+		applyHostReadOnly(&facts, "SFOPS_HOST_V1\nLinux\nx86_64\nDOCKER_MISSING\n"+line+"\n")
+		if facts.ReadOnly.Status != "UNAVAILABLE" || facts.ReadOnly.Code != "READ_ONLY_RESPONSE_INVALID" || facts.Platform != "" {
+			t.Fatalf("untrusted fifth line %q was accepted: %+v", line, facts)
+		}
+	}
+	for _, line := range []string{"DISTRO ubuntu 24.04", "DISTRO rocky"} {
+		facts := unknownHostCapabilities()
+		applyHostReadOnly(&facts, "SFOPS_HOST_V1\nLinux\nx86_64\nDOCKER_MISSING\n"+line+"\n")
+		if facts.ReadOnly.Status != "AVAILABLE" || facts.Platform != "linux/x86_64" {
+			t.Fatalf("valid distribution %q was rejected: %+v", line, facts)
+		}
 	}
 }
 

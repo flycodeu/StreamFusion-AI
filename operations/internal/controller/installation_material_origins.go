@@ -35,6 +35,9 @@ func materialVerification(m installationMaterial) string {
 	if m.Status != "AVAILABLE" {
 		return "PENDING"
 	}
+	if m.Definition.Commands != nil && !serviceinstall.IsBuiltinCommand(m.Definition) {
+		return "UPLOAD_SHA256"
+	}
 	if m.RuntimeMode == "NATIVE" {
 		return "RECIPE_SHA256"
 	}
@@ -99,6 +102,11 @@ func (s *Store) writeMaterialOrigin(id string, origin materialOrigin) error {
 
 func materialSources(d serviceinstall.Definition, mode string) []materialSource {
 	out := []materialSource{}
+	if d.Commands != nil && !serviceinstall.IsBuiltinCommand(d) {
+		// The uploaded file's name, size and hash live on the material itself;
+		// an administrator's script/image reference is not a vendor attestation.
+		return out
+	}
 	if mode != "NATIVE" || d.Native == nil {
 		if d.Image != "" {
 			out = append(out, materialSource{Name: d.Image, DisplayName: d.Name + " 官方镜像", Version: d.Version, Publisher: "镜像发布方（参见官方地址）", URL: d.OfficialURL, SHA256: strings.TrimPrefix(d.Digest, "sha256:"), Role: "MAIN", Packaging: "DOCKER_SAVE"})

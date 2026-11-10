@@ -1,0 +1,14 @@
+{
+  "refresh": {
+    "executable": "/usr/bin/apt-get",
+    "args": ["-o", "DPkg::Lock::Timeout=15", "-o", "APT::Update::Error-Mode=any", "-o", "Acquire::AllowInsecureRepositories=false", "update"]
+  },
+  "install": {
+    "executable": "/usr/bin/apt-get",
+    "args": ["--assume-yes", "--no-remove", "--no-upgrade", "--no-install-recommends", "-o", "DPkg::Lock::Timeout=15", "-o", "APT::Get::AllowUnauthenticated=false", "-o", "Acquire::AllowInsecureRepositories=false", "install", "--"]
+  },
+  "start": {
+    "executable": "/usr/bin/systemctl",
+    "args": ["enable", "--now", "--"]
+  }
+}

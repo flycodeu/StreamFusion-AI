@@ -36,7 +36,7 @@ func TestExecutorCapabilitiesSeparateDockerEngineFromCompose(t *testing.T) {
 			if calls != 2 || fact["dockerEngineAvailable"] != test.engine || fact["dockerAvailable"] != (test.engine && test.compose) {
 				t.Fatalf("capabilities conflated Engine with Compose: %+v", fact)
 			}
-			if fact["softwareLifecycleVersion"] != 1 {
+			if fact["softwareLifecycleVersion"] != SoftwareLifecycleVersion || fact["softwareManagementVersion"] != SoftwareManagementVersion {
 				t.Fatal("F02 lifecycle capability version missing", fact)
 			}
 		})

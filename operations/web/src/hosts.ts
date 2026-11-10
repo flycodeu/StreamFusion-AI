@@ -27,6 +27,8 @@ export interface Host {
     dockerCompose?: HostCapability;
     expiresAt: string;
     platform?: string;
+    distribution?: string;
+    distributionVersion?: string;
   };
 }
 

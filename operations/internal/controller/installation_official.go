@@ -26,7 +26,8 @@ func (h *HTTP) prepareOfficialMaterial(w http.ResponseWriter, r *http.Request, s
 		h.fail(w, r, 400, "INVALID_INPUT", err.Error())
 		return
 	}
-	d, err := serviceinstall.Find(in.RecipeKey, in.RecipeVersion)
+	d, err := h.store.findInstallRecipe(in.RecipeKey, in.RecipeVersion)
+	d = serviceinstall.BareDefinition(d)
 	if err != nil || d.Revision != in.RecipeRevision || d.Native == nil || len(in.Key) < 8 || len(in.Key) > 80 {
 		h.fail(w, r, 400, "NATIVE_RECIPE_INVALID", "请选择有固定官方原生材料的当前配方")
 		return

@@ -94,16 +94,17 @@ func (h *HTTP) observeHostFirewall(w http.ResponseWriter, r *http.Request, s *se
 		h.fail(w, r, 409, "HOST_CHANGED", "主机已变化，请刷新")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
-	defer cancel()
-	release, e := h.acquireObservation(ctx, id, false)
+	release, e := h.waitForObservation(r.Context(), id)
 	if e != nil {
-		h.fail(w, r, 429, "HOST_CHECK_BUSY", "主机正在检测")
+		h.fail(w, r, 408, "HOST_CHECK_TIMEOUT", "主机检测等待超时，请稍后重新检查")
 		return
 	}
 	defer release()
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
 	v := firewallView{AttemptAt: Now(), TraceID: r.Context().Value(traceKey{}).(string)}
 	e = h.store.callTarget(ctx, t, deploy.Request{Action: "FIREWALL_OBSERVE"}, "", &v.Snapshot)
+	portsRead := e == nil && v.Snapshot.PortCode == ""
 	if e != nil {
 		v.Code = "FIREWALL_EXECUTOR_REQUIRED"
 		v.Snapshot = deploy.FirewallSnapshot{Status: "UNAVAILABLE", Code: v.Code, ObservedAt: Now(), Ports: []deploy.HostPort{}, ManagedRules: []deploy.FirewallRule{}}
@@ -111,6 +112,9 @@ func (h *HTTP) observeHostFirewall(w http.ResponseWriter, r *http.Request, s *se
 			ports, docker, code, e := deploy.ObserveHostPorts(ctx, run)
 			if e == nil {
 				v.Snapshot.Ports, v.Snapshot.DockerPorts, v.Snapshot.DockerCode = ports, docker, code
+				portsRead = true
+			} else {
+				v.Snapshot.PortCode = e.Error()
 			}
 			return e
 		})
@@ -125,7 +129,7 @@ func (h *HTTP) observeHostFirewall(w http.ResponseWriter, r *http.Request, s *se
 		if e2 != nil || pluginTargetSnapshot(current) != pluginTargetSnapshot(t) {
 			e = errors.New("HOST_CHANGED")
 		} else {
-			_, e = tx.Exec(`INSERT INTO host_firewall_observations VALUES(?,?,?,?,?,?) ON CONFLICT(host_id) DO UPDATE SET payload_json=CASE WHEN excluded.attempt_code='' OR host_firewall_observations.target_snapshot<>excluded.target_snapshot THEN excluded.payload_json ELSE host_firewall_observations.payload_json END,target_snapshot=excluded.target_snapshot,attempt_code=excluded.attempt_code,attempt_at=excluded.attempt_at,trace_id=excluded.trace_id`, id, pluginTargetSnapshot(t), jsonText(v.Snapshot), v.Code, v.AttemptAt, v.TraceID)
+			_, e = tx.Exec(`INSERT INTO host_firewall_observations VALUES(?,?,?,?,?,?) ON CONFLICT(host_id) DO UPDATE SET payload_json=CASE WHEN ? OR excluded.attempt_code='' OR host_firewall_observations.target_snapshot<>excluded.target_snapshot THEN excluded.payload_json WHEN ?<>'' THEN json_set(host_firewall_observations.payload_json,'$.portCode',?) ELSE host_firewall_observations.payload_json END,target_snapshot=excluded.target_snapshot,attempt_code=excluded.attempt_code,attempt_at=excluded.attempt_at,trace_id=excluded.trace_id`, id, pluginTargetSnapshot(t), jsonText(v.Snapshot), v.Code, v.AttemptAt, v.TraceID, portsRead, v.Snapshot.PortCode, v.Snapshot.PortCode)
 			if e == nil {
 				e = auditTx(tx, s.Username, "HOST_PORTS_OBSERVED", id, v.Code, v.TraceID)
 			}

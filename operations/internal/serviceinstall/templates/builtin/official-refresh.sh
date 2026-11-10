@@ -1,0 +1,1 @@
+/usr/bin/apt-get -o DPkg::Lock::Timeout=15 -o APT::Update::Error-Mode=any -o Acquire::AllowInsecureRepositories=false update

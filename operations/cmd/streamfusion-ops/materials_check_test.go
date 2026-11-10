@@ -69,6 +69,21 @@ func TestMaterialLibraryCheckIsReadOnlyAndDoesNotClaimVendorValidation(t *testin
 	}
 }
 
+func TestMaterialLibraryCheckAcceptsShippedCustomRecipeOnly(t *testing.T) {
+	dir, library := materialCheckFixture(t)
+	entry := &library.Materials[0]
+	entry.RecipeKey, entry.RecipeVersion, entry.RecipeRevision = "custom-ytlabel-py312-native-offline", "4.0-python312", "1"
+	writeMaterialCheckFixture(t, dir, library)
+	if err := checkMaterialLibrary([]string{"--material-library", dir}, &bytes.Buffer{}); err != nil {
+		t.Fatal("shipped offline template was rejected", err)
+	}
+	entry.RecipeKey = "custom-unpublished"
+	writeMaterialCheckFixture(t, dir, library)
+	if err := checkMaterialLibrary([]string{"--material-library", dir}, &bytes.Buffer{}); err == nil {
+		t.Fatal("unknown custom template was trusted without a published definition")
+	}
+}
+
 func TestMaterialLibraryCheckRejectsUnsafeOrChangedManifest(t *testing.T) {
 	for _, test := range []struct {
 		name string

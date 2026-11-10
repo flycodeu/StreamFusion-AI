@@ -72,7 +72,7 @@ func (h *HTTP) listGitRepositories(w http.ResponseWriter, r *http.Request, hostI
 	h.success(w, r, out)
 }
 
-func (h *HTTP) gitTargetReady(ctx context.Context, t target) error {
+func (h *HTTP) gitTargetReady(ctx context.Context, t target, targetKeys ...bool) error {
 	var cap executorCapabilities
 	if err := h.store.callTarget(ctx, t, deploy.Request{Action: "CAPABILITIES"}, "", &cap); err != nil {
 		return err
@@ -80,7 +80,7 @@ func (h *HTTP) gitTargetReady(ctx context.Context, t target) error {
 	if cap.Owner.ControllerID != h.store.controllerID() || cap.Owner.TargetID != t.ID || cap.Owner.ProtocolVersion != 1 || cap.Owner.ExecutorVersion != deploy.Version {
 		return errors.New("EXECUTOR_IDENTITY_MISMATCH")
 	}
-	if cap.GitRepositoryVersion != deploy.GitRepositoryCapabilityVersion {
+	if cap.GitRepositoryVersion < 1 || cap.GitRepositoryVersion > deploy.GitRepositoryCapabilityVersion || len(targetKeys) > 0 && targetKeys[0] && cap.GitRepositoryVersion < deploy.GitRepositoryCapabilityVersion {
 		return errors.New("EXECUTOR_GIT_UNSUPPORTED")
 	}
 	return nil
@@ -96,7 +96,7 @@ func gitObservationMatches(c deploy.GitRepositoryRequest, o *deploy.GitRepositor
 
 func (h *HTTP) checkGitRepository(ctx context.Context, t target, c deploy.GitRepositoryRequest) (deploy.GitRepositoryObservation, error) {
 	var p deploy.GitRepositoryPreflight
-	if err := h.gitTargetReady(ctx, t); err != nil {
+	if err := h.gitTargetReady(ctx, t, c.KeySource == "TARGET"); err != nil {
 		return deploy.GitRepositoryObservation{}, err
 	}
 	if err := h.store.callTarget(ctx, t, deploy.Request{Action: "GIT_REPOSITORY_CHECK", GitRepository: &c}, "", &p); err != nil {
@@ -178,9 +178,15 @@ func (h *HTTP) createGitPlan(w http.ResponseWriter, r *http.Request, s *session,
 			h.gitError(w, r, errors.New("GIT_PROFILE_CHANGED"))
 			return
 		}
-		if _, e = h.store.secret(a.CredentialID, a.CredentialRevision, "SSH_KEY"); e != nil {
-			h.gitError(w, r, errors.New("GIT_CREDENTIAL_UNAVAILABLE"))
+		if a.KeySource == "TARGET" && (a.HostID != hostID || a.SystemAccount != in.Account) {
+			h.gitError(w, r, errors.New("GIT_KEY_SCOPE_MISMATCH"))
 			return
+		}
+		if a.KeySource != "TARGET" {
+			if _, e = h.store.secret(a.CredentialID, a.CredentialRevision, "SSH_KEY"); e != nil {
+				h.gitError(w, r, errors.New("GIT_CREDENTIAL_UNAVAILABLE"))
+				return
+			}
 		}
 		c = a.request()
 		c.Account = in.Account
@@ -203,7 +209,7 @@ func (h *HTTP) createGitPlan(w http.ResponseWriter, r *http.Request, s *session,
 		}
 	}
 	if c.Validate() != nil {
-		h.gitError(w, r, errors.New("GIT_REPOSITORY_INPUT_INVALID"))
+		h.gitError(w, r, errors.New("GIT_LEGACY_CONFIGURATION_INCOMPLETE"))
 		return
 	}
 	if !h.acquireHostCheck(w, r) {
@@ -254,12 +260,11 @@ func validateGitPlan(q gitQuery, p gitPlan) error {
 	}
 	if p.Action == "BIND" {
 		a, e := scanGitAccount(q.QueryRow("SELECT "+gitAccountColumns+" FROM git_accounts WHERE id=? AND deleted_at=''", p.Change.ProfileID))
-		if e != nil || a.Version != p.Change.ProfileVersion || a.CredentialID != p.Change.CredentialID || a.CredentialRevision != p.Change.CredentialRevision {
+		if e != nil || a.Version != p.Change.ProfileVersion {
 			return errors.New("GIT_PROFILE_CHANGED")
 		}
-		var valid int
-		if q.QueryRow("SELECT count(*) FROM credential_refs WHERE id=? AND revision=? AND revoked_at IS NULL", a.CredentialID, a.CredentialRevision).Scan(&valid) != nil || valid != 1 {
-			return errors.New("GIT_CREDENTIAL_UNAVAILABLE")
+		if err := validateGitProfileKey(q, a, p.HostID, p.Change); err != nil {
+			return err
 		}
 	}
 	var count int
@@ -287,6 +292,23 @@ func validateGitPlan(q gitQuery, p gitPlan) error {
 	}
 	if count > 0 {
 		return errors.New("OPERATION_LOCKED")
+	}
+	return nil
+}
+
+func validateGitProfileKey(q gitQuery, a gitAccount, hostID string, c deploy.GitRepositoryRequest) error {
+	if a.KeySource == "TARGET" {
+		if c.KeySource != "TARGET" || a.HostID != hostID || a.SystemAccount != c.Account || a.AccountUID != c.AccountUID || a.KeyPath != c.KeyPath || a.KeyFingerprint != c.KeyFingerprint {
+			return errors.New("GIT_KEY_SCOPE_MISMATCH")
+		}
+		return nil
+	}
+	if c.KeySource == "TARGET" || a.CredentialID != c.CredentialID || a.CredentialRevision != c.CredentialRevision {
+		return errors.New("GIT_PROFILE_CHANGED")
+	}
+	var valid int
+	if q.QueryRow("SELECT count(*) FROM credential_refs WHERE id=? AND revision=? AND revoked_at IS NULL", a.CredentialID, a.CredentialRevision).Scan(&valid) != nil || valid != 1 {
+		return errors.New("GIT_CREDENTIAL_UNAVAILABLE")
 	}
 	return nil
 }
@@ -325,7 +347,7 @@ func (h *HTTP) observeGitRepository(w http.ResponseWriter, r *http.Request, s *s
 	if test {
 		action = "GIT_REPOSITORY_TEST"
 	}
-	if err = h.gitTargetReady(ctx, t); err != nil {
+	if err = h.gitTargetReady(ctx, t, c.KeySource == "TARGET"); err != nil {
 		h.gitError(w, r, err)
 		return
 	}

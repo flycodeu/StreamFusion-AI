@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,6 +29,42 @@ type MaterialLibraryImportResult struct {
 	Reused   int                         `json:"reused"`
 	Skipped  int                         `json:"skipped"`
 	Items    []MaterialLibraryImportItem `json:"items"`
+}
+
+func (s *Store) libraryInstallRecipe(key, version string) (serviceinstall.Definition, error) {
+	if d, err := serviceinstall.Find(key, version); err == nil {
+		return d, nil
+	}
+	d, err := s.findInstallRecipe(key, version)
+	if strings.HasPrefix(key, "custom-") && (errors.Is(err, sql.ErrNoRows) || err != nil && err.Error() == "INSTALL_RECIPE_INVALID") {
+		return d, serviceinstall.ErrMaterialLibraryTemplateUnavailable
+	}
+	return d, err
+}
+
+func (s *Store) libraryMaterialDefinition(input serviceinstall.LibraryMaterialFile) (serviceinstall.Definition, error) {
+	d, err := input.Definition(s.libraryInstallRecipe)
+	if !errors.Is(err, serviceinstall.ErrMaterialLibraryTemplateUnavailable) {
+		return d, err
+	}
+	// A shipped archive also supports the exact current stock template after a
+	// local publication revision changes. Administrator edits still require a
+	// manifest naming their actual revision.
+	shipped, shippedErr := input.Definition(ShippedInstallRecipe)
+	if shippedErr != nil {
+		return d, err
+	}
+	current, currentErr := s.libraryInstallRecipe(input.RecipeKey, input.RecipeVersion)
+	if currentErr != nil {
+		return current, currentErr
+	}
+	current = serviceinstall.BareDefinition(current)
+	comparison := current
+	comparison.Revision = shipped.Revision
+	if jsonText(comparison) != jsonText(shipped) {
+		return d, err
+	}
+	return current, nil
 }
 
 // ImportInstallationMaterialLibrary imports release-sidecar bytes into the
@@ -59,10 +96,14 @@ func (s *Store) ImportInstallationMaterialLibrary(ctx context.Context, dir strin
 		return result, errors.New("MATERIAL_LIBRARY_MANIFEST_INVALID")
 	}
 	var total int64
+	var unavailable error
 	seen := map[string]bool{}
 	for _, material := range library.Materials {
-		if _, err = material.Definition(); err != nil {
-			return result, err
+		if _, err = s.libraryMaterialDefinition(material); err != nil {
+			if !errors.Is(err, serviceinstall.ErrMaterialLibraryTemplateUnavailable) {
+				return result, err
+			}
+			unavailable = err
 		}
 		key := serviceinstall.Digest(material)
 		if seen[key] {
@@ -73,6 +114,9 @@ func (s *Store) ImportInstallationMaterialLibrary(ctx context.Context, dir strin
 		if total > 16<<30 {
 			return result, errors.New("INSTALL_MATERIAL_QUOTA")
 		}
+	}
+	if unavailable != nil {
+		return result, unavailable
 	}
 	var actorID string
 	if err = s.DB.QueryRowContext(ctx, "SELECT id FROM admins ORDER BY created_at,id LIMIT 1").Scan(&actorID); err != nil {
@@ -105,7 +149,7 @@ func (s *Store) ImportInstallationMaterialLibrary(ctx context.Context, dir strin
 func (s *Store) importLibraryMaterial(ctx context.Context, dir, actorID string, input serviceinstall.LibraryMaterialFile) (installationMaterial, string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	d, err := input.Definition()
+	d, err := s.libraryMaterialDefinition(input)
 	if err != nil {
 		return installationMaterial{}, "", err
 	}
@@ -181,7 +225,9 @@ func (s *Store) importLibraryMaterial(ctx context.Context, dir, actorID string, 
 	if os.IsNotExist(statErr) {
 		temp := filepath.Join(storage, ".library-"+uuid.NewString())
 		defer os.Remove(temp)
-		if err = serviceinstall.CopyLibraryMaterial(ctx, dir, temp, input); err == nil {
+		copyInput := input
+		copyInput.RecipeRevision = d.Revision
+		if err = serviceinstall.CopyLibraryMaterial(ctx, dir, temp, copyInput, s.libraryInstallRecipe); err == nil {
 			image, err = serviceinstall.ValidateMaterial(temp, input.SHA256, input.ByteSize, d, input.RuntimeMode)
 		}
 		if err == nil {

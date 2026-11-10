@@ -105,8 +105,14 @@ func (x *executor) nativeInstallPreflight(i serviceinstall.Request) serviceinsta
 		check("DIRECTORY", "SERVICE_DATA_DIRECTORY_EXISTS", "实例目录已存在，请核对原安装")
 	}
 	needed := uint64(1 << 30)
-	if i.Source.ByteSize > 0 {
-		needed += uint64(i.Source.ByteSize) * 8
+	materialBytes := i.Source.ByteSize
+	if i.Source.TargetDownload(i.Config) {
+		for _, part := range i.Definition.Native.Parts {
+			materialBytes += part.ByteSize
+		}
+	}
+	if materialBytes > 0 {
+		needed += uint64(materialBytes) * 8
 	}
 	if free, err := availableBytes(parent); err != nil || free < needed {
 		check("SPACE", "SERVICE_SPACE_INSUFFICIENT", "不能确认足够的安装与构建空间")

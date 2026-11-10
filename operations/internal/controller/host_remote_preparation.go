@@ -20,11 +20,15 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-const preparationTimeout = 6 * time.Minute
+// Includes connection checks, upload and installation. Slow but progressing
+// links keep their budget; the separate idle watchdog still stops a dead upload.
+const preparationTimeout = 15 * time.Minute
 const preparationResponseTimeout = preparationTimeout + 30*time.Second
 const preparationUploadIdleTimeout = 45 * time.Second
 
 type preparationInput struct {
+	AuthorizeCommands     bool   `json:"authorizeCommands,omitempty"`
+	AuthorizeOnly         bool   `json:"authorizeOnly,omitempty"`
 	UpdateOnly            bool   `json:"updateOnly,omitempty"`
 	ExpectedCurrentSHA256 string `json:"expectedCurrentSHA256,omitempty"`
 	ExpectedPackageSHA256 string `json:"expectedPackageSHA256,omitempty"`
@@ -42,6 +46,8 @@ type preparationRepairInput struct {
 }
 
 type preparationSnapshot struct {
+	AuthorizeCommands bool   `json:"authorizeCommands,omitempty"`
+	AuthorizeOnly     bool   `json:"authorizeOnly,omitempty"`
 	UpdateFromSHA     string `json:"updateFromSHA256,omitempty"`
 	Host              target `json:"host"`
 	BinarySHA         string `json:"binarySha256"`
@@ -51,15 +57,16 @@ type preparationSnapshot struct {
 }
 
 var preparationMessages = map[string]string{
-	"PREPARATION_SUDO_DENIED":                "当前 SSH 账号无权执行组件更新，请联系服务器管理员核对授权；输入密码不会增加权限。",
+	"PREPARATION_SUDO_DENIED":                "当前 SSH 账号没有安装所需的管理员权限，请服务器管理员为该账号开通 sudo。",
 	"PREPARATION_UPDATE_UNKNOWN_BINARY":      "当前接入组件没有匹配的成功安装记录，请核对后手动更新。",
 	"PREPARATION_UPDATE_CHANGED":             "接入组件状态已变化，请重新检查后继续。",
 	"PREPARATION_UPDATE_ONLY":                "仅更新已有接入组件；目录或摘要已变化，已停止且未初始化或修复授权。",
 	"PREPARATION_READY":                      "主机接入完成，可以继续安装软件。",
 	"PREPARATION_CONNECT_FAILED":             "SSH 连接失败，请核对网络、账号、凭据和主机指纹。",
 	"PREPARATION_PLATFORM_UNSUPPORTED":       "此安装包仅支持 Linux amd64（x86_64），请核对服务器架构。",
+	"READ_ONLY_RESPONSE_INVALID":             "服务器系统信息返回异常，请检查 SSH 登录输出后重新检测。",
 	"PREPARATION_UPLOAD_FAILED":              "组件上传未完成，请查看传输进度和错误详情。",
-	"PREPARATION_UPLOAD_TIMEOUT":             "组件上传超时，安装尚未开始。请检查到目标服务器的网络速度。",
+	"PREPARATION_UPLOAD_TIMEOUT":             "组件上传达到时限，安装尚未开始。请查看传输进度后重试，或使用离线接入包。",
 	"PREPARATION_UPLOAD_STALLED":             "组件上传连续45秒无进度，已停止，安装尚未开始。请检查网络连接。",
 	"PREPARATION_UPLOAD_INTERRUPTED":         "组件上传连接已中断，安装尚未开始。请检查网络后重试。",
 	"PREPARATION_UPLOAD_NO_SPACE":            "目标服务器临时目录空间或配额不足，安装尚未开始。",
@@ -133,8 +140,8 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 		return
 	}
 	defer func() { in.SudoPassword = "" }()
-	if in.UpdateOnly && (!validSHA256(in.ExpectedCurrentSHA256) || !validSHA256(in.ExpectedPackageSHA256)) || !in.UpdateOnly && (in.ExpectedCurrentSHA256 != "" || in.ExpectedPackageSHA256 != "") {
-		h.fail(w, r, 400, "INVALID_INPUT", "自动更新需要已核对的当前与目标组件摘要")
+	if in.AuthorizeCommands && !in.UpdateOnly || in.UpdateOnly && in.AuthorizeOnly || (in.UpdateOnly || in.AuthorizeOnly) && (!validSHA256(in.ExpectedCurrentSHA256) || !validSHA256(in.ExpectedPackageSHA256)) || !in.UpdateOnly && !in.AuthorizeOnly && (in.ExpectedCurrentSHA256 != "" || in.ExpectedPackageSHA256 != "") {
+		h.fail(w, r, 400, "INVALID_INPUT", "安装准备需要已核对的组件摘要和单一操作模式")
 		return
 	}
 	if !in.Confirmed || !deploy.ID.MatchString(in.Key) || len(in.SudoPassword) > 1024 || strings.ContainsAny(in.SudoPassword, "\r\n\x00") {
@@ -155,34 +162,46 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 		return
 	}
 	p, material := preparationForHost(t, h.store.controllerID(), h.targetPackageDir)
+	p.CommandPublicKey = h.store.commandPublicKey()
 	if !p.Package.Available {
 		h.fail(w, r, 409, p.Package.Code, p.Package.Message)
 		return
 	}
-	if in.UpdateOnly {
-		if material.Binary.Hash != in.ExpectedPackageSHA256 {
+	if in.UpdateOnly || in.AuthorizeOnly {
+		if material.Binary.Hash != in.ExpectedPackageSHA256 || in.AuthorizeOnly && in.ExpectedCurrentSHA256 != material.Binary.Hash {
 			h.fail(w, r, 409, "PREPARATION_MATERIAL_CHANGED", preparationMessage("PREPARATION_MATERIAL_CHANGED"))
 			return
 		}
-		p.UpdateFromSHA = in.ExpectedCurrentSHA256
+		if in.UpdateOnly {
+			p.UpdateFromSHA = in.ExpectedCurrentSHA256
+		}
 	}
-	archive, err := createTargetPreparationArchive(p, material)
-	if err != nil {
-		h.fail(w, r, 409, "TARGET_PACKAGE_CHANGED", "安装材料已变化，请刷新后重试")
-		return
+	var archive *os.File
+	if !in.AuthorizeOnly {
+		archive, err = createTargetPreparationArchive(p, material)
+		if err != nil {
+			h.fail(w, r, 409, "TARGET_PACKAGE_CHANGED", "安装材料已变化，请刷新后重试")
+			return
+		}
+		defer os.Remove(archive.Name())
+		defer archive.Close()
 	}
-	defer os.Remove(archive.Name())
-	defer archive.Close()
 	if !h.acquireHostCheck(w, r) {
 		return
 	}
 	defer func() { <-h.hostCheckSlots }()
-	snapshot := preparationSnapshot{Host: t, BinarySHA: material.Binary.Hash, ScriptSHA: material.Script.Hash}
+	snapshot := preparationSnapshot{Host: t, BinarySHA: material.Binary.Hash, ScriptSHA: material.Script.Hash, AuthorizeOnly: in.AuthorizeOnly, AuthorizeCommands: in.AuthorizeCommands}
 	// Observation timestamps are not part of the user's repeat-submit identity.
 	requestHash := deploy.Digest([]string{t.ID, t.Version, material.Binary.Hash, material.Script.Hash})
 	if in.UpdateOnly {
 		snapshot.UpdateFromSHA = in.ExpectedCurrentSHA256
 		requestHash = deploy.Digest([]string{t.ID, t.Version, material.Binary.Hash, material.Script.Hash, "UPDATE_ONLY", in.ExpectedCurrentSHA256})
+	}
+	if in.AuthorizeOnly {
+		requestHash = deploy.Digest([]string{requestHash, "AUTHORIZE_ONLY"})
+	}
+	if in.AuthorizeCommands {
+		requestHash = deploy.Digest([]string{requestHash, "AUTHORIZE_COMMANDS"})
 	}
 	job, reused, err := h.acceptPreparation(actor, in.Key, requestHash, snapshot, r.Context().Value(traceKey{}).(string))
 	if err != nil {
@@ -208,7 +227,16 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), preparationTimeout)
 	defer cancel()
-	code, uncertain := h.runHostPreparation(ctx, actor, job, t, archive, material.Binary.Hash, in.SudoPassword, false, snapshot)
+	var code string
+	var uncertain bool
+	if in.AuthorizeOnly {
+		code, uncertain = h.runCommandAuthorization(ctx, actor, job, t, snapshot, in.SudoPassword)
+	} else {
+		code, uncertain = h.runHostPreparation(ctx, actor, job, t, archive, material.Binary.Hash, in.SudoPassword, false, snapshot)
+	}
+	if code == "PREPARATION_READY" && in.AuthorizeCommands {
+		code, uncertain = h.runCommandAuthorization(ctx, actor, job, t, snapshot, in.SudoPassword)
+	}
 	in.SudoPassword = ""
 	status := "FAILED"
 	if code == "PREPARATION_READY" {
@@ -370,9 +398,16 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 	if runSSHCommand(client, hostReadOnlyCommand, nil, out, stderr) != nil {
 		return "PREPARATION_CONNECT_FAILED", false
 	}
-	lines := strings.Split(strings.TrimSpace(strings.ReplaceAll(out.String(), "\r\n", "\n")), "\n")
-	if len(lines) != 4 || lines[0] != "SFOPS_HOST_V1" || lines[1] != "Linux" || lines[2] != "x86_64" {
+	facts := unknownHostCapabilities()
+	applyHostReadOnly(&facts, out.String())
+	if facts.ReadOnly.Status != "AVAILABLE" {
+		return "READ_ONLY_RESPONSE_INVALID", false
+	}
+	if facts.Platform != "linux/x86_64" {
 		return "PREPARATION_PLATFORM_UNSUPPORTED", false
+	}
+	if code := checkPreparationPrivilege(client, t, password); code != "" {
+		return code, false
 	}
 	stage := "/tmp/sfops-upload-" + job
 	if repair {
@@ -382,7 +417,7 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 		// Remove only the exact temporary upload created by this job. A canceled
 		// request also closes the SSH connection, so use a short independent
 		// cleanup connection instead of leaving a partial archive in /tmp.
-		cleanup := "/bin/sh -c " + shellQuote("rm -f -- "+shellQuote(stage+"/bundle.tar.gz")+"; rmdir -- "+shellQuote(stage)+" 2>/dev/null")
+		cleanup := "/bin/sh -c " + shellQuote(controllerTemplate("preparation/cleanup.sh.tmpl", shellQuote(stage+"/bundle.tar.gz"), shellQuote(stage)))
 		if ctx.Err() == nil {
 			if runSSHCommand(client, cleanup, nil, io.Discard, io.Discard) == nil {
 				return
@@ -408,7 +443,7 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 	if _, err = archive.Seek(0, 0); err != nil {
 		return "PREPARATION_UPLOAD_FAILED", false
 	}
-	command := "umask 077; mkdir -m 700 -- " + shellQuote(stage) + " && cat > " + shellQuote(stage+"/bundle.tar.gz")
+	command := controllerTemplate("preparation/upload.sh.tmpl", shellQuote(stage), shellQuote(stage+"/bundle.tar.gz"))
 	info, err := archive.Stat()
 	if err != nil {
 		return "PREPARATION_UPLOAD_FAILED", false
@@ -435,31 +470,7 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 			return code, false
 		}
 	}
-	// Revalidate the actor immediately before privilege elevation.
-	h.store.mu.Lock()
-	tx, authErr := h.beginAuthorized(actor)
-	if authErr == nil {
-		var currentVersion string
-		var maintenance bool
-		authErr = tx.QueryRow("SELECT CAST(version AS TEXT),maintenance FROM targets WHERE id=?", t.ID).Scan(&currentVersion, &maintenance)
-		if authErr == nil && (currentVersion != t.Version || maintenance) {
-			authErr = errors.New("HOST_CHANGED")
-		}
-		if authErr == nil && repair {
-			var protected int
-			authErr = tx.QueryRow(`SELECT count(*) FROM jobs j JOIN operation_locks l ON l.job_id=j.id AND l.resource_key='target:'||j.target_id WHERE j.id=? AND j.target_id=? AND j.kind='HOST_PREPARE' AND j.status='UNKNOWN'`, job, t.ID).Scan(&protected)
-			if authErr == nil && protected != 1 {
-				authErr = errors.New("HOST_CHANGED")
-			}
-		}
-		if authErr == nil {
-			authErr = tx.Commit()
-		} else {
-			tx.Rollback()
-		}
-	}
-	h.store.mu.Unlock()
-	if authErr != nil {
+	if !h.preparationActorCurrent(actor, t, job, repair) {
 		return "PREPARATION_HOST_CHANGED", false
 	}
 	h.preparationPhase(job, "INSTALLING_EXECUTOR")
@@ -627,19 +638,7 @@ func remotePreparationCommand(stage, digest string, root, password, repair bool)
 	if repair {
 		mode = "--repair-only --non-interactive"
 	}
-	script := `set -eu
-printf 'SFOPS_SETUP_ENTERED\n' >&2
-umask 077
-work=$(mktemp -d /var/tmp/sfops-setup-XXXXXX)
-cleanup(){ rm -f -- "$work/bundle.tar.gz" "$work/streamfusion-ops" "$work/install-target.sh" "$work/install.sh" "$work/SHA256SUMS" "$work/HOST-SETUP.md"; rmdir -- "$work"; }
-trap cleanup EXIT
-test -f ` + shellQuote(stage+"/bundle.tar.gz") + ` && test ! -L ` + shellQuote(stage+"/bundle.tar.gz") + `
-cat -- ` + shellQuote(stage+"/bundle.tar.gz") + ` > "$work/bundle.tar.gz"
-printf '%s  %s\n' ` + shellQuote(digest) + ` "$work/bundle.tar.gz" | sha256sum -c - --status
-tar -xzf "$work/bundle.tar.gz" -C "$work" --no-same-owner
-cd "$work"
-bash ./install.sh ` + mode + `
-`
+	script := strings.NewReplacer("@BUNDLE@", shellQuote(stage+"/bundle.tar.gz"), "@DIGEST@", shellQuote(digest), "@MODE@", mode).Replace(controllerScript("preparation/remote-install.sh.tmpl"))
 	command := "/bin/bash -c " + shellQuote(script)
 	if root {
 		return command
@@ -681,7 +680,12 @@ func (h *HTTP) repairHostPreparation(w http.ResponseWriter, r *http.Request, act
 		h.fail(w, r, 409, "VERSION_CONFLICT", "主机连接、安装目录或原安装记录已变化，请停止修复并核对")
 		return
 	}
+	if snapshot.AuthorizeOnly || snapshot.AuthorizeCommands {
+		h.fail(w, r, 409, "PREPARATION_REPAIR_NOT_ALLOWED", "请检查原授权任务结果，不能重复执行授权")
+		return
+	}
 	p, material := preparationForHost(t, h.store.controllerID(), h.targetPackageDir)
+	p.CommandPublicKey = h.store.commandPublicKey()
 	p.RepairSHA = snapshot.BinarySHA
 	if !p.Package.Available {
 		h.fail(w, r, 409, p.Package.Code, p.Package.Message)
@@ -802,7 +806,7 @@ func (h *HTTP) verifyPreparation(ctx context.Context, t target, sha string, alte
 	}
 	defer closeClient()
 	out := &limitedOutput{limit: 512}
-	if runSSHCommand(client, "sha256sum -- "+shellQuote(t.InstallRoot+"/executor"), nil, out, io.Discard) != nil {
+	if runSSHCommand(client, controllerTemplate("preparation/executor-sha256.command.tmpl", shellQuote(t.InstallRoot+"/executor")), nil, out, io.Discard) != nil {
 		return false, "EXECUTOR_HASH_UNAVAILABLE"
 	}
 	parts := strings.Fields(out.String())
@@ -894,6 +898,10 @@ func (h *HTTP) reconcilePreparation(w http.ResponseWriter, r *http.Request, acto
 	defer cancel()
 	if ready, code := h.verifyPreparation(ctx, t, snapshot.BinarySHA, snapshot.RecoveryBinarySHA); !ready {
 		h.fail(w, r, 409, code, preparationVerificationMessage(code))
+		return
+	}
+	if (snapshot.AuthorizeOnly || snapshot.AuthorizeCommands) && !h.commandAuthorizationReady(ctx, t) {
+		h.fail(w, r, 409, "COMMAND_TRUST_REQUIRED", "安装权限尚未确认，请核对原授权任务")
 		return
 	}
 	if err = h.finishReconciledPreparation(actor, t, jobID); err != nil {

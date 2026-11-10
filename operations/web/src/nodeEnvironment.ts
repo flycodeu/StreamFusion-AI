@@ -81,6 +81,8 @@ export interface NodePlan {
   checks?: { key: string; status: string; message: string }[];
   environmentId?: string;
   change?: {
+    definition?: ServiceRecipe;
+    source?: { type: string };
     context: {
       account: string;
       accountUid: string;

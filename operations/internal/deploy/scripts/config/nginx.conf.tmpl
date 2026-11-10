@@ -1,0 +1,4 @@
+pid %s/nginx.pid;
+error_log stderr;
+events {}
+http { access_log /dev/stdout; client_body_temp_path %s/client_temp; proxy_temp_path %s/proxy_temp; fastcgi_temp_path %s/fastcgi_temp; uwsgi_temp_path %s/uwsgi_temp; scgi_temp_path %s/scgi_temp; server { listen %s:%d; root %s/www; location = /__sfops_health { default_type text/plain; return 200 "%s"; } } }

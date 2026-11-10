@@ -111,7 +111,13 @@ func (h *HTTP) discoverHostSoftware(w http.ResponseWriter, r *http.Request, s *s
 	}
 	out := hostSoftwareDiscovery{SoftwareDiscovery: report, HostID: id, HostVersion: hostVersion, Candidates: []hostSoftwareCandidate{}}
 	for _, candidate := range report.Candidates {
-		out.Candidates = append(out.Candidates, hostSoftwareCandidate{SoftwareCandidate: candidate, RegisteredID: registered[candidate.RuntimeKind+":"+candidate.Locator]})
+		registeredID := registered[candidate.RuntimeKind+":"+candidate.Locator]
+		if candidate.RuntimeKind == "TOOL" && candidate.ExecutablePath != "" {
+			if resolvedID := registered["TOOL:"+candidate.ExecutablePath]; resolvedID != "" && (registeredID == "" || candidate.Locator == "java") {
+				registeredID = resolvedID
+			}
+		}
+		out.Candidates = append(out.Candidates, hostSoftwareCandidate{SoftwareCandidate: candidate, RegisteredID: registeredID})
 	}
 	unavailable := 0
 	for _, check := range report.Checks {

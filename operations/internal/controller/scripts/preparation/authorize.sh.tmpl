@@ -1,0 +1,7 @@
+set -eu
+printf 'SFOPS_AUTHORIZATION_ENTERED\n' >&2
+test ! -L @FILE@
+test "$(sha256sum -- @FILE@ | cut -d' ' -f1)" = @SHA@
+@FILE@ target-verify@IDENTITY@
+@FILE@ target-trust@IDENTITY@ --public-key @KEY@
+printf 'SFOPS_AUTHORIZATION_READY\n'

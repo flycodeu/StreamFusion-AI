@@ -17,6 +17,9 @@ func executorFailureCode(err error) string {
 		return ""
 	}
 	code := err.Error()
+	if _, known := commandErrorMessages[code]; known {
+		return code
+	}
 	if _, known := executorFailureMessages[code]; known {
 		return code
 	}
@@ -42,6 +45,8 @@ func executorFailureCode(err error) string {
 }
 
 var executorFailureMessages = map[string]string{
+	"COMMAND_TRUST_REQUIRED":           "此主机尚未授权命令模板，请在主机安装准备中更新授权后重试",
+	"COMMAND_SIGNATURE_INVALID":        "命令签名校验失败，请核对主机与控制器归属",
 	"SOFTWARE_IDENTITY_DRIFT":          "服务身份与登记记录不一致，请重新检测并核对服务，不读取其他服务的日志",
 	"SOFTWARE_OWNERSHIP_MISMATCH":      "服务受管归属与安装记录不一致，请核对原安装记录和实际服务",
 	"SOFTWARE_LOG_READ_DENIED":         "服务身份已核对，但日志命令未成功，请检查日志读取条件与服务状态",
@@ -57,11 +62,12 @@ var executorFailureMessages = map[string]string{
 	"EXECUTOR_UPGRADE_REQUIRED":        "执行器版本或协议不匹配，请按安装准备升级后重新检查",
 	"NATIVE_INSTALL_UPGRADE_REQUIRED":  "目标执行器尚未提供当前原生安装能力，请在主机安装准备中升级执行器后重新预检",
 	"INSTALL_RUNTIME_UNSUPPORTED":      "所选运行方式不受支持，请从当前配方支持的Docker或原生方式中选择",
-	"SERVICE_RECIPE_UNTRUSTED":         "目标执行器未收录所选配方的固定定义，请在主机安装准备中升级执行器，或改选该执行器支持的配方",
-	"SERVICE_INSTALL_INPUT_INVALID":    "目标执行器不接受所选配方的固定定义或安装参数格式，请在主机安装准备中升级执行器，或改选该执行器支持的配方后重新预检",
+	"SERVICE_RECIPE_UNTRUSTED":         "接入组件尚不支持所选配方，请升级执行器后重新预检",
+	"SERVICE_INSTALL_INPUT_INVALID":    "接入组件未接受所选配方或安装参数，请升级执行器后重新预检",
 	"EXECUTOR_RESPONSE_INVALID":        "执行器响应格式不正确，请升级匹配版本并检查SSH登录输出",
 	"EXECUTOR_CALL_FAILED":             "执行器调用失败，请在安装准备中核对文件、受限授权和版本",
 	"EXECUTOR_CHECK_TIMEOUT":           "执行器检查超时，请检查目标负载、连接及受管程序",
+	"EXECUTOR_CHECK_EXPIRED":           "检查请求已过期，请核对控制器与目标服务器的系统时间后重试",
 	"INSTALL_PLATFORM_UNSUPPORTED":     "安装配方要求Linux amd64；原生配方还需通过Ubuntu24.04依赖预检",
 	"DOCKER_ENGINE_UNAVAILABLE":        "Docker Engine不可访问，请检查安装、运行状态及固定socket",
 	"COMPOSE_UNAVAILABLE":              "Docker Compose不可用，仅依赖Compose的发布需要准备它",
@@ -72,6 +78,9 @@ var executorFailureMessages = map[string]string{
 func classifyExecutorInvocation(err error, stderr string) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return errors.New("EXECUTOR_CHECK_TIMEOUT")
+	}
+	if strings.TrimSpace(stderr) == "DEADLINE_EXCEEDED" {
+		return errors.New("EXECUTOR_CHECK_EXPIRED")
 	}
 	var pathError *os.PathError
 	if errors.As(err, &pathError) && filepath.Base(pathError.Path) == "executor" {
@@ -86,6 +95,9 @@ func classifyExecutorInvocation(err error, stderr string) error {
 	// Account checks return fixed classifications only. A diagnostic containing
 	// another line (including command output or secrets) must not pass through.
 	if fixed := strings.TrimSpace(stderr); dockerAccessMessages[fixed] != "" {
+		return errors.New(fixed)
+	}
+	if fixed := strings.TrimSpace(stderr); strings.HasPrefix(fixed, "GIT_") && gitMessages[fixed] != "" {
 		return errors.New(fixed)
 	}
 	switch {
@@ -156,9 +168,9 @@ func executorFileProbeCommand(root string, rootUser ...bool) string {
 	directory := "'" + root + "'"
 	authorization := ""
 	if len(rootUser) == 0 || !rootUser[0] {
-		authorization = "elif [ ! -x /usr/bin/sudo ]; then printf 'SFOPS_EXECUTOR_V1\\nSUDO_MISSING\\n'; elif ! /usr/bin/sudo -n -l -- " + file + " target-exec >/dev/null 2>&1; then printf 'SFOPS_EXECUTOR_V1\\nAUTHORIZATION_REQUIRED\\n'; "
+		authorization = controllerTemplate("observe/executor-authorization-probe.sh.tmpl", file)
 	}
-	return "/bin/sh -c \"if [ -L " + directory + " ] || [ -L " + file + " ]; then printf 'SFOPS_EXECUTOR_V1\\nUNSAFE\\n'; elif [ -d " + directory + " ] && [ ! -x " + directory + " ]; then printf 'SFOPS_EXECUTOR_V1\\nUNREADABLE\\n'; elif [ ! -e " + file + " ]; then printf 'SFOPS_EXECUTOR_V1\\nMISSING\\n'; elif [ ! -r " + file + " ]; then printf 'SFOPS_EXECUTOR_V1\\nUNREADABLE\\n'; elif [ ! -f " + file + " ] || [ ! -x " + file + " ]; then printf 'SFOPS_EXECUTOR_V1\\nNOT_EXECUTABLE\\n'; " + authorization + "else printf 'SFOPS_EXECUTOR_V1\\nPRESENT\\n'; fi\""
+	return controllerTemplate("observe/executor-file-probe.sh.tmpl", directory, file, authorization)
 }
 
 // This fallback only inspects the configured path and asks sudo to list the

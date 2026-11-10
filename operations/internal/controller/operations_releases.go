@@ -484,6 +484,8 @@ func (h *HTTP) reconcile(w http.ResponseWriter, r *http.Request, actor *session,
 	}
 	if req.Firewall != nil {
 		e = h.commitFirewallResult(id, req, result)
+	} else if req.Management != nil {
+		e = h.commitSoftwareOperationResult(id, req, result)
 	} else if req.Reconfiguration != nil {
 		e = h.commitSoftwareConfigurationResult(id, req, result)
 	} else if req.GitRepository != nil {

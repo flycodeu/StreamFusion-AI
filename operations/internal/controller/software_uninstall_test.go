@@ -28,7 +28,7 @@ func TestSoftwareUninstallRetainsHistoryReconcilesAndPreservesDataDefault(t *tes
 			if oldExecutor.Load() {
 				uninstallVersion = 0
 			}
-			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerEngineAvailable": true, "softwareLifecycleVersion": 1, "softwareUninstallVersion": uninstallVersion, "serviceInstallVersion": serviceinstall.CapabilityVersion, "serviceCatalogHash": serviceinstall.CatalogHash()})
+			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerEngineAvailable": true, "softwareLifecycleVersion": 1, "softwareUninstallVersion": uninstallVersion, "commandRecipeVersion": deploy.CommandRecipeVersion, "commandTrustFingerprint": deploy.CommandPublicKeyFingerprint(s.commandPublicKey()), "serviceInstallVersion": serviceinstall.CapabilityVersion, "serviceCatalogHash": serviceinstall.CatalogHash()})
 		}
 		if req.Uninstallation == nil {
 			return nil, false

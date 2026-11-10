@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,5 +138,93 @@ func TestMaterialLibraryOfficialSidecarImportReuseDeleteAndRepair(t *testing.T) 
 	s.DB.QueryRow("SELECT count(*) FROM audit WHERE action='INSTALL_MATERIAL_LIBRARY_IMPORTED' AND actor='LOCAL_STARTUP'").Scan(&audits)
 	if audits != first.Imported+1 {
 		t.Fatal("missing local import audit", audits)
+	}
+}
+
+func TestMaterialLibraryCustomRecipesRequireCurrentPublicationAndReuseSnapshots(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	d := testCommandDefinition()
+	d.SourceModes = []string{"ARCHIVE"}
+	saved := dataOf(t, b.call("POST", "/command-templates", map[string]any{"definition": d}, 200))
+	endpoint := "/command-templates/" + saved["id"].(string)
+	dir := t.TempDir()
+	content := []byte("custom material bytes; never executed by an import")
+	entry := serviceinstall.LibraryMaterialFile{RecipeKey: d.Key, RecipeVersion: d.Version, RecipeRevision: "1", RuntimeMode: "NATIVE", Name: "离线演示", File: "custom.tar.gz", SHA256: hashToken(string(content)), ByteSize: int64(len(content))}
+	if err := os.WriteFile(filepath.Join(dir, entry.File), content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	writeLibraryManifest(t, dir, []serviceinstall.LibraryMaterialFile{entry})
+	if _, err := s.ImportInstallationMaterialLibrary(context.Background(), dir); !errors.Is(err, serviceinstall.ErrMaterialLibraryTemplateUnavailable) {
+		t.Fatal("unpublished draft accepted", err)
+	}
+	manifest, err := os.ReadFile(filepath.Join(dir, "library.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := strings.Replace(string(manifest), `"recipeKey":`, `"definition":{"commands":{"steps":[{"script":"arbitrary script"}]}},"recipeKey":`, 1)
+	if err := os.WriteFile(filepath.Join(dir, "library.json"), []byte(injected), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ImportInstallationMaterialLibrary(context.Background(), dir); err == nil || err.Error() != "MATERIAL_LIBRARY_MANIFEST_INVALID" {
+		t.Fatal("manifest supplied its own executable definition", err)
+	}
+	writeLibraryManifest(t, dir, []serviceinstall.LibraryMaterialFile{entry})
+	published := dataOf(t, b.call("POST", endpoint+"/publish", map[string]any{"expectedVersion": saved["version"]}, 200))
+	first, err := s.ImportInstallationMaterialLibrary(context.Background(), dir)
+	if err != nil || first.Imported != 1 {
+		t.Fatal("published custom recipe was not imported", first, err)
+	}
+	frozen, err := s.readInstallationMaterial(first.Items[0].ID)
+	if err != nil || frozen.Definition.Commands == nil || !frozen.Available || frozen.Origin.Kind != "BUNDLED" {
+		t.Fatal("custom snapshot lost its published commands", frozen, err)
+	}
+	again, err := s.ImportInstallationMaterialLibrary(context.Background(), dir)
+	if err != nil || again.Reused != 1 || again.Imported != 0 || again.Items[0].ID != frozen.ID {
+		t.Fatal("custom material was not reused", again, err)
+	}
+	for _, mutate := range []func(*serviceinstall.LibraryMaterialFile){
+		func(m *serviceinstall.LibraryMaterialFile) { m.RecipeRevision = "2" },
+		func(m *serviceinstall.LibraryMaterialFile) { m.RuntimeMode = "DOCKER" },
+		func(m *serviceinstall.LibraryMaterialFile) { m.File = "../outside.tar.gz" },
+	} {
+		invalid := entry
+		mutate(&invalid)
+		writeLibraryManifest(t, dir, []serviceinstall.LibraryMaterialFile{invalid})
+		if _, err := s.ImportInstallationMaterialLibrary(context.Background(), dir); err == nil {
+			t.Fatal("invalid custom material accepted", invalid)
+		}
+	}
+	writeLibraryManifest(t, dir, []serviceinstall.LibraryMaterialFile{entry})
+	withdrawn := dataOf(t, b.call("DELETE", endpoint, map[string]any{"expectedVersion": published["version"]}, 200))
+	if _, err := s.ImportInstallationMaterialLibrary(context.Background(), dir); !errors.Is(err, serviceinstall.ErrMaterialLibraryTemplateUnavailable) {
+		t.Fatal("withdrawn custom recipe accepted", err)
+	}
+	b.call("POST", endpoint+"/publish", map[string]any{"expectedVersion": withdrawn["version"]}, 200)
+	if _, err := s.ImportInstallationMaterialLibrary(context.Background(), dir); !errors.Is(err, serviceinstall.ErrMaterialLibraryTemplateUnavailable) {
+		t.Fatal("old revision accepted after republication", err)
+	}
+	entry.RecipeRevision = "2"
+	writeLibraryManifest(t, dir, []serviceinstall.LibraryMaterialFile{entry})
+	updated, err := s.ImportInstallationMaterialLibrary(context.Background(), dir)
+	if err != nil || updated.Imported != 1 || updated.Items[0].ID == frozen.ID {
+		t.Fatal("new publication did not receive its own snapshot", updated, err)
+	}
+	old, err := s.readInstallationMaterial(frozen.ID)
+	if err != nil || jsonText(old.Definition) != jsonText(frozen.Definition) || old.SHA256 != frozen.SHA256 || old.CreatedAt != frozen.CreatedAt {
+		t.Fatal("existing material history changed", err)
+	}
+}
+
+func TestMaterialLibraryBuiltinRecipeRemainsAvailableAfterWithdrawal(t *testing.T) {
+	s, _ := setup(t)
+	entry := invalidLibraryEntry()
+	if _, err := s.DB.Exec("UPDATE command_templates SET published_json='' WHERE recipe_key=?", commandTemplateKey(entry.RecipeKey, entry.RecipeVersion)); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := entry.Definition(s.libraryInstallRecipe)
+	expected, _ := serviceinstall.Find(entry.RecipeKey, entry.RecipeVersion)
+	if err != nil || serviceinstall.Digest(actual) != serviceinstall.Digest(expected) {
+		t.Fatal("withdrawal changed the compiled vendor material definition", err)
 	}
 }

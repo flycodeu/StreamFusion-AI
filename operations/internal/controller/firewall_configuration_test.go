@@ -19,12 +19,16 @@ func TestFirewallAndSoftwareConfigurationShareHostResponsibility(t *testing.T) {
 	snap := deploy.FirewallSnapshot{Status: "INACTIVE", Hash: strings.Repeat("a", 64), RulesHash: strings.Repeat("b", 64), ManagementSource: "192.0.2.1/32", ManagementPort: 22, ObservedAt: Now(), Ports: []deploy.HostPort{}, ManagedRules: []deploy.FirewallRule{}}
 	results := map[string]deploy.Result{}
 	firewallCalls := 0
+	var commandFingerprint string
 	s, b, host, id, software := readyNginxFixture(t, func(req deploy.Request) ([]byte, bool) {
 		mu.Lock()
 		defer mu.Unlock()
 		encode := func(v any) ([]byte, bool) { data, _ := json.Marshal(v); return data, true }
 		if req.Action == "CAPABILITIES" {
-			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "firewallVersion": deploy.FirewallCapabilityVersion, "softwareConfigureVersion": 1, "softwareLifecycleVersion": 1, "serviceInstallVersion": serviceinstall.CapabilityVersion, "serviceCatalogHash": serviceinstall.CatalogHash(), "dockerEngineAvailable": true})
+			if commandFingerprint == "" {
+				return nil, false // Initial installation uses the base fixture's trust.
+			}
+			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "firewallVersion": deploy.FirewallCapabilityVersion, "softwareConfigureVersion": 1, "softwareLifecycleVersion": 1, "serviceInstallVersion": serviceinstall.CapabilityVersion, "serviceCatalogHash": serviceinstall.CatalogHash(), "dockerEngineAvailable": true, "commandRecipeVersion": deploy.CommandRecipeVersion, "commandTrustFingerprint": commandFingerprint})
 		}
 		if req.Action == "FIREWALL_OBSERVE" {
 			return encode(snap)
@@ -54,6 +58,9 @@ func TestFirewallAndSoftwareConfigurationShareHostResponsibility(t *testing.T) {
 		}
 		return nil, false
 	})
+	mu.Lock()
+	commandFingerprint = deploy.CommandPublicKeyFingerprint(s.commandPublicKey())
+	mu.Unlock()
 	before, _ := s.readSoftware(id)
 	next := before.Installation.Config
 	next.HostPort = 19288

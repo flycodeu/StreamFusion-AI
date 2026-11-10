@@ -22,17 +22,18 @@ type SoftwareRequest struct {
 }
 
 type SoftwareOwnership struct {
-	Node         *serviceinstall.NodeContext  `json:"node,omitempty"`
-	Official     *serviceinstall.OfficialPlan `json:"official,omitempty"`
-	RuntimeMode  string                       `json:"runtimeMode,omitempty"`
-	BinaryPath   string                       `json:"binaryPath,omitempty"`
-	BinaryHash   string                       `json:"binaryHash,omitempty"`
-	ControllerID string                       `json:"controllerId"`
-	TargetID     string                       `json:"targetId"`
-	SoftwareID   string                       `json:"softwareId"`
-	JobID        string                       `json:"jobId"`
-	ConfigHash   string                       `json:"configHash"`
-	ImageID      string                       `json:"imageId"`
+	CommandTemplateHash string                       `json:"commandTemplateHash,omitempty"`
+	Node                *serviceinstall.NodeContext  `json:"node,omitempty"`
+	Official            *serviceinstall.OfficialPlan `json:"official,omitempty"`
+	RuntimeMode         string                       `json:"runtimeMode,omitempty"`
+	BinaryPath          string                       `json:"binaryPath,omitempty"`
+	BinaryHash          string                       `json:"binaryHash,omitempty"`
+	ControllerID        string                       `json:"controllerId"`
+	TargetID            string                       `json:"targetId"`
+	SoftwareID          string                       `json:"softwareId"`
+	JobID               string                       `json:"jobId"`
+	ConfigHash          string                       `json:"configHash"`
+	ImageID             string                       `json:"imageId"`
 }
 
 type SoftwareObservation struct {
@@ -66,11 +67,15 @@ func (s SoftwareRequest) Validate(observation bool) error {
 			return errors.New("SOFTWARE_OWNERSHIP_INVALID")
 		}
 		if o.RuntimeMode == "NATIVE" {
-			if (s.Kind != "SYSTEMD" && s.Kind != "TOOL") || !Hex.MatchString(o.BinaryHash) || !validNativeBinaryPath(o.BinaryPath) && !validNodeOwnership(s) && !validOfficialOwnership(s) && !(s.SoftwareKey == "DOCKER" && s.Kind == "SYSTEMD" && s.Locator == "docker.service" && o.BinaryPath == "/usr/bin/dockerd") {
+			custom := Hex.MatchString(o.CommandTemplateHash) && ((s.Kind == "SYSTEMD" && o.BinaryPath == "" && o.BinaryHash == "") || validCommandBinaryPath(o.BinaryPath) && Hex.MatchString(o.BinaryHash))
+			if (s.Kind != "SYSTEMD" && s.Kind != "TOOL") || !custom && (!Hex.MatchString(o.BinaryHash) || !validNativeBinaryPath(o.BinaryPath) && !validNodeOwnership(s) && !validOfficialOwnership(s) && !(s.SoftwareKey == "DOCKER" && s.Kind == "SYSTEMD" && s.Locator == "docker.service" && o.BinaryPath == "/usr/bin/dockerd")) {
 				return errors.New("SOFTWARE_NATIVE_OWNERSHIP_INVALID")
 			}
 		} else if (s.Kind != "DOCKER" && s.Kind != "TOOL") || !strings.HasPrefix(o.ImageID, "sha256:") || !Hex.MatchString(strings.TrimPrefix(o.ImageID, "sha256:")) {
 			return errors.New("SOFTWARE_OWNERSHIP_INVALID")
+		}
+		if o.CommandTemplateHash != "" && !Hex.MatchString(o.CommandTemplateHash) {
+			return errors.New("COMMAND_TEMPLATE_IDENTITY_MISMATCH")
 		}
 	}
 	if s.Ownership != nil && s.Ownership.Node != nil && !validNodeOwnership(s) {
@@ -95,7 +100,7 @@ func (s SoftwareRequest) Validate(observation bool) error {
 			if s.Ownership.RuntimeMode == "NATIVE" && s.Locator != s.Ownership.BinaryPath || s.Ownership.RuntimeMode != "NATIVE" && s.Locator != "image:"+s.Ownership.ImageID {
 				return errors.New("SOFTWARE_TOOL_IDENTITY_INVALID")
 			}
-		} else if s.Locator != "java" && s.Locator != "python" && s.Locator != "ffmpeg" && s.Locator != "git" {
+		} else if s.Locator != "java" && s.Locator != "python" && s.Locator != "ffmpeg" && s.Locator != "git" && s.Locator != "codex" && s.Locator != "claude" {
 			return errors.New("SOFTWARE_TOOL_UNSUPPORTED")
 		}
 	default:
@@ -111,6 +116,9 @@ func (s SoftwareRequest) Validate(observation bool) error {
 }
 
 func softwareMutation(action string) bool {
+	if action == "SOFTWARE_OPERATION" || action == "SOFTWARE_RESTART" || action == "SOFTWARE_RELOAD" || action == "SOFTWARE_PAUSE" || action == "SOFTWARE_UNPAUSE" {
+		return true
+	}
 	if action == "NODE_ENVIRONMENT_CHANGE" || action == "SOFTWARE_DOCKER_ACCESS" || action == "GIT_REPOSITORY_CHANGE" {
 		return true
 	}

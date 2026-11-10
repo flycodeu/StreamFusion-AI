@@ -1,0 +1,1 @@
+"$OPS_NODE_ROOT/nvm/versions/node/$OPS_NODE_VERSION/bin/node" --version

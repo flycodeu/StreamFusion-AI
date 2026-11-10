@@ -3,18 +3,23 @@ import argparse
 import json
 import pathlib
 import platform
+import re
 import secrets
 import socket
+import sqlite3
 import subprocess
 import tarfile
 import time
 import urllib.request
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--binary", required=True)
 parser.add_argument("--output", required=True)
 parser.add_argument("--browser-executable", help="已有Chromium可执行文件；默认使用Playwright匹配版本")
+parser.add_argument("--error-docs-only", action="store_true", help="仅验证系统设置的错误说明文档")
+parser.add_argument("--settings-only", action="store_true", help="仅验证系统设置与运行监控")
+parser.add_argument("--logs-only", action="store_true", help="仅验证执行记录分页与原位日志弹窗")
 args = parser.parse_args()
 binary = str(pathlib.Path(args.binary).resolve())
 output = pathlib.Path(args.output).resolve()
@@ -67,6 +72,393 @@ try:
         page.reload()
         page.get_by_role("heading", name="运行总览", exact=True).wait_for()
         checks.extend(["login", "session-after-reload", "real-status"])
+        if args.logs_only:
+            # Terminal history fixtures live only in this script's disposable
+            # state. Every row is already SUCCEEDED; none is a queued operation.
+            host_id = "11111111-1111-4111-8111-111111111114"
+            software_id = "22222222-2222-4222-8222-222222222214"
+            stamp = "2026-11-09T12:00:00Z"
+            job_id = lambda index: f"00000000-0000-4000-8000-{index:012d}"
+            latest = job_id(126)
+            with sqlite3.connect(state / "controller.sqlite") as db:
+                admin = db.execute("SELECT id FROM admins LIMIT 1").fetchone()[0]
+                db.execute("INSERT INTO targets(id,name,install_root,kind,address,created_at) VALUES(?,?,?,'LOCAL','127.0.0.1',?)", (host_id, "日志测试主机", str(output / "fixture-target"), stamp))
+                db.execute("INSERT INTO software_instances(id,name,host_id,software_type,software_version,runtime_kind,locator,management_mode,desired_state,actual_state,last_job_id,created_at,updated_at) VALUES(?,?,?,'OTHER','1.0','SYSTEMD','log-fixture.service','OBSERVE','UNCHANGED','STOPPED',?,?,?)", (software_id, "日志测试软件", host_id, latest, stamp, stamp))
+                for index in range(127):
+                    raw = json.dumps({"software": {"id": software_id}, "installation": {"softwareId": software_id, "config": {"name": f"分页测试 {index:03d}"}}, "targetId": host_id, "secrets": {"password": "history-fixture-secret-never-render"}})
+                    db.execute("INSERT INTO jobs(id,actor_id,kind,target_id,idempotency_key,request_hash,status,phase,input_json,trace_id,created_at,updated_at) VALUES(?,?,'SOFTWARE_START',?,?,?,'SUCCEEDED','SOFTWARE_STATE_VERIFIED',?,'logs-fixture',?,?)", (job_id(index), admin, host_id, job_id(index), job_id(index), raw, stamp, stamp))
+            page.get_by_role("button", name="日志记录", exact=True).click()
+            logs = page.locator('section[aria-label="执行记录"]')
+            records = logs.get_by_label("日志列表", exact=True)
+            expect(records.get_by_role("button")).to_have_count(20)
+            expect(records.get_by_role("button").first).to_have_attribute("aria-label", "分页测试 126")
+            expect(logs.locator(".receipt-summary")).to_contain_text("已完成")
+            expect(logs.locator(".execution-terminal")).to_have_count(0)
+            expect(logs.get_by_text("SOFTWARE_STATE_VERIFIED", exact=True)).not_to_be_visible()
+            assert "history-fixture-secret-never-render" not in logs.inner_text()
+            checks.append("real-history-first-page-and-receipt-card-hide-raw-codes-and-private-input")
+            for index in range(6):
+                logs.get_by_role("button", name="下一页", exact=True).click()
+                expect(logs.get_by_text(f"第 {index+2} 页", exact=True)).to_be_visible()
+                expect(records.get_by_role("button").first).to_have_attribute("aria-label", f"分页测试 {106-index*20:03d}")
+            expect(records.get_by_role("button")).to_have_count(7)
+            expect(logs.get_by_role("button", name="下一页", exact=True)).to_be_disabled()
+            expect(records.get_by_role("button").last).to_have_attribute("aria-label", "分页测试 000")
+            logs.get_by_role("button", name="上一页", exact=True).click()
+            expect(records.get_by_role("button")).to_have_count(20)
+            checks.append("cursor-pagination-reaches-all-127-same-timestamp-records-and-returns")
+            logs.get_by_label("搜索日志", exact=True).fill("分页测试 005")
+            expect(records.get_by_role("button")).to_have_count(1)
+            expect(records.get_by_role("button").first).to_have_attribute("aria-label", "分页测试 005")
+            expect(logs.get_by_text("第 1 页", exact=True)).to_be_visible()
+            logs.get_by_label("搜索日志", exact=True).fill("__NO_LOG_MATCH__")
+            expect(logs.get_by_text("没有匹配的日志", exact=True)).to_be_visible()
+            expect(logs.locator(".receipt-summary")).to_have_count(0)
+            logs.get_by_label("搜索日志", exact=True).fill("")
+            expect(records.get_by_role("button")).to_have_count(20)
+            logs.get_by_label("日志每页条数", exact=True).select_option("50")
+            expect(records.get_by_role("button")).to_have_count(50)
+            checks.append("server-search-before-pagination-clears-old-selection-and-page-size-resets-cursor")
+            page.get_by_role("button", name="软件管理", exact=True).click()
+            card = page.locator("article.software-card").filter(has=page.get_by_role("heading", name="日志测试软件", exact=True))
+            card.get_by_role("button", name=re.compile("^(详情|管理)$")).first.click()
+            detail = page.get_by_role("dialog", name="日志测试软件", exact=True)
+            detail.get_by_role("tab", name="执行记录", exact=True).click()
+            detail.get_by_role("button", name="查看日志", exact=True).click()
+            detail.wait_for(state="hidden")
+            modal = page.get_by_role("dialog", name="执行日志", exact=True)
+            expect(modal).to_be_visible()
+            expect(page.get_by_role("heading", name="软件管理", exact=True)).to_be_visible()
+            expect(modal.locator(".receipt-summary")).to_contain_text("已完成")
+            expect(modal.locator(".execution-terminal")).to_have_count(0)
+            for width, height in [(1440, 900), (390, 500)]:
+                page.set_viewport_size({"width": width, "height": height})
+                screenshot_ready(modal)
+                page.screenshot(path=str(output / f"execution-log-modal-{width}.png"), animations="disabled")
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                assert modal.evaluate("el => {const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1&&r.top>=0&&r.bottom<=innerHeight+1}"), (width, height, modal.bounding_box())
+            page.mouse.click(3, 3)
+            modal.wait_for(state="hidden")
+            expect(page.get_by_role("heading", name="软件管理", exact=True)).to_be_visible()
+            checks.append("software-log-opens-one-responsive-modal-without-changing-page-and-outside-closes")
+            page.set_viewport_size({"width": 1440, "height": 900})
+            initial_job = page.request.get(url + "/ops/api/v1/jobs/" + latest).json()["data"]
+            log_reads, held_reads = [], []
+            hold = {"logs": False}
+            def running_job(route):
+                route.fulfill(json={"data": {**initial_job, "status": "RUNNING"}})
+            def execution_output(route):
+                log_reads.append(route.request.url)
+                if hold["logs"]:
+                    held_reads.append(route)
+                else:
+                    route.fulfill(json={"data": {"text": f"测试命令输出 {len(log_reads)}", "source": "TARGET_EXECUTION", "limited": False}})
+            page.route("**/ops/api/v1/jobs/" + latest, running_job)
+            page.route("**/ops/api/v1/jobs/" + latest + "/logs", execution_output)
+            card.get_by_role("button", name=re.compile("^(详情|管理)$")).first.click()
+            detail.get_by_role("tab", name="执行记录", exact=True).click()
+            detail.get_by_role("button", name="查看日志", exact=True).click()
+            expect(modal.get_by_label("执行过程输出", exact=True)).to_contain_text("测试命令输出")
+            first_reads = len(log_reads)
+            page.wait_for_timeout(3300)
+            assert len(log_reads) > first_reads
+            modal.get_by_role("button", name="暂停刷新", exact=True).click()
+            paused_reads = len(log_reads)
+            page.wait_for_timeout(3300)
+            assert len(log_reads) == paused_reads
+            modal.get_by_role("button", name="继续刷新", exact=True).click()
+            expect(modal.get_by_label("执行过程输出", exact=True)).to_contain_text(f"测试命令输出 {paused_reads+1}")
+            checks.append("shared-modal-viewer-polls-real-output-and-preserves-pause-resume")
+            modal.get_by_role("button", name="暂停刷新", exact=True).click()
+            hold["logs"] = True
+            modal.get_by_role("button", name="继续刷新", exact=True).click()
+            page.wait_for_function("() => document.querySelector('.software-log-dialog button[disabled]') !== null")
+            page.wait_for_timeout(150)
+            assert held_reads, "test must hold a dispatched log response before closing"
+            modal.get_by_role("button", name="Close this dialog", exact=True).click()
+            modal.wait_for(state="hidden")
+            hold["logs"] = False
+            for old in held_reads:
+                old.fulfill(json={"data": {"text": "关闭后的旧输出", "source": "TARGET_EXECUTION"}})
+            read_count = len(log_reads)
+            page.wait_for_timeout(3300)
+            assert len(log_reads) == read_count
+            expect(page.get_by_text("关闭后的旧输出", exact=True)).to_have_count(0)
+            assert page.request.get(url + "/ops/api/v1/jobs/" + latest).json()["data"]["status"] == "SUCCEEDED"
+            checks.append("closing-log-cancels-read-and-drops-late-response-without-changing-underlying-job")
+            page.get_by_role("button", name="日志记录", exact=True).click()
+            expect(records.get_by_role("button")).to_have_count(20)
+            for width, height in [(1440, 900), (390, 900)]:
+                page.set_viewport_size({"width": width, "height": height})
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                page.screenshot(path=str(output / f"execution-history-{width}.png"), full_page=True, animations="disabled")
+            with sqlite3.connect(state / "controller.sqlite") as db:
+                assert db.execute("SELECT count(*) FROM jobs").fetchone()[0] == 127
+                assert db.execute("SELECT count(*) FROM jobs WHERE kind='SOFTWARE_INSTALL'").fetchone()[0] == 0
+                assert db.execute("SELECT count(*) FROM operation_locks").fetchone()[0] == 0
+            assert not errors, errors
+            result = {"passed": checks, "pageErrors": errors, "backend": "real binary / disposable state and 127 terminal history rows", "browserUIFixtures": ["running job read and command output only; no target operation"], "remoteInstalls": 0, "productionAcceptance": False}
+            (output / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf8")
+            print(json.dumps(result, ensure_ascii=False))
+            browser.close()
+            raise SystemExit(0)
+        if args.settings_only:
+            before_settings = page.request.get(url + "/ops/api/v1/settings").json()["data"]
+            plain_status = page.request.get(url + "/ops/api/v1/status").json()["data"]
+            real_status = page.request.get(url + "/ops/api/v1/status?system=1").json()["data"]
+            system = real_status["system"]
+            assert "system" not in plain_status
+            assert system["hostname"] and system["platform"] and system["arch"] and system["observedAt"]
+            assert system["cpu"]["cores"] > 0
+            for resource in ("memory", "disk"):
+                metric = system[resource]
+                assert metric["available"] and 0 <= metric["usedBytes"] <= metric["totalBytes"] and metric["totalBytes"] > 0
+                assert 0 <= metric["usagePercent"] <= 100
+            if platform.system() == "Windows":
+                assert system["platform"] == "windows" and "Windows" in system["platformVersion"], {key: system[key] for key in ("platform", "platformVersion")}
+            checks.append("authenticated-real-system-metrics-without-expanding-lightweight-status")
+
+            page.get_by_role("button", name="系统设置", exact=True).click()
+            settings = page.locator("section.content.settings")
+            monitor = settings.get_by_role("region", name="运行监控", exact=True)
+            cpu = monitor.get_by_role("article", name="CPU 使用情况", exact=True)
+            memory = monitor.get_by_role("article", name="内存 使用情况", exact=True)
+            disk = monitor.get_by_role("article", name="数据磁盘 使用情况", exact=True)
+            expect(monitor.get_by_text(system["hostname"], exact=True)).to_be_visible()
+            expect(settings.locator(".settings-info-card")).to_have_count(2)
+            expect(settings.get_by_text("控制器 ID", exact=True)).to_have_count(0)
+            expect(page.get_by_label("控制器名称", exact=True)).to_have_count(0)
+            expect(settings.get_by_role("button", name="保存名称", exact=True)).to_have_count(0)
+            expect(settings.locator(".settings-meta").get_by_text(plain_status["listen"], exact=True)).to_be_visible()
+            expect(settings.locator(".settings-meta").get_by_text("v" + plain_status["release"], exact=True)).to_be_visible()
+            expect(memory.locator(".resource-value")).to_have_text(re.compile(r"\d+\.\d%"))
+            expect(disk.locator(".resource-value")).to_have_text(re.compile(r"\d+\.\d%"))
+            if system["cpu"]["usagePercent"] is None:
+                page.wait_for_timeout(2100)
+                real_status = page.request.get(url + "/ops/api/v1/status?system=1").json()["data"]
+                system = real_status["system"]
+            assert system["cpu"]["available"] and system["cpu"]["usagePercent"] is not None and 0 <= system["cpu"]["usagePercent"] <= 100
+            monitor.get_by_role("button", name="刷新监控", exact=True).click()
+            expect(cpu.locator(".resource-value")).to_have_text(re.compile(r"\d+\.\d%"))
+            checks.append("settings-has-two-service-cards-real-monitoring-and-no-name-or-controller-id-input")
+
+            for width, height in ((1440, 900), (1000, 800), (390, 900)):
+                page.set_viewport_size({"width": width, "height": height})
+                screenshot_ready()
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), width
+                assert settings.locator(".settings-info-card, .resource-card, .setting-action").evaluate_all(
+                    "els => els.every(el => { const r=el.getBoundingClientRect(); return r.width>0 && r.left>=0 && r.right<=innerWidth+1; })"
+                ), width
+                page.screenshot(path=str(output / f"settings-monitor-{width}.png"), full_page=True, animations="disabled")
+                checks.append(f"settings-service-monitor-maintenance-layout-{width}")
+            page.set_viewport_size({"width": 1440, "height": 900})
+            settings.get_by_role("button", name="查看文档", exact=True).click()
+            docs = page.get_by_role("dialog", name="错误说明", exact=True)
+            expect(docs.get_by_role("article", name="错误说明正文", exact=True)).to_be_visible()
+            docs.get_by_role("button", name="Close this dialog", exact=True).click()
+            docs.wait_for(state="hidden")
+            with page.expect_download() as download:
+                settings.get_by_role("button", name="下载备份", exact=True).click()
+            backup = output / "settings-backup.tar.gz"
+            download.value.save_as(str(backup))
+            with tarfile.open(backup) as archive:
+                assert "manifest.json" in archive.getnames() and "master.key" not in archive.getnames()
+            assert page.request.get(url + "/ops/api/v1/settings").json()["data"] == before_settings
+            checks.append("error-document-and-real-backup-remain-usable-without-changing-controller-settings")
+
+            page.clock.install()
+            fixture = json.loads(json.dumps(real_status))
+            fixture["system"].update({"hostname": "settings-monitor-fixture", "platformVersion": "Windows 11 测试系统", "observedAt": "2026-11-09T10:00:00Z"})
+            fixture["system"]["cpu"].update({"available": True, "cores": 8, "model": "Test CPU", "usagePercent": None})
+            fixture["system"]["memory"].update({"available": True, "totalBytes": 8 * 1024**3, "usedBytes": 4 * 1024**3, "usagePercent": 50})
+            fixture["system"]["disk"].update({"available": True, "path": "D:\\", "totalBytes": 100 * 1024**3, "usedBytes": 25 * 1024**3, "freeBytes": 75 * 1024**3, "usagePercent": 25})
+            fixture_mode, monitor_requests, held_monitor = "first", [], []
+            monitor_route = "**/ops/api/v1/status?system=1"
+            def monitor_fixture(route):
+                assert route.request.method == "GET"
+                monitor_requests.append(route.request.url)
+                if fixture_mode == "hold":
+                    held_monitor.append(route)
+                elif fixture_mode == "network":
+                    route.abort("connectionfailed")
+                elif fixture_mode == "unauthorized":
+                    route.fulfill(status=401, json={"code": "AUTH_REQUIRED", "msg": "请先登录", "traceId": "settings-auth-fixture", "timestamp": "2026-11-09T10:00:00Z"})
+                else:
+                    value = json.loads(json.dumps(fixture))
+                    if fixture_mode == "zero":
+                        value["system"]["cpu"]["usagePercent"] = 0
+                    elif fixture_mode == "partial":
+                        value["system"]["cpu"]["available"] = False
+                        value["system"]["disk"]["available"] = False
+                    route.fulfill(status=200, json={"data": value})
+            page.route(monitor_route, monitor_fixture)
+            refresh = monitor.get_by_role("button", name="刷新监控", exact=True)
+            refresh.click()
+            expect(cpu.locator(".resource-value")).to_have_text("采集中")
+            fixture_mode = "zero"
+            refresh.click()
+            expect(cpu.locator(".resource-value")).to_have_text("0.0%")
+            expect(cpu.get_by_role("progressbar", name="CPU 使用率", exact=True)).to_have_attribute("value", "0")
+            checks.append("first-cpu-sample-is-collecting-and-valid-zero-remains-zero")
+            fixture_mode = "partial"
+            refresh.click()
+            expect(cpu.locator(".resource-value")).to_have_text("暂不可用")
+            expect(disk.locator(".resource-value")).to_have_text("暂不可用")
+            expect(memory.locator(".resource-value")).to_have_text("50.0%")
+            checks.append("unavailable-cpu-or-disk-keeps-available-memory-and-service-information")
+            old_time = monitor.locator(".monitor-update").inner_text()
+            fixture_mode = "network"
+            refresh.click()
+            expect(monitor.get_by_text("监控暂未更新", exact=True)).to_be_visible()
+            expect(memory.locator(".resource-value")).to_have_text("50.0%")
+            assert monitor.locator(".monitor-update").inner_text() == old_time
+            fixture_mode = "zero"
+            refresh.click()
+            expect(cpu.locator(".resource-value")).to_have_text("0.0%")
+            expect(monitor.locator(".monitor-error")).to_have_count(0)
+            checks.append("network-failure-retains-last-snapshot-and-time-manual-refresh-recovers")
+
+            fixture_mode = "hold"
+            refresh.click()
+            expect(monitor.get_by_role("button", name="读取中…", exact=True)).to_be_disabled()
+            request_count = len(monitor_requests)
+            page.clock.fast_forward(6000)
+            assert len(monitor_requests) == request_count and len(held_monitor) == 1
+            checks.append("slow-refresh-disables-duplicate-manual-action-and-never-overlaps-polling")
+            page.evaluate("() => { window.settingsHidden=true; Object.defineProperty(document,'hidden',{configurable:true,get:()=>window.settingsHidden}); document.dispatchEvent(new Event('visibilitychange')); }")
+            late = json.loads(json.dumps(fixture))
+            late["system"]["hostname"] = "late-monitor-must-not-render"
+            held_monitor.pop().fulfill(status=200, json={"data": late})
+            page.clock.fast_forward(10000)
+            assert len(monitor_requests) == request_count
+            expect(monitor.get_by_text("late-monitor-must-not-render", exact=True)).to_have_count(0)
+            fixture_mode = "zero"
+            page.evaluate("() => { window.settingsHidden=false; document.dispatchEvent(new Event('visibilitychange')); }")
+            expect(cpu.locator(".resource-value")).to_have_text("0.0%")
+            expect(refresh).to_be_enabled()
+            assert len(monitor_requests) == request_count + 1
+            checks.append("hidden-page-aborts-pending-read-stops-polling-and-resumes-with-fresh-snapshot")
+
+            fixture_mode = "hold"
+            refresh.click()
+            expect(monitor.get_by_role("button", name="读取中…", exact=True)).to_be_disabled()
+            page.get_by_role("button", name="运行总览", exact=True).click()
+            expect(monitor).to_have_count(0)
+            request_count = len(monitor_requests)
+            held_monitor.pop().fulfill(status=200, json={"data": late})
+            page.clock.fast_forward(6000)
+            assert len(monitor_requests) == request_count
+            expect(page.get_by_text("late-monitor-must-not-render", exact=True)).to_have_count(0)
+            fixture_mode = "zero"
+            page.get_by_role("button", name="系统设置", exact=True).click()
+            expect(cpu.locator(".resource-value")).to_have_text("0.0%")
+            checks.append("leaving-settings-aborts-old-read-without-late-output-or-new-monitoring-requests")
+
+            fixture_mode = "hold"
+            refresh.click()
+            expect(monitor.get_by_role("button", name="读取中…", exact=True)).to_be_disabled()
+            page.get_by_role("button", name="退出", exact=True).click()
+            page.get_by_role("heading", name="控制器登录", exact=True).wait_for()
+            request_count = len(monitor_requests)
+            held_monitor.pop().fulfill(status=200, json={"data": late})
+            page.clock.fast_forward(6000)
+            assert len(monitor_requests) == request_count
+            expect(monitor).to_have_count(0)
+            checks.append("logout-aborts-old-monitor-and-stops-its-timer")
+            fixture_mode = "zero"
+            page.get_by_label("密码", exact=True).fill(password)
+            page.get_by_role("button", name="登录", exact=True).click()
+            expect(cpu.locator(".resource-value")).to_have_text("0.0%")
+            fixture_mode = "unauthorized"
+            refresh.click()
+            page.get_by_role("heading", name="控制器登录", exact=True).wait_for()
+            request_count = len(monitor_requests)
+            page.clock.fast_forward(6000)
+            assert len(monitor_requests) == request_count
+            checks.append("monitor-authentication-expiry-returns-to-login-and-stops-monitoring")
+            assert not errors, errors
+            result = {"passed": checks, "pageErrors": errors, "backend": "real binary / isolated state",
+                      "browserUIFixtures": ["read-only system metrics for sampling, partial failure, transport failure and delayed/authentication replies", "synthetic page visibility and browser clock"],
+                      "realSystem": {"platform": system["platform"], "memoryAvailable": system["memory"]["available"], "diskAvailable": system["disk"]["available"]},
+                      "controllerSettingsUnchanged": True, "remoteInstalls": 0, "productionAcceptance": False}
+            (output / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf8")
+            print(json.dumps(result, ensure_ascii=False))
+            browser.close()
+            raise SystemExit(0)
+        if args.error_docs_only:
+            page.get_by_role("button", name="系统设置", exact=True).click()
+            settings = page.locator("section.content.settings")
+            expect(settings.locator('[aria-label="错误说明列表"]')).to_have_count(0)
+            expect(page.get_by_text("点击条目查看检查步骤。具体原因需结合出错主机、时间和 traceId 核对。", exact=True)).to_have_count(0)
+            page.screenshot(path=str(output / "settings-error-docs-entry-1440.png"), animations="disabled")
+            settings.get_by_role("button", name="查看文档", exact=True).click()
+            dialog = page.get_by_role("dialog", name="错误说明", exact=True)
+            screenshot_ready(dialog)
+            docs = dialog.get_by_role("region", name="错误说明列表", exact=True)
+            content = docs.get_by_role("article", name="错误说明正文", exact=True)
+            expect(content.get_by_role("heading", name="错误含义", exact=True)).to_be_visible()
+            expect(content.get_by_role("heading", name="检查步骤", exact=True)).to_be_visible()
+            checks.extend(["settings-has-button-without-embedded-reference-or-intro", "reference-opens-as-document-with-selected-entry"])
+
+            category = docs.get_by_label("错误分类", exact=True)
+            category.select_option(label="软件安装")
+            expect(docs.get_by_role("button", name=re.compile("COMMAND_TRUST_REQUIRED"))).to_have_attribute("aria-current", "page")
+            category.select_option(label="全部分类")
+            query = docs.get_by_label("查询错误说明", exact=True)
+            query.fill("OPERATION_LOCKED")
+            expect(content.get_by_role("heading", name="主机存在未决操作", exact=True)).to_be_visible()
+            expect(docs.get_by_role("button", name=re.compile("OPERATION_LOCKED"))).to_have_attribute("aria-current", "page")
+            query.fill("")
+            docs.get_by_role("button", name=re.compile("PORT_OBSERVATION_DENIED")).click()
+            expect(content.get_by_role("heading", name="监听端口读取受限", exact=True)).to_be_visible()
+            checks.extend(["category-selects-matching-first-entry", "code-search-and-entry-selection-update-document"])
+            query.fill("")
+            first = docs.locator('.reference-heading[aria-current="page"]')
+            first.focus()
+            initial = first.get_attribute("aria-label")
+            first.press("ArrowDown")
+            expect(docs.locator('.reference-heading[aria-current="page"]')).not_to_have_attribute("aria-label", initial)
+            page.keyboard.press("Tab")
+            expect(content).to_be_focused()
+            page.keyboard.press("Shift+Tab")
+            page.keyboard.press("ArrowUp")
+            expect(docs.locator('.reference-heading[aria-current="page"]')).to_have_attribute("aria-label", initial)
+            checks.append("reference-keyboard-selection-and-document-focus")
+
+            query.fill("UNKNOWN_ERROR_DOCS_TEST")
+            expect(docs.get_by_text("没有匹配的错误说明", exact=True)).to_be_visible()
+            expect(content).to_have_count(0)
+            query.fill("PORT_OBSERVATION_DENIED")
+            expect(content.get_by_role("heading", name="监听端口读取受限", exact=True)).to_be_visible()
+            checks.append("unknown-search-shows-concise-empty-state-and-recovers")
+
+            for width, height in ((1440, 900), (390, 900), (390, 500)):
+                page.set_viewport_size({"width": width, "height": height})
+                screenshot_ready(dialog)
+                expect(content.get_by_role("heading", name="检查步骤", exact=True)).to_be_visible()
+                assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), width
+                assert dialog.evaluate("el => {const r=el.getBoundingClientRect(); return r.left>=0 && r.right<=innerWidth+1 && r.top>=0 && r.bottom<=innerHeight+1}"), width
+                entry_bounds = docs.get_by_role("button", name=re.compile("PORT_OBSERVATION_DENIED")).bounding_box()
+                content_bounds = content.bounding_box()
+                assert entry_bounds and content_bounds
+                if width == 1440:
+                    assert entry_bounds["x"] + entry_bounds["width"] <= content_bounds["x"] + 1
+                else:
+                    assert content_bounds["y"] >= entry_bounds["y"]
+                assert content_bounds["height"] >= 180, (width, height, content_bounds)
+                page.screenshot(path=str(output / f"error-docs-{width}-{height}.png"), animations="disabled")
+                checks.append(f"document-layout-{width}-{height}-within-viewport")
+
+            page.mouse.click(3, 3)
+            dialog.wait_for(state="hidden")
+            checks.append("background-click-closes-document")
+            assert not errors, errors
+            result = {"passed": checks, "pageErrors": errors, "backend": "real binary / isolated state",
+                      "browserUIFixtures": [], "initialCodeCoverage": "existing errorReference.test.mjs", "productionAcceptance": False}
+            (output / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf8")
+            print(json.dumps(result, ensure_ascii=False))
+            browser.close()
+            raise SystemExit(0)
         page.get_by_role("button", name="连接凭据", exact=True).click()
         page.get_by_role("button", name="新增凭据", exact=True).click()
         dialog = page.get_by_role("dialog", name="新增凭据", exact=True)
@@ -86,17 +478,18 @@ try:
         row.get_by_text("已撤销", exact=True).wait_for()
         checks.extend(["credential-create", "credential-revision", "credential-revoke", "secret-not-rendered"])
         page.get_by_role("button", name="系统设置", exact=True).click()
-        page.get_by_label("控制器名称", exact=True).fill("测试控制器")
-        page.get_by_role("button", name="保存名称", exact=True).click()
-        page.get_by_text("名称已保存", exact=True).wait_for()
+        expect(page.get_by_label("控制器名称", exact=True)).to_have_count(0)
+        expect(page.locator(".settings-info-card")).to_have_count(2)
+        expect(page.get_by_text("控制器 ID", exact=True)).to_have_count(0)
         with page.expect_download() as download:
             page.get_by_role("button", name="下载备份", exact=True).click()
         backup = output / "ui-backup.tar.gz"
         download.value.save_as(str(backup))
         with tarfile.open(backup) as archive:
             assert "manifest.json" in archive.getnames() and "master.key" not in archive.getnames()
-        checks.extend(["settings-save", "browser-backup-download"])
-        page.get_by_role("button", name="操作记录", exact=True).click()
+        checks.extend(["settings-cards-without-controller-name-or-id", "browser-backup-download"])
+        page.get_by_role("button", name="日志记录", exact=True).click()
+        page.get_by_role("tab", name="操作记录", exact=True).click()
         page.get_by_text("创建备份", exact=True).wait_for()
         page.get_by_role("button", name="详情", exact=True).first.click()
         page.get_by_role("dialog", name="记录详情", exact=True).wait_for()
@@ -223,7 +616,7 @@ try:
         checks.extend(["F01-host-normal-fields", "F01-host-state-first-column", "F01-host-four-capabilities", "F01-host-maintenance", "F01-host-edit", "F01-unreferenced-host-remove", "F01-host-filter", "F01-host-controls-aligned", "F02-project-directory-visible", "F02-project-directory-saved-and-editable"])
         page.get_by_role("button", name="软件管理", exact=True).click()
         page.get_by_text("尚未添加软件", exact=True).wait_for()
-        assert page.get_by_role("tab", name="软件中心", exact=True).get_attribute("aria-selected") == "true"
+        assert page.get_by_role("button", name="软件管理", exact=True).get_attribute("aria-current") == "page"
         page.get_by_role("button", name="自动识别", exact=True).click()
         discovery_dialog = page.get_by_role("dialog", name="自动识别软件", exact=True)
         discovery_dialog.get_by_text("选择主机，识别已有软件", exact=True).wait_for()
@@ -421,7 +814,7 @@ try:
         page.get_by_label("筛选管理模式", exact=True).select_option("RELEASED")
         page.locator(".software-cards").get_by_text("已有 Java 工具", exact=True).wait_for()
         checks.extend(["F02-software-default-management", "F02-register-readonly-tool", "F02-tool-no-lifecycle-controls", "F02-tool-observe-no-running-claim", "F02-card-status-first", "F02-controls-aligned", "F02-software-filter", "F02-unmanage-keeps-history"])
-        page.get_by_role("tab", name="软件目录", exact=True).click()
+        page.get_by_role("button", name="软件安装", exact=True).click()
         page.locator(".software-recipes").wait_for()
         catalog = page.request.get(url + "/ops/api/v1/software-recipes").json()["data"]
         catalog_keys = {entry["key"] for entry in catalog if entry["key"] != "node"}
@@ -533,13 +926,13 @@ try:
         page.get_by_label("密码", exact=True).fill(changed)
         page.get_by_role("button", name="登录", exact=True).click()
         page.get_by_role("button", name="系统设置", exact=True).click()
-        page.get_by_label("控制器名称", exact=True).wait_for()
-        assert page.get_by_label("控制器名称", exact=True).input_value() == "测试控制器"
+        expect(page.locator(".settings-info-card")).to_have_count(2)
+        expect(page.get_by_label("控制器名称", exact=True)).to_have_count(0)
         page.get_by_role("button", name="运行总览", exact=True).click()
         page.get_by_role("heading", name="运行总览", exact=True).wait_for()
         checks.append("password-change-relogin")
         page.set_viewport_size({"width": 390, "height": 844})
-        for name in ["运行总览", "主机管理", "软件管理", "应用实例", "版本制品", "发布作业", "连接凭据", "操作记录", "系统设置"]:
+        for name in ["运行总览", "主机管理", "软件管理", "应用实例", "版本制品", "发布作业", "连接凭据", "日志记录", "系统设置"]:
             page.get_by_role("button", name="展开导航", exact=True).click()
             page.get_by_role("button", name=name, exact=True).click()
             if name == "主机管理":
@@ -565,7 +958,8 @@ try:
                 detail.get_by_role("button", name="Close this dialog").click()
                 detail.wait_for(state="hidden")
                 checks.append("software-detail-internal-tabs-within-390px")
-                page.get_by_role("tab", name="软件目录", exact=True).click()
+                page.get_by_role("button", name="展开导航", exact=True).click()
+                page.get_by_role("button", name="软件安装", exact=True).click()
                 page.locator(".software-recipes").wait_for()
                 page.wait_for_function("count => document.querySelectorAll('.plugin-card').length === count", arg=expected_cards)
                 page.wait_for_function("() => document.querySelectorAll('.el-message').length === 0")
@@ -586,10 +980,15 @@ try:
     result = {"passed": checks, "pageErrors": errors, "backend": "real binary / isolated state", "browserUIFixtures": ["software-discovery candidate responses only; registration and unmanage use the real API", "read-only audit list responses for translated results and raw identifiers"], "productionAcceptance": False}
     (output / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False))
     print(json.dumps(result, ensure_ascii=False))
-except Exception:
-    if "page" in locals() and not page.is_closed():
-        page.screenshot(path=str(output / "failure.png"), full_page=True, animations="disabled")
-        (output / "failure.html").write_text(page.content(), encoding="utf8")
+except Exception as cause:
+    result = {"status": "FAIL", "passed": checks, "pageErrors": errors, "error": str(cause)}
+    try:
+        if "page" in locals() and not page.is_closed():
+            page.screenshot(path=str(output / "failure.png"), full_page=True, animations="disabled")
+            (output / "failure.html").write_text(page.content(), encoding="utf8")
+    except Exception as capture_error:
+        result["captureError"] = str(capture_error)
+    (output / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf8")
     raise
 finally:
     process.terminate()

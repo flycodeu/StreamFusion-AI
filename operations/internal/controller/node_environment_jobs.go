@@ -32,10 +32,41 @@ type nodeEnvironmentPlan struct {
 	ExpiresAt       string                             `json:"expiresAt"`
 }
 
+// Removal uses the commands that installed this environment, including after a
+// newer template is published. Older installations retain their original path.
+func (s *Store) nodeRemovalDefinition(environmentID, action, nodeVersion string) (*serviceinstall.Definition, error) {
+	first, second := "INITIALIZE", "UPDATE_NVM"
+	if action == "REMOVE_PNPM" {
+		first, second = "INSTALL_PNPM", "UPDATE_PNPM"
+	}
+	var raw string
+	err := s.DB.QueryRow(`SELECT j.input_json FROM jobs j
+		JOIN node_environment_plans p ON p.id=j.node_environment_plan_id
+		WHERE p.environment_id=? AND p.action IN (?,?) AND j.status='SUCCEEDED'
+		AND (?='' OR json_extract(p.snapshot_json,'$.change.nodeVersion')=?)
+		ORDER BY j.created_at DESC,j.id DESC LIMIT 1`, environmentID, first, second, nodeVersion, nodeVersion).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var req deploy.Request
+	if deploy.StrictJSON([]byte(raw), &req) != nil || req.NodeEnvironment == nil {
+		return nil, errors.New("NODE_INPUT_DAMAGED")
+	}
+	return req.NodeEnvironment.Definition, nil
+}
+
 func (h *HTTP) nodePreflight(ctx context.Context, t target, c deploy.NodeEnvironmentRequest) (deploy.NodeEnvironmentPreflight, error) {
 	var p deploy.NodeEnvironmentPreflight
 	if err := h.nodeTargetReady(ctx, t, c.Action == "CONNECT_TERMINAL" || c.Context.ConnectTerminal, c.Action == "SET_NPM_REGISTRY" || c.Context.ObserveRegistry); err != nil {
 		return p, err
+	}
+	if c.Definition != nil {
+		if err := h.installTargetReady(ctx, t, serviceinstall.Config{RuntimeMode: "NATIVE"}, c.Source, *c.Definition); err != nil {
+			return p, err
+		}
 	}
 	err := h.store.callTarget(ctx, t, deploy.Request{Action: "NODE_ENVIRONMENT_CHECK", NodeEnvironment: &c}, "", &p)
 	if err != nil {
@@ -185,6 +216,12 @@ func (h *HTTP) createNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 			h.nodeError(w, r, e)
 			return
 		}
+		definition, e = h.store.findInstallRecipe(definition.Key, definition.Version)
+		if e != nil {
+			h.nodeError(w, r, errors.New("NODE_RECIPE_UNAVAILABLE"))
+			return
+		}
+		c.Definition = &definition
 		if in.Action == "UPDATE_NVM" {
 			c.PackageVersion = definition.Version
 		}
@@ -195,7 +232,7 @@ func (h *HTTP) createNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 				return
 			}
 			digest, e := fileDigest(h.store.installationMaterialPath(m.ID, false))
-			if e != nil || digest != m.SHA256 || deploy.Digest(m.Definition) != deploy.Digest(definition) {
+			if e != nil || digest != m.SHA256 || !sameMaterialDefinition(m.Definition, definition) {
 				h.nodeError(w, r, errors.New("NODE_MATERIAL_MISMATCH"))
 				return
 			}
@@ -207,6 +244,13 @@ func (h *HTTP) createNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 	} else if in.Source.Type != "" || in.Source.MaterialID != "" {
 		h.fail(w, r, 400, "NODE_SOURCE_UNEXPECTED", "此操作不需要安装材料")
 		return
+	}
+	if in.Action == "REMOVE_ENVIRONMENT" || in.Action == "REMOVE_PNPM" {
+		c.Definition, err = h.store.nodeRemovalDefinition(env.ID, c.Action, c.NodeVersion)
+		if err != nil {
+			h.internal(w, r, err)
+			return
+		}
 	}
 	if in.DeleteData && in.Action != "REMOVE_ENVIRONMENT" {
 		h.fail(w, r, 400, "NODE_DELETE_DATA_ACTION_INVALID", "删除数据选项仅适用于移除环境")
@@ -377,6 +421,13 @@ func (h *HTTP) submitNodeEnvironmentPlan(w http.ResponseWriter, r *http.Request,
 	if err = tx.QueryRow("SELECT count(*) FROM node_environment_plans WHERE id=? AND status='DRAFT' AND snapshot_json=? AND expires_at>?", id, raw, Now()).Scan(&count); err != nil || count != 1 {
 		h.nodeError(w, r, errors.New("NODE_PLAN_STALE"))
 		return
+	}
+	if p.Change.Definition != nil && p.Action != "REMOVE_ENVIRONMENT" && p.Action != "REMOVE_PNPM" {
+		current, e := findInstallRecipe(tx, p.Change.Definition.Key, p.Change.Definition.Version)
+		if e != nil || deploy.Digest(current) != deploy.Digest(*p.Change.Definition) {
+			h.nodeError(w, r, errors.New("NODE_PLAN_STALE"))
+			return
+		}
 	}
 	if err = nodeTargetUnlocked(tx, p.HostID); err != nil {
 		h.nodeError(w, r, err)

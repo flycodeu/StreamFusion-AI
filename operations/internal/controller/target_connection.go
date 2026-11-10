@@ -59,7 +59,7 @@ func (s *Store) sshExecute(ctx context.Context, t target, input io.Reader, out, 
 }
 
 func executorSSHCommand(t target) string {
-	command := "'" + t.InstallRoot + "/executor' target-exec"
+	command := controllerTemplate("preparation/executor.command.tmpl", t.InstallRoot)
 	if t.User == "root" {
 		return command
 	}

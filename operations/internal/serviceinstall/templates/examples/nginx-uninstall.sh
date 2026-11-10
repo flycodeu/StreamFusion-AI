@@ -1,0 +1,1 @@
+docker rm --force "sfops-$OPS_SOFTWARE_ID"

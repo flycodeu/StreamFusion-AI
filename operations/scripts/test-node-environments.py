@@ -201,9 +201,11 @@ def main():
                 def enter():
                     page.goto(base)
                     page.get_by_role('button',name='软件管理',exact=True).click()
-                    expect(page.get_by_role('tablist',name='软件管理视图',exact=True).get_by_role('tab')).to_have_count(2)
+                    expect(page.get_by_role('tablist',name='软件管理视图',exact=True)).to_have_count(0)
+                    for title in ('软件管理','软件安装','软件配置'):
+                        expect(page.get_by_role('button',name=title,exact=True)).to_be_visible()
                     assert not page.get_by_role('tab',name='Node.js 环境',exact=True).count()
-                    page.get_by_role('tab',name='软件目录',exact=True).click()
+                    page.get_by_role('button',name='软件安装',exact=True).click()
                     page.locator('article.node-catalog-card').get_by_role('button',name='安装与管理',exact=True).click()
                     page.get_by_role('dialog',name='Node.js',exact=True).wait_for()
                 def dialog(title): return page.get_by_role('dialog',name=title,exact=True)
@@ -407,7 +409,7 @@ def main():
                 expect(manager.get_by_role('tab',name='来源与目录',exact=True)).to_have_attribute('aria-selected','true')
                 manager.get_by_role('button',name='Close this dialog',exact=True).click()
                 manager.wait_for(state='hidden')
-                page.get_by_role('tab',name='软件中心',exact=True).click()
+                page.get_by_role('button',name='软件管理',exact=True).click()
                 page.locator('article.software-card').filter(has=page.get_by_role('heading',name='Node.js '+node_version,exact=True)).get_by_role('button',name='详情',exact=True).click()
                 manager.wait_for()
                 manager.get_by_role('tab',name='版本列表',exact=True).click()

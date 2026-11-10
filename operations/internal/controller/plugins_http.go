@@ -371,7 +371,9 @@ func (h *HTTP) pluginJobLogs(w http.ResponseWriter, r *http.Request, id string) 
 		h.internal(w, r, errors.New("INPUT_DAMAGED"))
 		return
 	}
-	if req.GitRepository != nil || req.NodeEnvironment != nil || req.Firewall != nil || req.Software != nil && req.Reconfiguration == nil {
+	commandUninstall := req.Uninstallation != nil && req.Uninstallation.Installation.Definition.Commands != nil
+	executionLog := req.Management != nil || newSoftwareLifecycleAction(req.SoftwareOperation) || req.ExecutionLogVersion >= 1
+	if !executionLog && (req.GitRepository != nil || req.NodeEnvironment != nil || req.Firewall != nil || req.Software != nil && req.Reconfiguration == nil && !commandUninstall) {
 		var phase, status, code, updated string
 		if e := h.store.DB.QueryRow("SELECT phase,status,error_code,updated_at FROM jobs WHERE id=?", id).Scan(&phase, &status, &code, &updated); e != nil {
 			h.opsError(w, r, e)
@@ -386,7 +388,7 @@ func (h *HTTP) pluginJobLogs(w http.ResponseWriter, r *http.Request, id string) 
 		return
 	}
 	req.Action = "PLUGIN_LOGS"
-	if req.Installation != nil || req.Reconfiguration != nil {
+	if req.Installation != nil || req.Reconfiguration != nil || commandUninstall || executionLog {
 		req.Action = "SOFTWARE_INSTALL_LOGS"
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)

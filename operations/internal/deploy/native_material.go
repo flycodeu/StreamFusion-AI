@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 	"io"
 	"os"
@@ -49,26 +50,48 @@ func fileSHA(filename string) (string, error) {
 
 func (x *executor) receiveNativeMaterial(req Request, dir string) (map[string]string, error) {
 	i := req.Installation
+	if i.Source.TargetDownload(i.Config) {
+		if i.Definition.Native == nil {
+			return nil, errors.New("NATIVE_RECIPE_UNAVAILABLE")
+		}
+		var downloadBytes uint64
+		for _, part := range i.Definition.Native.Parts {
+			downloadBytes += uint64(part.ByteSize)
+		}
+		if free, err := availableBytes(dir); err != nil || free < downloadBytes {
+			return nil, errors.New("SERVICE_SPACE_INSUFFICIENT")
+		}
+		if err := x.checkpoint(req, "NATIVE_DOWNLOAD"); err != nil {
+			return nil, err
+		}
+		for _, part := range i.Definition.Native.Parts {
+			x.appendServiceLog(req, "NATIVE_DOWNLOAD", "下载来源: "+part.URL+"\n")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), nativeDeadline(req))
+		defer cancel()
+		parts, err := serviceinstall.DownloadNativeParts(ctx, i.Definition, filepath.Join(dir, "native-download"), func(name string, size, total int64) {
+			x.appendServiceLog(req, "NATIVE_DOWNLOAD", fmt.Sprintf("%s: %d / %d bytes\n", name, size, total))
+		})
+		if err != nil {
+			if err.Error() == "NATIVE_DOWNLOAD_INTERRUPTED" {
+				x.appendServiceLog(req, "NATIVE_DOWNLOAD", "下载中断，已保留已接收的文件，可继续安装\n")
+			}
+			return nil, err
+		}
+		if err = x.checkpoint(req, "NATIVE_VERIFY"); err != nil {
+			return nil, err
+		}
+		x.appendServiceLog(req, "NATIVE_VERIFY", "安装文件 SHA-256 校验通过\n")
+		return parts, nil
+	}
 	if x.installationInput == nil || i.Source.ByteSize < 1 || !Hex.MatchString(i.Source.SHA256) {
 		return nil, errors.New("NATIVE_MATERIAL_REQUIRED")
 	}
 	archive := filepath.Join(dir, "native-material")
-	f, err := os.OpenFile(archive, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return nil, err
-	}
-	_, err = io.CopyN(f, x.installationInput, i.Source.ByteSize)
-	if err == nil {
-		err = f.Sync()
-	}
-	closeErr := f.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
+	if err := receiveInstallArchive(archive, x.installationInput, i.Source.ByteSize, req.ResumeOffset); err != nil {
 		return nil, errors.New("NATIVE_MATERIAL_TRANSFER_FAILED")
 	}
-	if _, err = serviceinstall.ValidateMaterial(archive, i.Source.SHA256, i.Source.ByteSize, i.Definition, "NATIVE"); err != nil {
+	if _, err := serviceinstall.ValidateMaterial(archive, i.Source.SHA256, i.Source.ByteSize, i.Definition, "NATIVE"); err != nil {
 		return nil, err
 	}
 	parts := map[string]string{}
@@ -91,7 +114,7 @@ func (x *executor) receiveNativeMaterial(req Request, dir string) (map[string]st
 			return nil, err
 		}
 		out := filepath.Join(dir, header.Name)
-		file, err := os.OpenFile(out, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		file, err := os.OpenFile(out, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 		if err != nil {
 			return nil, err
 		}

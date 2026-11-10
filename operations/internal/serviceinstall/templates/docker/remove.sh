@@ -1,0 +1,1 @@
+/usr/bin/docker container rm -- "$OPS_CONTAINER_ID"

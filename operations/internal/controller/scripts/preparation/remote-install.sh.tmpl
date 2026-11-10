@@ -1,0 +1,12 @@
+set -eu
+printf 'SFOPS_SETUP_ENTERED\n' >&2
+umask 077
+work=$(mktemp -d /var/tmp/sfops-setup-XXXXXX)
+cleanup(){ rm -f -- "$work/bundle.tar.gz" "$work/streamfusion-ops" "$work/install-target.sh" "$work/install.sh" "$work/SHA256SUMS" "$work/HOST-SETUP.md"; rmdir -- "$work"; }
+trap cleanup EXIT
+test -f @BUNDLE@ && test ! -L @BUNDLE@
+cat -- @BUNDLE@ > "$work/bundle.tar.gz"
+printf '%s  %s\n' @DIGEST@ "$work/bundle.tar.gz" | sha256sum -c - --status
+tar -xzf "$work/bundle.tar.gz" -C "$work" --no-same-owner
+cd "$work"
+bash ./install.sh @MODE@

@@ -209,7 +209,7 @@ func (h *HTTP) cancelPluginJob(w http.ResponseWriter, r *http.Request, s *sessio
 		h.cancelledJobResponse(w, r, id, kind)
 		return
 	}
-	if status != "QUEUED" || pending || phase == "UPLOADING" {
+	if status != "QUEUED" || pending || phase == "UPLOADING" || phase == "INSTALL_RESUMING" {
 		h.fail(w, r, 409, "PLUGIN_CANCEL_BLOCKED", "只可取消尚未执行或未上传中的排队作业；运行中和结果未确认时保留原责任")
 		return
 	}

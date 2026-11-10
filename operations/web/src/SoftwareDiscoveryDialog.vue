@@ -275,7 +275,7 @@ const stateTone = (candidate: SoftwareDiscoveryCandidate) =>
                         !candidate.ports?.length &&
                         !candidate.listeningPorts?.length
                       "
-                      >未识别</small
+                      >{{ candidate.runtimeKind === "TOOL" ? "无需监听" : "未识别" }}</small
                     >
                   </td>
                   <td class="discovery-operation">

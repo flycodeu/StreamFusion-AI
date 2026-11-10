@@ -4,9 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +13,9 @@ import (
 
 func (x *executor) prepareNativeProgram(ctx context.Context, req Request, dir, root, user string, uid, gid int, parts map[string]string) error {
 	d := req.Installation.Definition
+	if builtinStep(req, "NATIVE_PROGRAM") != nil {
+		return x.prepareBuiltinNative(ctx, req, root, user, uid, gid, parts)
+	}
 	if d.Native.BuildRecipe == "GIT_DEB" {
 		return x.prepareGitProgram(ctx, req, root, parts)
 	}
@@ -86,13 +87,13 @@ func (x *executor) prepareNativeProgram(ctx context.Context, req Request, dir, r
 	if err := chownNativeTree(workspace, uid, gid); err != nil {
 		return err
 	}
-	build := func(phase, command string, args ...string) error {
+	build := func(phase string, command []string) error {
 		if err := x.checkpoint(req, phase); err != nil {
 			return err
 		}
 		loggedContext, closeLog := x.installationLogContext(ctx, req, phase)
 		defer closeLog()
-		_, err := runNativeBuild(loggedContext, user, source, command, args...)
+		_, err := runNativeBuild(loggedContext, user, source, command[0], command[1:]...)
 		if err != nil {
 			return errors.New(phase + "_FAILED")
 		}
@@ -100,10 +101,10 @@ func (x *executor) prepareNativeProgram(ctx context.Context, req Request, dir, r
 	}
 	switch d.Native.BuildRecipe {
 	case "FFMPEG_SOURCE":
-		if err := build("NATIVE_FFMPEG_CONFIGURE", "/bin/sh", "./configure", "--disable-doc", "--disable-ffplay", "--disable-debug", "--enable-gpl", "--enable-version3", "--enable-libx264", "--enable-openssl"); err != nil {
+		if err := build("NATIVE_FFMPEG_CONFIGURE", deployCommand("native-ffmpeg-configure")); err != nil {
 			return err
 		}
-		if err := build("NATIVE_FFMPEG_BUILD", "/usr/bin/make", "-j"+nativeBuildJobs()); err != nil {
+		if err := build("NATIVE_FFMPEG_BUILD", deployCommand("native-make-build", "-j"+nativeBuildJobs())); err != nil {
 			return err
 		}
 		for _, name := range []string{"ffmpeg", "ffprobe"} {
@@ -122,17 +123,17 @@ func (x *executor) prepareNativeProgram(ctx context.Context, req Request, dir, r
 		if err := os.Chown(prefix, uid, gid); err != nil {
 			return err
 		}
-		if err := build("NATIVE_PYTHON_CONFIGURE", "/bin/sh", "./configure", "--prefix="+prefix, "--with-ensurepip=install"); err != nil {
+		if err := build("NATIVE_PYTHON_CONFIGURE", deployCommand("native-python-configure", "--prefix="+prefix)); err != nil {
 			return err
 		}
-		if err := build("NATIVE_PYTHON_BUILD", "/usr/bin/make", "-j"+nativeBuildJobs()); err != nil {
+		if err := build("NATIVE_PYTHON_BUILD", deployCommand("native-make-build", "-j"+nativeBuildJobs())); err != nil {
 			return err
 		}
-		if err := build("NATIVE_PYTHON_INSTALL", "/usr/bin/make", "altinstall"); err != nil {
+		if err := build("NATIVE_PYTHON_INSTALL", deployCommand("native-python-install")); err != nil {
 			return err
 		}
 	case "REDIS_SOURCE":
-		if err := build("NATIVE_REDIS_BUILD", "/usr/bin/make", "-j"+nativeBuildJobs(), "MALLOC=libc", "BUILD_TLS=yes", "redis-server", "redis-cli"); err != nil {
+		if err := build("NATIVE_REDIS_BUILD", deployCommand("native-redis-build", "-j"+nativeBuildJobs())); err != nil {
 			return err
 		}
 		for _, binary := range []string{"redis-server", "redis-cli"} {
@@ -141,10 +142,10 @@ func (x *executor) prepareNativeProgram(ctx context.Context, req Request, dir, r
 			}
 		}
 	case "NGINX_SOURCE":
-		if err := build("NATIVE_NGINX_CONFIGURE", "/bin/sh", "./configure", "--prefix="+root, "--conf-path="+filepath.Join(root, "config/nginx.conf"), "--pid-path="+filepath.Join(root, "data/nginx.pid"), "--error-log-path=stderr", "--http-log-path=/dev/stdout", "--with-http_ssl_module", "--with-http_v2_module"); err != nil {
+		if err := build("NATIVE_NGINX_CONFIGURE", deployCommand("native-nginx-configure", "--prefix="+root, "--conf-path="+filepath.Join(root, "config/nginx.conf"), "--pid-path="+filepath.Join(root, "data/nginx.pid"))); err != nil {
 			return err
 		}
-		if err := build("NATIVE_NGINX_BUILD", "/usr/bin/make", "-j"+nativeBuildJobs()); err != nil {
+		if err := build("NATIVE_NGINX_BUILD", deployCommand("native-make-build", "-j"+nativeBuildJobs())); err != nil {
 			return err
 		}
 		if err := copyNativeFile(filepath.Join(source, "objs/nginx"), filepath.Join(root, "bin/nginx")); err != nil {
@@ -152,10 +153,10 @@ func (x *executor) prepareNativeProgram(ctx context.Context, req Request, dir, r
 		}
 	case "ZLM_SOURCE":
 		output := filepath.Join(workspace, "build")
-		if err := build("NATIVE_ZLM_CONFIGURE", "/usr/bin/cmake", "-S", source, "-B", output, "-DCMAKE_BUILD_TYPE=Release", "-DENABLE_TESTS=OFF", "-DENABLE_PYTHON=OFF", "-DENABLE_OPENSSL=ON", "-DENABLE_WEBRTC=ON", "-DENABLE_SRT=ON", "-DDISABLE_REPORT=ON"); err != nil {
+		if err := build("NATIVE_ZLM_CONFIGURE", deployCommand("native-zlm-configure", source, output)); err != nil {
 			return err
 		}
-		if err := build("NATIVE_ZLM_BUILD", "/usr/bin/cmake", "--build", output, "--parallel", nativeBuildJobs(), "--target", "MediaServer"); err != nil {
+		if err := build("NATIVE_ZLM_BUILD", deployCommand("native-zlm-build", output, nativeBuildJobs())); err != nil {
 			return err
 		}
 		if err := copyNativeFile(filepath.Join(source, "release/linux/Release/MediaServer"), filepath.Join(root, "bin/MediaServer")); err != nil {
@@ -176,7 +177,9 @@ func posixSingleQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 func nativeMavenWrapper(root string) string {
-	return "#!/bin/sh\nJAVA_HOME=" + posixSingleQuote(filepath.Join(root, "runtime/jdk")) + "\nexport JAVA_HOME\nexec " + posixSingleQuote(filepath.Join(root, "runtime/maven/bin/mvn")) + " \"$@\"\n"
+	return deployTemplate("native/maven-wrapper.sh.tmpl",
+		posixSingleQuote(filepath.Join(root, "runtime/jdk")),
+		posixSingleQuote(filepath.Join(root, "runtime/maven/bin/mvn")))
 }
 
 func (x *executor) writeNativeConfiguration(req Request, root string, gid int) error {
@@ -198,26 +201,29 @@ func (x *executor) nativeConfigurationAt(req Request, root, outputConfig string,
 	case "mysql":
 		initLine := ""
 		if initialize {
-			initLine = "init-file=" + filepath.Join(config, "bootstrap.sql") + "\n"
+			initLine = deployTemplate("config/mysql-bootstrap.cnf.tmpl", filepath.Join(config, "bootstrap.sql"))
 		}
-		if err = write("my.cnf", fmt.Sprintf("[mysqld]\nbasedir=%s/runtime/mysql\ndatadir=%s\nsocket=%s/mysql.sock\npid-file=%s/mysql.pid\nport=%d\nbind-address=%s\nmysqlx=0\nlog-error=/proc/self/fd/2\n%s", root, data, data, data, c.HostPort, c.BindAddress, initLine), false); err != nil {
+		if err = write("my.cnf", deployTemplate("config/mysql-server.cnf.tmpl", root, data, data, data, c.HostPort, c.BindAddress, initLine), false); err != nil {
 			return err
 		}
-		if err = write("health.cnf", fmt.Sprintf("[client]\nuser=root\npassword=\"%s\"\nprotocol=socket\nsocket=%s/mysql.sock\n", safeOptionSecret(secret), data), true); err != nil {
+		if err = write("health.cnf", deployTemplate("config/mysql-health.cnf.tmpl", safeOptionSecret(secret), data), true); err != nil {
 			return err
 		}
 		if !initialize {
 			return nil
 		}
-		sql := "ALTER USER 'root'@'localhost' IDENTIFIED BY '" + secret + "';\n"
+		sql := deployTemplate("config/mysql-root.sql.tmpl", secret)
 		if c.Database != "" {
-			sql += "CREATE DATABASE IF NOT EXISTS `" + c.Database + "`;\n"
+			sql += deployTemplate("config/mysql-database.sql.tmpl", c.Database)
 		}
 		if c.Username != "" {
-			sql += "CREATE USER IF NOT EXISTS '" + c.Username + "'@'%' IDENTIFIED BY '" + userSecret + "';\nGRANT ALL ON `" + c.Database + "`.* TO '" + c.Username + "'@'%';\n"
+			sql += deployTemplate("config/mysql-user.sql.tmpl", c.Username, userSecret, c.Database, c.Username)
 		}
 		if err = write("bootstrap.sql", sql, true); err != nil {
 			return err
+		}
+		if builtinFlow(req) {
+			return nil
 		}
 		// Initialization is offline: no TCP listener and no default remote root.
 		user := nativeUserName(i.SoftwareID)
@@ -237,17 +243,17 @@ func (x *executor) nativeConfigurationAt(req Request, root, outputConfig string,
 		ctx := initializationCtx
 		// mysqld --initialize performs only filesystem setup; the unit's init-file
 		// sets the supplied password before the first network-serving startup.
-		if _, err = x.softwareRunner(ctx, filepath.Join(root, "runtime/mysql/bin/mysqld"), "--no-defaults", "--initialize-insecure", "--basedir="+filepath.Join(root, "runtime/mysql"), "--datadir="+data, "--user="+user); err != nil {
+		if _, err = x.loggedSourceCommand(ctx, req, "NATIVE_MYSQL_INITIALIZE", "native-mysql-initialize", filepath.Join(root, "runtime/mysql/bin/mysqld"), "--basedir="+filepath.Join(root, "runtime/mysql"), "--datadir="+data, "--user="+user); err != nil {
 			return errors.New("NATIVE_MYSQL_INITIALIZE_FAILED")
 		}
 	case "redis":
 		hashed := sha256.Sum256([]byte(secret))
-		if err = write("users.acl", "user default on #"+hex.EncodeToString(hashed[:])+" ~* &* +@all\n", true); err != nil {
+		if err = write("users.acl", deployTemplate("config/redis.acl.tmpl", hex.EncodeToString(hashed[:])), true); err != nil {
 			return err
 		}
-		return write("redis.conf", fmt.Sprintf("bind %s\nport %d\nprotected-mode yes\ndaemonize no\naclfile %s/users.acl\ndir %s\nappendonly yes\nappendfsync everysec\nmaxmemory %dmb\nmaxmemory-policy noeviction\nlogfile \"\"\n", c.BindAddress, c.HostPort, config, data, c.MemoryMiB*3/4), false)
+		return write("redis.conf", deployTemplate("config/redis.conf.tmpl", c.BindAddress, c.HostPort, config, data, c.MemoryMiB*3/4), false)
 	case "nginx":
-		if err = write("nginx.conf", fmt.Sprintf("pid %s/nginx.pid;\nerror_log stderr;\nevents {}\nhttp { access_log /dev/stdout; client_body_temp_path %s/client_temp; proxy_temp_path %s/proxy_temp; fastcgi_temp_path %s/fastcgi_temp; uwsgi_temp_path %s/uwsgi_temp; scgi_temp_path %s/scgi_temp; server { listen %s:%d; root %s/www; location = /__sfops_health { default_type text/plain; return 200 \"%s\"; } } }\n", data, data, data, data, data, data, c.BindAddress, c.HostPort, data, i.SoftwareID), false); err != nil {
+		if err = write("nginx.conf", deployTemplate("config/nginx.conf.tmpl", data, data, data, data, data, data, c.BindAddress, c.HostPort, data, i.SoftwareID), false); err != nil {
 			return err
 		}
 		if !initialize {
@@ -256,7 +262,7 @@ func (x *executor) nativeConfigurationAt(req Request, root, outputConfig string,
 		if err = os.Mkdir(filepath.Join(data, "www"), 0750); err != nil {
 			return err
 		}
-		return serviceFile(filepath.Join(data, "www/index.html"), []byte("Nginx is running\n"), gid, false)
+		return serviceFile(filepath.Join(data, "www/index.html"), []byte(deployScript("config/nginx-index.html")), gid, false)
 	case "seaweedfs":
 		if initialize {
 			for _, name := range []string{"master", "volume", "filerldb2"} {
@@ -265,8 +271,7 @@ func (x *executor) nativeConfigurationAt(req Request, root, outputConfig string,
 				}
 			}
 		}
-		identity := map[string]any{"identities": []any{map[string]any{"name": "ops-managed", "credentials": []any{map[string]string{"accessKey": access, "secretKey": secret}}, "actions": []string{"Admin", "Read", "List", "Tagging", "Write"}}}}
-		body, _ := json.Marshal(identity)
+		body := seaweedS3Configuration(access, secret)
 		return serviceFile(filepath.Join(outputConfig, "s3.json"), body, gid, true)
 	case "mediamtx":
 		return serviceFile(filepath.Join(outputConfig, "mediamtx.yml"), mediaMTXConfiguration(*i, secret, true), gid, true)

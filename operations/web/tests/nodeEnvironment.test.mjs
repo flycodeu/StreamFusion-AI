@@ -40,6 +40,28 @@ function load(s, imports = {}, props = {}) {
 const model = load(
   await readFile(new URL("../src/nodeEnvironment.ts", import.meta.url), "utf8"),
 );
+test("Node preview follows the frozen recipe order and selected operation", async () => {
+  const component = await readFile(new URL("../src/NodeVersionDialog.vue", import.meta.url), "utf8");
+  const script = component.split('<script setup lang="ts">')[1].split("</script>")[0];
+  const installation = load(await readFile(new URL("../src/serviceInstallation.ts", import.meta.url), "utf8"));
+  const steps = [
+    { id: "download", phase: "INSTALL" }, { id: "verify", phase: "VERIFY" },
+    { id: "configure", phase: "INSTALL" }, { id: "remove", phase: "UNINSTALL" },
+    { id: "data", phase: "DELETE_DATA" },
+    { id: "offline", phase: "INSTALL", sourceModes: ["ARCHIVE"] },
+  ];
+  const props = vue.reactive({ draft: { action: "INITIALIZE", source: "OFFICIAL", deleteData: false },
+    plan: { change: { definition: { commands: { steps } }, source: { type: "OFFICIAL" } } },
+  });
+  const form = load(script + "\nexport { plannedSteps };", {
+    vue, "element-plus": {}, "./nodeEnvironment": model, "./serviceInstallation": installation,
+  }, props);
+  assert.deepEqual(form.plannedSteps.value.map(step => step.id), ["download", "verify", "configure"]);
+  props.draft.action = "REMOVE_ENVIRONMENT";
+  assert.deepEqual(form.plannedSteps.value.map(step => step.id), ["remove"]);
+  props.draft.deleteData = true;
+  assert.deepEqual(form.plannedSteps.value.map(step => step.id), ["remove", "data"]);
+});
 const preparationUpdate = load(await readFile(new URL("../src/preparationUpdate.ts", import.meta.url), "utf8"));
 const source = (
   await readFile(

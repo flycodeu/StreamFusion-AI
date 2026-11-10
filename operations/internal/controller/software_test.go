@@ -300,7 +300,7 @@ func TestSoftwareRejectsOldExecutorWithSameVersionBeforeCreatingJob(t *testing.T
 	if !strings.Contains(refused.Body.String(), "EXECUTOR_SOFTWARE_UNSUPPORTED") {
 		t.Fatal(refused.Body.String())
 	}
-	lifecycleVersion.Store(2)
+	lifecycleVersion.Store(deploy.SoftwareLifecycleVersion + 1)
 	refused = b.call("POST", "/software-instances/"+id+"/adopt", map[string]any{"expectedVersion": "1", "identityHash": identity, "confirmed": true, "idempotencyKey": "unknown-executor-gate"}, 409)
 	if !strings.Contains(refused.Body.String(), "EXECUTOR_SOFTWARE_UNSUPPORTED") {
 		t.Fatal(refused.Body.String())

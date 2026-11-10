@@ -1,0 +1,1 @@
+/usr/bin/docker pull --platform "$OPS_PLATFORM" "$OPS_IMAGE@$OPS_IMAGE_DIGEST"

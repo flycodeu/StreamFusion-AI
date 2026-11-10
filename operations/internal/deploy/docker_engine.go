@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -214,24 +213,20 @@ func validateDockerAptPlan(output []byte, packages []dockerPackage, remove bool)
 }
 
 func dockerAptArgs(simulate, remove bool, files []string) []string {
-	args := []string{"--no-download", "--no-install-recommends", "-o", "APT::Get::AutomaticRemove=false", "-o", "DPkg::Lock::Timeout=15", "-o", "Dpkg::Options::=--force-confold"}
-	if simulate {
-		args = append(args, "--simulate")
-	} else {
-		args = append(args, "--assume-yes")
-	}
+	operation, mode := "install", "apply"
 	if remove {
-		args = append(args, "remove")
-	} else {
-		args = append(args, "--no-remove", "install")
+		operation = "remove"
 	}
-	return append(append(args, "--"), files...)
+	if simulate {
+		mode = "simulate"
+	}
+	return deployCommand("docker-apt-"+operation+"-"+mode, files...)
 }
 
 func dockerDaemonConfig(root string) []byte {
 	// Keep all image/volume data in this instance. Docker29's containerd image
 	// store is disabled explicitly, leaving system containerd metadata retained.
-	return []byte(fmt.Sprintf("{\"data-root\":%q,\"features\":{\"containerd-snapshotter\":false},\"log-driver\":\"json-file\",\"log-opts\":{\"max-size\":\"10m\",\"max-file\":\"3\"}}\n", filepath.Join(root, "data")))
+	return []byte(deployTemplate("docker/daemon.json.tmpl", filepath.Join(root, "data")))
 }
 
 func (x *executor) installDockerEngine(req Request, dir string) (Result, error) {
@@ -268,7 +263,7 @@ func (x *executor) installDockerEngine(req Request, dir string) (Result, error) 
 		}
 		files = append(files, file)
 	}
-	out, err := x.loggedSoftwareCommand(ctx, req, "DOCKER_PACKAGE_PLAN", "/usr/bin/apt-get", dockerAptArgs(true, false, files)...)
+	out, err := x.loggedSourceCommand(ctx, req, "DOCKER_PACKAGE_PLAN", "docker-apt", dockerAptArgs(true, false, files)...)
 	if err != nil {
 		return result, errors.New("DOCKER_OFFLINE_DEPENDENCIES_MISSING")
 	}
@@ -338,14 +333,14 @@ func (x *executor) installDockerEngine(req Request, dir string) (Result, error) 
 	if err = x.checkpoint(req, "DOCKER_PACKAGES_APPLY"); err != nil {
 		return unknown()
 	}
-	_, err = x.loggedSoftwareCommand(ctx, req, "DOCKER_PACKAGES_APPLY", "/usr/bin/apt-get", dockerAptArgs(false, false, files)...)
+	_, err = x.loggedSourceCommand(ctx, req, "DOCKER_PACKAGES_APPLY", "docker-apt", dockerAptArgs(false, false, files)...)
 	if err != nil {
 		return unknown()
 	}
 	if err = x.completeDockerOwnership(ctx, req, dir, &marker); err != nil {
 		return unknown()
 	}
-	if _, err = x.softwareRunner(ctx, "/usr/bin/systemctl", "enable", "--now", "docker.service"); err != nil {
+	if _, err = x.loggedSourceCommand(ctx, req, "DOCKER_START", "docker-engine-start"); err != nil {
 		return unknown()
 	}
 	return x.dockerEngineInstalledResult(ctx, req, dir, marker), nil
@@ -427,13 +422,13 @@ func (x *executor) dockerEngineInstalledResult(ctx context.Context, req Request,
 
 func (x *executor) dockerEngineHealth(ctx context.Context, req Request) (string, error) {
 	i := req.Installation
-	out, err := x.softwareRunner(ctx, "/usr/bin/docker", "info", "--format", "{{.ServerVersion}}\t{{.DockerRootDir}}")
+	out, err := x.sourceSoftwareCommand(ctx, "verify-docker-info")
 	version := strings.Split(i.Definition.Version, "-")[0]
 	want := version + "\t" + filepath.Join(serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config), "data")
 	if err != nil || strings.TrimSpace(string(out)) != want {
 		return "", errors.New("DOCKER_ENGINE_HEALTH_MISMATCH")
 	}
-	compose, err := x.softwareRunner(ctx, "/usr/bin/docker", "compose", "version", "--short")
+	compose, err := x.sourceSoftwareCommand(ctx, "verify-docker-compose")
 	if err != nil || strings.TrimPrefix(strings.TrimSpace(string(compose)), "v") != "5.6.1" {
 		return "", errors.New("DOCKER_COMPOSE_VERSION_MISMATCH")
 	}
@@ -519,7 +514,7 @@ func (x *executor) preflightDockerEngineUninstall(ctx context.Context, req Reque
 		}
 		names = append(names, p.Name)
 	}
-	out, err := x.softwareRunner(ctx, "/usr/bin/apt-get", dockerAptArgs(true, true, names)...)
+	out, err := x.sourceSoftwareCommand(ctx, "docker-apt", dockerAptArgs(true, true, names)...)
 	if err != nil {
 		return errors.New("DOCKER_PACKAGE_REMOVE_PLAN_FAILED")
 	}
@@ -541,7 +536,7 @@ func (x *executor) removeDockerEnginePackages(ctx context.Context, req Request, 
 		names = append(names, p.Name)
 	}
 	sort.Strings(names)
-	_, err = x.loggedSoftwareCommand(ctx, req, "DOCKER_PACKAGES_REMOVE", "/usr/bin/apt-get", dockerAptArgs(false, true, names)...)
+	_, err = x.loggedSourceCommand(ctx, req, "DOCKER_PACKAGES_REMOVE", "docker-apt", dockerAptArgs(false, true, names)...)
 	if err != nil {
 		return errors.New("DOCKER_PACKAGE_REMOVE_UNCONFIRMED")
 	}

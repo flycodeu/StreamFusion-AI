@@ -120,16 +120,7 @@ func readNodeRegistryFile(n serviceinstall.NodeContext) (nodeRegistryFile, error
 
 // npm ships its INI parser. Reusing it preserves npm's arrays, scoped keys and
 // authentication values without introducing another parser or exposing them.
-const nodeRegistryInspectScript = `const fs=require('fs'),crypto=require('crypto');
-const ini=require(process.argv[1]);const file=process.argv[2];
-let raw='';try{raw=fs.readFileSync(file,'utf8');}catch(e){if(e.code!=='ENOENT')process.exit(1);}
-if(Buffer.byteLength(raw)>131072)process.exit(1);
-const config=ini.parse(raw);const value=config.registry;delete config.registry;
-function sorted(v){if(Array.isArray(v))return v.map(sorted);if(v&&typeof v==='object')return Object.fromEntries(Object.keys(v).sort().map(k=>[k,sorted(v[k])]));return v;}
-const otherHash=crypto.createHash('sha256').update(JSON.stringify(sorted(config))).digest('hex');
-let registry='',configured=value!==undefined,redacted=false;
-if(configured){if(typeof value!=='string'||value.length>2048){redacted=true;}else{try{const u=new URL(value);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.search||u.hash||/[\s\x00-\x1f\x7f]/.test(value)){redacted=true;}else{registry=value;}}catch{redacted=true;}}}
-process.stdout.write(JSON.stringify({registry,configured,redacted,otherHash}));`
+var nodeRegistryInspectScript = deployScript("node_registry_inspect.js")
 
 type nodeRegistryInspection struct {
 	Registry   string `json:"registry"`
@@ -247,7 +238,8 @@ func (x *executor) applyNodeRegistry(ctx context.Context, req Request, dir strin
 	}
 	// Work only on a private candidate. No project/global config, package script,
 	// registry request, debug log or authentication value is emitted to job logs.
-	args := []string{"-u", n.Context.Account, "--", "/usr/bin/env", "-i", "HOME=" + account.HomeDir, "PATH=" + path.Dir(v.BinaryPath) + ":/usr/bin:/bin", "NPM_CONFIG_LOGS_MAX=0", "NPM_CONFIG_LOGLEVEL=silent", "NPM_CONFIG_UPDATE_NOTIFIER=false", "NPM_CONFIG_IGNORE_SCRIPTS=true", "NPM_CONFIG_CACHE=" + filepath.Join(stage, "cache"), "/usr/bin/bash", "--noprofile", "--norc", "-c", `cd -- "$1"; shift; exec "$@"`, "sfops-npm-registry", stage, v.BinaryPath, path.Join(serviceinstall.NodeVersionRoot(n.Context, v.Version), "lib/node_modules/npm/bin/npm-cli.js"), "config", "set", "registry", n.RegistryURL, "--location=user", "--userconfig=" + candidate, "--globalconfig=" + global}
+	args := []string{"-u", n.Context.Account, "--", "/usr/bin/env", "-i", "HOME=" + account.HomeDir, "PATH=" + path.Dir(v.BinaryPath) + ":/usr/bin:/bin", "NPM_CONFIG_LOGS_MAX=0", "NPM_CONFIG_LOGLEVEL=silent", "NPM_CONFIG_UPDATE_NOTIFIER=false", "NPM_CONFIG_IGNORE_SCRIPTS=true", "NPM_CONFIG_CACHE=" + filepath.Join(stage, "cache"), "/usr/bin/bash", "--noprofile", "--norc", "-c", deployScript("node_registry_exec.sh"), "sfops-npm-registry", stage}
+	args = append(args, deployCommand("node-registry-config", v.BinaryPath, path.Join(serviceinstall.NodeVersionRoot(n.Context, v.Version), "lib/node_modules/npm/bin/npm-cli.js"), n.RegistryURL, "--userconfig="+candidate, "--globalconfig="+global)...)
 	if _, err = x.softwareRunner(ctx, "/usr/sbin/runuser", args...); err != nil {
 		return errors.New("NODE_REGISTRY_CONFIG_REJECTED")
 	}

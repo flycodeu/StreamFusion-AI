@@ -14,18 +14,83 @@ import (
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
-func installCompatibilityCapabilities(req deploy.Request) executorCapabilities {
-	return executorCapabilities{Owner: deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, Platform: "linux/amd64", DockerEngine: true, InstallVersion: serviceinstall.CapabilityVersion, NativeInstallVersion: 1, CatalogHash: "a-historical-catalog-hash"}
+func installCompatibilityCapabilities(req deploy.Request, s *Store) executorCapabilities {
+	return executorCapabilities{Owner: deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, Platform: "linux/amd64", DockerEngine: true, InstallVersion: serviceinstall.CapabilityVersion, NativeInstallVersion: 1, CatalogHash: "a-historical-catalog-hash", CommandRecipeVersion: deploy.CommandRecipeVersion, CommandTrustFingerprint: deploy.CommandPublicKeyFingerprint(s.commandPublicKey())}
+}
+
+func TestNativeOnlinePlanDownloadsOnTargetWithoutControllerMaterial(t *testing.T) {
+	for _, supported := range []bool{false, true} {
+		t.Run(map[bool]string{false: "old-executor", true: "target-download"}[supported], func(t *testing.T) {
+			s, b := setup(t)
+			b.login()
+			host, fixture := installSSHFixture(t, s, b, func(req deploy.Request) ([]byte, bool) {
+				if req.Action != "CAPABILITIES" {
+					return nil, false
+				}
+				capability := installCompatibilityCapabilities(req, s)
+				if supported {
+					capability.NativeDownloadVersion = 1
+				}
+				raw, _ := json.Marshal(capability)
+				return raw, true
+			})
+			d, _ := serviceinstall.Find("java", "8")
+			input := map[string]any{"expectedHostVersion": "1", "recipeKey": d.Key, "recipeVersion": d.Version, "recipeRevision": d.Revision, "config": serviceinstall.Config{RuntimeMode: "NATIVE", Name: "java8", MemoryMiB: 512}, "source": map[string]string{"type": "ONLINE"}}
+			if !supported {
+				response := b.call("POST", "/hosts/"+host+"/software-install-plans", input, 409)
+				if !strings.Contains(response.Body.String(), "EXECUTOR_UPGRADE_REQUIRED") {
+					t.Fatal(response.Body.String())
+				}
+				return
+			}
+			plan := dataOf(t, b.call("POST", "/hosts/"+host+"/software-install-plans", input, 200))
+			accepted := dataOf(t, b.call("POST", "/software-install-plans/"+plan["id"].(string)+"/submit", map[string]string{"idempotencyKey": "native-target-download"}, 202))
+			var raw string
+			if err := s.DB.QueryRow("SELECT input_json FROM jobs WHERE id=?", accepted["jobId"]).Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			var intent deploy.Request
+			if err := deploy.StrictJSON([]byte(raw), &intent); err != nil || intent.Installation == nil {
+				t.Fatal(err)
+			}
+			if !intent.Installation.Source.TargetDownload(intent.Installation.Config) || fixture.InstallCount.Load() != 0 {
+				t.Fatal("planning uploaded bytes or performed installation")
+			}
+			if !sameMaterialDefinition(intent.Installation.Definition, d) {
+				t.Fatal("fixed vendor URLs or digests changed")
+			}
+			var materials int
+			if err := s.DB.QueryRow("SELECT count(*) FROM installation_materials").Scan(&materials); err != nil || materials != 0 {
+				t.Fatal("target online download depends on a controller material", err, materials)
+			}
+		})
+	}
+}
+
+func TestNativeDownloadCapabilityDoesNotBlockHistoricalMaterialRequests(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	host, _ := installSSHFixture(t, s, b)
+	target, err := s.readTarget(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sourceType := range []string{"ONLINE", "ARCHIVE"} {
+		source := serviceinstall.Source{Type: sourceType, SHA256: strings.Repeat("a", 64), ByteSize: 100}
+		if err := b.h.installTargetReady(context.Background(), target, serviceinstall.Config{RuntimeMode: "NATIVE"}, source); err != nil {
+			t.Fatal("existing archive installation requires unrelated download capability", err)
+		}
+	}
 }
 
 func TestServiceInstallHistoricalCatalogStillChecksSelectedRecipeAndPreservesIntent(t *testing.T) {
 	s, b := setup(t)
 	b.login()
 	var checks atomic.Int32
-	selected, _ := serviceinstall.Find("nginx", "1.30.6")
+	selected, _ := s.findInstallRecipe("nginx", "1.30.6")
 	host, fixture := installSSHFixture(t, s, b, func(req deploy.Request) ([]byte, bool) {
 		if req.Action == "CAPABILITIES" {
-			raw, _ := json.Marshal(installCompatibilityCapabilities(req))
+			raw, _ := json.Marshal(installCompatibilityCapabilities(req, s))
 			return raw, true
 		}
 		if req.Action == "SOFTWARE_INSTALL_CHECK" {
@@ -79,7 +144,7 @@ func TestServiceInstallUnsupportedSelectedRecipeFailsWithActionableCode(t *testi
 			}
 			switch req.Action {
 			case "CAPABILITIES":
-				raw, _ := json.Marshal(installCompatibilityCapabilities(req))
+				raw, _ := json.Marshal(installCompatibilityCapabilities(req, s))
 				response.Stdout = string(raw)
 			case "SOFTWARE_INSTALL_CHECK":
 				checks.Add(1)
@@ -136,7 +201,7 @@ func TestServiceInstallReadinessRejectsIncompatibleVersionsAndRuntime(t *testing
 				if req.Action != "CAPABILITIES" {
 					return nil, false
 				}
-				capability := installCompatibilityCapabilities(req)
+				capability := installCompatibilityCapabilities(req, s)
 				test.edit(&capability)
 				raw, _ := json.Marshal(capability)
 				return raw, true
@@ -145,7 +210,7 @@ func TestServiceInstallReadinessRejectsIncompatibleVersionsAndRuntime(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			err = b.h.installTargetReady(context.Background(), target, serviceinstall.Config{RuntimeMode: test.mode})
+			err = b.h.installTargetReady(context.Background(), target, serviceinstall.Config{RuntimeMode: test.mode}, serviceinstall.Source{})
 			if test.code == "" {
 				if err != nil {
 					t.Fatal(err)

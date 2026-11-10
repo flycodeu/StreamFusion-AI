@@ -6,8 +6,106 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+
+	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
+
+func TestInstallResumeReusesArchivePrefixAndStopsAtCreateMarker(t *testing.T) {
+	x, req := serviceRequestFixture(t)
+	req.Installation.Source = serviceinstall.Source{Type: "ARCHIVE", ByteSize: 6, SHA256: strings.Repeat("a", 64)}
+	req.InputHash = ""
+	req.InputHash = Digest(req)
+	if err := validateSoftwareInput(req); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(x.root, "jobs", req.JobID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	intent, _ := json.Marshal(req)
+	for _, filename := range []string{filepath.Join(dir, "intent.json"), filepath.Join(x.root, "pending.json")} {
+		if err := os.WriteFile(filename, intent, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	archive := filepath.Join(dir, "service-image.partial")
+	if err := receiveInstallArchive(archive, strings.NewReader("abc"), 6, 0); err == nil {
+		t.Fatal("short transfer accepted as complete")
+	}
+	offset, err := x.installResumeOffset(req, dir)
+	if err != nil || offset != 3 {
+		t.Fatalf("offset=%d err=%v", offset, err)
+	}
+	if err = receiveInstallArchive(archive, strings.NewReader("def"), 6, offset); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(archive); err != nil || string(data) != "abcdef" {
+		t.Fatalf("archive=%q err=%v", data, err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "service-create.json"), []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = x.installResumeOffset(req, dir); err == nil {
+		t.Fatal("container creation was eligible to replay")
+	}
+}
+
+func TestNativeDownloadResumeAcceptsOnlyPartsBeforeMutation(t *testing.T) {
+	for _, recipe := range [][2]string{{"java", "8"}, {"docker", "29.9.2-ubuntu24.04"}} {
+		t.Run(recipe[0], func(t *testing.T) {
+			x, req := serviceRequestFixture(t)
+			d, err := serviceinstall.Find(recipe[0], recipe[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Installation.Definition = d
+			req.Installation.Config = serviceinstall.Config{Name: recipe[0], RuntimeMode: "NATIVE", MemoryMiB: 512}
+			req.Installation.Source = serviceinstall.Source{Type: "ONLINE"}
+			req.InputHash = ""
+			req.InputHash = Digest(req)
+			if err = validateSoftwareInput(req); err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(x.root, "jobs", req.JobID)
+			cache := filepath.Join(dir, "native-download")
+			if err = os.MkdirAll(cache, 0700); err != nil {
+				t.Fatal(err)
+			}
+			intent, _ := json.Marshal(req)
+			for _, file := range []string{filepath.Join(dir, "intent.json"), filepath.Join(x.root, "pending.json")} {
+				if err = os.WriteFile(file, intent, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = os.WriteFile(filepath.Join(cache, d.Native.Parts[0].Name), []byte("partial"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if offset, err := x.installResumeOffset(req, dir); err != nil || offset != 0 {
+				t.Fatal("target download should resume without controller upload offset", offset, err)
+			}
+			for _, marker := range []string{"native-owned.json", "docker-packages.json", "unknown-file"} {
+				file := filepath.Join(dir, marker)
+				if err = os.WriteFile(file, []byte("{}"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = x.installResumeOffset(req, dir); err == nil {
+					t.Fatal("mutation evidence allowed replay:", marker)
+				}
+				if err = os.Remove(file); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = os.WriteFile(filepath.Join(cache, "unexpected"), []byte("x"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = x.installResumeOffset(req, dir); err == nil {
+				t.Fatal("unexpected cache file allowed replay")
+			}
+		})
+	}
+}
 
 func TestSoftwareStatusDoesNotDeclareNotStartedWithRemainingEvidence(t *testing.T) {
 	for _, evidence := range []string{"official-update.json", "official-apply.json", "native-owned.json", "native-start.json", "docker-packages.json", "service-create.json", "service-start.json", "configuration.json", "configuration-result.json", "future-execution-marker.json", "material-directory"} {

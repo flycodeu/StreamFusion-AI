@@ -193,6 +193,7 @@ func (x *executor) dockerWithinContext(ctx context.Context, args ...string) ([]b
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=/root", "DOCKER_CONFIG=" + filepath.Join(x.root, "docker-config")}
 	out := &cappedBuffer{limit: 64 << 10}
 	cmd.Stdout, cmd.Stderr = commandOutputs(ctx, out)
+	logExecutedCommand(ctx, cmd.Path, cmd.Args[1:]...)
 	err := cmd.Run()
 	return out.Bytes(), err
 }
@@ -400,13 +401,8 @@ func Execute(input io.Reader, output io.Writer) error {
 	if e = readJSON(filepath.Join(root, "owner.json"), &x.owner); e != nil {
 		return e
 	}
-	br := bufio.NewReaderSize(io.LimitReader(input, max(PreviewArchiveLimit, serviceinstall.ArchiveLimit)+(128<<10)), 64<<10)
-	line, e := br.ReadSlice('\n')
-	if e != nil || len(line) > 64<<10 {
-		return errors.New("ENVELOPE_INVALID")
-	}
-	var req Request
-	if e = StrictJSON([]byte(line), &req); e != nil {
+	req, br, e := ReadExecutorRequest(input)
+	if e != nil {
 		return e
 	}
 	x.secrets = req.Secrets
@@ -418,7 +414,19 @@ func Execute(input io.Reader, output io.Writer) error {
 	if req.Action == "CAPABILITIES" {
 		// A successful protected invocation proves mutation authority separately
 		// from optional Docker/Compose availability. This action changes no state.
-		return json.NewEncoder(output).Encode(inspectExecutorCapabilities(x.owner, runtime.GOOS+"/"+runtime.GOARCH, x.dockerWithin))
+		capabilities := inspectExecutorCapabilities(x.owner, runtime.GOOS+"/"+runtime.GOARCH, x.dockerWithin)
+		capabilities["commandRecipeVersion"] = CommandRecipeVersion
+		capabilities["commandTrustFingerprint"] = x.commandTrustFingerprint()
+		return json.NewEncoder(output).Encode(capabilities)
+	}
+	if req.Management != nil {
+		return x.executeSoftware(req, output)
+	}
+	if req.GitAccount != nil || req.Action == "GIT_ACCOUNT_CONFIGURE" || req.Action == "GIT_ACCOUNT_REMOVE" {
+		return x.executeGitAccount(req, output)
+	}
+	if req.GitKey != nil || req.Action == "GIT_KEY_PREPARE" || req.Action == "GIT_KEY_READ" || req.Action == "GIT_HOST_KEY_CHECK" {
+		return x.executeGitKey(req, output)
 	}
 	if req.Firewall != nil || strings.HasPrefix(req.Action, "FIREWALL_") {
 		return x.executeFirewall(req, output)
@@ -864,6 +872,31 @@ func Execute(input io.Reader, output io.Writer) error {
 		}
 	}
 	return x.recover(req, resultFile, output, e.Error())
+}
+
+func ExecutorRequestLimit(req Request) int {
+	if req.Management != nil && managementRebind(req) && req.Management.Installation != nil && req.Management.Validate() == nil {
+		return 128 << 10
+	}
+	return 64 << 10
+}
+
+// ReadExecutorRequest keeps the ordinary 64 KiB envelope boundary. A signed
+// rebind carries two bounded definitions and may use at most 128 KiB.
+func ReadExecutorRequest(input io.Reader) (Request, *bufio.Reader, error) {
+	br := bufio.NewReaderSize(io.LimitReader(input, max(PreviewArchiveLimit, serviceinstall.ArchiveLimit)+(128<<10)), 128<<10)
+	line, err := br.ReadSlice('\n')
+	var req Request
+	if err != nil || len(line) > 128<<10 {
+		return req, br, errors.New("ENVELOPE_INVALID")
+	}
+	if err = StrictJSON(line, &req); err != nil {
+		return req, br, err
+	}
+	if len(line) > ExecutorRequestLimit(req) {
+		return req, br, errors.New("ENVELOPE_INVALID")
+	}
+	return req, br, nil
 }
 
 func (x *executor) checkImageTag(tag, imageID string) error {

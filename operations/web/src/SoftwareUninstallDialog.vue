@@ -3,6 +3,8 @@ import { computed, ref, watch } from "vue";
 import { ElDialog } from "element-plus";
 import { ApiError, request } from "./api";
 import { hostTime } from "./hosts";
+import { recipeCommandSteps } from "./serviceInstallation";
+import RecipeSystemStepDetails from "./RecipeSystemStepDetails.vue";
 import { softwareIsDockerEngine, softwareUninstallAvailable, type SoftwareInstance, type SoftwareMutationResult } from "./software";
 
 const props = defineProps<{ open: boolean; item?: SoftwareInstance; dependentContainers: string[] }>();
@@ -15,8 +17,14 @@ const key = ref("");
 const expectedVersion = ref("");
 const error = ref<{ message: string; code: string; at: string; traceId: string }>();
 const official = computed(() => props.item?.installation?.official);
+const commands = computed(() => props.item?.installation?.definition?.commands);
+const customCommands = computed(() => !!commands.value && !commands.value.builtin);
+const migratedData = computed(() => customCommands.value && !!props.item?.installationPaths?.root && !!props.item.installationPaths.data && props.item.installationPaths.data !== `${props.item.installationPaths.root}/data`);
+const instanceSteps = computed(() => recipeCommandSteps(commands.value, props.item?.installation?.config?.runtimeMode, props.item?.installation?.source?.type));
+const canDeleteData = computed(() => migratedData.value || !commands.value || instanceSteps.value.some(step => step.phase === "DELETE_DATA"));
+const uninstallSteps = computed(() => instanceSteps.value.filter(step => step.phase === "UNINSTALL" || !migratedData.value && deleteData.value && step.phase === "DELETE_DATA"));
 const officialInstallation = computed(() => !!official.value || props.item?.installation?.definition?.sourceModes?.includes("OFFICIAL"));
-const directoryRows = computed(() => officialInstallation.value ? (official.value?.paths.ownedPaths || []).map((path) => ({
+const directoryRows = computed(() => migratedData.value ? [{ label: "当前数据目录", path: props.item?.installationPaths?.data }] : officialInstallation.value ? (official.value?.paths.ownedPaths || []).map((path) => ({
   label: path === official.value?.paths.data ? "数据目录" : path === official.value?.paths.config ? "配置目录" : path === official.value?.paths.logs ? "实例日志目录" : "专属目录", path,
 })) : [
   { label: "实例根目录", path: props.item?.installationPaths?.root },
@@ -35,7 +43,7 @@ watch(() => props.item?.id, () => {
   error.value = undefined;
 }, { immediate: true });
 const canSubmit = computed(() => !!props.item && softwareUninstallAvailable(props.item) &&
-  (!deleteData.value || (pathsReady.value && confirmationName.value === props.item.name)));
+  (!deleteData.value || (canDeleteData.value && pathsReady.value && confirmationName.value === props.item.name)));
 async function submit() {
   if (busy.value || !canSubmit.value || !props.item) return;
   busy.value = true;
@@ -74,16 +82,25 @@ async function submit() {
         <p v-if="dependentContainers.length">此主机已登记 {{ dependentContainers.length }} 个容器：{{ dependentContainers.join("、") }}。请先处理依赖；服务器上未登记的容器也可能受影响。</p>
         <p>Docker Engine 的容器数据使用下方数据目录。</p>
       </div>
-      <label class="delete-choice"><input v-model="deleteData" type="checkbox" :disabled="busy || attempted || !pathsReady" />同时删除此实例的数据</label>
-      <p class="data-summary">{{ deleteData ? "会删除下列专属目录，无法通过界面恢复。" : "默认保留数据、配置和日志。" }}</p>
+      <label v-if="canDeleteData" class="delete-choice"><input v-model="deleteData" type="checkbox" :disabled="busy || attempted || !pathsReady" />同时删除此实例的数据</label>
+      <p class="data-summary">{{ migratedData ? deleteData ? '删除当前数据目录，保留迁移前目录和外部素材源。' : '当前数据、迁移前目录和素材源均保留。' : customCommands ? deleteData ? '同时执行删除数据命令。' : '保留数据，不执行删除数据步骤。' : deleteData ? "会删除下列专属目录，无法通过界面恢复。" : "默认保留数据、配置和日志。" }}</p>
       <section v-if="pathsReady" class="uninstall-paths" aria-label="卸载目录范围">
-        <h3>{{ deleteData ? "将删除的实例目录" : "保留的实例目录" }}</h3>
+        <h3>{{ migratedData ? deleteData ? '将删除的数据目录' : '保留的数据目录' : customCommands ? '命令可用目录' : deleteData ? "将删除的实例目录" : "保留的实例目录" }}</h3>
         <dl><template v-for="directory in directoryRows" :key="directory.label">
           <dt>{{ directory.label }}</dt><dd><code>{{ directory.path }}</code></dd>
         </template></dl>
       </section>
       <p v-else-if="official && !directoryRows.length" class="data-summary">此官方安装没有可删除的专属数据目录，共享系统目录保留。</p>
-      <p v-else class="uninstall-warning" role="alert">未取得完整安装目录，暂不能删除数据。请取消并刷新软件详情，重新检查后再操作；仍可选择卸载并保留数据。</p>
+      <p v-else-if="canDeleteData" class="uninstall-warning" role="alert">未取得完整安装目录，暂不能删除数据；仍可卸载并保留数据。</p>
+      <details v-if="uninstallSteps.length" class="command-preview">
+        <summary>查看卸载步骤</summary>
+        <article v-for="(step, index) in uninstallSteps" :key="index">
+          <strong>{{ index + 1 }}. {{ step.name }} · {{ step.runAs === 'ROOT' ? '管理员' : commands?.builtin ? '安装账号' : item.installation?.config?.account || '所选账号' }}</strong>
+          <RecipeSystemStepDetails v-if="step.kind === 'SYSTEM' && item.installation?.definition" :recipe="item.installation.definition" :step="step" :context="{ config: item.installation.config, paths: item.installationPaths, official }" />
+          <pre v-else>{{ step.script }}</pre>
+        </article>
+        <p v-if="migratedData && deleteData" class="data-summary">移除程序后，核对当前数据目录归属并清理；不执行迁移前目录的删除步骤。</p>
+      </details>
       <section v-if="softwareIsDockerEngine(item) && !officialInstallation" class="uninstall-paths" aria-label="Docker 系统目录处理">
         <h3>Docker 系统目录</h3>
         <dl>
@@ -96,8 +113,8 @@ async function submit() {
       </label>
       <div v-if="error" class="uninstall-warning" role="alert">
         <strong>{{ error.message }}</strong>
-        <small>{{ error.code }} · {{ hostTime(error.at) }} · {{ item.name }}</small>
-        <details v-if="error.traceId"><summary>诊断信息</summary><code>{{ error.traceId }}</code></details>
+        <small>{{ hostTime(error.at) }} · {{ item.name }}</small>
+        <details><summary>诊断信息</summary><code>{{ error.code }}</code><code v-if="error.traceId">{{ error.traceId }}</code></details>
         <p>重试会核对同一卸载请求。也可关闭后查看该实例的执行记录。</p>
       </div>
     </div>
@@ -129,4 +146,5 @@ summary { cursor: pointer; }
 .primary { margin: 0 0 0 10px; width: auto; }
 .primary.danger { color: #fff; background: var(--error); border-color: var(--error); }
 .primary.danger:hover:not(:disabled) { background: #b91c1c; border-color: #b91c1c; }
+.command-preview article { margin-top: 12px; font-size: 12px; }.command-preview pre { padding: 12px; border-radius: 5px; background: #f7f9fc; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 var(--mono); }
 </style>

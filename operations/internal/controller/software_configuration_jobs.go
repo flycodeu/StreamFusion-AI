@@ -51,6 +51,10 @@ func (h *HTTP) submitSoftwareConfigurationPlan(w http.ResponseWriter, r *http.Re
 		h.opsError(w, r, err)
 		return
 	}
+	if err := baseSoftwareConfigurationAllowed(h.store.DB, p.SoftwareID); err != nil {
+		h.fail(w, r, 409, configurationErrorCode(err), "该软件已有管理配置，请从管理操作修改")
+		return
+	}
 	t, err := h.store.readTarget(p.TargetID)
 	if err != nil {
 		h.opsError(w, r, err)
@@ -116,6 +120,10 @@ func (h *HTTP) submitSoftwareConfigurationPlan(w http.ResponseWriter, r *http.Re
 		h.fail(w, r, 409, "CONFIGURATION_PLAN_STALE", "提交期间主机或软件发生变化")
 		return
 	}
+	if err = baseSoftwareConfigurationAllowed(tx, p.SoftwareID); err != nil {
+		h.fail(w, r, 409, configurationErrorCode(err), "该软件已有管理配置，请从管理操作修改")
+		return
+	}
 	if err = checkInstallCredentialTx(tx, p.Previous.Config); err != nil {
 		h.fail(w, r, 409, "INSTALL_CREDENTIAL_UNAVAILABLE", "原配置凭据发生变化，无法安全恢复")
 		return
@@ -143,6 +151,10 @@ func (h *HTTP) submitSoftwareConfigurationPlan(w http.ResponseWriter, r *http.Re
 	}
 	if err = reserveInstallPorts(tx, p.TargetID, s.AdminID, p.ID, p.Definition, p.Config); err != nil {
 		h.fail(w, r, 409, "INSTALL_PORT_RESERVED", "有效计划已预留该协议端口")
+		return
+	}
+	if err = reserveManagementResources(tx, p.TargetID, p.SoftwareID, p.ID, installationResources(host.InstallRoot, p.SoftwareID, p.Definition, p.Config)); err != nil {
+		h.fail(w, r, 409, configurationErrorCode(err), "配置资源与其他软件或待执行操作冲突，请重新检查")
 		return
 	}
 	job, now := uuid.NewString(), Now()

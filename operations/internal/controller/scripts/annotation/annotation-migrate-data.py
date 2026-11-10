@@ -1,0 +1,31 @@
+owner()
+before = actual()
+source, target, size, count, free = migration(before)
+snapshot(before)
+stop()
+source, target, size, count, free = migration(before)
+original, _, _ = tree(source, True)
+target.parent.mkdir(parents=True, exist_ok=True)
+staging = target.parent/('.ops-'+sid+'-'+job)
+if staging.exists():
+    fail('本次操作暂存目录已存在，请核对原任务')
+print('数据复制暂存目录：'+str(staging), flush=True)
+run(['cp','-a','--preserve=all','--reflink=auto','--',str(source),str(staging)], 'cp -a --preserve=all --reflink=auto -- '+str(source)+' '+str(staging))
+copied, _, _ = tree(staging, True)
+verified, _, _ = tree(source, True)
+if original != copied or original != verified:
+    fail('数据摘要、权限或原目录状态不一致，原目录和复制结果均保留')
+save(staging/'.streamfusion-ops-data.json', {'softwareId':sid, 'originalDirectory':str(source)})
+run(['mv','-T','--no-clobber','--',str(staging),str(target)], 'mv -T --no-clobber -- '+str(staging)+' '+str(target))
+if staging.exists() or not target.is_dir():
+    fail('目标目录被占用，已保留暂存副本和原目录')
+value = dict(before, DATA_DIRECTORY=str(target))
+if app == 'ytlabel':
+    import_source(value)
+apply(value)
+save(meta, dict(softwareId=sid, dataDirectory=str(target)))
+save(backup/'expected.json', value)
+start()
+if app != 'ytlabel':
+    import_source(value)
+print('数据复制核验完成，原目录已保留：'+str(source), flush=True)

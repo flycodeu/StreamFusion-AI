@@ -1,0 +1,1 @@
+elif [ ! -x /usr/bin/sudo ]; then printf 'SFOPS_EXECUTOR_V1\nSUDO_MISSING\n'; elif ! /usr/bin/sudo -n -l -- %[1]s target-exec >/dev/null 2>&1; then printf 'SFOPS_EXECUTOR_V1\nAUTHORIZATION_REQUIRED\n';

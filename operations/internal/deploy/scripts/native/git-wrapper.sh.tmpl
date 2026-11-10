@@ -1,0 +1,6 @@
+#!/bin/sh
+GIT_EXEC_PATH=%s
+GIT_TEMPLATE_DIR=%s
+PERL5LIB=%s
+export GIT_EXEC_PATH GIT_TEMPLATE_DIR PERL5LIB
+exec %s "$@"

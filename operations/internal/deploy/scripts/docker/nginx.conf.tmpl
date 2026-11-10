@@ -1,0 +1,2 @@
+events {}
+http { server { listen 80; server_name _; root /usr/share/nginx/html; location = /__sfops_health { default_type text/plain; return 200 "%s"; } location / { index index.html; } } }

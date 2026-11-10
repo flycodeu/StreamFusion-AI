@@ -1,0 +1,7 @@
+# >>> streamfusion-ops node %[1]s >>>
+if [ -n "${BASH_VERSION:-}" ] && [ -r %[2]s/nvm.sh ]; then
+  export NVM_DIR=%[2]s
+  . "$NVM_DIR/nvm.sh" --no-use
+  if [ "$(nvm version default 2>/dev/null)" != N/A ]; then nvm use --silent default >/dev/null 2>&1; fi
+fi
+# <<< streamfusion-ops node %[1]s <<<

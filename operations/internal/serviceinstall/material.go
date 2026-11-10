@@ -11,6 +11,28 @@ import (
 )
 
 func ValidateMaterial(file, expectedSHA string, size int64, d Definition, mode string) (string, error) {
+	if d.Commands != nil && !IsBuiltinCommand(d) {
+		if d.ValidateCommands() != nil || len(d.RuntimeModes) != 1 || d.RuntimeModes[0] != mode || d.SourceModes[0] != "ARCHIVE" || !sha.MatchString(expectedSHA) || size < 1 || size > ArchiveLimit {
+			return "", errors.New("COMMAND_MATERIAL_INVALID")
+		}
+		f, err := os.Open(file)
+		if err != nil {
+			return "", err
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil || !info.Mode().IsRegular() || info.Size() != size {
+			return "", errors.New("COMMAND_MATERIAL_SIZE_MISMATCH")
+		}
+		sum := sha256.New()
+		if _, err = io.Copy(sum, f); err != nil {
+			return "", err
+		}
+		if hex.EncodeToString(sum.Sum(nil)) != expectedSHA {
+			return "", errors.New("COMMAND_MATERIAL_HASH_MISMATCH")
+		}
+		return "", nil
+	}
 	if mode == "" || mode == "DOCKER" {
 		return ValidateArchive(file, expectedSHA, size, d)
 	}

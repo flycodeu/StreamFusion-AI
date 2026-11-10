@@ -1,0 +1,33 @@
+package controller
+
+// Exact Config-20 stock hashes; administrator edits are never replaced.
+var previousServiceConfiguration = map[string]string{
+	"builtin/mysql/8.4.11":                  "bf774d94c3a6a27409800f618bce6fdbb18268e74bc01c921dcb8781c72fb040",
+	"builtin/mysql/ubuntu24.04-repository":  "267cc92c0e9622426718ae7e3e16cfa36930a9cb4eb412de8d70487950461cd1",
+	"builtin/nginx/1.24.0-2ubuntu7.19":      "de119d83b89a34f60ab1f7c1fafa3f7f85301069efd43948fd456a46ddde5288",
+	"builtin/nginx/1.30.6":                  "acfec76dee546badb02ca216ea0473b5d85c4cb5b0f80f64f29f247c3edc60a2",
+	"builtin/nginx/ubuntu24.04-repository":  "fa24fbdaa22223660728066b21dff6a04818ad0392fc97bac338350f4729babe",
+	"builtin/redis/7.0.15-1ubuntu0.24.04.5": "951b64b752d59e55087beeff9619e04434b4bb8022341bc3db4af2c1a9938b0b",
+	"builtin/redis/7.4.11":                  "66b7fd7bc32fb3d128c083bc0c55a305258a2e44400afa2f46eb335e3a2df265",
+	"builtin/redis/ubuntu24.04-repository":  "d9f29c4ddaeb5f0161628b6440871ddeb5246652525be01cb7b7c6461d1bc020",
+	"custom-gitlab-docker-offline":          "8669bdc7b1652370ff179f30a3caf085109de7adb95cb666b2efdc5747dc6531",
+	"custom-gitlab-docker-online":           "5ee2111b27b19ebc95a43c878ca4d934b046febe4f61817916972d84258b60ff",
+	"custom-gitlab-native-offline":          "3dfb465a5707bd7092248eea8ad13ada73dccb855319bc544c00023505169aa2",
+	"custom-gitlab-native-online":           "0b4b1b92c539d30cb03ef2fe317e71a8dc46623bac6b9e4871f091a633878442",
+	"custom-jenkins-docker-offline":         "6eec03617ee1350a12c67aeb0987e7a018a18ea0fc431d99e52e803affa342e4",
+	"custom-jenkins-docker-online":          "39904e0189c41b0a66f114f874c947c279bff176a4cc5517b09cf8150c18959c",
+	"custom-jenkins-native-offline":         "903db5695810dc16fbb7fe5ada3c6febcd8b251d081f22a52f7b6f9042201263",
+	"custom-jenkins-native-online":          "e74f4b62fdb1f62b9a36982cd92d387d7cbd2553510a0e19a57515f28415b7fa",
+	"custom-nacos-docker-offline":           "8465e3a7a68b9016b3e80ce76d43a75fa1d534408d530db9eaa0491868d2371e",
+	"custom-nacos-docker-online":            "cf4f85337c3440c0b47b3ac5c9a7868f25a1bc34b1b7cf143a8c38da6ad147c6",
+	"custom-nacos-native-offline":           "c47a56541800130780c7436980550393fd04a2ab67cf17afedd106e587ad2a8c",
+	"custom-nacos-native-online":            "1be3741142c6aaa7123d4c79007cbdd6325673e70df83e5172f87bea995df025",
+	"custom-postgresql-docker-offline":      "3603be38884ff363925e5dfda2a25c5658b9d0213a6c80607ed0b5a52a25a390",
+	"custom-postgresql-docker-online":       "72c232a5d5556e3d0cd485cceb874f6a392cef8f98ee34e3debb0d0cf0140b31",
+	"custom-postgresql-native-offline":      "29b686f7c3b7950f7109d478706ce4468110282328ecb22d791e50414b5f5006",
+	"custom-postgresql-native-online":       "b54c8e0346cc1fa8ad0f175390c537b2c48a0cd455ed41c16e83327e516f71af",
+	"custom-prometheus-docker-offline":      "7ff431de8fd4ef4cfcbcdc3dfac60a572f9d1a71d0af7061e796e5c86da78366",
+	"custom-prometheus-docker-online":       "5429db1eba8a84e5c207e1dcf5712fad198a4c52360ea07d51f2639750095608",
+	"custom-prometheus-native-offline":      "e0a29045791058d4d0303e9f41dd40bc78c98e79b9984a76caf20056b6a8ea7b",
+	"custom-prometheus-native-online":       "2a1041bc0c056464d7343de9b359d2ed04ea5d3e5934dc501895b259fc2ec6f8",
+}

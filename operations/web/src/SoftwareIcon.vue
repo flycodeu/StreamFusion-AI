@@ -18,6 +18,15 @@ const initials: Record<string, string> = {
   FFMPEG: "FF",
   SEAWEEDFS: "S3",
   MEDIAMTX: "MTX",
+  JENKINS: "Jk",
+  POSTGRESQL: "Pg",
+  GITLAB: "Gl",
+  PROMETHEUS: "Pm",
+  NACOS: "Na",
+  LABELSTUDIO: "Ls",
+  LABEL_STUDIO: "Ls",
+  "LABEL-STUDIO": "Ls",
+  YTLABEL: "Yt",
 };
 </script>
 
@@ -51,7 +60,8 @@ const initials: Record<string, string> = {
         stroke-linecap="round"
       />
     </svg>
-    <span v-else>{{ initials[kind] || kind.slice(0, 2) }}</span>
+    <span v-else-if="initials[kind]">{{ initials[kind] }}</span>
+    <svg v-else viewBox="0 0 40 40" fill="none"><path d="m20 7 12 7v13l-12 7-12-7V14l12-7Zm0 14 12-7M20 21 8 14m12 7v13M14 11l12 7" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /></svg>
   </span>
 </template>
 
@@ -90,6 +100,8 @@ const initials: Record<string, string> = {
   background: #eaf6ef;
   color: #2f8759;
 }
+.icon-labelstudio, .icon-label-studio, .icon-label_studio { background: #fff1ec; color: #b75c3b; }
+.icon-ytlabel { background: #edf5f2; color: #397864; }
 .icon-python {
   background: #fdf7e9;
   color: #3877a2;

@@ -1,0 +1,1 @@
+/usr/bin/docker image rm -- "$OPS_IMAGE@$OPS_IMAGE_DIGEST"

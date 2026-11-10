@@ -1,0 +1,1 @@
+/usr/bin/docker run --rm --pull never --network none --read-only --user 65534:65534 --workdir /tmp --tmpfs /tmp:rw,noexec,nosuid,size=32m --cap-drop ALL --security-opt no-new-privileges:true --memory 256m --cpus 1 --pids-limit 64 --env HOME=/tmp --entrypoint %s "$OPS_IMAGE_ID" %s

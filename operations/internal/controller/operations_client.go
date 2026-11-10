@@ -16,7 +16,8 @@ import (
 )
 
 // All target invocations use one protected executable with one fixed argument.
-// No client input is evaluated by a shell or passed as a Docker option.
+// Built-in requests retain fixed operations; administrator-published command
+// plans are signed here and require separately enrolled trust on the target.
 func (s *Store) callTarget(ctx context.Context, t target, req deploy.Request, archive string, dst any) error {
 	if t.Kind != "SSH" && runtime.GOOS != "linux" {
 		return errors.New("LINUX_TARGET_REQUIRED")
@@ -31,7 +32,18 @@ func (s *Store) callTarget(ctx context.Context, t target, req deploy.Request, ar
 	if err := s.releaseSecrets(&req); err != nil {
 		return err
 	}
-	b, _ := json.Marshal(req)
+	if commandRequest(req) {
+		if err := deploy.SignCommandRequest(&req, s.commandSigningKey()); err != nil {
+			return err
+		}
+	}
+	b, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	if len(b)+1 > deploy.ExecutorRequestLimit(req) {
+		return errors.New("INSTALL_REQUEST_TOO_LARGE")
+	}
 	input := io.Reader(bytes.NewReader(append(b, '\n')))
 	var f *os.File
 	if archive != "" {
@@ -41,9 +53,24 @@ func (s *Store) callTarget(ctx context.Context, t target, req deploy.Request, ar
 			return e
 		}
 		defer f.Close()
+		if req.ResumeOffset != 0 {
+			info, err := f.Stat()
+			if err != nil || req.Installation == nil || info.Size() != req.Installation.Source.ByteSize || req.ResumeOffset < 0 || req.ResumeOffset > info.Size() {
+				return errors.New("INSTALL_RESUME_OFFSET_INVALID")
+			}
+			if _, err = f.Seek(req.ResumeOffset, io.SeekStart); err != nil {
+				return err
+			}
+		}
 		input = io.MultiReader(input, f)
+	} else if req.ResumeOffset != 0 {
+		return errors.New("INSTALL_RESUME_OFFSET_INVALID")
 	}
-	out := &limitedOutput{limit: 128 << 10}
+	responseLimit := 128 << 10
+	if req.Management != nil {
+		responseLimit = 1 << 20
+	}
+	out := &limitedOutput{limit: responseLimit}
 	errOut := &limitedOutput{limit: 1024}
 	if t.Kind == "SSH" {
 		if e := s.sshExecute(ctx, t, input, out, errOut); e != nil {

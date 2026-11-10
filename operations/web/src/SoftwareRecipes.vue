@@ -1,17 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
+import { ElDialog, ElDropdown, ElDropdownMenu, ElDropdownItem, ElMessage, ElMessageBox } from "element-plus";
 import { request } from "./api";
+import { findErrorReference } from "./errorReference";
 import SoftwareIcon from "./SoftwareIcon.vue";
 import ServiceInstallDialog from "./ServiceInstallDialog.vue";
 import {
   serviceDescriptions,
+  recipeCatalogKey,
   isTool,
   type InstallationMaterial,
   type ServiceRecipe,
 } from "./serviceInstallation";
 import { hostObservationExpired, type Host } from "./hosts";
-import { softwareJobDiagnostic, softwareIsDockerEngine, softwareState, type SoftwareInstance } from "./software";
+import { softwareHasInstallationRecord, softwareIsDockerEngine, softwareState, type SoftwareInstance } from "./software";
+import { catalogDefaultRecipe, catalogInstances, catalogInstallState, catalogPending, catalogPendingRecords, catalogVersionMatches, installedPythonPaths } from "./softwareCatalog";
 
 interface Installation {
   id: string;
@@ -38,31 +41,78 @@ interface Job {
 }
 
 const props = defineProps<{ hostId: string; initialRecipeKey?: string }>();
-const emit = defineEmits<{ error: [unknown]; preparation: [string]; openInstance: [string]; register: [hostId: string, softwareType: string]; node: [hostId: string]; git: [hostId: string] }>();
+const emit = defineEmits<{ error: [unknown]; preparation: [string]; openInstance: [string]; register: [hostId: string, softwareType: string]; node: [hostId: string]; git: [hostId: string]; logs: [jobId: string] }>();
 const targets = ref<Host[]>([]);
 const serviceDefinitions = ref<ServiceRecipe[]>([]);
 const officialDefinitions = ref<ServiceRecipe[]>([]);
 const serviceRecipe = ref<ServiceRecipe>();
+const serviceRecord = ref<SoftwareInstance>();
 const installations = ref<Installation[]>([]);
 const softwareInstances = ref<SoftwareInstance[]>([]);
 const dockerRecipe = computed(() => serviceDefinitions.value.find((item) => item.key === "docker"));
 const dockerInstance = computed(() => softwareInstances.value.find((item) => item.hostId === targetId.value &&
   item.managementMode !== "RELEASED" && softwareIsDockerEngine(item)));
 const targetId = ref("");
+const pythonPaths = computed(() => installedPythonPaths(softwareInstances.value, targetId.value));
+const installedGit = computed(() => softwareInstances.value.find((item) => item.hostId === targetId.value &&
+  item.softwareType === "GIT" && item.managementMode !== "RELEASED" &&
+  (['READY', 'INSTALLING', 'UNKNOWN'].includes(item.installationStatus || '') || item.actualState === 'INSTALLED')));
+function recipeRecord(definition: ServiceRecipe, pendingOnly = false) {
+  if (pendingOnly) return catalogPending(softwareInstances.value, targetId.value, definition);
+  const history = softwareInstances.value.filter(item => item.hostId === targetId.value &&
+    softwareHasInstallationRecord(item) && item.installation?.definition &&
+    recipeCatalogKey(item.installation.definition) === recipeCatalogKey(definition))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return history.find(item => catalogVersionMatches(item, definition)) || history[0];
+}
+const nodeInstances = computed(() => catalogInstances(softwareInstances.value, targetId.value, "node"));
+const nodeVersionCount = computed(() => new Set(nodeInstances.value.map(item => item.softwareVersion || item.observation?.version).filter(Boolean)).size);
+const installState = (definition: ServiceRecipe) => catalogInstallState(softwareInstances.value, targetId.value, definition);
+function manageDefinition(definition: ServiceRecipe) {
+  const state = installState(definition);
+  const item = state.matching[0] || state.instances[0];
+  if (item) emit("openInstance", item.id);
+}
+function openDefinition(definition: ServiceRecipe) {
+  const pending = recipeRecord(definition, true);
+  if (pending) {
+    serviceRecord.value = pending;
+    serviceRecipe.value = pending.installation!.definition;
+  }
+  else if (definition.key === "git" && installedGit.value) emit("openInstance", installedGit.value.id);
+  else { serviceRecord.value = undefined; serviceRecipe.value = definition; }
+}
+function openPendingRecord(id: string) {
+  const item = softwareInstances.value.find(record => record.id === id);
+  if (!item?.installation?.definition) return;
+  serviceRecord.value = item;
+  serviceRecipe.value = item.installation.definition;
+}
+const pendingRecords = (key: string) => catalogPendingRecords(softwareInstances.value, targetId.value, key);
+function showJobLogs(jobId: string) {
+  dialog.value = false;
+  serviceRecipe.value = undefined;
+  serviceRecord.value = undefined;
+  emit("logs", jobId);
+}
 const search = ref("");
 const category = ref("ALL");
 const selectedVersions = ref<Record<string, string>>({});
 const categories = [
   { key: "ALL", label: "全部软件" },
   { key: "SERVICES", label: "服务软件" },
+  { key: "ANNOTATION", label: "标注平台" },
   { key: "ENGINE", label: "容器引擎" },
   { key: "JAVA_RUNTIME", label: "运行环境" },
   { key: "MAVEN_JDK_BUILD", label: "构建工具" },
   { key: "MEDIA_TOOLS", label: "媒体工具" },
   { key: "PROGRAMMING", label: "编程软件" },
+  { key: "CUSTOM", label: "自定义软件" },
 ];
 function recipeSubtitle(d: ServiceRecipe) {
-  if (d.key === "git") return "版本控制与仓库账号";
+  if (d.category === "ANNOTATION") return "数据标注平台";
+  if (d.commands && !d.commands.builtin) return { TOOL: "程序工具", SYSTEMD: "系统服务", DOCKER: "容器服务", SERVICE: "服务" }[d.commands.kind];
+  if (d.key === "git") return "版本控制";
   if (d.key === "docker") return "主机容器运行引擎";
   if (d.category === "PROGRAMMING") return "编程软件";
   if (["java", "python"].includes(d.key)) return "应用运行环境";
@@ -74,13 +124,15 @@ function recipeSubtitle(d: ServiceRecipe) {
     ? "关系数据库"
     : d.key === "redis"
       ? "内存数据服务"
-      : "Web 与反向代理";
+      : d.key === "nginx" ? "Web 与反向代理" : isTool(d) ? "程序工具" : "服务软件";
 }
 const catalogEntries = computed(() => {
   const term = search.value.trim().toLowerCase();
   const groups = new Map<string, ServiceRecipe[]>();
   for (const definition of serviceDefinitions.value) {
     if (definition.key === "node") continue;
+    if (category.value === "CUSTOM" && (!definition.commands || definition.commands.builtin)) continue;
+    if (category.value === "ANNOTATION" && definition.category !== "ANNOTATION") continue;
     if (category.value === "ENGINE" && definition.key !== "docker") continue;
     if (category.value === "SERVICES" && definition.key === "docker") continue;
     if (category.value === "SERVICES" && isTool(definition)) continue;
@@ -89,7 +141,7 @@ const catalogEntries = computed(() => {
       !["java", "python"].includes(definition.key)
     )
       continue;
-    if (category.value === "MAVEN_JDK_BUILD" && !["maven", "git"].includes(definition.key))
+    if (category.value === "MAVEN_JDK_BUILD" && !["maven", "git"].includes(definition.key) && definition.category !== "BUILD_TOOLS")
       continue;
     if (
       ["MEDIA_TOOLS", "PROGRAMMING"].includes(category.value) &&
@@ -103,15 +155,17 @@ const catalogEntries = computed(() => {
         .includes(term)
     )
       continue;
-    const versions = groups.get(definition.key) || [];
+    const groupKey = recipeCatalogKey(definition);
+    const versions = groups.get(groupKey) || [];
     versions.push(definition);
-    groups.set(definition.key, versions);
+    groups.set(groupKey, versions);
   }
-  return Array.from(groups.values(), (versions) => ({
-    definition:
-      versions.find((d) => d.version === selectedVersions.value[d.key]) ||
-      versions[0]!,
+  return Array.from(groups, ([key, versions]) => ({
+    key,
+    name: (versions.find(item => item.key === key && (!item.commands || item.commands.builtin)) || versions[0]!).name,
+    definition: catalogDefaultRecipe(versions, selectedVersions.value[key])!,
     versions,
+    versionChoices: Array.from(new Set(versions.map(item => item.version))),
   }));
 });
 const showNode = computed(() => ["ALL", "JAVA_RUNTIME"].includes(category.value) && (!search.value.trim() || /node|npm|pnpm|nvm|运行环境/i.test(search.value)));
@@ -124,7 +178,6 @@ const busy = ref(false);
 const loading = ref(false);
 const selectedId = ref("");
 const detailJob = ref<Job | null>(null);
-const jobLogs = ref("");
 const dialog = ref(false);
 const currentTarget = computed(() =>
   targets.value.find((t) => t.id === targetId.value),
@@ -179,11 +232,10 @@ async function refresh() {
   if (loading.value) return;
   loading.value = true;
   try {
-    const [ts, rows, services, software, materials, official] = await Promise.all([
+    const [ts, rows, services, materials, official] = await Promise.all([
       request<Host[]>("/hosts"),
       request<Installation[]>("/plugin-installations"),
       request<ServiceRecipe[]>("/software-recipes"),
-      request<SoftwareInstance[]>("/software-instances"),
       request<InstallationMaterial[]>("/installation-materials"),
       request<ServiceRecipe[]>("/software-official-recipes"),
     ]);
@@ -191,20 +243,31 @@ async function refresh() {
     targets.value = ts;
     installations.value = rows;
     serviceDefinitions.value = services;
-    softwareInstances.value = software;
     officialDefinitions.value = official;
+    if (selectedVersions.value.ytlabel === undefined) {
+      const preferred = catalogDefaultRecipe(services.filter(item => recipeCatalogKey(item) === "ytlabel"));
+      if (preferred) selectedVersions.value.ytlabel = preferred.version;
+    }
     for (const material of materials) {
-      if (selectedVersions.value[material.recipeKey] !== undefined ||
-        !material.available || material.origin?.kind !== "BUNDLED") continue;
+      if (!material.available || material.origin?.kind !== "BUNDLED") continue;
       const matching = services.find((definition) => definition.key === material.recipeKey &&
         definition.version === material.recipeVersion && definition.revision === material.recipeRevision &&
         definition.runtimeModes.includes(material.runtimeMode));
-      if (matching) selectedVersions.value[matching.key] = matching.version;
+      if (matching && selectedVersions.value[recipeCatalogKey(matching)] === undefined)
+        selectedVersions.value[recipeCatalogKey(matching)] = matching.version;
+    }
+    for (const definition of services) {
+      const key = recipeCatalogKey(definition);
+      if (!services.some(item => recipeCatalogKey(item) === key && item.version === selectedVersions.value[key]))
+        selectedVersions.value[key] = definition.version;
     }
     if (!targetId.value && ts.length)
       targetId.value = ts.some((t) => t.id === props.hostId)
         ? props.hostId
         : ts[0]!.id;
+    const hostId = targetId.value;
+    const software = hostId ? await request<SoftwareInstance[]>("/software-instances?hostId=" + encodeURIComponent(hostId)) : [];
+    if (!disposed && hostId === targetId.value) softwareInstances.value = software;
     if (dialog.value && selected.value?.lastJobId)
       detailJob.value = await request<Job>("/jobs/" + selected.value.lastJobId);
   } finally {
@@ -240,7 +303,6 @@ async function probe() {
 async function details(i: Installation) {
   selectedId.value = i.id;
   detailJob.value = null;
-  jobLogs.value = "";
   dialog.value = true;
   await act(async () => {
     detailJob.value = await request<Job>("/jobs/" + i.lastJobId);
@@ -254,7 +316,7 @@ async function verify(i: Installation) {
     );
     await refresh();
     if (result.status === "READY") ElMessage.success("工具镜像校验通过");
-    else ElMessage.error(result.errorCode || "环境校验失败，请查看详情");
+    else ElMessage.error(findErrorReference(result.errorCode)?.name || "环境校验未通过，请查看执行记录");
   });
 }
 async function remove(i: Installation) {
@@ -286,15 +348,6 @@ async function reconcile() {
     await request("/jobs/" + j.id + "/reconcile", "POST");
     detailJob.value = await request<Job>("/jobs/" + j.id);
     await refresh();
-  });
-}
-async function loadLogs() {
-  const j = detailJob.value;
-  if (!j) return;
-  await act(async () => {
-    jobLogs.value = (
-      await request<{ text: string }>("/jobs/" + j.id + "/logs")
-    ).text;
   });
 }
 async function cancelJob() {
@@ -336,7 +389,7 @@ onUnmounted(() => {
     <div class="catalog-target">
       <div class="target-choice">
         <span class="target-label">安装到</span>
-        <select v-model="targetId" aria-label="目标主机" :disabled="busy">
+        <select v-model="targetId" aria-label="目标主机" :disabled="busy || loading" @change="act(refresh)">
           <option v-if="!targets.length" value="">暂无主机</option>
           <option v-for="t in targets" :key="t.id" :value="t.id">
             {{ t.name }} · {{ t.address || "本机" }}
@@ -344,7 +397,7 @@ onUnmounted(() => {
         </select>
       </div>
       <span class="target-capability" :class="{ available: ready }"
-        ><i></i>{{ currentTarget?.maintenance ? "维护中" : ready ? "变更执行已就绪" : "安装时检查" }}</span
+        ><i></i>{{ currentTarget?.maintenance ? "维护中" : ready ? "已就绪" : "安装时检查" }}</span
       >
       <button class="quiet" :disabled="busy || !targetId" @click="probe">
         检查目标
@@ -365,7 +418,10 @@ onUnmounted(() => {
             <code>{{ currentTarget.installRoot }}</code>
           </dd>
           <dt>运行环境</dt>
-          <dd>{{ currentTarget.capabilities?.platform || "待检查" }}</dd>
+          <dd>{{ [
+            [currentTarget.capabilities?.distribution, currentTarget.capabilities?.distributionVersion].filter(Boolean).join(" "),
+            currentTarget.capabilities?.platform,
+          ].filter(Boolean).join(" · ") || "待检查" }}</dd>
           <dt>Docker 能力</dt>
           <dd>
             {{
@@ -381,6 +437,7 @@ onUnmounted(() => {
           </dd>
         </dl>
       </details>
+      <button class="secondary installation-trigger" @click="showJobLogs('')">安装日志</button>
     </div>
     <section v-if="currentTarget" class="docker-engine-bar" aria-label="主机 Docker Engine">
       <SoftwareIcon type="DOCKER" />
@@ -390,9 +447,9 @@ onUnmounted(() => {
           hostObservationExpired(currentTarget, Date.now()) ? '当前状态待检查' :
           currentTarget.capabilities?.docker.status === 'AVAILABLE' ? '外部 Docker 已可用' : '安装容器软件前需准备 Docker Engine' }}</p>
       </div>
-      <button v-if="dockerInstance" class="secondary" :disabled="busy" @click="emit('openInstance', dockerInstance.id)">查看与启停</button>
+      <button v-if="dockerInstance" class="secondary" :disabled="busy" @click="emit('openInstance', dockerInstance.id)">管理 Docker</button>
       <button v-else-if="currentTarget.capabilities?.docker.status !== 'AVAILABLE'" class="secondary" :disabled="busy || !dockerRecipe || currentTarget.maintenance"
-        @click="serviceRecipe = dockerRecipe">安装 Docker Engine</button>
+        @click="serviceRecord = undefined; serviceRecipe = dockerRecipe">安装 Docker Engine</button>
     </section>
     <div class="catalog-toolbar">
       <div class="catalog-categories" aria-label="软件分类">
@@ -428,53 +485,62 @@ onUnmounted(() => {
     </div>
     <div v-else class="plugin-grid">
       <article v-if="showNode" class="plugin-card node-catalog-card">
-        <div class="plugin-heading"><SoftwareIcon type="NODE" /><div class="plugin-title"><h3>Node.js</h3><span>多版本运行环境</span></div></div>
+        <div class="plugin-heading"><SoftwareIcon type="NODE" /><div class="plugin-title"><h3>Node.js</h3><span>多版本运行环境</span></div><span v-if="nodeInstances.length" class="state-tag success catalog-installed">已安装{{ nodeVersionCount ? ` · ${nodeVersionCount} 个版本` : '' }}</span></div>
         <p class="plugin-description">安装 Node.js，管理 npm、pnpm 和默认版本。</p>
         <div class="plugin-meta"><span>官方在线 / Ops 离线 / 自行安装</span></div>
-        <footer><span class="recipe-kind">nvm · 多版本</span><button class="primary" :disabled="!currentTarget" @click="emit('node', targetId)">安装与管理</button></footer>
+        <footer><span class="recipe-kind">nvm · 多版本</span><button class="primary" :disabled="!currentTarget" @click="emit('node', targetId)">{{ nodeInstances.length ? '版本管理' : '安装与管理' }}</button></footer>
       </article>
       <article
-        v-for="{ definition, versions } in catalogEntries"
-        :key="definition.key"
+        v-for="{ key, name, definition, versions, versionChoices } in catalogEntries"
+        :key="key"
         class="plugin-card"
       >
         <div class="plugin-heading">
-          <SoftwareIcon :type="definition.key" />
+          <SoftwareIcon :type="key" />
           <div class="plugin-title">
-            <h3>{{ definition.name }}</h3>
+            <h3>{{ name }}</h3>
             <span>{{ recipeSubtitle(definition) }}</span>
           </div>
+          <span v-if="installState(definition).label" class="state-tag catalog-installed" :class="installState(definition).tone">{{ installState(definition).label }}</span>
         </div>
-        <p class="plugin-description">
-          {{ serviceDescriptions[definition.key] || definition.name }}
+        <p v-if="serviceDescriptions[key]" class="plugin-description">
+          {{ serviceDescriptions[key] }}
         </p>
         <div class="plugin-meta">
-          <span>{{ versions.length > 1 ? versions.length + ' 个可选版本' : definition.version }}</span>
+          <select v-if="versionChoices.length > 1" v-model="selectedVersions[key]" :aria-label="name + '版本'"><option v-for="version in versionChoices" :key="version" :value="version">{{ version }}{{ catalogInstances(softwareInstances, targetId, key).some(item => catalogVersionMatches(item, { ...definition, version })) ? ' · 已安装' : '' }}</option></select><span v-else>{{ definition.version }}</span>
           <span>{{ definition.platform }}</span>
+          <span v-if="definition.commands && !definition.commands.builtin">{{ definition.commands.steps.length }} 个步骤</span>
         </div>
         <footer>
           <span class="recipe-kind"
             >{{
-              Array.from(new Set([...versions.flatMap((item) => item.runtimeModes), ...(officialDefinitions.some((item) => item.key === definition.key) ? ["NATIVE"] : [])]))
+              Array.from(new Set([...versions.flatMap((item) => item.runtimeModes), ...(officialDefinitions.some((item) => recipeCatalogKey(item) === key) ? ["NATIVE"] : [])]))
                 .map((mode) => (mode === "NATIVE" ? "原生" : "Docker"))
                 .join(" / ")
             }}
 </span
           >
           <div class="recipe-actions">
-            <button v-if="definition.key === 'git'" class="secondary" :disabled="!currentTarget" @click="emit('git', targetId)">账号与仓库</button>
+            <ElDropdown v-if="pendingRecords(key).length && (!recipeRecord(definition, true) || pendingRecords(key).length > 1)" trigger="click" @command="openPendingRecord">
+              <button class="quiet">查看进度<span v-if="pendingRecords(key).length > 1">（{{ pendingRecords(key).length }}）</span></button>
+              <template #dropdown><ElDropdownMenu><ElDropdownItem v-for="record in pendingRecords(key)" :key="record.id" :command="record.id">{{ record.installation!.definition!.version }} · {{ record.runtimeKind === 'DOCKER' ? 'Docker' : '原生' }} · {{ record.installationStatus === 'UNKNOWN' ? '结果待确认' : '安装中' }}</ElDropdownItem></ElDropdownMenu></template>
+            </ElDropdown>
+            <button v-if="installState(definition).instances.length && definition.key !== 'git'" class="quiet" @click="manageDefinition(definition)">管理</button>
+            <button v-if="recipeRecord(definition)" class="quiet" @click="showJobLogs(recipeRecord(definition)!.installationJobId!)">安装日志</button>
+            <button v-if="definition.key === 'git'" class="secondary" :disabled="!currentTarget" @click="emit('git', targetId)">账号配置</button>
             <a
+              v-if="definition.officialUrl"
               class="official-link"
               :href="definition.officialUrl"
               target="_blank"
               rel="noopener noreferrer"
-              >官方说明</a
+              >{{ definition.commands && !definition.commands.builtin ? '来源说明' : '官方说明' }}</a
             ><button
               class="primary"
-              :disabled="busy || !currentTarget || currentTarget.maintenance || (definition.key === 'docker' && (!!dockerInstance || currentTarget.capabilities?.docker.status === 'AVAILABLE'))"
-              @click="serviceRecipe = definition"
+              :disabled="busy || !currentTarget || currentTarget.maintenance || (definition.key === 'docker' && !recipeRecord(definition, true) && (!!dockerInstance || currentTarget.capabilities?.docker.status === 'AVAILABLE'))"
+              @click="openDefinition(definition)"
             >
-              安装
+              {{ recipeRecord(definition, true) ? '查看进度' : definition.key === 'git' && installedGit ? '查看软件' : '安装' }}
             </button>
           </div>
         </footer>
@@ -512,12 +578,15 @@ onUnmounted(() => {
   <ServiceInstallDialog
     :open="!!serviceRecipe"
     :recipe="serviceRecipe"
-    :recipes="serviceDefinitions.filter((item) => item.key === serviceRecipe?.key)"
-    :official-recipes="officialDefinitions.filter((item) => item.key === serviceRecipe?.key)"
+    :existing="serviceRecord"
+    :recipes="serviceDefinitions.filter((item) => serviceRecipe && recipeCatalogKey(item) === recipeCatalogKey(serviceRecipe))"
+    :official-recipes="officialDefinitions.filter((item) => serviceRecipe && recipeCatalogKey(item) === recipeCatalogKey(serviceRecipe))"
+    :known-python-paths="pythonPaths"
     :docker-recipe="dockerRecipe"
     :docker-official-recipes="officialDefinitions.filter((item) => item.key === 'docker')"
     :host="currentTarget"
-    @close="serviceRecipe = undefined"
+    @close="serviceRecord = undefined; serviceRecipe = undefined"
+    @logs="showJobLogs"
     @submitted="act(refresh)"
     @error="emit('error', $event)"
     @preparation="emit('preparation', $event)"
@@ -542,12 +611,6 @@ onUnmounted(() => {
         <dt>引用数</dt>
         <dd>{{ selected?.referenceCount || 0 }}</dd>
       </dl>
-      <details><summary>诊断信息</summary><dl class="plugin-detail">
-        <dt>状态 / 阶段</dt><dd>{{ softwareJobDiagnostic(selected?.status || detailJob?.status, detailJob?.phase, phases) }}</dd>
-        <dt>错误码</dt><dd>{{ selected?.errorCode || detailJob?.errorCode || "—" }}</dd>
-        <dt>作业</dt><dd><code>{{ detailJob?.id }}</code></dd>
-        <dt>追踪</dt><dd><code>{{ detailJob?.traceId }}</code></dd>
-      </dl></details>
       <div
         v-if="detailJob?.status === 'UNKNOWN' || detailJob?.targetAckPending"
         class="job-notice"
@@ -578,22 +641,14 @@ onUnmounted(() => {
         <code>{{ selected.imageDigest }}</code
         ><code>{{ selected.imageId || "尚未确认" }}</code>
       </details>
-      <details
-        v-if="
-          detailJob &&
-          detailJob.status !== 'QUEUED' &&
-          detailJob.phase !== 'CANCELLED'
-        "
-      >
-        <summary>执行日志</summary>
-        <button class="quiet" :disabled="busy" @click="loadLogs">
-          读取目标日志
-        </button>
-        <pre v-if="jobLogs" class="version-output">{{ jobLogs }}</pre>
-      </details>
+      <button v-if="detailJob" class="secondary" @click="showJobLogs(detailJob.id)">查看日志</button>
     </div>
   </ElDialog>
 </template>
+
+<style scoped>
+.installation-trigger { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+</style>
 
 <style scoped>
 .docker-engine-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; padding: 17px 0; border-bottom: 1px solid var(--border); }
@@ -807,6 +862,10 @@ onUnmounted(() => {
 }
 .plugin-heading .state-tag {
   flex-shrink: 0;
+}
+.catalog-installed {
+  margin-left: auto;
+  font-size: 11px;
 }
 .plugin-description {
   color: #7a8798;

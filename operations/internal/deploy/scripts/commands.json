@@ -1,0 +1,360 @@
+{
+  "management-container-ports": ["/usr/bin/docker", "container", "port", "--", "$1"],
+  "management-unit-load": ["/usr/bin/systemctl", "show", "--property=LoadState", "--value", "--", "$1"],
+  "management-container-list": ["/usr/bin/docker", "container", "ls", "-a", "--no-trunc", "--format", "{{.ID}} {{.Names}}"],
+  "systemd-start-identity": ["/usr/bin/systemctl", "show", "--property=InvocationID", "--value", "--", "$1"],
+  "systemd-can-reload": ["/usr/bin/systemctl", "show", "--property=CanReload", "--value", "--", "$1"],
+  "docker-start-identity": ["/usr/bin/docker", "container", "inspect", "--format", "{{.State.StartedAt}}", "--", "$1"],
+  "docker-restart": ["/usr/bin/docker", "container", "restart", "--time", "20", "--", "$1"],
+  "docker-pause": ["/usr/bin/docker", "container", "pause", "--", "$1"],
+  "docker-unpause": ["/usr/bin/docker", "container", "unpause", "--", "$1"],
+  "docker-access-grant": [
+    "/usr/bin/gpasswd",
+    "-a",
+    "$1",
+    "docker"
+  ],
+  "docker-access-revoke": [
+    "/usr/bin/gpasswd",
+    "-d",
+    "$1",
+    "docker"
+  ],
+  "node-plan-registry": [
+    "$1",
+    "config",
+    "set",
+    "registry",
+    "$2",
+    "--location=user"
+  ],
+  "node-plan-nvm-script": [
+    "install",
+    "-m",
+    "600",
+    "nvm.sh",
+    "$1"
+  ],
+  "node-plan-nvm-exec": [
+    "install",
+    "-m",
+    "700",
+    "nvm-exec",
+    "$1"
+  ],
+  "node-plan-default": [
+    "nvm",
+    "alias",
+    "default",
+    "$1"
+  ],
+  "node-plan-remove-environment": [
+    "rm",
+    "-rf",
+    "--",
+    "$1"
+  ],
+  "node-plan-remove-manager": [
+    "rm",
+    "-f",
+    "--",
+    "$1",
+    "$2"
+  ],
+  "node-plan-package": [
+    "$1",
+    "$2",
+    "$3",
+    "--global",
+    "--offline",
+    "--ignore-scripts",
+    "--no-audit",
+    "--no-fund",
+    "--prefix",
+    "$4",
+    "--",
+    "$5"
+  ],
+  "git-repository-ssh": [
+    "/usr/bin/ssh",
+    "-F",
+    "/dev/null",
+    "-o",
+    "StrictHostKeyChecking=yes",
+    "-o",
+    "IdentitiesOnly=yes",
+    "-o",
+    "IdentityAgent=none",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "PasswordAuthentication=no",
+    "-o",
+    "KbdInteractiveAuthentication=no",
+    "-o",
+    "UpdateHostKeys=no",
+    "-o",
+    "GlobalKnownHostsFile=/dev/null",
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "$1",
+    "-o",
+    "$2",
+    "-p",
+    "$3",
+    "-l",
+    "$4",
+    "-i",
+    "$5"
+  ],
+  "node-registry-config": [
+    "$1",
+    "$2",
+    "config",
+    "set",
+    "registry",
+    "$3",
+    "--location=user",
+    "$4",
+    "$5"
+  ],
+  "systemd-reload": [
+    "/usr/bin/systemctl",
+    "daemon-reload"
+  ],
+  "systemd-action": [
+    "/usr/bin/systemctl",
+    "$1",
+    "--",
+    "$2"
+  ],
+  "systemd-docker-stop": [
+    "/usr/bin/systemctl",
+    "stop",
+    "--",
+    "docker.service",
+    "docker.socket"
+  ],
+  "systemd-disable": [
+    "/usr/bin/systemctl",
+    "disable",
+    "--now",
+    "--",
+    "$1"
+  ],
+  "docker-start": [
+    "/usr/bin/docker",
+    "container",
+    "start",
+    "--",
+    "$1"
+  ],
+  "docker-stop": [
+    "/usr/bin/docker",
+    "container",
+    "stop",
+    "--time",
+    "20",
+    "--",
+    "$1"
+  ],
+  "docker-remove": [
+    "/usr/bin/docker",
+    "container",
+    "rm",
+    "--",
+    "$1"
+  ],
+  "docker-rename": [
+    "/usr/bin/docker",
+    "container",
+    "rename",
+    "$1",
+    "$2"
+  ],
+  "docker-image-remove": [
+    "/usr/bin/docker",
+    "image",
+    "rm",
+    "--",
+    "$1"
+  ],
+  "docker-pull": [
+    "/usr/bin/docker",
+    "pull",
+    "--platform",
+    "linux/amd64",
+    "$1"
+  ],
+  "docker-load": [
+    "/usr/bin/docker",
+    "image",
+    "load",
+    "--input",
+    "$1"
+  ],
+  "docker-image-verify": [
+    "/usr/bin/docker",
+    "image",
+    "inspect",
+    "--format",
+    "{\"id\":{{json .Id}},\"os\":{{json .Os}},\"arch\":{{json .Architecture}}}",
+    "$1"
+  ],
+  "docker-user-group": [
+    "/usr/bin/docker",
+    "run",
+    "--rm",
+    "--pull",
+    "never",
+    "--network",
+    "none",
+    "--read-only",
+    "--entrypoint",
+    "id",
+    "$1",
+    "-g",
+    "$2"
+  ],
+  "docker-create-base": [
+    "/usr/bin/docker",
+    "container",
+    "create",
+    "--pull",
+    "never",
+    "--name",
+    "$1",
+    "--restart",
+    "unless-stopped",
+    "--security-opt",
+    "no-new-privileges:true",
+    "--memory",
+    "$2",
+    "--cpus",
+    "2",
+    "--pids-limit",
+    "512",
+    "--log-driver",
+    "json-file",
+    "--log-opt",
+    "max-size=10m",
+    "--log-opt",
+    "max-file=3"
+  ],
+  "docker-runtime-mysql": [
+    "mysqld",
+    "--mysqlx=0",
+    "--port=3306",
+    "--bind-address=0.0.0.0"
+  ],
+  "docker-runtime-redis": [
+    "redis-server",
+    "/usr/local/etc/redis/redis.conf"
+  ],
+  "docker-runtime-nginx": [
+    "nginx",
+    "-g",
+    "daemon off;"
+  ],
+  "docker-runtime-seaweedfs": [
+    "server",
+    "-dir=/data/volume",
+    "-master.dir=/data/master",
+    "-volume.max=8",
+    "-master.volumeSizeLimitMB=1024",
+    "-ip=127.0.0.1",
+    "-ip.bind=127.0.0.1",
+    "-master.telemetry=false",
+    "-volume.port=8081",
+    "-filer",
+    "-s3",
+    "-s3.ip.bind=0.0.0.0",
+    "-s3.port=8333",
+    "-s3.port.iceberg=0",
+    "-s3.port.lance=0",
+    "-s3.config=/etc/seaweedfs/s3.json"
+  ],
+  "docker-runtime-zlm": [
+    "-c",
+    "/opt/media/conf/config.ini",
+    "-l",
+    "1",
+    "--log-dir",
+    "/data/logs",
+    "--log-size",
+    "10",
+    "--log-slice",
+    "3",
+    "-m",
+    "3"
+  ],
+  "docker-mount": [
+    "--volume",
+    "${1}:${2}${3}"
+  ],
+  "docker-publish": [
+    "--publish",
+    "$1"
+  ],
+  "docker-label": [
+    "--label",
+    "$1"
+  ],
+  "docker-mysql-root-env": [
+    "--env",
+    "MYSQL_ROOT_PASSWORD_FILE=/run/secrets/mysql-root",
+    "--env",
+    "MYSQL_ROOT_HOST=localhost"
+  ],
+  "docker-mysql-database": [
+    "--env",
+    "MYSQL_DATABASE=${1}"
+  ],
+  "docker-mysql-user": [
+    "--env",
+    "MYSQL_USER=${1}",
+    "--env",
+    "MYSQL_PASSWORD_FILE=/run/secrets/mysql-user"
+  ],
+  "docker-zlm-entrypoint": [
+    "--entrypoint",
+    "/opt/media/bin/MediaServer"
+  ],
+  "docker-mount-mysql-root": [
+    "/run/secrets/mysql-root"
+  ],
+  "docker-mount-mysql-health": [
+    "/run/secrets/mysql-health.cnf"
+  ],
+  "docker-mount-mysql-data": [
+    "/var/lib/mysql"
+  ],
+  "docker-mount-mysql-user": [
+    "/run/secrets/mysql-user"
+  ],
+  "docker-mount-redis-users": [
+    "/run/secrets/redis-users.acl"
+  ],
+  "docker-mount-redis-config": [
+    "/usr/local/etc/redis/redis.conf"
+  ],
+  "docker-mount-data": [
+    "/data"
+  ],
+  "docker-mount-nginx-config": [
+    "/etc/nginx/nginx.conf"
+  ],
+  "docker-mount-nginx-data": [
+    "/usr/share/nginx/html"
+  ],
+  "docker-mount-seaweedfs-config": [
+    "/etc/seaweedfs/s3.json"
+  ],
+  "docker-mount-mediamtx-config": [
+    "/mediamtx.yml"
+  ],
+  "docker-mount-zlm-config": [
+    "/opt/media/conf/config.ini"
+  ]
+}

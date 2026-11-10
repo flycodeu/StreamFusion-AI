@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -15,9 +16,11 @@ import (
 // Uninstallation freezes the installation and exact bound object. Empty fields
 // are omitted so existing job input hashes and durable receipts stay unchanged.
 type SoftwareUninstallRequest struct {
-	ClearNodeDefault bool                   `json:"clearNodeDefault,omitempty"`
-	Installation     serviceinstall.Request `json:"installation"`
-	DeleteData       bool                   `json:"deleteData,omitempty"`
+	DataDirectory         string                 `json:"dataDirectory,omitempty"`
+	DataDirectoryIdentity string                 `json:"dataDirectoryIdentity,omitempty"`
+	ClearNodeDefault      bool                   `json:"clearNodeDefault,omitempty"`
+	Installation          serviceinstall.Request `json:"installation"`
+	DeleteData            bool                   `json:"deleteData,omitempty"`
 }
 
 type SoftwareUninstallEvidence struct {
@@ -46,6 +49,14 @@ func validateSoftwareUninstall(req Request) error {
 		return errors.New("SOFTWARE_UNINSTALL_INPUT_INVALID")
 	}
 	i, o := u.Installation, s.Ownership
+	if u.DataDirectory != "" || u.DataDirectoryIdentity != "" {
+		if !validCommandBinaryPath(u.DataDirectory) || !path.IsAbs(u.DataDirectory) || !serviceinstall.ValidStorageRoot(u.DataDirectory) || !Hex.MatchString(u.DataDirectoryIdentity) || i.Definition.Commands == nil || serviceinstall.IsBuiltinCommand(i.Definition) || s.Kind != "SYSTEMD" && s.Kind != "DOCKER" {
+			return errors.New("MIGRATED_DATA_INPUT_INVALID")
+		}
+	}
+	if i.Definition.Commands != nil && !serviceinstall.IsBuiltinCommand(i.Definition) && o.CommandTemplateHash != Digest(i.Definition) {
+		return errors.New("COMMAND_TEMPLATE_IDENTITY_MISMATCH")
+	}
 	if i.Node != nil || o.Node != nil {
 		if !serviceinstall.IsNode(i.Definition) || !sameNodeOwner(i.Node, o.Node) {
 			return errors.New("NODE_UNINSTALL_IDENTITY_MISMATCH")
@@ -84,11 +95,20 @@ func (x *executor) uninstallSoftware(req Request, dir string) (Result, error) {
 	if err := x.boundSoftware(*req.Software); err != nil {
 		return result, err
 	}
+	if err := x.validateManagedDataClaim(req); err != nil {
+		return result, err
+	}
+	if req.Uninstallation.Installation.Definition.Commands != nil && !serviceinstall.IsBuiltinCommand(req.Uninstallation.Installation.Definition) {
+		return x.uninstallCommands(req, dir)
+	}
 	if req.Software.Ownership.Node != nil {
 		return x.uninstallNodeVersion(req, dir)
 	}
 	if req.Software.Ownership.Official != nil {
 		return x.uninstallOfficialSoftware(req, dir)
+	}
+	if c := req.Uninstallation.Installation.Definition.Commands; c != nil && c.Builtin && c.FlowVersion == 1 {
+		return x.uninstallBuiltinFlow(req, dir)
 	}
 	root, err := x.uninstallRoot(req)
 	if err != nil {
@@ -138,20 +158,20 @@ func (x *executor) uninstallSoftware(req Request, dir string) (Result, error) {
 		}
 	} else if req.Software.Kind == "TOOL" && req.Software.Ownership.RuntimeMode != "NATIVE" && !marker.SharedProgramRetained {
 		i := req.Uninstallation.Installation
-		if _, err = x.softwareRunner(ctx, "/usr/bin/docker", "image", "rm", "--", i.Definition.Image+"@"+i.Definition.Digest); err != nil {
+		if _, err = x.loggedSourceCommand(ctx, req, "DOCKER_IMAGE_REMOVE", "docker-image-remove", i.Definition.Image+"@"+i.Definition.Digest); err != nil {
 			return x.reconcileSoftwareUninstall(req, dir), nil
 		}
 	} else if req.Software.Kind == "DOCKER" {
 		if actual.State == "RUNNING" {
-			if _, err = x.softwareRunner(ctx, "/usr/bin/docker", "container", "stop", "--time", "20", "--", req.Software.Locator); err != nil {
+			if _, err = x.loggedSourceCommand(ctx, req, "DOCKER_STOP", "docker-stop", req.Software.Locator); err != nil {
 				return result, nil
 			}
 		}
-		if _, err = x.softwareRunner(ctx, "/usr/bin/docker", "container", "rm", "--", req.Software.Locator); err != nil {
+		if _, err = x.loggedSourceCommand(ctx, req, "DOCKER_REMOVE", "docker-remove", req.Software.Locator); err != nil {
 			return x.reconcileSoftwareUninstall(req, dir), nil
 		}
 	} else if req.Software.Kind == "SYSTEMD" {
-		if _, err = x.softwareRunner(ctx, "/usr/bin/systemctl", "disable", "--now", "--", req.Software.Locator); err != nil {
+		if _, err = x.loggedSourceCommand(ctx, req, "NATIVE_STOP", "systemd-disable", req.Software.Locator); err != nil {
 			return result, nil
 		}
 		// Reobserve the exact identity after the stop boundary before unlinking.
@@ -159,22 +179,37 @@ func (x *executor) uninstallSoftware(req Request, dir string) (Result, error) {
 		if observeErr != nil || stopped.State != "STOPPED" && stopped.State != "FAILED" {
 			return result, nil
 		}
-		if err = os.Remove(nativeUnitPath(req.Software.ID)); err != nil {
-			return result, nil
+		if _, handled, stepErr := x.runBuiltinStep(ctx, req, "NATIVE_REMOVE_UNIT", nil, nil, ""); handled {
+			err = stepErr
+		} else {
+			err = os.Remove(nativeUnitPath(req.Software.ID))
+			if err == nil {
+				_, err = x.sourceSoftwareCommand(ctx, "systemd-reload")
+			}
 		}
-		if _, err = x.softwareRunner(ctx, "/usr/bin/systemctl", "daemon-reload"); err != nil {
+		if err != nil {
 			return result, nil
 		}
 	}
 	if req.Software.Ownership.RuntimeMode == "NATIVE" && !engine {
-		if err = removeOwnedUninstallPaths(root, []string{"bin", "runtime"}, false); err != nil {
+		if _, handled, stepErr := x.runBuiltinStep(ctx, req, "NATIVE_REMOVE_PROGRAM", nil, nil, ""); handled {
+			err = stepErr
+		} else {
+			err = removeOwnedUninstallPaths(root, []string{"bin", "runtime"}, false)
+		}
+		if err != nil {
 			return result, nil
 		}
 	}
 	if req.Uninstallation.DeleteData {
 		// Include old configuration snapshots and logs only after explicit data
 		// confirmation; program-only removal leaves all of these untouched.
-		if err = removeOwnedUninstallPaths(root, []string{"."}, true); err != nil {
+		if _, handled, stepErr := x.runBuiltinStep(ctx, req, "DELETE_DATA", nil, nil, ""); handled {
+			err = stepErr
+		} else {
+			err = removeOwnedUninstallPaths(root, []string{"."}, true)
+		}
+		if err != nil {
 			return result, nil
 		}
 	}
@@ -333,6 +368,9 @@ func (x *executor) reconcileSoftwareUninstall(req Request, dir string) Result {
 }
 
 func (x *executor) verifySoftwareUninstall(req Request, result Result) error {
+	if req.Uninstallation.DataDirectory != "" {
+		return x.verifyMigratedDataUninstall(req, result)
+	}
 	if req.Software.Ownership.Node != nil {
 		return x.verifyNodeUninstall(req, result)
 	}

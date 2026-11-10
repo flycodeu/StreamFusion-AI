@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"strings"
@@ -45,6 +46,9 @@ func (p storedConfigurationPlan) change() *serviceinstall.ChangeRequest {
 
 func (h *HTTP) softwareConfigurationRoute(w http.ResponseWriter, r *http.Request, s *session, path string) bool {
 	p := strings.Split(strings.Trim(path, "/"), "/")
+	if h.softwareManagementRoute(w, r, s, p) {
+		return true
+	}
 	if len(p) != 3 || !deploy.ID.MatchString(p[1]) || r.Method != "POST" {
 		return false
 	}
@@ -61,7 +65,10 @@ func (h *HTTP) softwareConfigurationRoute(w http.ResponseWriter, r *http.Request
 
 func (h *HTTP) checkSoftwareConfiguration(ctx context.Context, t target, i softwareInstance, config serviceinstall.Config) (serviceinstall.Preflight, error) {
 	var out serviceinstall.Preflight
-	if i.Installation == nil || i.Installation.Official != nil || !installationBound(i) || i.InstallationStatus != "READY" || i.RuntimeKind == "TOOL" || i.SoftwareType == "DOCKER" {
+	if err := baseSoftwareConfigurationAllowed(h.store.DB, i.ID); err != nil {
+		return out, err
+	}
+	if i.Installation == nil || (i.Installation.Definition.Commands != nil && !serviceinstall.IsBuiltinCommand(i.Installation.Definition)) || i.Installation.Official != nil || !installationBound(i) || i.InstallationStatus != "READY" || i.RuntimeKind == "TOOL" || i.SoftwareType == "DOCKER" {
 		return out, errors.New("CONFIGURATION_UNAVAILABLE")
 	}
 	change := &serviceinstall.ChangeRequest{Previous: *i.Installation, Config: config, ExpectedBindingRevision: i.BindingRevision}
@@ -71,7 +78,7 @@ func (h *HTTP) checkSoftwareConfiguration(ctx context.Context, t target, i softw
 	if err := h.store.checkInstallSecrets(i.Installation.Definition, config); err != nil {
 		return out, err
 	}
-	if err := h.installTargetReady(ctx, t, config); err != nil {
+	if err := h.installTargetReady(ctx, t, config, serviceinstall.Source{}); err != nil {
 		return out, err
 	}
 	err := h.store.callTarget(ctx, t, deploy.Request{Action: "SOFTWARE_CONFIGURE_CHECK", Software: softwareRequest(i), Reconfiguration: change}, "", &out)
@@ -100,6 +107,10 @@ func (h *HTTP) createSoftwareConfigurationPlan(w http.ResponseWriter, r *http.Re
 	}
 	if i.Version != in.ExpectedVersion {
 		h.fail(w, r, 409, "VERSION_CONFLICT", "软件已变化，请刷新后重新配置")
+		return
+	}
+	if err := baseSoftwareConfigurationAllowed(h.store.DB, id); err != nil {
+		h.fail(w, r, 409, configurationErrorCode(err), "该软件已有管理配置，请从管理操作修改")
 		return
 	}
 	if i.Installation == nil || i.Installation.Official != nil || !installationBound(i) || i.InstallationStatus != "READY" || i.RuntimeKind == "TOOL" || i.SoftwareType == "DOCKER" {
@@ -159,6 +170,10 @@ func (h *HTTP) createSoftwareConfigurationPlan(w http.ResponseWriter, r *http.Re
 		h.fail(w, r, 409, "VERSION_CONFLICT", "配置检查期间软件已变化")
 		return
 	}
+	if err = baseSoftwareConfigurationAllowed(tx, id); err != nil {
+		h.fail(w, r, 409, configurationErrorCode(err), "该软件已有管理配置，请从管理操作修改")
+		return
+	}
 	host, err := scanHost(tx.QueryRow("SELECT "+hostColumns+" FROM targets WHERE id=?", t.ID))
 	if err != nil {
 		h.internal(w, r, err)
@@ -189,6 +204,10 @@ func (h *HTTP) createSoftwareConfigurationPlan(w http.ResponseWriter, r *http.Re
 		h.fail(w, r, 409, "INSTALL_PORT_RESERVED", "其他有效计划已预留该协议端口")
 		return
 	}
+	if err = reserveManagementResources(tx, t.ID, i.ID, "", installationResources(t.InstallRoot, i.ID, p.Definition, p.Config)); err != nil {
+		h.fail(w, r, 409, configurationErrorCode(err), "配置资源与其他软件或待执行操作冲突，请调整后重检")
+		return
+	}
 	if err = tx.QueryRow("SELECT count(*) FROM software_configuration_plans WHERE target_id=? AND status='DRAFT' AND expires_at>?", t.ID, time.Now().UTC().Format(time.RFC3339)).Scan(&busy); err != nil {
 		h.internal(w, r, err)
 		return
@@ -217,6 +236,17 @@ func (h *HTTP) createSoftwareConfigurationPlan(w http.ResponseWriter, r *http.Re
 		return
 	}
 	h.success(w, r, p.softwareConfigurationPlan)
+}
+
+func baseSoftwareConfigurationAllowed(q interface{ QueryRow(string, ...any) *sql.Row }, id string) error {
+	var count int
+	if err := q.QueryRow("SELECT count(*) FROM software_management_state m,json_each(m.resources_json) r WHERE m.software_id=? AND json_extract(r.value,'$.type')='PATH_WRITE'", id).Scan(&count); err != nil {
+		return err
+	}
+	if count != 0 {
+		return errors.New("MANAGEMENT_CONFIGURATION_REQUIRED")
+	}
+	return nil
 }
 
 func configurationErrorCode(err error) string {

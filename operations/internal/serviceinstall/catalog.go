@@ -27,22 +27,29 @@ type PortDescriptor struct {
 	NativeOnly    bool   `json:"nativeOnly,omitempty"`
 }
 type Definition struct {
-	Category     string            `json:"category,omitempty"`
-	Kind         string            `json:"kind,omitempty"`
-	Native       *NativeDefinition `json:"native,omitempty"`
-	Ports        []PortDescriptor  `json:"ports,omitempty"`
-	Key          string            `json:"key"`
-	Name         string            `json:"name"`
-	Version      string            `json:"version"`
-	Revision     string            `json:"revision"`
-	Platform     string            `json:"platform"`
-	Image        string            `json:"image"`
-	Digest       string            `json:"digest"`
-	ImageID      string            `json:"imageId"`
-	OfficialURL  string            `json:"officialUrl"`
-	RuntimeModes []string          `json:"runtimeModes"`
-	SourceModes  []string          `json:"sourceModes"`
-	Port         int               `json:"port"`
+	DefaultMemoryMiB   int                   `json:"defaultMemoryMiB,omitempty"`
+	DefaultBindAddress string                `json:"defaultBindAddress,omitempty"`
+	Web                *WebAccessDefinition  `json:"web,omitempty"`
+	Parameters         []ParameterDefinition `json:"parameters,omitempty"`
+	Management         *ManagementDefinition `json:"management,omitempty"`
+	Commands           *CommandRecipe        `json:"commands,omitempty"`
+	CatalogKey         string                `json:"catalogKey,omitempty"`
+	Category           string                `json:"category,omitempty"`
+	Kind               string                `json:"kind,omitempty"`
+	Native             *NativeDefinition     `json:"native,omitempty"`
+	Ports              []PortDescriptor      `json:"ports,omitempty"`
+	Key                string                `json:"key"`
+	Name               string                `json:"name"`
+	Version            string                `json:"version"`
+	Revision           string                `json:"revision"`
+	Platform           string                `json:"platform"`
+	Image              string                `json:"image"`
+	Digest             string                `json:"digest"`
+	ImageID            string                `json:"imageId"`
+	OfficialURL        string                `json:"officialUrl"`
+	RuntimeModes       []string              `json:"runtimeModes"`
+	SourceModes        []string              `json:"sourceModes"`
+	Port               int                   `json:"port"`
 }
 
 var legacyCatalog = []Definition{

@@ -85,7 +85,7 @@ func (h *HTTP) checkPreparationUpdate(ctx context.Context, t target, ownJob stri
 	}
 	defer closeClient()
 	out := &limitedOutput{limit: 512}
-	if runSSHCommand(client, "sha256sum -- "+shellQuote(t.InstallRoot+"/executor"), nil, out, io.Discard) != nil {
+	if runSSHCommand(client, controllerTemplate("preparation/executor-sha256.command.tmpl", shellQuote(t.InstallRoot+"/executor")), nil, out, io.Discard) != nil {
 		u.Status = "MANUAL_REQUIRED"
 		u.Code = "EXECUTOR_HASH_UNAVAILABLE"
 		return u

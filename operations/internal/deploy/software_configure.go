@@ -47,6 +47,17 @@ func (x *executor) configurationPreflight(req Request) serviceinstall.Preflight 
 		fail("BINDING", "SOFTWARE_BINDING_REVISION_MISMATCH", "原安装绑定已变化，请重新读取实例")
 		return p
 	}
+	var binding softwareBinding
+	if readJSON(x.softwareFile(req.Software.ID), &binding) != nil {
+		fail("BINDING", "SOFTWARE_BINDING_DAMAGED", "无法读取软件绑定，请重新检查")
+		return p
+	}
+	for _, resource := range binding.Resources {
+		if resource.Type == "PATH_WRITE" {
+			fail("CONFIGURATION", "MANAGEMENT_CONFIGURATION_REQUIRED", "软件已有专属配置，请在软件管理中修改")
+			return p
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	actual, err := ObserveSoftware(ctx, *req.Software, x.softwareRunner)
@@ -162,7 +173,7 @@ func (x *executor) configureSoftware(req Request, dir string) (Result, error) {
 		if err = replaceProtectedServiceFile(nativeUnitPath(i.SoftwareID), []byte(renderNativeUnit(target, root, nativeUserName(i.SoftwareID)))); err != nil {
 			return x.rollbackConfiguration(req, dir, marker), nil
 		}
-		if _, err = x.softwareRunner(ctx, "/usr/bin/systemctl", "daemon-reload"); err != nil {
+		if _, err = x.sourceSoftwareCommand(ctx, "systemd-reload"); err != nil {
 			return x.rollbackConfiguration(req, dir, marker), nil
 		}
 		n := nativeInstallation{SoftwareID: i.SoftwareID, JobID: req.JobID, ConfigHash: Digest(i.Config), BinaryPath: req.Software.Ownership.BinaryPath, BinaryHash: req.Software.Ownership.BinaryHash}
@@ -174,7 +185,7 @@ func (x *executor) configureSoftware(req Request, dir string) (Result, error) {
 		current.IdentityHash = actual.IdentityHash
 	} else {
 		backupName := serviceName(i.SoftwareID) + "-previous-" + req.JobID
-		if _, err = x.softwareRunner(ctx, "/usr/bin/docker", "container", "rename", req.Software.Locator, backupName); err != nil {
+		if _, err = x.sourceSoftwareCommand(ctx, "docker-rename", req.Software.Locator, backupName); err != nil {
 			return x.rollbackConfiguration(req, dir, marker), nil
 		}
 		output, createErr := x.serviceDocker(target, "CONFIGURATION_CREATE", 45*time.Second, createArgs...)
@@ -226,7 +237,7 @@ func (x *executor) configureSoftware(req Request, dir string) (Result, error) {
 	// The original container is removed only after the new identity has a durable
 	// confirmed receipt; its bind-mounted data is never removed.
 	if i.Config.Mode() == "DOCKER" {
-		_, _ = x.softwareRunner(ctx, "/usr/bin/docker", "container", "rm", "--", req.Software.Locator)
+		_, _ = x.sourceSoftwareCommand(ctx, "docker-remove", req.Software.Locator)
 	}
 	_ = os.RemoveAll(previous)
 	return result, nil
@@ -261,13 +272,9 @@ func (x *executor) changeOwnedState(ctx context.Context, s SoftwareRequest, stat
 		action = "stop"
 	}
 	if s.Kind == "SYSTEMD" {
-		_, _ = x.softwareRunner(ctx, "/usr/bin/systemctl", action, "--", s.Locator)
+		_, _ = x.sourceSoftwareCommand(ctx, "systemd-action", action, s.Locator)
 	} else {
-		args := []string{"container", action, "--", s.Locator}
-		if action == "stop" {
-			args = []string{"container", "stop", "--time", "20", "--", s.Locator}
-		}
-		_, _ = x.softwareRunner(ctx, "/usr/bin/docker", args...)
+		_, _ = x.sourceSoftwareCommand(ctx, "docker-"+action, s.Locator)
 	}
 	observeCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -291,18 +298,18 @@ func (x *executor) rollbackConfiguration(req Request, dir string, marker configu
 			if x.changeOwnedState(ctx, current, "STOPPED") != nil {
 				return result
 			}
-			if _, err = x.softwareRunner(ctx, "/usr/bin/docker", "container", "rm", "--", current.Locator); err != nil {
+			if _, err = x.sourceSoftwareCommand(ctx, "docker-remove", current.Locator); err != nil {
 				return result
 			}
 		}
 		// Rename the original full ID back. No replacement of its identity occurs.
-		if _, err = x.softwareRunner(ctx, "/usr/bin/docker", "container", "rename", req.Software.Locator, serviceName(i.SoftwareID)); err != nil {
+		if _, err = x.sourceSoftwareCommand(ctx, "docker-rename", req.Software.Locator, serviceName(i.SoftwareID)); err != nil {
 			if _, observeErr := ObserveSoftware(ctx, *req.Software, x.softwareRunner); observeErr != nil {
 				return result
 			}
 		}
 	} else {
-		if _, err := x.softwareRunner(ctx, "/usr/bin/systemctl", "stop", "--", req.Software.Locator); err != nil {
+		if _, err := x.sourceSoftwareCommand(ctx, "systemd-action", "stop", req.Software.Locator); err != nil {
 			return result
 		}
 		unit, err := os.ReadFile(filepath.Join(dir, "unit.previous"))
@@ -326,7 +333,7 @@ func (x *executor) rollbackConfiguration(req Request, dir string, marker configu
 		}
 	}
 	if i.Config.Mode() == "NATIVE" {
-		if _, err := x.softwareRunner(ctx, "/usr/bin/systemctl", "daemon-reload"); err != nil {
+		if _, err := x.sourceSoftwareCommand(ctx, "systemd-reload"); err != nil {
 			return result
 		}
 	}

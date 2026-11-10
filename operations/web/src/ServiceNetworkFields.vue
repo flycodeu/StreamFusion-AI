@@ -3,6 +3,7 @@ import { computed } from "vue";
 import {
   isTool,
   isDockerEngine,
+  requiresServicePort,
   servicePortAddress,
   servicePortValue,
   visibleServicePorts,
@@ -83,7 +84,7 @@ function portInputValue(key: string) {
 
 <template>
   <div class="network-fields">
-    <template v-if="!isTool(recipe) && !isDockerEngine(recipe)">
+    <template v-if="requiresServicePort(recipe)">
       <div class="form-row">
         <label
           >监听地址<input
@@ -91,7 +92,7 @@ function portInputValue(key: string) {
             aria-label="宿主机监听地址"
             :disabled="disabled"
             spellcheck="false"
-            placeholder="服务器内网 IPv4"
+            :placeholder="recipe.web ? '0.0.0.0' : '服务器内网 IPv4'"
         /></label>
         <label
           >{{ primaryLabel
@@ -116,9 +117,6 @@ function portInputValue(key: string) {
         >
         <span v-else>原生监听</span>
       </div>
-      <p v-if="config.bindAddress.startsWith('127.')" class="install-note">
-        当前仅允许服务器本机访问；跨机使用请填写内网地址。
-      </p>
       <div v-if="requiredPorts.length" class="required-ports">
         <h3>必要组件端口</h3>
         <div class="form-row">
@@ -188,14 +186,7 @@ function portInputValue(key: string) {
         </div>
       </details>
     </template>
-    <p v-else-if="isDockerEngine(recipe)" class="install-note">
-      Docker Engine 使用主机本地 Unix socket。容器的网络端口在安装各软件时单独配置。
-    </p>
-    <p v-else class="install-note">
-      这是按需使用的程序工具，不监听端口，也无需保持后台进程。
-    </p>
     <div class="storage-section">
-      <h3>程序与存储</h3>
       <label v-if="storageEditable"
         >存储根目录 <small>可选</small
         ><input
@@ -235,12 +226,11 @@ function portInputValue(key: string) {
 .storage-section,
 .required-ports {
   display: grid;
-  gap: 18px;
+  gap: 14px;
   min-width: 0;
 }
 .storage-section {
-  border-top: 1px solid var(--border);
-  padding-top: 20px;
+  padding-top: 2px;
 }
 .storage-section h3,
 .required-ports h3 {
@@ -290,6 +280,7 @@ function portInputValue(key: string) {
   min-width: 0;
   padding: 8px 10px;
 }
+.network-fields .port-preview { padding: 8px 11px; border: 0; background: #f4f7fa; font-size: 11px; }
 .network-fields small {
   color: var(--muted);
   font-size: 11px;

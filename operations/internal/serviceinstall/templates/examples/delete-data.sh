@@ -1,0 +1,1 @@
+rm -rf -- "$OPS_DATA_ROOT"

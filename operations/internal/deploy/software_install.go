@@ -60,6 +60,12 @@ func (x *executor) installOwnership(req Request) *SoftwareOwnership {
 }
 
 func (x *executor) serviceInstallPreflight(i serviceinstall.Request) serviceinstall.Preflight {
+	if err := builtinAccountCheck(i); err != nil {
+		return serviceinstall.Preflight{Ready: false, Checks: []serviceinstall.Check{{Key: "ACCOUNT", Status: "FAIL", Code: err.Error(), Message: "模板要求普通账号，请配置执行账号或将该步骤改为管理员权限"}}}
+	}
+	if i.Definition.Commands != nil && !serviceinstall.IsBuiltinCommand(i.Definition) {
+		return x.commandPreflight(i)
+	}
 	if serviceinstall.IsNode(i.Definition) {
 		return x.nodeInstallPreflight(i)
 	}
@@ -259,7 +265,10 @@ func (x *executor) readServiceInstallation(req Request, output io.Writer) error 
 func (x *executor) serviceImage(req Request) error {
 	i := req.Installation
 	if i.Source.Type == "REGISTRY" {
-		if _, err := x.serviceDocker(req, "SERVICE_IMAGE_PULL", 8*time.Minute, "pull", "--platform", "linux/amd64", i.Definition.Image+"@"+i.Definition.Digest); err != nil {
+		if out, err := x.serviceDockerSource(req, "SERVICE_IMAGE_PULL", 8*time.Minute, "docker-pull", i.Definition.Image+"@"+i.Definition.Digest); err != nil {
+			if temporaryInstallNetwork(out) {
+				return errors.New("SERVICE_IMAGE_PULL_INTERRUPTED")
+			}
 			return errors.New("SERVICE_IMAGE_PULL_FAILED")
 		}
 	} else {
@@ -274,33 +283,25 @@ func (x *executor) serviceImage(req Request) error {
 			return err
 		}
 		partial := filepath.Join(x.root, "jobs", req.JobID, "service-image.partial")
-		f, err := os.OpenFile(partial, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if err != nil {
-			return errors.New("SERVICE_ARCHIVE_TRANSFER_EXISTS")
-		}
-		_, err = io.CopyN(f, x.installationInput, i.Source.ByteSize)
-		if err == nil {
-			err = f.Sync()
-		}
-		closeErr := f.Close()
-		if err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			return errors.New("SERVICE_ARCHIVE_TRANSFER_FAILED")
-		}
-		if _, err = serviceinstall.ValidateArchive(partial, i.Source.SHA256, i.Source.ByteSize, i.Definition); err != nil {
-			return err
-		}
 		pkg := filepath.Join(packages, "service-"+i.Source.SHA256+".tar")
-		if err = os.Rename(partial, pkg); err != nil {
+		if _, err := os.Lstat(partial); req.ResumeOffset != i.Source.ByteSize || !os.IsNotExist(err) {
+			if err = receiveInstallArchive(partial, x.installationInput, i.Source.ByteSize, req.ResumeOffset); err != nil {
+				return errors.New("SERVICE_ARCHIVE_TRANSFER_FAILED")
+			}
+			if _, err = serviceinstall.ValidateArchive(partial, i.Source.SHA256, i.Source.ByteSize, i.Definition); err != nil {
+				return err
+			}
+			if err = os.Rename(partial, pkg); err != nil {
+				return err
+			}
+		} else if _, err = serviceinstall.ValidateArchive(pkg, i.Source.SHA256, i.Source.ByteSize, i.Definition); err != nil {
 			return err
 		}
-		if _, err = x.serviceDocker(req, "SERVICE_IMAGE_LOAD", 5*time.Minute, "image", "load", "--input", pkg); err != nil {
+		if _, err := x.serviceDockerSource(req, "SERVICE_IMAGE_LOAD", 5*time.Minute, "docker-load", pkg); err != nil {
 			return errors.New("SERVICE_IMAGE_LOAD_FAILED")
 		}
 	}
-	out, err := x.serviceDocker(req, "SERVICE_IMAGE_VERIFY", 10*time.Second, "image", "inspect", "--format", `{"id":{{json .Id}},"os":{{json .Os}},"arch":{{json .Architecture}}}`, i.Definition.ImageID)
+	out, err := x.serviceDockerSource(req, "SERVICE_IMAGE_VERIFY", 10*time.Second, "docker-image-verify", i.Definition.ImageID)
 	var actual struct{ ID, OS, Arch string }
 	if err != nil || json.Unmarshal(out, &actual) != nil || actual.ID != i.Definition.ImageID || actual.OS != "linux" || actual.Arch != "amd64" {
 		return errors.New("SERVICE_IMAGE_IDENTITY_MISMATCH")
@@ -309,6 +310,37 @@ func (x *executor) serviceImage(req Request) error {
 }
 
 func (x *executor) installService(req Request, dir string) (Result, error) {
+	if err := builtinAccountCheck(*req.Installation); err != nil {
+		return softwareResult(req), err
+	}
+	result, err := x.installServiceProgram(req, dir)
+	if err == nil {
+		result = x.verifyBuiltinInstall(req, result)
+	}
+	return result, err
+}
+
+func (x *executor) installServiceProgram(req Request, dir string) (Result, error) {
+	if builtinFlow(req) {
+		if err := os.MkdirAll(filepath.Dir(x.softwareFile(req.Installation.SoftwareID)), 0700); err != nil {
+			return softwareResult(req), err
+		}
+		switch {
+		case serviceinstall.IsNode(req.Installation.Definition):
+			return x.installNodeVersionFlow(req, dir)
+		case serviceinstall.IsOfficial(req.Installation.Definition):
+			return x.installOfficialFlow(req, dir)
+		case req.Installation.Config.Mode() == "NATIVE" && req.Installation.Definition.Key == "docker":
+			return x.installDockerEngineFlow(req, dir)
+		case req.Installation.Config.Mode() == "NATIVE":
+			return x.installNativeFlow(req, dir)
+		default:
+			return x.installDockerFlow(req, dir)
+		}
+	}
+	if req.Installation.Definition.Commands != nil && !serviceinstall.IsBuiltinCommand(req.Installation.Definition) {
+		return x.installCommands(req, dir)
+	}
 	if serviceinstall.IsNode(req.Installation.Definition) {
 		return x.installNodeVersion(req, dir)
 	}
@@ -366,7 +398,7 @@ func (x *executor) installService(req Request, dir string) (Result, error) {
 	if err = atomicJSON(filepath.Join(dir, "service-start.json"), creation); err != nil {
 		return result, nil
 	}
-	_, startErr := x.serviceDocker(req, "SERVICE_INITIALIZING", 45*time.Second, "container", "start", "--", id)
+	_, startErr := x.serviceDockerSource(req, "SERVICE_INITIALIZING", 45*time.Second, "docker-start", id)
 	if startErr == nil {
 		version, healthErr := x.waitServiceHealth(req, s, 2*time.Minute)
 		if healthErr == nil {

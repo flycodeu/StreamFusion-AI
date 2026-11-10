@@ -162,9 +162,8 @@ func (h *HTTP) createInstallationMaterial(w http.ResponseWriter, r *http.Request
 	if mode == "" {
 		mode = "DOCKER"
 	}
-	d, err := serviceinstall.Find(in.RecipeKey, in.RecipeVersion)
-	if err != nil || !slices.Contains(d.RuntimeModes, mode) || d.Revision != in.RecipeRevision || !validName(in.Name) || !deploy.Hex.MatchString(in.SHA256) || in.ByteSize < 1 || in.ByteSize > serviceinstall.ArchiveLimit || len(in.Key) < 8 || len(in.Key) > 80 {
-		h.fail(w, r, 400, "INSTALL_MATERIAL_INVALID", "请选择内置配方、文件名称、SHA-256及大小；单文件最大2GiB")
+	if !validName(in.Name) || !deploy.Hex.MatchString(in.SHA256) || in.ByteSize < 1 || in.ByteSize > serviceinstall.ArchiveLimit || len(in.Key) < 8 || len(in.Key) > 80 {
+		h.fail(w, r, 400, "INSTALL_MATERIAL_INVALID", "请核对文件名称、SHA-256及大小；单文件最大2GiB")
 		return
 	}
 	h.store.mu.Lock()
@@ -195,6 +194,14 @@ func (h *HTTP) createInstallationMaterial(w http.ResponseWriter, r *http.Request
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		h.internal(w, r, err)
+		return
+	}
+	// Resolve the published configuration only for a new upload, in this same
+	// transaction. Replays keep their original material after edits/withdrawal.
+	d, err := findInstallRecipe(tx, in.RecipeKey, in.RecipeVersion)
+	d = serviceinstall.BareDefinition(d)
+	if err != nil || !slices.Contains(d.RuntimeModes, mode) || d.Revision != in.RecipeRevision || d.Commands != nil && !slices.Contains(d.SourceModes, "ARCHIVE") {
+		h.fail(w, r, 400, "INSTALL_MATERIAL_INVALID", "请选择当前支持离线文件的安装配置")
 		return
 	}
 	var count int
@@ -384,7 +391,7 @@ func (h *HTTP) confirmInstallationMaterial(w http.ResponseWriter, r *http.Reques
 	defer h.store.mu.Unlock()
 	if err != nil {
 		_, _ = h.store.DB.Exec("UPDATE installation_materials SET status='FAILED',error_code='ARCHIVE_VALIDATION_FAILED',updated_at=? WHERE id=?", Now(), id)
-		h.fail(w, r, 400, "INSTALL_ARCHIVE_REJECTED", "归档摘要、运行方式、程序/镜像身份或内容不符合所选官方配方，请核对后重新上传")
+		h.fail(w, r, 400, "INSTALL_ARCHIVE_REJECTED", "文件摘要、运行方式或内容不符合所选安装配置，请核对后重新上传")
 		return
 	}
 	if r.Context().Err() != nil {

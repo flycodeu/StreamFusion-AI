@@ -7,6 +7,8 @@ import type {
 } from "./serviceInstallation";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
 import NodeMaterialImport from "./NodeMaterialImport.vue";
+import RecipeSystemStepDetails from "./RecipeSystemStepDetails.vue";
+import { recipeCommandSteps } from "./serviceInstallation";
 import type { Host } from "./hosts";
 import {
   nodeVersionRow,
@@ -47,6 +49,14 @@ const emit = defineEmits<{
   materialBusy: [boolean];
 }>();
 const initialDraft = JSON.stringify(props.draft);
+const plannedRecipe = computed(() => props.plan?.change?.definition || props.plan?.definition);
+const plannedSource = computed(() => props.plan?.change?.source?.type || props.plan?.source?.type || props.draft.source);
+const plannedSteps = computed(() => {
+  const removing = ["UNINSTALL_NODE", "REMOVE_ENVIRONMENT", "REMOVE_PNPM"].includes(props.draft.action);
+  return recipeCommandSteps(plannedRecipe.value?.commands, "NATIVE", plannedSource.value).filter(step =>
+    removing ? step.phase === "UNINSTALL" || props.draft.deleteData && step.phase === "DELETE_DATA" : step.phase === "INSTALL" || step.phase === "VERIFY",
+  );
+});
 async function confirmClose(done?: () => void) {
   if (props.busy || props.attempted || props.preparationBusy) return;
   if (JSON.stringify(props.draft) !== initialDraft) {
@@ -400,7 +410,16 @@ const canSubmit = computed(
           </p>
         </details>
         <code v-if="plan.paths?.root">{{ plan.paths.root }}</code>
-        <details v-if="plan.commands?.length">
+        <details v-if="plannedRecipe && plannedSteps.length">
+          <summary>执行步骤 · {{ plannedSteps.length }} 步</summary>
+          <article v-for="(step, index) in plannedSteps" :key="step.id || index" class="planned-step">
+            <strong>{{ index + 1 }}. {{ step.name }}</strong>
+            <small>{{ step.runAs === 'ROOT' ? '管理员' : plan.change?.context.account || environment?.account || draft.account }}</small>
+            <RecipeSystemStepDetails v-if="step.kind === 'SYSTEM'" :recipe="plannedRecipe" :step="step" :context="{ runtimeMode: 'NATIVE', sourceMode: plannedSource, account: plan.change?.context.account || environment?.account || draft.account, rootPath: plan.change?.context.rootPath || environment?.rootPath }" />
+            <pre v-else>{{ step.script }}</pre>
+          </article>
+        </details>
+        <details v-else-if="plan.commands?.length">
           <summary>将在目标服务器执行</summary>
           <pre v-for="(command, index) in plan.commands" :key="index">{{
             nodeCommand(command)
@@ -527,6 +546,9 @@ select {
 }
 .hint,
 .context,
+.planned-step { margin-top: 14px; }
+.planned-step > strong { display: block; font-size: 12px; }
+.planned-step > small { display: block; margin-top: 5px; color: var(--muted); }
 .plan p {
   margin: 0;
   color: var(--muted);

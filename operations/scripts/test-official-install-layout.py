@@ -123,7 +123,7 @@ def main():
                 page.add_init_script("""window.__copiedCommands=[];window.__clipboardFails=false;Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>{if(window.__clipboardFails)throw new Error('denied');window.__copiedCommands.push(value)}}});""")
                 page.goto(base)
                 page.get_by_role('button',name='软件管理',exact=True).click()
-                page.get_by_role('tab',name='软件目录',exact=True).click()
+                page.get_by_role('button',name='软件安装',exact=True).click()
                 card=page.locator('article.plugin-card').filter(has=page.get_by_role('heading',name=next(d['name'] for d in definitions if d['key']=='docker'),exact=True))
                 card.get_by_role('button',name='安装',exact=True).click()
                 drawer=page.locator('.el-drawer:visible').last

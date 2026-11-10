@@ -1,0 +1,1 @@
+"$OPS_BINARY" --no-defaults --initialize-insecure --basedir="$OPS_INSTALL_ROOT/runtime/mysql" --datadir="$OPS_DATA_ROOT" --user="$OPS_ACCOUNT"

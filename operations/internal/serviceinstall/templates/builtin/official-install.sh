@@ -1,0 +1,1 @@
+/usr/bin/apt-get --assume-yes --no-remove --no-upgrade --no-install-recommends -o DPkg::Lock::Timeout=15 -o APT::Get::AllowUnauthenticated=false -o Acquire::AllowInsecureRepositories=false install -- ${OPS_PACKAGE_ARGUMENTS}

@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+const SoftwareLifecycleVersion = 2
+const SoftwareManagementVersion = 1
+
 func inspectExecutorCapabilities(owner Owner, platform string, command func(time.Duration, ...string) ([]byte, error)) map[string]any {
 	_, engineErr := command(2*time.Second, "version", "--format", "{{.Server.Version}}")
 	_, composeErr := command(2*time.Second, "compose", "version", "--short")
@@ -18,7 +21,9 @@ func inspectExecutorCapabilities(owner Owner, platform string, command func(time
 		"dockerEngineAvailable":    engineErr == nil,
 		"dockerComposeAvailable":   composeErr == nil,
 		"nativeInstallVersion":     1,
+		"nativeDownloadVersion":    1,
 		"gitRepositoryVersion":     GitRepositoryCapabilityVersion,
+		"gitAccountVersion":        1,
 		"nodeEnvironmentVersion":   NodeEnvironmentCapabilityVersion,
 		"nodeTerminalVersion":      1,
 		"nodeRegistryVersion":      1,
@@ -28,10 +33,11 @@ func inspectExecutorCapabilities(owner Owner, platform string, command func(time
 		"toolProbeVersion":         1,
 		// F02 is independently gated: older 0.2.0 executors do not understand
 		// software requests even though their original protocol still matches.
-		"softwareLifecycleVersion": 1,
-		"dockerAccessVersion":      DockerAccessCapabilityVersion,
-		"firewallVersion":          FirewallCapabilityVersion,
-		"serviceInstallVersion":    serviceinstall.CapabilityVersion,
-		"serviceCatalogHash":       serviceinstall.CatalogHash(),
+		"softwareLifecycleVersion":  SoftwareLifecycleVersion,
+		"softwareManagementVersion": SoftwareManagementVersion,
+		"dockerAccessVersion":       DockerAccessCapabilityVersion,
+		"firewallVersion":           FirewallCapabilityVersion,
+		"serviceInstallVersion":     serviceinstall.CapabilityVersion,
+		"serviceCatalogHash":        serviceinstall.CatalogHash(),
 	}
 }

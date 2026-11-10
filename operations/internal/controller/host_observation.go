@@ -21,35 +21,42 @@ type hostCapability struct {
 
 // Keep the complete additive CAPABILITIES contract in one strict decoder.
 type executorCapabilities struct {
-	GitRepositoryVersion     int          `json:"gitRepositoryVersion"`
-	DockerAccessVersion      int          `json:"dockerAccessVersion"`
-	NodeEnvironmentVersion   int          `json:"nodeEnvironmentVersion"`
-	NodeTerminalVersion      int          `json:"nodeTerminalVersion"`
-	NodeRegistryVersion      int          `json:"nodeRegistryVersion"`
-	OfficialInstallVersion   int          `json:"officialInstallVersion"`
-	FirewallVersion          int          `json:"firewallVersion"`
-	Owner                    deploy.Owner `json:"owner"`
-	Platform                 string       `json:"platform"`
-	Docker                   bool         `json:"dockerAvailable"`
-	DockerEngine             bool         `json:"dockerEngineAvailable"`
-	DockerCompose            bool         `json:"dockerComposeAvailable"`
-	SoftwareLifecycleVersion int          `json:"softwareLifecycleVersion"`
-	InstallVersion           int          `json:"serviceInstallVersion"`
-	CatalogHash              string       `json:"serviceCatalogHash"`
-	NativeInstallVersion     int          `json:"nativeInstallVersion"`
-	SoftwareConfigureVersion int          `json:"softwareConfigureVersion"`
-	SoftwareUninstallVersion int          `json:"softwareUninstallVersion"`
-	ToolProbeVersion         int          `json:"toolProbeVersion"`
+	CommandRecipeVersion      int          `json:"commandRecipeVersion"`
+	CommandTrustFingerprint   string       `json:"commandTrustFingerprint"`
+	GitRepositoryVersion      int          `json:"gitRepositoryVersion"`
+	GitAccountVersion         int          `json:"gitAccountVersion"`
+	DockerAccessVersion       int          `json:"dockerAccessVersion"`
+	NodeEnvironmentVersion    int          `json:"nodeEnvironmentVersion"`
+	NodeTerminalVersion       int          `json:"nodeTerminalVersion"`
+	NodeRegistryVersion       int          `json:"nodeRegistryVersion"`
+	OfficialInstallVersion    int          `json:"officialInstallVersion"`
+	FirewallVersion           int          `json:"firewallVersion"`
+	Owner                     deploy.Owner `json:"owner"`
+	Platform                  string       `json:"platform"`
+	Docker                    bool         `json:"dockerAvailable"`
+	DockerEngine              bool         `json:"dockerEngineAvailable"`
+	DockerCompose             bool         `json:"dockerComposeAvailable"`
+	SoftwareLifecycleVersion  int          `json:"softwareLifecycleVersion"`
+	SoftwareManagementVersion int          `json:"softwareManagementVersion"`
+	InstallVersion            int          `json:"serviceInstallVersion"`
+	CatalogHash               string       `json:"serviceCatalogHash"`
+	NativeInstallVersion      int          `json:"nativeInstallVersion"`
+	NativeDownloadVersion     int          `json:"nativeDownloadVersion"`
+	SoftwareConfigureVersion  int          `json:"softwareConfigureVersion"`
+	SoftwareUninstallVersion  int          `json:"softwareUninstallVersion"`
+	ToolProbeVersion          int          `json:"toolProbeVersion"`
 }
 
 type hostCapabilities struct {
-	Reachability  hostCapability `json:"reachability"`
-	ReadOnly      hostCapability `json:"readOnly"`
-	Mutation      hostCapability `json:"mutation"`
-	Docker        hostCapability `json:"docker"`
-	DockerCompose hostCapability `json:"dockerCompose"`
-	Platform      string         `json:"platform"`
-	ExpiresAt     string         `json:"expiresAt"`
+	Reachability        hostCapability `json:"reachability"`
+	ReadOnly            hostCapability `json:"readOnly"`
+	Mutation            hostCapability `json:"mutation"`
+	Docker              hostCapability `json:"docker"`
+	DockerCompose       hostCapability `json:"dockerCompose"`
+	Platform            string         `json:"platform"`
+	Distribution        string         `json:"distribution,omitempty"`
+	DistributionVersion string         `json:"distributionVersion,omitempty"`
+	ExpiresAt           string         `json:"expiresAt"`
 }
 
 func unknownHostCapabilities() hostCapabilities {
@@ -59,34 +66,7 @@ func unknownHostCapabilities() hostCapabilities {
 
 // Fixed, read-only POSIX probe. User input is never inserted into this command;
 // it does not source /etc/os-release, use sudo, write files or evaluate output.
-const hostReadOnlyCommand = `/bin/sh -c '
-printf "SFOPS_HOST_V1\n"; uname -s; uname -m
-if command -v docker >/dev/null 2>&1 || command -v dockerd >/dev/null 2>&1; then
-  printf "DOCKER_PRESENT\n"; exit 0
-fi
-unknown=0
-for dir in /bin /sbin /usr/bin /usr/sbin /usr/local/bin /usr/local/sbin /snap/bin; do
-  for name in docker dockerd; do
-    if [ -e "$dir/$name" ] || [ -L "$dir/$name" ]; then printf "DOCKER_PRESENT\n"; exit 0; fi
-  done
-  current=$dir
-  while [ ! -e "$current" ] && [ ! -L "$current" ]; do
-    current=${current%/*}; current=${current:-/}
-  done
-  if [ ! -d "$current" ] || [ ! -r "$current" ] || [ ! -x "$current" ]; then unknown=1; fi
-done
-for unit in docker.service snap.docker.dockerd.service; do
-  if state=$(systemctl show "$unit" --property=LoadState --value 2>/dev/null); then
-    case "$state" in
-      not-found) ;;
-      loaded|masked|bad-setting|error|merged) printf "DOCKER_PRESENT\n"; exit 0 ;;
-      *) unknown=1 ;;
-    esac
-  else
-    unknown=1
-  fi
-done
-if [ "$unknown" = 0 ]; then printf "DOCKER_MISSING\n"; else printf "DOCKER_UNKNOWN\n"; fi'`
+var hostReadOnlyCommand = controllerScript("observe/host-read-only.command")
 
 func checkedCapability(available bool, code, message string) hostCapability {
 	status := "UNAVAILABLE"
@@ -195,9 +175,20 @@ func (h *HTTP) observeHost(ctx context.Context, t target) hostCapabilities {
 // The return value records positive installation evidence separately from access.
 func applyHostReadOnly(facts *hostCapabilities, output string) bool {
 	lines := strings.Split(strings.TrimSpace(strings.ReplaceAll(output, "\r\n", "\n")), "\n")
-	if len(lines) != 4 || lines[0] != "SFOPS_HOST_V1" || len(lines[1]) > 64 || len(lines[2]) > 64 {
+	if (len(lines) != 4 && len(lines) != 5) || lines[0] != "SFOPS_HOST_V1" || len(lines[1]) > 64 || len(lines[2]) > 64 {
 		facts.ReadOnly = checkedCapability(false, "READ_ONLY_RESPONSE_INVALID", "只读观察返回格式不正确")
 		return false
+	}
+	if len(lines) == 5 {
+		fields := strings.Fields(lines[4])
+		if len(fields) < 2 || len(fields) > 3 || fields[0] != "DISTRO" || !validDistroField(fields[1]) || len(fields) == 3 && !validDistroField(fields[2]) {
+			facts.ReadOnly = checkedCapability(false, "READ_ONLY_RESPONSE_INVALID", "只读观察返回格式不正确")
+			return false
+		}
+		facts.Distribution = fields[1]
+		if len(fields) == 3 {
+			facts.DistributionVersion = fields[2]
+		}
 	}
 	facts.ReadOnly = checkedCapability(true, "READ_ONLY_READY", "可读取系统信息")
 	facts.Platform = strings.ToLower(lines[1]) + "/" + lines[2]
@@ -209,6 +200,10 @@ func applyHostReadOnly(facts *hostCapabilities, output string) bool {
 		facts.Docker = hostCapability{Status: "UNKNOWN", Code: "DOCKER_ACCESS_UNCONFIRMED", Message: "Docker安装与访问状态尚未确认", ObservedAt: Now(), Source: "DOCKER"}
 	}
 	return lines[3] == "DOCKER_PRESENT"
+}
+
+func validDistroField(value string) bool {
+	return len(value) <= 64 && strings.Trim(value, "abcdefghijklmnopqrstuvwxyz0123456789._-") == ""
 }
 
 func (h *HTTP) checkHost(w http.ResponseWriter, r *http.Request, s *session, id string) {

@@ -14,12 +14,11 @@ var gitRuntimePackages = []string{"libc6", "libcurl3t64-gnutls", "libexpat1", "l
 
 func gitDebWrapper(root string) string {
 	vendor := filepath.Join(root, "runtime/git/usr")
-	return "#!/bin/sh\n" +
-		"GIT_EXEC_PATH=" + posixSingleQuote(filepath.Join(vendor, "lib/git-core")) + "\n" +
-		"GIT_TEMPLATE_DIR=" + posixSingleQuote(filepath.Join(vendor, "share/git-core/templates")) + "\n" +
-		"PERL5LIB=" + posixSingleQuote(filepath.Join(vendor, "share/perl5")) + "\n" +
-		"export GIT_EXEC_PATH GIT_TEMPLATE_DIR PERL5LIB\n" +
-		"exec " + posixSingleQuote(filepath.Join(vendor, "bin/git")) + " \"$@\"\n"
+	return deployTemplate("native/git-wrapper.sh.tmpl",
+		posixSingleQuote(filepath.Join(vendor, "lib/git-core")),
+		posixSingleQuote(filepath.Join(vendor, "share/git-core/templates")),
+		posixSingleQuote(filepath.Join(vendor, "share/perl5")),
+		posixSingleQuote(filepath.Join(vendor, "bin/git")))
 }
 
 func (x *executor) prepareGitProgram(ctx context.Context, req Request, root string, parts map[string]string) error {

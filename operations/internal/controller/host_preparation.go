@@ -55,6 +55,7 @@ type targetPreparationStep struct {
 }
 
 type hostPreparation struct {
+	CommandPublicKey    string                         `json:"-"`
 	Update              *preparationUpdate             `json:"update,omitempty"`
 	UpdateFromSHA       string                         `json:"-"`
 	HostID              string                         `json:"hostId"`
@@ -217,7 +218,7 @@ func preparationForHost(t target, controllerID, directory string) (hostPreparati
 		p.Package.Code, p.Package.Message = "LINUX_TARGET_REQUIRED", "当前本机不是Linux amd64，请新增Linux amd64远程主机后准备安装"
 		p.Package.DownloadURL = ""
 	}
-	p.Authorization = targetPreparationAuthorization{Scope: "仅允许指定受管执行器的target-exec入口", Command: "'" + t.InstallRoot + "/executor' target-exec"}
+	p.Authorization = targetPreparationAuthorization{Scope: "仅允许指定受管执行器的target-exec入口", Command: controllerTemplate("preparation/executor.command.tmpl", t.InstallRoot)}
 	if p.Account != "root" {
 		p.Authorization.Command = "/usr/bin/sudo -n " + p.Authorization.Command
 	}
@@ -226,14 +227,14 @@ func preparationForHost(t target, controllerID, directory string) (hostPreparati
 		sha = "REPLACE_WITH_VERIFIED_SHA256"
 	}
 	if sshUserPattern.MatchString(p.Account) {
-		p.Commands.Preview = "bash ./install.sh --preview"
+		p.Commands.Preview = controllerScript("preparation/install-preview.command")
 		prefix := "sudo "
 		if p.Account == "root" {
 			prefix = ""
 		}
-		p.Commands.Apply = "bash ./install.sh"
-		p.Commands.Authorize = "bash ./install.sh"
-		p.Commands.Upgrade = prefix + "./streamfusion-ops target-upgrade --binary \"$(realpath ./streamfusion-ops)\" --sha256 " + sha + " --root " + t.InstallRoot + " --controller-id " + controllerID + " --target-id " + t.ID
+		p.Commands.Apply = controllerScript("preparation/install.command")
+		p.Commands.Authorize = controllerScript("preparation/install.command")
+		p.Commands.Upgrade = controllerTemplate("preparation/upgrade.command.tmpl", prefix, sha, t.InstallRoot, controllerID, t.ID)
 	}
 	expired := true
 	if expiry, e := time.Parse(time.RFC3339Nano, t.Capabilities.ExpiresAt); e == nil {
@@ -272,6 +273,7 @@ func (h *HTTP) hostPreparation(w http.ResponseWriter, r *http.Request, id string
 		return
 	}
 	p, _ := preparationForHost(t, h.store.controllerID(), h.targetPackageDir)
+	p.CommandPublicKey = h.store.commandPublicKey()
 	p.RepairSHA = h.preparationRepairSHA(t)
 	p.RemoteJob = h.latestPreparationJob(id)
 	if r.URL.Query().Get("checkUpdate") == "1" {
@@ -298,6 +300,7 @@ func (h *HTTP) downloadHostPreparation(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 	p, material := preparationForHost(t, h.store.controllerID(), h.targetPackageDir)
+	p.CommandPublicKey = h.store.commandPublicKey()
 	p.RepairSHA = h.preparationRepairSHA(t)
 	if !p.Package.Available {
 		h.fail(w, r, 409, p.Package.Code, p.Package.Message)

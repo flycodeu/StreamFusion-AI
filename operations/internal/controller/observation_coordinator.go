@@ -41,6 +41,29 @@ func (h *HTTP) acquireObservation(ctx context.Context, id string, background boo
 	}, nil
 }
 
+// Foreground checks wait for the current read-only cycle instead of reporting
+// normal scheduler contention as a failure. Waiting never starts another probe.
+func (h *HTTP) waitForObservation(ctx context.Context, id string) (func(), error) {
+	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		release, err := h.acquireObservation(ctx, id, false)
+		if err == nil {
+			return release, nil
+		}
+		if err.Error() != "HOST_BUSY" && err.Error() != "CHECK_BUSY" {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-tick.C:
+		}
+	}
+}
+
 type observationPlan struct {
 	Host                     target
 	Enabled                  bool

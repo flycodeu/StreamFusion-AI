@@ -2,7 +2,6 @@ package deploy
 
 import (
 	"context"
-	_ "embed"
 	"errors"
 	"os"
 	"os/user"
@@ -14,8 +13,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-//go:embed git_change.sh
-var gitChangeScript string
+var gitChangeScript = deployScript("git_change.sh")
 
 type gitChangeMarker struct {
 	JobID      string             `json:"jobId"`
@@ -40,6 +38,9 @@ func (x *executor) gitBindingMatches(ctx context.Context, state gitRepositorySta
 	}
 	for name, hash := range map[string]string{"key": state.KeyHash, "known_hosts": state.KnownHostsHash} {
 		file := filepath.Join(gitPrivateDirectory(g, a), name)
+		if name == "key" {
+			file = gitPrivateKeyPath(g, a)
+		}
 		if gitOwnedPath(file, uid, false) != nil {
 			return errors.New("GIT_KEY_DRIFT")
 		}
@@ -199,12 +200,12 @@ func (x *executor) applyGitRepository(req Request, dir string) (Result, error) {
 			return result, e
 		}
 		if len(current) > 0 {
-			if _, e = x.gitCommand(ctx, g, a, "config", "--file", filepath.Join(stage, "config"), "--unset-all", "--", key); e != nil {
+			if _, e = x.gitCommand(ctx, g, a, deployCommand("git-config-unset", filepath.Join(stage, "config"), key)...); e != nil {
 				return result, e
 			}
 		}
 		for _, value := range values[key] {
-			if _, e = x.gitCommand(ctx, g, a, "config", "--file", filepath.Join(stage, "config"), "--add", "--", key, value); e != nil {
+			if _, e = x.gitCommand(ctx, g, a, deployCommand("git-config-add", filepath.Join(stage, "config"), key, value)...); e != nil {
 				return result, e
 			}
 		}
@@ -215,6 +216,15 @@ func (x *executor) applyGitRepository(req Request, dir string) (Result, error) {
 	}
 	if g.Action == "BIND" {
 		key := []byte(x.secrets["gitKey"])
+		if g.KeySource == "TARGET" {
+			if len(key) != 0 {
+				return result, errors.New("GIT_KEY_IDENTITY_MISMATCH")
+			}
+			key, err = os.ReadFile(g.KeyPath)
+			if err != nil {
+				return result, errors.New("GIT_KEY_UNAVAILABLE")
+			}
+		}
 		if len(key) > 32<<10 {
 			return result, errors.New("GIT_KEY_IDENTITY_MISMATCH")
 		}
@@ -225,7 +235,10 @@ func (x *executor) applyGitRepository(req Request, dir string) (Result, error) {
 		known := gitKnownHosts(g)
 		after.KeyHash = nodeBytesSHA(key)
 		after.KnownHostsHash = nodeBytesSHA(known)
-		if gitStageFile(stage, "key", key, a) != nil || gitStageFile(stage, "known_hosts", known, a) != nil || gitStageFile(stage, "original.config", raw, a) != nil {
+		if g.KeySource != "TARGET" && gitStageFile(stage, "key", key, a) != nil {
+			return result, errors.New("GIT_STAGE_FAILED")
+		}
+		if gitStageFile(stage, "known_hosts", known, a) != nil || gitStageFile(stage, "original.config", raw, a) != nil {
 			return result, errors.New("GIT_STAGE_FAILED")
 		}
 	}
@@ -244,12 +257,14 @@ func (x *executor) applyGitRepository(req Request, dir string) (Result, error) {
 	if err != nil {
 		return result, nil
 	}
-	previousKey, previousKnown := "", ""
+	previousKey, previousKnown, previousPath := "", "", ""
 	if old != nil && old.Status == "BOUND" {
 		previousKey = old.KeyHash
 		previousKnown = old.KnownHostsHash
+		previousPath = gitPrivateKeyPath(old.Request, a)
 	}
 	args := []string{"-u", g.Account, "--", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=" + a.HomeDir, "LC_ALL=C", "/bin/bash", "--noprofile", "--norc", "-c", gitChangeScript, "sfops-git", g.Action, g.RepoPath, g.AccountUID, observation.ConfigHash, after.ConfigHash, strconv.FormatUint(uint64(st.Mode().Perm()), 8), stage, gitPrivateDirectory(g, a), req.JobID, previousKey, previousKnown}
+	args = append(args, g.KeySource, previousPath)
 	if _, err = x.softwareRunner(ctx, "/usr/sbin/runuser", args...); err != nil {
 		return result, nil
 	}
@@ -327,7 +342,7 @@ func (x *executor) verifyGitRepositoryResult(req Request, result Result) error {
 
 // A caller cannot smuggle a Git payload into a different software operation.
 func validateGitRepositoryInput(req Request) error {
-	if req.GitRepository == nil || req.GitRepository.Validate() != nil || req.SoftwareOperation != "GIT_REPOSITORY_CHANGE" || gitRequestConflict(req) || req.GitRepository.AccountUID == "" || !Hex.MatchString(req.GitRepository.ExpectedConfigHash) {
+	if req.GitRepository == nil || req.GitRepository.Validate() != nil || req.SoftwareOperation != "GIT_REPOSITORY_CHANGE" || req.GitKey != nil || gitRequestConflict(req) || req.GitRepository.AccountUID == "" || !Hex.MatchString(req.GitRepository.ExpectedConfigHash) {
 		return errors.New("GIT_REPOSITORY_INPUT_INVALID")
 	}
 	return nil

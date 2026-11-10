@@ -123,6 +123,14 @@ func hostSSHServer(t *testing.T, s *Store, b *browser, executorAvailable, docker
 						if handled {
 							continue
 						}
+						if strings.Contains(payload.Command, "SFOPS_PRIVILEGE_READY") {
+							request.Reply(true, nil)
+							_, _ = io.Copy(io.Discard, io.LimitReader(ch, 1<<20))
+							io.WriteString(ch, "SFOPS_PRIVILEGE_READY\n")
+							ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+							ch.Close()
+							continue
+						}
 						if payload.Command == hostReadOnlyCommand {
 							request.Reply(true, nil)
 							io.WriteString(ch, "SFOPS_HOST_V1\nLinux\nx86_64\nDOCKER_MISSING\n")

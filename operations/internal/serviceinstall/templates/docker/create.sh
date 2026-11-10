@@ -1,0 +1,1 @@
+/usr/bin/docker container create --pull never --name "$OPS_CONTAINER_NAME" --restart unless-stopped --security-opt no-new-privileges:true --memory "${OPS_MEMORY_MIB}m" --cpus 2 --pids-limit 512 --log-driver json-file --log-opt max-size=10m --log-opt max-file=3 ${OPS_PUBLISH_ARGUMENTS} ${OPS_OWNERSHIP_ARGUMENTS} ${OPS_CONTAINER_ARGUMENTS} "$OPS_IMAGE_ID" ${OPS_PROGRAM_ARGUMENTS}

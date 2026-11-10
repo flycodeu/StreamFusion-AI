@@ -23,8 +23,10 @@ export type SoftwareType =
   | "NGINX"
   | "JENKINS"
   | "SEAWEEDFS"
+  | "LABEL_STUDIO"
   | "OTHER";
 export type SoftwareRuntime = "SYSTEMD" | "DOCKER" | "TOOL";
+export type SoftwareAction = "START" | "STOP" | "RESTART" | "RELOAD" | "PAUSE" | "UNPAUSE";
 
 export interface SoftwareMetadata {
   versionSource?: string;
@@ -36,6 +38,7 @@ export interface SoftwareMetadata {
 }
 
 export interface SoftwareInstance {
+  configurationAvailable?: boolean;
   id: string;
   name: string;
   hostId: string;
@@ -45,9 +48,9 @@ export interface SoftwareInstance {
   runtimeKind: SoftwareRuntime;
   locator: string;
   managementMode: "OBSERVE" | "MANAGED" | "RELEASED";
-  desiredState: "UNCHANGED" | "RUNNING" | "STOPPED" | "INSTALLED" | "REMOVED";
+  desiredState: "UNCHANGED" | "RUNNING" | "STOPPED" | "INSTALLED" | "REMOVED" | "PAUSED";
   actualState:
-    "UNKNOWN" | "RUNNING" | "STOPPED" | "INSTALLED" | "MISSING" | "FAILED" | "REMOVED";
+    "UNKNOWN" | "RUNNING" | "STOPPED" | "INSTALLED" | "MISSING" | "FAILED" | "REMOVED" | "PAUSED";
   observation?: SoftwareMetadata & {
     state: SoftwareInstance["actualState"];
     identityHash: string;
@@ -95,6 +98,15 @@ export interface SoftwareJob {
   traceId: string;
   updatedAt: string;
   targetAckPending: boolean;
+}
+
+export function softwareHasInstallationRecord(item: SoftwareInstance): boolean {
+  return !!(item.installationJobId && item.installation?.definition && item.installation.config);
+}
+
+export function softwareIsHistoryOnly(item: SoftwareInstance): boolean {
+  return item.locator === `pending:${item.id}` && item.managementMode !== "MANAGED" &&
+    (item.installationStatus === "FAILED" || item.installationStatus === "CANCELLED");
 }
 
 export interface SoftwareMutationResult {
@@ -160,8 +172,13 @@ export const softwareTypes: Record<SoftwareType, string> = {
   NGINX: "Nginx",
   JENKINS: "Jenkins",
   SEAWEEDFS: "SeaweedFS",
+  LABEL_STUDIO: "Label Studio",
   OTHER: "其他服务",
 };
+export function softwareTypeLabel(item: SoftwareInstance) {
+  const definition = item.installation?.definition;
+  return definition?.commands && !definition.commands.builtin ? definition.name : softwareTypes[item.softwareType] || definition?.name || "其他软件";
+}
 export const softwareModes = {
   OBSERVE: "只读登记",
   MANAGED: "已接管",
@@ -177,6 +194,7 @@ export function softwareVersionLabel(
   metadata?: SoftwareMetadata,
   runtime?: SoftwareRuntime,
 ) {
+  if (metadata?.versionSource === "TEMPLATE" || metadata?.versionStatus === "DECLARED") return "配置版本";
   if (metadata?.versionSource === "PACKAGE") return "安装包版本";
   if (metadata?.versionSource === "IMAGE_REFERENCE" || runtime === "DOCKER")
     return "镜像引用";
@@ -187,6 +205,7 @@ export function softwareVersionReason(
   metadata?: SoftwareMetadata,
   runtime?: SoftwareRuntime,
 ) {
+  if (metadata?.versionSource === "TEMPLATE" || metadata?.versionStatus === "DECLARED") return "来自安装配置";
   if (metadata?.versionStatus === "METADATA_UNAVAILABLE")
     return "版本信息不可读取";
   if (metadata?.versionStatus === "METADATA_LIMIT") return "本次未探测版本";
@@ -208,6 +227,7 @@ export function softwareVersionText(value?: string) {
   );
 }
 export const softwareDesiredLabels = {
+  PAUSED: "暂停",
   REMOVED: "已卸载",
   UNCHANGED: "保持现状",
   INSTALLED: "已安装（按需使用）",
@@ -215,6 +235,7 @@ export const softwareDesiredLabels = {
   STOPPED: "停止",
 };
 export const softwareActualLabels = {
+  PAUSED: "已暂停",
   REMOVED: "已卸载",
   UNKNOWN: "未确认",
   RUNNING: "运行中",
@@ -244,6 +265,18 @@ export const softwareJobErrorMessages: Record<string, string> = {
   DOCKER_CONTAINER_DEPENDENCIES_UNCONFIRMED: "Docker Engine 当前不可访问，无法确认容器依赖。请检查 Engine 状态；若已停止，请先明确启动 Docker，再提交卸载。启动可能恢复原有容器，请先确认业务影响。",
 };
 export const softwareJobPhaseLabels: Record<string, string> = {
+  SOFTWARE_RESTARTED: "软件已重启",
+  SOFTWARE_RELOADED: "配置已重载",
+  SOFTWARE_PAUSED: "服务已暂停",
+  SOFTWARE_UNPAUSED: "服务已继续",
+  SOFTWARE_OPERATION_COMPLETED: "操作已完成",
+  MANAGEMENT_EXECUTING: "执行管理操作",
+  MANAGEMENT_VERIFYING: "核对操作结果",
+  MANAGEMENT_EXECUTE: "执行管理操作",
+  MANAGEMENT_VERIFY: "核对操作结果",
+  MANAGEMENT_COMPLETED: "管理操作已完成",
+  MANAGEMENT_RESULT_UNCONFIRMED: "操作结果待核对",
+  OPERATION_SUBMITTED: "任务已受理",
   GIT_REPOSITORY_BOUND: "仓库账号已绑定",
   GIT_REPOSITORY_UNBOUND: "仓库账号已解除",
   GIT_REPOSITORY_APPLY: "正在配置仓库账号",
@@ -258,6 +291,9 @@ export const softwareJobPhaseLabels: Record<string, string> = {
   DOCKER_MATERIAL: "准备 Docker 安装材料",
   DOCKER_PACKAGES_APPLY: "安装 Docker 软件包",
   OFFICIAL_REFRESH: "更新官方软件索引",
+  OFFICIAL_PLAN_VERIFY: "复核官方软件包计划",
+  INSTALL_RESUMING: "等待继续安装",
+  INSTALL_TRANSFER_INTERRUPTED: "网络或材料传输中断",
   OFFICIAL_PACKAGES_APPLY: "安装官方软件包",
   SOFTWARE_PREFLIGHT: "检查软件安装条件",
   SERVICE_CONFIGURE: "写入服务配置",
@@ -272,6 +308,8 @@ export const softwareJobPhaseLabels: Record<string, string> = {
   NATIVE_RECONCILE_REQUIRED: "安装结果待核对",
   OFFICIAL_PLAN_CHANGED: "安装计划已变化",
   OFFICIAL_PREPARATION_INTERRUPTED: "安装准备已中断",
+  OFFICIAL_REFRESH_FAILED: "软件源刷新失败",
+  INSTALL_QUEUE_EXPIRED: "排队已超时",
   NODE_INSTALL: "安装 Node.js",
   NODE_CHANGE: "更新 Node 环境",
   NODE_ENVIRONMENT_UPDATED: "Node 环境已更新",
@@ -287,6 +325,15 @@ export const softwareJobPhaseLabels: Record<string, string> = {
   SERVICE_INITIALIZING: "启动与初始化",
   SERVICE_READY: "服务检查通过",
   NATIVE_MATERIAL: "校验与准备原生材料",
+  NATIVE_DOWNLOAD: "下载原生安装文件",
+  NATIVE_VERIFY: "校验安装文件",
+  COMMAND_INSTALL: "执行安装命令",
+  COMMAND_VERIFY: "验证安装结果",
+  MANAGEMENT_ROLLBACK: "恢复原配置",
+  OPERATION_RESTORED: "配置未生效，已恢复原配置",
+  MANAGEMENT_REBIND: "核对更新后的服务配置",
+  COMMAND_UNINSTALL: "执行卸载命令",
+  COMMAND_DELETE_DATA: "删除软件数据",
   NATIVE_FFMPEG_CONFIGURE: "检查 FFmpeg 构建配置",
   NATIVE_FFMPEG_BUILD: "编译 FFmpeg",
   NATIVE_PYTHON_CONFIGURE: "检查 Python 构建配置",

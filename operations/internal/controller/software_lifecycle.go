@@ -48,8 +48,8 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	}
 	action := "SOFTWARE_" + strings.ToUpper(operation)
 	if operation == "actions" {
-		if in.Action != "START" && in.Action != "STOP" && in.Action != "UNINSTALL" {
-			h.fail(w, r, 400, "SOFTWARE_ACTION_INVALID", "仅支持启动、停止或卸载")
+		if !standardSoftwareAction(in.Action) {
+			h.fail(w, r, 400, "SOFTWARE_ACTION_INVALID", "请选择受支持的软件操作")
 			return
 		}
 		action = "SOFTWARE_" + in.Action
@@ -82,6 +82,14 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 		h.opsError(w, r, e)
 		return
 	}
+	if (in.Action == "PAUSE" || in.Action == "UNPAUSE") && prepared.RuntimeKind != "DOCKER" {
+		h.fail(w, r, 409, "SOFTWARE_ACTION_UNSUPPORTED", "暂停和继续仅适用于容器服务")
+		return
+	}
+	if in.Action == "RELOAD" && prepared.RuntimeKind != "SYSTEMD" {
+		h.fail(w, r, 409, "SOFTWARE_ACTION_UNSUPPORTED", "此运行方式不支持重载配置")
+		return
+	}
 	if action == "SOFTWARE_UNINSTALL" && (prepared.Installation == nil || !installationBound(prepared)) {
 		h.fail(w, r, 409, "SOFTWARE_UNINSTALL_NOT_OWNED", "仅支持卸载由Ops安装且身份已确认的软件；外部接管对象请使用解除管理")
 		return
@@ -90,7 +98,17 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 		h.fail(w, r, 409, "SOFTWARE_UNINSTALL_CONFIRMATION_REQUIRED", "请确认卸载；删除数据还需输入当前软件名称")
 		return
 	}
+	var dataDirectory, dataDirectoryIdentity string
+	if action == "SOFTWARE_UNINSTALL" {
+		state, err := h.store.readSoftwareManagement(id)
+		if err != nil {
+			h.internal(w, r, err)
+			return
+		}
+		dataDirectory, dataDirectoryIdentity = managedDataDirectory(state.Resources)
+	}
 	var checkedHostVersion string
+	executionLogs := false
 	if prepared.Version == in.ExpectedVersion && (prepared.ManagementMode == "MANAGED" || (operation == "adopt" && in.Confirmed && prepared.ManagementMode == "OBSERVE" && prepared.Freshness == "FRESH" && prepared.IdentityHash == in.IdentityHash && prepared.ErrorCode == "" && prepared.RuntimeKind != "TOOL")) {
 		t, e := h.store.readTarget(prepared.HostID)
 		if e != nil {
@@ -113,13 +131,28 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 			h.fail(w, r, 409, code, message)
 			return
 		}
-		if capability.SoftwareLifecycleVersion != 1 {
+		if capability.SoftwareLifecycleVersion < 1 || capability.SoftwareLifecycleVersion > deploy.SoftwareLifecycleVersion || newSoftwareLifecycleAction(action) && capability.SoftwareLifecycleVersion < deploy.SoftwareLifecycleVersion {
 			h.fail(w, r, 409, "EXECUTOR_SOFTWARE_UNSUPPORTED", "执行器尚未支持软件生命周期管理，请先升级目标执行器")
 			return
 		}
+		executionLogs = capability.SoftwareLifecycleVersion >= deploy.SoftwareLifecycleVersion
 		if action == "SOFTWARE_UNINSTALL" && capability.SoftwareUninstallVersion != 1 {
 			h.fail(w, r, 409, "EXECUTOR_SOFTWARE_UNINSTALL_UNSUPPORTED", "执行器尚未支持软件卸载，请先升级目标执行器")
 			return
+		}
+		if dataDirectory != "" && capability.CommandRecipeVersion < 8 {
+			h.fail(w, r, 409, "EXECUTOR_UPGRADE_REQUIRED", "卸载已迁移数据的软件需要更新接入组件")
+			return
+		}
+		if prepared.Installation != nil && prepared.Installation.Definition.Commands != nil {
+			if capability.CommandRecipeVersion < deploy.RequiredCommandRecipeVersion(prepared.Installation.Definition) {
+				h.fail(w, r, 409, "EXECUTOR_UPGRADE_REQUIRED", "管理此软件需要更新接入组件")
+				return
+			}
+			if action == "SOFTWARE_UNINSTALL" && capability.CommandTrustFingerprint != deploy.CommandPublicKeyFingerprint(h.store.commandPublicKey()) {
+				h.fail(w, r, 409, "COMMAND_TRUST_REQUIRED", "请先在主机安装准备中授权命令配置")
+				return
+			}
 		}
 		if prepared.RuntimeKind == "DOCKER" && operation != "unmanage" && !capability.DockerEngine {
 			h.fail(w, r, 409, "DOCKER_NOT_READY", "执行器无法访问Docker，请检查主机能力")
@@ -181,6 +214,16 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	if action == "SOFTWARE_UNINSTALL" && (i.Installation == nil || !installationBound(i) || !in.Confirmed || in.DeleteData && in.ConfirmationName != i.Name) {
 		h.fail(w, r, 409, "SOFTWARE_UNINSTALL_CONFIRMATION_REQUIRED", "软件安装身份或名称已变化，请刷新后重新确认卸载")
 		return
+	}
+	if action == "SOFTWARE_UNINSTALL" && in.DeleteData && i.Installation.Definition.Commands != nil {
+		canDelete := false
+		for _, step := range i.Installation.Definition.Commands.Steps {
+			canDelete = canDelete || step.Phase == "DELETE_DATA"
+		}
+		if !canDelete {
+			h.fail(w, r, 409, "COMMAND_DATA_REMOVAL_UNAVAILABLE", "此安装配置未提供删除数据步骤，请选择保留数据")
+			return
+		}
 	}
 	if i.ManagementMode == "RELEASED" {
 		h.fail(w, r, 409, "SOFTWARE_RELEASED", "记录已解除管理")
@@ -275,7 +318,7 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 		h.fail(w, r, 409, "SOFTWARE_NOT_MANAGED", "请先明确接管该服务，再执行启停")
 		return
 	}
-	if i.SoftwareType == "DOCKER" && i.Installation != nil && i.Installation.Definition.Key == "docker" && (action == "SOFTWARE_STOP" || action == "SOFTWARE_UNINSTALL") {
+	if i.SoftwareType == "DOCKER" && i.Installation != nil && i.Installation.Definition.Key == "docker" && (action == "SOFTWARE_STOP" || action == "SOFTWARE_RESTART" || action == "SOFTWARE_UNINSTALL") {
 		dependencies, dependencyErr := softwareDockerEngineDependencies(tx, i.HostID, i.ID)
 		if dependencyErr != nil {
 			h.internal(w, r, dependencyErr)
@@ -300,8 +343,24 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	}
 	job, now := uuid.NewString(), Now()
 	req := deploy.Request{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: h.storeIDTx(tx), TargetID: i.HostID, JobID: job, TraceID: r.Context().Value(traceKey{}).(string), Action: action, SoftwareOperation: action, Software: softwareRequest(i), DeadlineAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)}
+	if executionLogs && operation == "actions" && action != "SOFTWARE_UNINSTALL" {
+		req.ExecutionLogVersion = 1
+	}
 	if action == "SOFTWARE_UNINSTALL" {
-		req.Uninstallation = &deploy.SoftwareUninstallRequest{Installation: *i.Installation, DeleteData: in.DeleteData, ClearNodeDefault: in.ClearNodeDefault}
+		state, err := scanSoftwareManagement(tx, id)
+		if err != nil {
+			h.internal(w, r, err)
+			return
+		}
+		currentDirectory, currentIdentity := managedDataDirectory(state.Resources)
+		if currentDirectory != dataDirectory || currentIdentity != dataDirectoryIdentity {
+			h.fail(w, r, 409, "MANAGEMENT_STATE_CHANGED", "数据目录已变化，请刷新后重新确认卸载")
+			return
+		}
+		req.Uninstallation = &deploy.SoftwareUninstallRequest{Installation: *i.Installation, DeleteData: in.DeleteData, ClearNodeDefault: in.ClearNodeDefault, DataDirectory: dataDirectory, DataDirectoryIdentity: dataDirectoryIdentity}
+		if i.Installation.Definition.Commands != nil {
+			req.DeadlineAt = time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
+		}
 	}
 	if req.Uninstallation != nil && i.NodeEnvironmentID != "" {
 		env, e := scanNodeEnvironment(tx.QueryRow("SELECT "+nodeEnvironmentColumns+" FROM node_environments WHERE id=?", i.NodeEnvironmentID))
@@ -314,11 +373,14 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	}
 	req.InputHash = deploy.Digest(req)
 	desired := i.DesiredState
-	if action == "SOFTWARE_START" {
+	if action == "SOFTWARE_START" || action == "SOFTWARE_RESTART" || action == "SOFTWARE_UNPAUSE" {
 		desired = "RUNNING"
 	}
 	if action == "SOFTWARE_STOP" {
 		desired = "STOPPED"
+	}
+	if action == "SOFTWARE_PAUSE" {
+		desired = "PAUSED"
 	}
 	if action == "SOFTWARE_UNINSTALL" {
 		desired = "REMOVED"
@@ -345,6 +407,18 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	}
 	w.Header().Set("Location", api+"/jobs/"+job)
 	h.reply(w, r, 202, "SUCCESS", "", map[string]string{"jobId": job, "softwareInstanceId": id})
+}
+
+func standardSoftwareAction(action string) bool {
+	switch action {
+	case "START", "STOP", "UNINSTALL", "RESTART", "RELOAD", "PAUSE", "UNPAUSE":
+		return true
+	}
+	return false
+}
+
+func newSoftwareLifecycleAction(action string) bool {
+	return action == "SOFTWARE_RESTART" || action == "SOFTWARE_RELOAD" || action == "SOFTWARE_PAUSE" || action == "SOFTWARE_UNPAUSE"
 }
 
 func (h *HTTP) replaySoftwareChange(w http.ResponseWriter, r *http.Request, s *session, id, action, key, hash string) bool {

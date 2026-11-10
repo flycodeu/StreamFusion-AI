@@ -140,6 +140,26 @@ nav {
   font-weight: 600;
   letter-spacing: 0.06em;
 }
+.log-record-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+.log-record-tabs button {
+  padding: 8px 0 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.log-record-tabs button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
 nav button {
   display: flex;
   align-items: center;
@@ -801,39 +821,52 @@ td .quiet {
   box-shadow: var(--card-shadow);
 }
 .settings-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 24px;
-  padding: 14px 16px;
-  margin-bottom: 22px;
-  background: #f8fafc;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--control-radius);
-  font-size: 12px;
-  color: var(--muted);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
 }
-.settings-meta strong {
-  color: var(--text);
-  font-weight: 500;
-  margin-left: 6px;
+.settings-info-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+  background: #fafcff;
+}
+.settings-info-card > div {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.settings-info-card > div > span {
+  color: var(--muted);
+  font-size: 12px;
 }
 .settings-meta code {
   color: var(--text);
-  font: 12px var(--mono);
-  margin-left: 6px;
+  font: 600 18px var(--mono);
+  overflow-wrap: anywhere;
 }
-.settings-form {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  max-width: 560px;
+.settings-card-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  height: 44px;
+  background: var(--accent-soft);
+  border-radius: 10px;
+  color: var(--accent);
 }
-.settings-form label {
-  flex: 1;
-  min-width: 0;
-}
-.settings-form button {
-  min-height: 38px;
+.settings-card-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .settings > .section-head {
   margin-top: 32px;
@@ -844,13 +877,18 @@ td .quiet {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  padding: 18px 0;
-  border-bottom: 1px solid var(--border-subtle);
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
 }
-.setting-action:last-child {
-  border-bottom: 0;
-  padding-bottom: 0;
+.settings-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.setting-action button {
+  white-space: nowrap;
 }
 .setting-action strong {
   font-size: 14px;
@@ -950,6 +988,13 @@ td .quiet {
 .diagnostic summary {
   cursor: pointer;
   font-weight: 500;
+}
+.diagnostic .diagnostic-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font: inherit;
 }
 .diagnostic code,
 .diagnostic div {
@@ -1120,14 +1165,13 @@ td .quiet {
   }
   .settings-meta {
     gap: 12px;
-    padding: 12px;
+    grid-template-columns: 1fr;
   }
-  .settings-form {
-    flex-wrap: wrap;
-    gap: 10px;
+  .settings-info-card {
+    padding: 16px;
   }
-  .settings-form label {
-    flex-basis: 100%;
+  .settings-actions {
+    grid-template-columns: 1fr;
   }
   .setting-action {
     gap: 12px;

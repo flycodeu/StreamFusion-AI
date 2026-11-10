@@ -95,7 +95,7 @@ def main():
                 drawer = page.get_by_role("dialog", name=host["name"], exact=True)
                 drawer.get_by_role("tab", name="安装准备", exact=True).click()
                 panel = drawer.locator(".host-preparation")
-                panel.get_by_role("heading", name="一键安装到服务器", exact=True).wait_for()
+                panel.get_by_role("heading", name="安装接入组件", exact=True).wait_for()
                 assert panel.get_by_role("button", name="开始安装", exact=True).is_enabled()
                 assert panel.locator('input[type="password"]').count() == 0
                 assert panel.get_by_text(preparation["installRoot"], exact=True).is_visible()
@@ -110,7 +110,7 @@ def main():
                 panel.screenshot(path=str(output / "online-narrow.png"), animations="disabled")
                 page.set_viewport_size({"width": 1440, "height": 1000})
                 panel.get_by_role("button", name="离线", exact=True).click()
-                panel.get_by_role("heading", name="下载后运行一条命令", exact=True).wait_for()
+                panel.get_by_role("heading", name="离线安装", exact=True).wait_for()
                 assert panel.locator(".single-command code").inner_text() == "bash install.sh"
                 with page.expect_download() as download:
                     panel.get_by_role("button", name="下载离线安装包", exact=True).click()
@@ -176,8 +176,8 @@ def main():
                 assert panel.get_by_label("ubuntu 的登录密码", exact=True).count() == 0
                 assert panel.get_by_role("button", name="开始安装", exact=True).count() == 0
                 assert panel.get_by_role("button", name="检查安装结果", exact=True).is_enabled()
-                assert panel.get_by_text("请检查服务器上的安装结果。", exact=True).is_visible()
-                assert panel.get_by_text("最后确认到：安装接入组件", exact=True).is_visible()
+                assert panel.get_by_text("请核对安装结果", exact=True).is_visible()
+                assert "安装接入组件" in panel.locator(".phase-uncertain").inner_text()
                 assert not panel.get_by_text("PREPARATION_RESULT_UNKNOWN", exact=True).is_visible()
                 panel.screenshot(path=str(output / "unknown-wide.png"), animations="disabled")
                 page.set_viewport_size({"width": 390, "height": 844})

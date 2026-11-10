@@ -132,7 +132,7 @@ jobs:
       - run: node scripts/embed-web.mjs
       - name: Check Go formatting
         run: test -z "$(gofmt -l cmd internal)"
-      - run: go test ./...
+      - run: go test -timeout 15m ./...
       - name: Check protected Linux executor fixtures
         if: runner.os == 'Linux'
         run: |

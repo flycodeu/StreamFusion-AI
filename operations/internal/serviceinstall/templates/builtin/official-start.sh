@@ -1,0 +1,1 @@
+/usr/bin/systemctl enable --now -- "$OPS_SERVICE_UNIT"

@@ -241,6 +241,9 @@ func (h *HTTP) operationsRoute(w http.ResponseWriter, r *http.Request, s *sessio
 		case "POST jobs recover":
 			h.reconcile(w, r, s, p[1], true)
 			return true
+		case "POST jobs resume":
+			h.resumeSoftwareInstall(w, r, s, p[1])
+			return true
 		}
 	}
 	if len(p) == 4 && p[0] == "jobs" && p[2] == "input" && p[3] == "complete" && r.Method == "POST" {

@@ -83,7 +83,7 @@ def main():
 
     def wait_job(job_id, desired="SUCCEEDED"):
         for _ in range(240):
-            j = next(j for j in api("/jobs") if j["id"] == job_id)
+            j = next(j for j in api("/jobs?limit=100")["items"] if j["id"] == job_id)
             if j["status"] in ("SUCCEEDED", "FAILED", "UNKNOWN"):
                 assert j["status"] == desired, j
                 if not j["targetAckPending"]:
@@ -182,7 +182,7 @@ def main():
         process.wait(timeout=10)
         process = start()
         login()
-        assert next(j for j in api("/jobs") if j["id"] == crash_job)["status"] == "UNKNOWN"
+        assert next(j for j in api("/jobs?limit=100")["items"] if j["id"] == crash_job)["status"] == "UNKNOWN"
         api(f"/plans/{crash_plan['id']}/submit", "POST", {"idempotencyKey": str(uuid.uuid4())}, 409)
         for _ in range(40):
             result_file = target / "jobs" / crash_job / "result.json"

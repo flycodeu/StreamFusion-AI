@@ -1,0 +1,28 @@
+[Unit]
+Description=StreamFusion %s %s
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=%s
+Group=%s
+WorkingDirectory=%s/data
+ExecStart=%s
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=%s/data %s/logs
+UMask=0027
+LimitNOFILE=65536
+MemoryMax=%dM
+%sLogRateLimitIntervalSec=30s
+LogRateLimitBurst=2000
+StandardOutput=journal
+StandardError=journal
+[Install]
+WantedBy=multi-user.target

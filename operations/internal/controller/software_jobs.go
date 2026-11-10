@@ -52,8 +52,18 @@ func (h *HTTP) processSoftware(ctx context.Context, id, raw string) {
 			return
 		}
 	}
-	execCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	limit := 3 * time.Minute
+	if commandRequest(req) {
+		limit = 30 * time.Minute
+	}
+	execCtx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
+	if commandRequest(req) {
+		progressCtx, stop := context.WithCancel(execCtx)
+		done := make(chan struct{})
+		go func() { defer close(done); h.pollProgress(progressCtx, t, req) }()
+		defer func() { stop(); <-done }()
+	}
 	var result deploy.Result
 	if e = h.store.callTarget(execCtx, t, req, "", &result); e != nil {
 		h.jobUnknown(id, "TARGET_RESULT_UNKNOWN")
@@ -111,6 +121,12 @@ func (h *HTTP) commitSoftwareResult(id string, req deploy.Request, result deploy
 			return errors.New("SOFTWARE_UNINSTALL_EVIDENCE_MISMATCH")
 		}
 		dataRoot := serviceinstall.InstallRoot(t.InstallRoot, req.Software.ID, req.Uninstallation.Installation.Config)
+		if req.Uninstallation.Installation.Definition.Commands != nil && !serviceinstall.IsBuiltinCommand(req.Uninstallation.Installation.Definition) {
+			dataRoot += "/data"
+		}
+		if req.Uninstallation.DataDirectory != "" {
+			dataRoot = req.Uninstallation.DataDirectory
+		}
 		var removedPaths []string
 		if official := req.Uninstallation.Installation.Official; official != nil {
 			dataRoot = official.Paths.Data
@@ -142,10 +158,25 @@ func (h *HTTP) commitSoftwareResult(id string, req deploy.Request, result deploy
 		if req.Action == "SOFTWARE_STOP" && result.Software.State != "STOPPED" {
 			return errors.New("SOFTWARE_STOP_UNCONFIRMED")
 		}
+		if newSoftwareLifecycleAction(req.Action) {
+			e := result.Lifecycle
+			if e == nil || e.Action != req.Action {
+				return errors.New("SOFTWARE_LIFECYCLE_UNCONFIRMED")
+			}
+			if _, err := time.Parse(time.RFC3339Nano, e.ObservedAt); err != nil {
+				return errors.New("SOFTWARE_LIFECYCLE_UNCONFIRMED")
+			}
+			if req.Action == "SOFTWARE_RESTART" && (e.Before == "" || e.After == "" || e.Before == e.After) {
+				return errors.New("SOFTWARE_RESTART_UNCONFIRMED")
+			}
+			if (req.Action == "SOFTWARE_RESTART" || req.Action == "SOFTWARE_UNPAUSE") && result.Software.State != "RUNNING" || req.Action == "SOFTWARE_PAUSE" && result.Software.State != "PAUSED" {
+				return errors.New("SOFTWARE_LIFECYCLE_STATE_MISMATCH")
+			}
+		}
 		if req.Action == "SOFTWARE_STOP" && req.Software.SoftwareKey == "DOCKER" && req.Software.Ownership != nil && req.Software.Ownership.RuntimeMode == "NATIVE" && !result.DockerSocketInactive {
 			return errors.New("DOCKER_SOCKET_STOP_UNCONFIRMED")
 		}
-		if result.Software.State != "RUNNING" && result.Software.State != "STOPPED" && result.Software.State != "FAILED" {
+		if result.Software.State != "RUNNING" && result.Software.State != "STOPPED" && result.Software.State != "FAILED" && result.Software.State != "PAUSED" {
 			return errors.New("SOFTWARE_STATE_INVALID")
 		}
 		if _, e := time.Parse(time.RFC3339Nano, result.Software.ObservedAt); e != nil {

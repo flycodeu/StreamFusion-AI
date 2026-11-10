@@ -70,7 +70,7 @@ func TestOfficialInstallationFreezesCommandsAndPreservesHistory(t *testing.T) {
 	host, _ := installSSHFixture(t, s, b, func(req deploy.Request) ([]byte, bool) {
 		encode := func(v any) ([]byte, bool) { data, _ := json.Marshal(v); return data, true }
 		if req.Action == "CAPABILITIES" {
-			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "nativeInstallVersion": 1, "officialInstallVersion": 1, "softwareLifecycleVersion": 1, "softwareUninstallVersion": 1, "serviceInstallVersion": serviceinstall.CapabilityVersion})
+			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "nativeInstallVersion": 1, "officialInstallVersion": 1, "softwareLifecycleVersion": 1, "softwareUninstallVersion": 1, "commandRecipeVersion": deploy.CommandRecipeVersion, "commandTrustFingerprint": deploy.CommandPublicKeyFingerprint(s.commandPublicKey()), "serviceInstallVersion": serviceinstall.CapabilityVersion})
 		}
 		if req.Installation == nil && req.Uninstallation == nil {
 			return nil, false

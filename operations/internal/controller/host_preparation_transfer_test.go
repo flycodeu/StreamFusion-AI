@@ -13,6 +13,17 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+func TestPreparationTimeoutKeepsSlowUploadBounded(t *testing.T) {
+	// The observed 6.7 MiB package needs over six minutes at 17 KiB/s.
+	transferTime := time.Duration((7073520+17*1024-1)/(17*1024)) * time.Second
+	if preparationTimeout < transferTime+2*time.Minute || preparationTimeout > 15*time.Minute {
+		t.Fatal("slow upload has insufficient or unbounded total budget", preparationTimeout)
+	}
+	if preparationResponseTimeout != preparationTimeout+30*time.Second || preparationUploadIdleTimeout != 45*time.Second {
+		t.Fatal("response or stalled-upload guard changed")
+	}
+}
+
 func TestPreparationTransferReaderBoundsWritesAndKeepsFinalCount(t *testing.T) {
 	var snapshots []preparationTransfer
 	p := newPreparationTransferReader(bytes.NewReader(make([]byte, 2048)), 2048, func(v preparationTransfer) { snapshots = append(snapshots, v) })
