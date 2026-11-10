@@ -123,7 +123,7 @@ summary:focus-visible {
     600 20px "Bahnschrift",
     sans-serif;
 }
-nav {
+.sidebar nav {
   display: grid;
   gap: 18px;
   margin-top: 16px;
@@ -160,7 +160,7 @@ nav {
   border-bottom-color: var(--accent);
   font-weight: 600;
 }
-nav button {
+.sidebar nav button {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -177,11 +177,11 @@ nav button {
     background 120ms,
     color 120ms;
 }
-nav button:hover {
+.sidebar nav button:hover {
   background: #f1f5f9;
   color: #0f172a;
 }
-nav button.active {
+.sidebar nav button.active {
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 600;
