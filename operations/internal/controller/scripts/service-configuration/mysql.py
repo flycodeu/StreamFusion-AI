@@ -43,7 +43,7 @@ def mysql_query(sql):
     elif official:
         args=['/usr/bin/mysql']+(['--defaults-extra-file=/dev/stdin'] if options else ['--user=root'])+['--protocol=socket']
     else:
-        args=[str(root/'runtime/mysql/bin/mysql'),'--defaults-extra-file='+('/dev/stdin' if options else str(root/'config/health.cnf')),'--protocol=socket']
+        args=[str(root/'runtime/mysql/bin/mysql'),'--defaults-extra-file='+('/dev/stdin' if options else str(root/'config/health.cnf')),'--protocol=socket','--socket='+str(root/'data/mysql.sock')]
     return run(args+['--batch','--skip-column-names','--connect-timeout=5','--execute='+sql],timeout=15,input=options)
 
 

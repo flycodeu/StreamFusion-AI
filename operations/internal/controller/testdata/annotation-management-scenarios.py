@@ -4,7 +4,7 @@ from pathlib import Path
 report = {}
 for application, mode, program in payload['programs']:
     with tempfile.TemporaryDirectory(prefix='ops-config20-') as temporary:
-        base = Path(temporary)
+        base = Path(temporary).resolve()
         root, source = base/'root', base/'materials'
         for directory in [root/'config',root/'bin',root/'data',root/'logs',source]:
             directory.mkdir(parents=True, exist_ok=True)

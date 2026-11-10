@@ -52,28 +52,37 @@ func TestGitMigrationPreservesHistoricalJobsAndCredentials(t *testing.T) {
 }
 
 type gitFixture struct {
-	mu      sync.Mutex
-	changed bool
-	unknown bool
-	calls   int
-	results map[string]deploy.Result
+	mu                sync.Mutex
+	changed           bool
+	unknown           bool
+	calls             int
+	accountVersion    int
+	repositoryVersion int
+	accountCalls      int
+	keyCalls          int
+	results           map[string]deploy.Result
 }
 
 func gitControllerFixture(t *testing.T) (*Store, *browser, string, map[string]any, *gitFixture) {
 	s, b := setup(t)
 	b.login()
-	f := &gitFixture{results: map[string]deploy.Result{}}
+	f := &gitFixture{results: map[string]deploy.Result{}, accountVersion: deploy.GitAccountCapabilityVersion, repositoryVersion: deploy.GitRepositoryCapabilityVersion}
 	_, privateKey, _ := ed25519.GenerateKey(rand.Reader)
 	keySigner, _ := ssh.NewSignerFromKey(privateKey)
 	host, _ := installSSHFixture(t, s, b, func(req deploy.Request) ([]byte, bool) {
 		encode := func(v any) ([]byte, bool) { raw, _ := json.Marshal(v); return raw, true }
 		if req.Action == "CAPABILITIES" {
+			f.mu.Lock()
+			defer f.mu.Unlock()
 			cap := installCompatibilityCapabilities(req, s)
-			cap.GitRepositoryVersion = deploy.GitRepositoryCapabilityVersion
-			cap.GitAccountVersion = 1
+			cap.GitRepositoryVersion = f.repositoryVersion
+			cap.GitAccountVersion = f.accountVersion
 			return encode(cap)
 		}
 		if g := req.GitAccount; g != nil {
+			f.mu.Lock()
+			f.accountCalls++
+			f.mu.Unlock()
 			if g.AuthMethod == "HTTPS" && req.Action == "GIT_ACCOUNT_CONFIGURE" && req.Secrets["gitToken"] == "" {
 				t.Error("HTTPS configuration missing token")
 			}
@@ -87,6 +96,9 @@ func gitControllerFixture(t *testing.T) (*Store, *browser, string, map[string]an
 			return encode(deploy.GitAccountEvidence{ID: g.ID, Version: g.Version, Account: g.Account, AccountUID: "1000", Status: status, ObservedAt: Now()})
 		}
 		if k := req.GitKey; k != nil {
+			f.mu.Lock()
+			f.keyCalls++
+			f.mu.Unlock()
 			if len(req.Secrets) != 0 {
 				t.Error("key operation received secrets")
 			}

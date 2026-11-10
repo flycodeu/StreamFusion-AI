@@ -3,6 +3,7 @@ package serviceinstall
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -104,7 +105,10 @@ func TestBuiltinShellSyntax(t *testing.T) {
 		if err != nil {
 			t.Skip("Git Bash unavailable")
 		}
-		bash = filepath.Join(filepath.Dir(filepath.Dir(git)), "usr", "bin", "bash.exe")
+		bash = builtinTestGitBash(git)
+		if bash == "" {
+			t.Fatal("Git installation has no Bash executable")
+		}
 	}
 	scripts := strings.Builder{}
 	index := 0
@@ -121,5 +125,35 @@ func TestBuiltinShellSyntax(t *testing.T) {
 	cmd.Stdin = strings.NewReader(scripts.String())
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("command syntax: %v\n%s", err, output)
+	}
+}
+
+func builtinTestGitBash(git string) string {
+	for directory := filepath.Dir(git); ; directory = filepath.Dir(directory) {
+		for _, relative := range []string{filepath.Join("bin", "bash.exe"), filepath.Join("usr", "bin", "bash.exe")} {
+			candidate := filepath.Join(directory, relative)
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				return candidate
+			}
+		}
+		if filepath.Dir(directory) == directory {
+			return ""
+		}
+	}
+}
+
+func TestBuiltinShellLookupAcceptsGitRuntimeLayouts(t *testing.T) {
+	directory := t.TempDir()
+	bash := filepath.Join(directory, "bin", "bash.exe")
+	if err := os.MkdirAll(filepath.Dir(bash), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bash, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, relative := range []string{"cmd", filepath.Join("ucrt64", "bin"), filepath.Join("mingw64", "bin")} {
+		if got := builtinTestGitBash(filepath.Join(directory, relative, "git.exe")); got != bash {
+			t.Fatalf("Git layout %s: Bash=%s", relative, got)
+		}
 	}
 }

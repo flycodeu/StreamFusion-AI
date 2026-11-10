@@ -23,7 +23,7 @@ func inspectExecutorCapabilities(owner Owner, platform string, command func(time
 		"nativeInstallVersion":     1,
 		"nativeDownloadVersion":    1,
 		"gitRepositoryVersion":     GitRepositoryCapabilityVersion,
-		"gitAccountVersion":        1,
+		"gitAccountVersion":        GitAccountCapabilityVersion,
 		"nodeEnvironmentVersion":   NodeEnvironmentCapabilityVersion,
 		"nodeTerminalVersion":      1,
 		"nodeRegistryVersion":      1,

@@ -31,3 +31,9 @@ var previousServiceConfiguration = map[string]string{
 	"custom-prometheus-native-offline":      "e0a29045791058d4d0303e9f41dd40bc78c98e79b9984a76caf20056b6a8ea7b",
 	"custom-prometheus-native-online":       "2a1041bc0c056464d7343de9b359d2ed04ea5d3e5934dc501895b259fc2ec6f8",
 }
+
+// Initial Config-21 MySQL stock, before retaining its native client socket.
+var previousMysqlSocketConfiguration = map[string]string{
+	"builtin/mysql/8.4.11":                 "c63ad2dc27f7ce93f395672533c377cfb2cf4749f52cb582d1e4d26bb363de6c",
+	"builtin/mysql/ubuntu24.04-repository": "9f5a38cd1d888cd9c7d072318dccab6a8ab29c5ce7078e4ed4bfd118f5ff3ffd",
+}

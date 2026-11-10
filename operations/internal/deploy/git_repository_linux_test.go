@@ -29,6 +29,54 @@ func TestGitRepositoryLinuxIsolatedLifecycle(t *testing.T) {
 	}
 }
 
+func TestGitKeyDefaultACLGenerationKeepsPrivateMode(t *testing.T) {
+	acl, err := exec.LookPath("setfacl")
+	if err != nil {
+		t.Skip("default ACL tooling unavailable")
+	}
+	home := t.TempDir()
+	if out, err := exec.Command(acl, "-m", "d:u::rwx,d:g::rwx,d:o::rx", home).CombinedOutput(); err != nil {
+		t.Fatalf("fixture default ACL: %v %s", err, out)
+	}
+	id := "22222222-2222-4222-8222-222222222222"
+	run := func(generate string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return exec.CommandContext(ctx, "/usr/bin/env", "-i", "--chdir="+home, "HOME="+home, "PATH=/usr/bin:/bin", "LC_ALL=C", "/bin/bash", "--noprofile", "--norc", "-c", gitKeyScript, "sfops-key-acl-fixture", id, strconv.Itoa(os.Getuid()), generate).CombinedOutput()
+	}
+	first, err := run("yes")
+	if err != nil {
+		t.Fatalf("private key generation under default ACL failed: %v %s", err, first)
+	}
+	_, _, options, rest, err := ssh.ParseAuthorizedKey(first)
+	if err != nil || len(options) != 0 || len(bytes.TrimSpace(rest)) != 0 {
+		t.Fatal("key generation did not return only a public key", err)
+	}
+	path := gitKeyPath(home, id)
+	original, err := os.Stat(path)
+	if err != nil || original.Mode().Perm() != 0600 {
+		t.Fatal("generated key permissions", err)
+	}
+	for _, generate := range []string{"yes", "no"} {
+		out, err := run(generate)
+		if err != nil || !bytes.Equal(first, out) {
+			t.Fatal("generated identity changed on retry or read", err)
+		}
+	}
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, generate := range []string{"yes", "no"} {
+		if _, err := run(generate); err == nil {
+			t.Fatal("existing broad-permission key accepted")
+		}
+	}
+	after, err := os.Stat(path)
+	if err != nil || after.Mode().Perm() != 0644 || !os.SameFile(original, after) {
+		t.Fatal("existing broad-permission key was repaired or replaced", err)
+	}
+}
+
 func testGitRepositoryLifecycle(t *testing.T, targetKey bool) {
 	if os.Geteuid() != 0 || os.Getenv("SFOPS_TEST_NODE_LINUX") != "1" {
 		t.Skip("requires isolated Linux account fixture with SFOPS_TEST_NODE_LINUX=1")
@@ -51,9 +99,12 @@ func testGitRepositoryLifecycle(t *testing.T, targetKey bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Exercise target-key preparation as well as repository commands from a
+	// working directory the isolated account cannot traverse.
+	t.Chdir(t.TempDir())
 	run := func(args ...string) string {
 		t.Helper()
-		out, e := exec.Command("/usr/sbin/runuser", append([]string{"-u", name, "--", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "/bin/bash", "--noprofile", "--norc", "-c", `umask 077; exec /usr/bin/git -C "$HOME" "$@"`, "sfops-git-fixture"}, args...)...).CombinedOutput()
+		out, e := exec.Command("/usr/sbin/runuser", append([]string{"-u", name, "--", "/usr/bin/env", "-i", "--chdir=" + home, "PATH=/usr/bin:/bin", "HOME=" + home, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "/bin/bash", "--noprofile", "--norc", "-c", `umask 077; exec /usr/bin/git -C "$HOME" "$@"`, "sfops-git-fixture"}, args...)...).CombinedOutput()
 		if e != nil {
 			t.Fatalf("fixture git: %v %s", e, out)
 		}
@@ -73,10 +124,13 @@ func testGitRepositoryLifecycle(t *testing.T, targetKey bool) {
 		k := GitKeyRequest{ID: g.ProfileID, Account: name}
 		var first, repeated bytes.Buffer
 		x := &executor{}
+		diagnostics := gitFixtureDiagnostics(t, x)
 		if err = x.executeGitKey(Request{Action: "GIT_KEY_PREPARE", GitKey: &k}, &first); err != nil {
+			diagnostics()
 			t.Fatal(err)
 		}
 		if err = x.executeGitKey(Request{Action: "GIT_KEY_PREPARE", GitKey: &k}, &repeated); err != nil || first.String() != repeated.String() {
+			diagnostics()
 			t.Fatal("key retry changed identity", err)
 		}
 		var evidence GitKeyEvidence
@@ -131,8 +185,6 @@ func testGitRepositoryLifecycle(t *testing.T, targetKey bool) {
 		}
 		return out, err
 	}
-	// The root executor may start from a directory inaccessible to this account.
-	t.Chdir(t.TempDir())
 	read := func(action string) GitRepositoryPreflight {
 		t.Helper()
 		var out bytes.Buffer

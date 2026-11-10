@@ -1,11 +1,61 @@
 package controller
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/streamfusion-ai/operations/internal/deploy"
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
+
+func TestMysqlSocketTemplateCorrectionOnlyUpdatesUntouchedStock(t *testing.T) {
+	s, _ := setup(t)
+	for _, seed := range serviceConfigurationSeeds() {
+		key := commandTemplateKey(seed.Key, seed.Version)
+		if _, exists := previousMysqlSocketConfiguration[key]; !exists {
+			continue
+		}
+		old := serviceinstall.NormalizeCommandScripts(seed)
+		old.Management.ScriptPrelude = strings.ReplaceAll(old.Management.ScriptPrelude, ",'--socket='+str(root/'data/mysql.sock')", "")
+		if annotationConfigurationHash(old) != previousMysqlSocketConfiguration[key] {
+			t.Fatal("prior stock socket definition changed", key)
+		}
+		for _, edited := range []bool{false, true} {
+			current := serviceinstall.NormalizeCommandScripts(old)
+			if edited {
+				current.Management.ScriptPrelude += "\n# administrator settings"
+			}
+			raw := jsonText(current)
+			if _, err := s.DB.Exec("UPDATE command_templates SET draft_json=?,published_json=?,revision=7,version=5 WHERE recipe_key=?", raw, raw, key); err != nil {
+				t.Fatal(err)
+			}
+			for pass := 0; pass < 2; pass++ {
+				tx, err := s.DB.Begin()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = repairServiceConfigurationTemplates(tx); err != nil {
+					tx.Rollback()
+					t.Fatal(err)
+				}
+				if err = tx.Commit(); err != nil {
+					t.Fatal(err)
+				}
+				actual, err := scanCommandTemplate(s.DB.QueryRow("SELECT "+commandTemplateColumns+" FROM command_templates WHERE recipe_key=?", key))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if edited {
+					if actual.Revision != 7 || jsonText(*actual.Published) != raw {
+						t.Fatal("administrator edit replaced")
+					}
+				} else if actual.Revision != 8 || annotationConfigurationHash(*actual.Published) != annotationConfigurationHash(seed) {
+					t.Fatal("socket correction missing or repeated")
+				}
+			}
+		}
+	}
+}
 
 func TestServiceConfigurationStockUpgradeKeepsEditsWithdrawalAndHistory(t *testing.T) {
 	var previous serviceinstall.Definition

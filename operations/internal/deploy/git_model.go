@@ -11,7 +11,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-const GitRepositoryCapabilityVersion = 2
+const GitRepositoryCapabilityVersion = 3
 
 type GitRepositoryRequest struct {
 	Action               string `json:"action"`

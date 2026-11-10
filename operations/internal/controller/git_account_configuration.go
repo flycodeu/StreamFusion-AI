@@ -59,7 +59,7 @@ func (h *HTTP) configureGitAccount(w http.ResponseWriter, r *http.Request, s *se
 		h.gitError(w, r, errors.New("EXECUTOR_IDENTITY_MISMATCH"))
 		return
 	}
-	if cap.GitAccountVersion != 1 {
+	if cap.GitAccountVersion < deploy.GitAccountCapabilityVersion {
 		h.gitError(w, r, errors.New("EXECUTOR_GIT_UNSUPPORTED"))
 		return
 	}

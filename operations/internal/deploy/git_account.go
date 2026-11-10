@@ -17,6 +17,8 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+const GitAccountCapabilityVersion = 2
+
 type GitAccountRequest struct {
 	CredentialID       string `json:"credentialId,omitempty"`
 	CredentialRevision string `json:"credentialRevision,omitempty"`
@@ -170,7 +172,7 @@ func (x *executor) executeGitAccount(req Request, output io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	args := []string{"-u", g.Account, "--", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=" + a.HomeDir, "LC_ALL=C", "/bin/bash", "--noprofile", "--norc", "-c", gitAccountScript, "sfops-git-account", req.Action, directory, stage, a.Uid, g.AuthMethod, key, helper, g.Version}
+	args := []string{"-u", g.Account, "--", "/usr/bin/env", "-i", "--chdir=" + a.HomeDir, "PATH=/usr/bin:/bin", "HOME=" + a.HomeDir, "LC_ALL=C", "/bin/bash", "--noprofile", "--norc", "-c", gitAccountScript, "sfops-git-account", req.Action, directory, stage, a.Uid, g.AuthMethod, key, helper, g.Version}
 	args = append(args, identityKey, withIdentity)
 	if _, err = x.softwareRunner(ctx, "/usr/sbin/runuser", args...); err != nil {
 		return errors.New("GIT_ACCOUNT_CONFIGURATION_FAILED")

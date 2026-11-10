@@ -212,14 +212,24 @@ func TestCommandExistingObjectChecksAreConclusive(t *testing.T) {
 }
 
 func TestCommandInstallRechecksBeforeRunningScripts(t *testing.T) {
-	if runtime.GOOS != "linux" || os.Geteuid() != 0 {
-		t.Skip("requires Linux root")
+	if runtime.GOOS != "linux" {
+		t.Skip("requires Linux filesystem protection checks")
 	}
-	root, err := os.MkdirTemp("/opt", "sfops-command-existing-")
-	if err != nil {
-		t.Fatal(err)
+	root := t.TempDir()
+	if os.Geteuid() == 0 {
+		var err error
+		root, err = os.MkdirTemp("/var/lib", "sfops-command-existing-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(root)
+		if err = secureAncestors(root); err != nil {
+			t.Fatalf("root fixture parent is not protected: %v", err)
+		}
+		if err = os.Chmod(root, 0777); err != nil {
+			t.Fatal(err)
+		}
 	}
-	defer os.RemoveAll(root)
 	req := commandTestRequest()
 	req.Installation.Definition.Kind = "SERVICE"
 	req.Installation.Definition.Commands.Kind = "SYSTEMD"
@@ -234,16 +244,29 @@ func TestCommandInstallRechecksBeforeRunningScripts(t *testing.T) {
 		return []byte("loaded\n"), nil
 	}}
 	dir := filepath.Join(root, "jobs", req.JobID)
-	if err = os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = x.installCommands(req, dir); err == nil || err.Error() != "COMMAND_OBJECT_ALREADY_EXISTS" {
+	if _, err := x.installCommands(req, dir); err == nil || err.Error() != "NATIVE_DIRECTORY_NOT_PROTECTED" {
+		t.Fatalf("unprotected installation directory accepted: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(root, "software", req.Installation.SoftwareID)); !os.IsNotExist(err) {
+		t.Fatalf("rejected preparation created the installation directory: %v", err)
+	}
+	if os.Geteuid() != 0 {
+		return
+	}
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	queries = 0
+	if _, err := x.installCommands(req, dir); err == nil || err.Error() != "COMMAND_OBJECT_ALREADY_EXISTS" {
 		t.Fatalf("object appeared during preparation: %v", err)
 	}
 	if queries != 2 {
 		t.Fatalf("object checks: %d", queries)
 	}
-	if _, err = os.Lstat(filepath.Join(root, "software", req.Installation.SoftwareID, "must-not-run")); !os.IsNotExist(err) {
+	if _, err := os.Lstat(filepath.Join(root, "software", req.Installation.SoftwareID, "must-not-run")); !os.IsNotExist(err) {
 		t.Fatalf("install script ran: %v", err)
 	}
 }
@@ -351,49 +374,74 @@ func TestCommandPhaseOrderPrecedesEditorRowOrder(t *testing.T) {
 }
 
 func TestCommandTrustRequiresRootEnrollment(t *testing.T) {
-	if runtime.GOOS != "linux" || os.Geteuid() != 0 {
-		t.Skip("requires Linux root")
+	if runtime.GOOS != "linux" {
+		t.Skip("requires Linux root enrollment checks")
 	}
-	root, err := os.MkdirTemp("/opt", "sfops-command-trust-")
-	if err != nil {
-		t.Fatal(err)
+	root := t.TempDir()
+	if os.Geteuid() == 0 {
+		var err error
+		root, err = os.MkdirTemp("/var/lib", "sfops-command-trust-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(root)
+		if err = secureAncestors(root); err != nil {
+			t.Fatalf("root fixture parent is not protected: %v", err)
+		}
 	}
-	defer os.RemoveAll(root)
 	req := commandTestRequest()
-	if err = os.WriteFile(filepath.Join(root, "executor"), []byte("test fixture"), 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "executor"), []byte("test fixture"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	owner := Owner{ProtocolVersion: 1, ExecutorVersion: Version, ControllerID: req.ControllerID, TargetID: req.TargetID}
-	if err = atomicJSON(filepath.Join(root, "owner.json"), owner); err != nil {
+	if err := atomicJSON(filepath.Join(root, "owner.json"), owner); err != nil {
 		t.Fatal(err)
 	}
 	pub, key, _ := ed25519.GenerateKey(nil)
 	encoded := base64.StdEncoding.EncodeToString(pub)
+	if os.Geteuid() != 0 {
+		if err := TrustCommandController(root, req.ControllerID, req.TargetID, encoded); err == nil || err.Error() != "LINUX_ROOT_REQUIRED" {
+			t.Fatalf("ordinary account enrolled a controller: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(root, "command-trust.json")); !os.IsNotExist(err) {
+			t.Fatalf("rejected enrollment created trust: %v", err)
+		}
+		return
+	}
+	if err := os.Chmod(root, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if err := TrustCommandController(root, req.ControllerID, req.TargetID, encoded); err == nil || err.Error() != "EXECUTOR_PATH_NOT_PROTECTED" {
+		t.Fatalf("writable enrollment ancestor accepted: %v", err)
+	}
+	if err := os.Chmod(root, 0700); err != nil {
+		t.Fatal(err)
+	}
 	for n := 0; n < 2; n++ {
-		if err = TrustCommandController(root, req.ControllerID, req.TargetID, encoded); err != nil {
+		if err := TrustCommandController(root, req.ControllerID, req.TargetID, encoded); err != nil {
 			t.Fatal(err)
 		}
 	}
 	other, _, _ := ed25519.GenerateKey(nil)
-	if err = TrustCommandController(root, req.ControllerID, req.TargetID, base64.StdEncoding.EncodeToString(other)); err == nil || err.Error() != "COMMAND_TRUST_CONFLICT" {
+	if err := TrustCommandController(root, req.ControllerID, req.TargetID, base64.StdEncoding.EncodeToString(other)); err == nil || err.Error() != "COMMAND_TRUST_CONFLICT" {
 		t.Fatalf("trust overwrite: %v", err)
 	}
 	x := executor{root: root, owner: owner}
 	req.InputHash = Digest(req)
-	if err = SignCommandRequest(&req, key); err != nil {
+	if err := SignCommandRequest(&req, key); err != nil {
 		t.Fatal(err)
 	}
-	if err = x.verifyCommandRequest(req); err != nil {
+	if err := x.verifyCommandRequest(req); err != nil {
 		t.Fatal(err)
 	}
 	req.Installation.Definition.Commands.Steps[0].Script = "id"
-	if err = x.verifyCommandRequest(req); err == nil {
+	if err := x.verifyCommandRequest(req); err == nil {
 		t.Fatal("forged command accepted")
 	}
-	if err = os.Chmod(filepath.Join(root, "command-trust.json"), 0666); err != nil {
+	if err := os.Chmod(filepath.Join(root, "command-trust.json"), 0666); err != nil {
 		t.Fatal(err)
 	}
-	if err = x.verifyCommandRequest(req); err == nil || err.Error() != "COMMAND_TRUST_REQUIRED" {
+	if err := x.verifyCommandRequest(req); err == nil || err.Error() != "COMMAND_TRUST_REQUIRED" {
 		t.Fatalf("unprotected trust accepted: %v", err)
 	}
 }

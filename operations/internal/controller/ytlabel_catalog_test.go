@@ -145,7 +145,9 @@ if __name__=='__main__':
 	if err := json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Limit != 73*1024*1024 || result.Options["host"] != "127.0.0.1" || result.Options["port"] != float64(19924) || result.Options["debug"] != false || result.Options["use_reloader"] != false || result.Options["allow_unsafe_werkzeug"] != true || filepath.Clean(result.CWD) != filepath.Join(root, "data") {
+	actualDirectory, actualErr := os.Stat(result.CWD)
+	expectedDirectory, expectedErr := os.Stat(filepath.Join(root, "data"))
+	if result.Limit != 73*1024*1024 || result.Options["host"] != "127.0.0.1" || result.Options["port"] != float64(19924) || result.Options["debug"] != false || result.Options["use_reloader"] != false || result.Options["allow_unsafe_werkzeug"] != true || actualErr != nil || expectedErr != nil || !os.SameFile(actualDirectory, expectedDirectory) {
 		t.Fatalf("wrong actual launcher configuration: %s", data)
 	}
 }

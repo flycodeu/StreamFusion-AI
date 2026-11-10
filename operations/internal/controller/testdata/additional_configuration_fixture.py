@@ -2,6 +2,7 @@ import copy, json, os, re, sys
 from pathlib import Path
 
 program, location, app, mode, state = sys.argv[1:]
+location = str(Path(location).resolve())
 sys.argv = ['fixture', location, 'configure']
 os.environ.update(OPS_SOFTWARE_ID='11111111-1111-4111-8111-111111111111', OPS_JOB_ID='22222222-2222-4222-8222-222222222222', OPS_PREVIOUS_STATE=state, OPS_SOFTWARE_LOCATOR='a'*64)
 namespace = {'__name__': 'configuration_fixture'}

@@ -5,6 +5,30 @@ import (
 	"testing"
 )
 
+func TestGitOldExecutorStopsBeforeSendingAccountOrKey(t *testing.T) {
+	s, b, host, account, fixture := gitControllerFixture(t)
+	target, _ := s.readTarget(host)
+	fixture.mu.Lock()
+	fixture.accountVersion = 1
+	fixture.repositoryVersion = 2
+	accountCalls, keyCalls := fixture.accountCalls, fixture.keyCalls
+	fixture.mu.Unlock()
+	responses := []string{
+		b.call("POST", "/git-accounts/"+account["id"].(string)+"/configure", map[string]string{"expectedVersion": "1", "expectedHostVersion": target.Version}, 409).Body.String(),
+		b.call("POST", "/hosts/"+host+"/git-keys", map[string]string{"id": "23456789-1234-4234-8234-123456789012", "account": "ubuntu", "operation": "GENERATE", "expectedHostVersion": target.Version}, 409).Body.String(),
+	}
+	for _, response := range responses {
+		if !strings.Contains(response, "EXECUTOR_GIT_UNSUPPORTED") {
+			t.Fatal(response)
+		}
+	}
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	if fixture.accountCalls != accountCalls || fixture.keyCalls != keyCalls {
+		t.Fatal("unsupported executor received account or key mutation")
+	}
+}
+
 func TestGitHTTPSAccountConfigurationRetainsOnlyCredentialReference(t *testing.T) {
 	s, b, host, _, _ := gitControllerFixture(t)
 	target, _ := s.readTarget(host)

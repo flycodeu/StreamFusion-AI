@@ -19,6 +19,11 @@ func serviceConfigurationSeeds() []serviceinstall.Definition {
 	return seeds
 }
 
+func previousServiceConfigurationMatches(key string, definition serviceinstall.Definition) bool {
+	hash := annotationConfigurationHash(definition)
+	return previousServiceConfiguration[key] == hash || previousMysqlSocketConfiguration[key] == hash
+}
+
 // Upgrade only exact shipped definitions. Existing installation and job snapshots
 // keep their frozen commands; an edited draft or withdrawn publication stays intact.
 func repairServiceConfigurationTemplates(tx *sql.Tx) error {
@@ -44,7 +49,7 @@ func repairServiceConfigurationTemplates(tx *sql.Tx) error {
 		if err = deploy.StrictJSON([]byte(published), &current); err != nil {
 			return err
 		}
-		if annotationConfigurationHash(current) != previous {
+		if !previousServiceConfigurationMatches(key, current) {
 			continue
 		}
 		if err = seed.ValidateCommands(); err != nil {
@@ -53,7 +58,7 @@ func repairServiceConfigurationTemplates(tx *sql.Tx) error {
 		if err = deploy.StrictJSON([]byte(draft), &editing); err != nil {
 			return err
 		}
-		if annotationConfigurationHash(editing) == previous {
+		if previousServiceConfigurationMatches(key, editing) {
 			updated := serviceinstall.NormalizeCommandScripts(seed)
 			updated.Revision, updated.Commands.Revision = editing.Revision, editing.Commands.Revision
 			draft = jsonText(updated)

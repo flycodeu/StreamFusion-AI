@@ -16,6 +16,27 @@ import (
 	"time"
 )
 
+// Keep protected CI failures actionable without substituting a fake command
+// runner or publishing credential material from even an isolated fixture.
+func gitFixtureDiagnostics(t *testing.T, x *executor) func() {
+	t.Helper()
+	var last []byte
+	var lastError error
+	x.softwareRun = func(limit time.Duration, command string, args ...string) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), limit)
+		defer cancel()
+		last, lastError = (&executor{}).softwareRunner(ctx, command, args...)
+		return last, lastError
+	}
+	return func() {
+		value := strings.ReplaceAll(string(last), "fixture-token", "[redacted]")
+		if strings.Contains(value, "PRIVATE KEY") {
+			value = "[private material redacted]"
+		}
+		t.Logf("isolated Git command: err=%v output=%q", lastError, value)
+	}
+}
+
 func TestGitAccountLinuxTerminalConfiguration(t *testing.T) {
 	if os.Geteuid() != 0 || os.Getenv("SFOPS_TEST_NODE_LINUX") != "1" {
 		t.Skip("requires isolated Linux account fixture")
@@ -41,12 +62,17 @@ func TestGitAccountLinuxTerminalConfiguration(t *testing.T) {
 	if err = os.Chmod(home, 0700); err != nil {
 		t.Fatal(err)
 	}
+	// The executor's working directory may be private to root. Terminal
+	// operations must start in the already validated target account HOME.
+	t.Chdir(t.TempDir())
 	x := &executor{secrets: map[string]string{"gitToken": "fixture-token"}}
+	diagnostics := gitFixtureDiagnostics(t, x)
 	g := GitAccountRequest{ID: "12345678-1234-4234-8234-123456789012", Version: "1", Account: name, AccountUID: a.Uid, AuthMethod: "HTTPS", Host: "git.example.test", Port: 443, Username: "first", CredentialID: "12345678-1234-4234-8234-123456789013", CredentialRevision: "1", AuthorName: "First Author", AuthorEmail: "first@example.test"}
 	apply := func(action string) {
 		t.Helper()
 		var output bytes.Buffer
 		if e := x.executeGitAccount(Request{Action: action, GitAccount: &g}, &output); e != nil {
+			diagnostics()
 			t.Fatal(e)
 		}
 		if strings.Contains(output.String(), "fixture-token") {
@@ -61,7 +87,7 @@ func TestGitAccountLinuxTerminalConfiguration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, e := x.softwareRunner(ctx, "/usr/sbin/runuser", "-u", name, "--", "/usr/bin/env", "-i", "HOME="+home, "PATH=/usr/bin:/bin", "GIT_TERMINAL_PROMPT=0", "/bin/bash", "-c", "printf 'protocol=https\\nhost=git.example.test\\nusername=first\\n\\n' | /usr/bin/git credential fill")
+	out, e := x.softwareRunner(ctx, "/usr/sbin/runuser", "-u", name, "--", "/usr/bin/env", "-i", "--chdir="+home, "HOME="+home, "PATH=/usr/bin:/bin", "GIT_TERMINAL_PROMPT=0", "/bin/bash", "-c", "printf 'protocol=https\\nhost=git.example.test\\nusername=first\\n\\n' | /usr/bin/git credential fill")
 	if e != nil || !bytes.Contains(out, []byte("password=fixture-token")) {
 		t.Fatal("terminal did not reuse configured token", e)
 	}
@@ -73,6 +99,7 @@ func TestGitAccountLinuxTerminalConfiguration(t *testing.T) {
 	k := GitKeyRequest{ID: g.ID, Account: name}
 	var pub bytes.Buffer
 	if e = x.executeGitKey(Request{Action: "GIT_KEY_PREPARE", GitKey: &k}, &pub); e != nil {
+		diagnostics()
 		t.Fatal(e)
 	}
 	var key GitKeyEvidence
@@ -82,7 +109,7 @@ func TestGitAccountLinuxTerminalConfiguration(t *testing.T) {
 	g.AuthMethod, g.Username, g.Port, g.KeyPath, g.KeyFingerprint = "SSH", "git", 2222, key.KeyPath, key.Fingerprint
 	apply("GIT_ACCOUNT_CONFIGURE")
 	apply("GIT_ACCOUNT_CONFIGURE")
-	out, e = x.softwareRunner(ctx, "/usr/sbin/runuser", "-u", name, "--", "/usr/bin/env", "-i", "HOME="+home, "PATH=/usr/bin:/bin", "/usr/bin/ssh", "-G", "ops-git-"+g.ID)
+	out, e = x.softwareRunner(ctx, "/usr/sbin/runuser", "-u", name, "--", "/usr/bin/env", "-i", "--chdir="+home, "HOME="+home, "PATH=/usr/bin:/bin", "/usr/bin/ssh", "-G", "ops-git-"+g.ID)
 	if e != nil || !bytes.Contains(out, []byte("hostname git.example.test")) || !bytes.Contains(out, []byte("port 2222")) || !bytes.Contains(out, []byte(key.KeyPath)) {
 		t.Fatal("SSH alias unavailable", e)
 	}

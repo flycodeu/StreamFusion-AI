@@ -17,6 +17,9 @@ if [ ! -e "$keydir" ] && [ ! -L "$keydir" ] && [ "$generate" = yes ]; then
   stage=$(mktemp -d "$directory/.new.XXXXXXXX")
   trap 'rm -f -- "$stage/key" "$stage/key.pub"; rmdir -- "$stage"' EXIT
   /usr/bin/ssh-keygen -q -t ed25519 -N '' -C "ops-git-$id" -f "$stage/key"
+  # A default ACL can override umask. Tighten only this newly generated key
+  # inside the private staging directory before publishing the identity.
+  chmod 600 -- "$stage/key"
   mv -T -n -- "$stage" "$keydir"
   if [ ! -e "$stage" ]; then trap - EXIT; fi
 fi

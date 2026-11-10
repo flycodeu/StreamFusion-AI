@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -53,10 +52,14 @@ func TestLabelStudioPackageMetadataReadsOnlyTheLauncherEnvironment(t *testing.T)
 	for _, scenario := range []string{"valid", "ambiguous", "oversized", "wrong-package", "symlink", "large-argv"} {
 		t.Run(scenario, func(t *testing.T) {
 			dir := t.TempDir()
-			posix := filepath.ToSlash(dir)
-			if runtime.GOOS == "windows" {
-				posix = "/" + strings.ToLower(posix[:1]) + posix[2:]
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			canonical := exec.CommandContext(ctx, shell, "-c", `cd "$1" && /usr/bin/readlink -f .`, "fixture", filepath.ToSlash(dir))
+			resolved, err := canonical.CombinedOutput()
+			if err != nil {
+				t.Fatal(err, string(resolved))
 			}
+			posix := strings.TrimSpace(string(resolved))
 			prefix := filepath.Join(dir, "env")
 			metadata := filepath.Join(prefix, "lib/python3.11/site-packages/label_studio-1.22.0.dist-info/METADATA")
 			launcher := filepath.Join(prefix, "bin/label-studio")
@@ -102,8 +105,6 @@ func TestLabelStudioPackageMetadataReadsOnlyTheLauncherEnvironment(t *testing.T)
 				start += strings.Repeat("x", 16385)
 			}
 			script := strings.ReplaceAll(deployScript("observe/label-studio-package.sh"), "/usr/bin/systemctl", posixSingleQuote(posix+"/systemctl")) + "\nlabel_studio_package label-studio.service\n"
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
 			cmd := exec.CommandContext(ctx, shell, "-c", script)
 			cmd.Env = append(os.Environ(), "TEST_EXEC_START="+start)
 			data, err := cmd.CombinedOutput()

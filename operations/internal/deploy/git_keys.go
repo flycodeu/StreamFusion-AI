@@ -61,7 +61,7 @@ func (x *executor) executeGitKey(req Request, output io.Writer) error {
 	}
 	evidence := GitKeyEvidence{ID: k.ID, Account: k.Account, AccountUID: a.Uid}
 	if req.Action != "GIT_HOST_KEY_CHECK" {
-		out, err := x.softwareRunner(ctx, "/usr/sbin/runuser", "-u", k.Account, "--", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME="+a.HomeDir, "LC_ALL=C", "/bin/bash", "--noprofile", "--norc", "-c", gitKeyScript, "sfops-git-key", k.ID, a.Uid, generate)
+		out, err := x.softwareRunner(ctx, "/usr/sbin/runuser", "-u", k.Account, "--", "/usr/bin/env", "-i", "--chdir="+a.HomeDir, "PATH=/usr/bin:/bin", "HOME="+a.HomeDir, "LC_ALL=C", "/bin/bash", "--noprofile", "--norc", "-c", gitKeyScript, "sfops-git-key", k.ID, a.Uid, generate)
 		if err != nil || len(out) > 16<<10 {
 			return errors.New("GIT_KEY_UNAVAILABLE")
 		}

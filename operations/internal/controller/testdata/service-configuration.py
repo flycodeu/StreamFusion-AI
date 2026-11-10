@@ -58,6 +58,10 @@ def scenario(app,mode='NATIVE',official=False,stopped=False,failure=False):
             namespace['auto'].write_text(json.dumps({'Version':2,'mysql_server':{'max_connections':{'Value':'151'},'long_query_time':{'Value':'5'}}}),encoding='utf-8')
             (root/'config/health.cnf').write_text('[client]\nuser=root\npassword=do-not-return-this-secret\n',encoding='utf-8')
             (root/'data/database.frm').write_text('preserved database and account data',encoding='utf-8')
+            if mode=='NATIVE' and not official:
+                secret=root/'work/admin-password'
+                secret.write_text('do-not-return-native-password',encoding='utf-8')
+                os.environ['OPS_SECRET_ADMIN_PASSWORD_FILE']=str(secret)
         original={'Id':'a'*64,'Name':'/sfops-service-'+sid,'Image':'sha256:'+'1'*64,'State':{'Running':not stopped},'Config':{'Env':['SECRET=keep-me'],'Labels':{'com.streamfusion.ops.software':sid,'com.streamfusion.ops.job':'old-job'},'Cmd':['original-command'],'Entrypoint':['original-entry'],'User':'999'},'HostConfig':{'Memory':0,'MemorySwap':0,'PortBindings':{str(namespace['internal_port'])+'/tcp':[{'HostIp':'127.0.0.1','HostPort':str(namespace['internal_port'])}],'9000/tcp':[{'HostIp':'127.0.0.1','HostPort':'19000'}]},'Binds':[str(root/'data')+':/data'],'Mounts':None,'RestartPolicy':{'Name':'unless-stopped'},'SecurityOpt':['no-new-privileges'],'LogConfig':{'Type':'json-file','Config':{'max-size':'10m'}}},'Mounts':[{'Type':'volume','Name':'original-anonymous','Destination':'/extra','RW':True,'Source':'/var/lib/docker/volumes/original-anonymous/_data'}],'NetworkSettings':{'Networks':{'default':{'Aliases':['user-alias','a'*12]}}}}
         containers={original['Id']:copy.deepcopy(original)}
         calls=[]
@@ -110,6 +114,11 @@ def scenario(app,mode='NATIVE',official=False,stopped=False,failure=False):
                     return str(int(value[:-1])*1048576) if value.endswith('M') else value
                 return 'infinity'
             if any(value.startswith('--execute=') for value in args):
+                if app=='mysql' and mode=='NATIVE' and not official:
+                    assert '--socket='+str(root/'data/mysql.sock') in args, 'native MySQL lost its instance socket'
+                    assert '--defaults-extra-file=/dev/stdin' in args
+                    assert input and 'do-not-return-native-password' in input, 'password options did not use stdin'
+                    assert all('do-not-return-native-password' not in value for value in args), 'password leaked in argv'
                 query=next(value for value in args if value.startswith('--execute='))
                 if 'SELECT 1' in query:
                     return '1'
