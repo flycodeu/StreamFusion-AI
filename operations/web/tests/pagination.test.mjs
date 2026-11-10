@@ -60,6 +60,10 @@ test("pager blocks disabled and unavailable cursor actions without inventing tot
   pager.changePage(2); pager.changeSize(20);
   assert.deepEqual(events, [["update:page", 2], ["update:pageSize", 20]]);
   events.length = 0;
+  props.page = 2;
+  pager.changePage(1);
+  assert.deepEqual(events, [["update:page", 1]], "a cursor page must allow returning to its previous page");
+  events.length = 0;
   props.page = 3; props.total = 21;
   pager.changePage(99);
   assert.deepEqual(events, [], "a clamp to the current page must not replay a fetch");

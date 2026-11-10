@@ -9,12 +9,11 @@ const props = withDefaults(defineProps<{
   pageSize?: number;
   total?: number;
   hasNext?: boolean;
-  hasPrevious?: boolean;
   disabled?: boolean;
   label?: string;
 }>(), { page: 1, pageSize: 10, disabled: false, label: "列表分页" });
 const emit = defineEmits<{ "update:page": [value: number]; "update:pageSize": [value: number] }>();
-const canPrevious = computed(() => props.hasPrevious ?? props.page > 1);
+const canPrevious = computed(() => props.page > 1);
 function changePage(value: number) {
   if (props.disabled || value === props.page) return;
   if (props.total === undefined && (value < props.page ? !canPrevious.value : !props.hasNext)) return;
