@@ -17,7 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-const GitAccountCapabilityVersion = 2
+const GitAccountCapabilityVersion = 3
 
 type GitAccountRequest struct {
 	CredentialID       string `json:"credentialId,omitempty"`

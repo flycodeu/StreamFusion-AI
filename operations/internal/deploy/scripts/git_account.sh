@@ -15,6 +15,22 @@ flock -w 5 9
 for name in credentials ssh.conf revision identity.gitconfig known_hosts; do
   [ ! -L "$directory/$name" ] || exit 1
 done
+global_config="$HOME/.gitconfig"
+[ ! -L "$global_config" ] || exit 1
+if [ "$action" = GIT_ACCOUNT_CONFIGURE ] && { [ "$method" = HTTPS ] || [ "$with_identity" = yes ]; } && [ ! -e "$global_config" ]; then
+  # Git preserves an existing mode, while a new Git lock inherits default ACLs.
+  temporary_global=$(mktemp "$HOME/.ops-gitconfig.XXXXXXXX")
+  trap 'rm -f -- "$temporary_global"' EXIT
+  chmod 600 -- "$temporary_global"
+  ln -T -- "$temporary_global" "$global_config"
+  rm -f -- "$temporary_global"
+  trap - EXIT
+fi
+if [ -e "$global_config" ]; then
+  [ -f "$global_config" ] && [ "$(stat -c %u -- "$global_config")" = "$uid" ] || exit 1
+  permissions=$(stat -c %a -- "$global_config")
+  [ "$((8#$permissions & 8#22))" -eq 0 ] || exit 1
+fi
 if [ -f "$directory/revision" ]; then
   saved=$(cat -- "$directory/revision")
   case "$saved" in ''|*[!0-9]*) exit 1;; esac

@@ -9,7 +9,7 @@ func TestGitOldExecutorStopsBeforeSendingAccountOrKey(t *testing.T) {
 	s, b, host, account, fixture := gitControllerFixture(t)
 	target, _ := s.readTarget(host)
 	fixture.mu.Lock()
-	fixture.accountVersion = 1
+	fixture.accountVersion = 2
 	fixture.repositoryVersion = 2
 	accountCalls, keyCalls := fixture.accountCalls, fixture.keyCalls
 	fixture.mu.Unlock()

@@ -55,7 +55,7 @@ func TestAdditionalConfigurationAdaptersPreserveDataSecretsAndStoppedStateAndRol
 					if err := os.WriteFile(path, []byte(program), 0600); err != nil {
 						t.Fatal(err)
 					}
-					cmd := exec.Command(python, "-I", "testdata/additional_configuration_fixture.py", path, filepath.Join(directory, "installation"), app.key, mode, state)
+					cmd := exec.Command(python, "-I", "-X", "utf8", "testdata/additional_configuration_fixture.py", path, filepath.Join(directory, "installation"), app.key, mode, state)
 					if output, err := cmd.CombinedOutput(); err != nil {
 						t.Fatalf("adapter failed: %v\n%s", err, output)
 					}

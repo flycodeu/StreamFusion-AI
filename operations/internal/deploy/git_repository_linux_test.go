@@ -149,6 +149,7 @@ func testGitRepositoryLifecycle(t *testing.T, targetKey bool) {
 		g.CredentialID, g.CredentialRevision = "", ""
 	}
 	port, hostKey := gitFixtureSSH(t, name, remote, signer)
+	g.HostPublicKey = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
 	g.SSHHost = "127.0.0.1"
 	g.SSHPort = port
 	run("-C", repo, "remote", "add", "origin", fmt.Sprintf("ssh://git@127.0.0.1:%d/project.git", port))

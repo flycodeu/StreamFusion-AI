@@ -11,10 +11,85 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestGitAccountDefaultACLPreservesGlobalConfiguration(t *testing.T) {
+	acl, err := exec.LookPath("setfacl")
+	if err != nil {
+		t.Skip("default ACL tooling unavailable")
+	}
+	for _, mode := range []os.FileMode{0, 0600, 0644, 0664} {
+		t.Run(fmt.Sprintf("original-mode-%04o", mode), func(t *testing.T) {
+			home := t.TempDir()
+			if out, err := exec.Command(acl, "-m", "d:u::rwx,d:g::rwx,d:o::rx", home).CombinedOutput(); err != nil {
+				t.Fatalf("fixture default ACL: %v %s", err, out)
+			}
+			global, stage := filepath.Join(home, ".gitconfig"), filepath.Join(home, "stage")
+			original := []byte("[custom]\n\tkeep = original\n")
+			if mode != 0 {
+				if err := os.WriteFile(global, original, mode); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(global, mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Mkdir(stage, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(stage, "credential"), []byte("protocol=https\nhost=git.example.test\nusername=first\npassword=fixture-token\n\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(stage, "identity.gitconfig"), []byte("[user]\nname = Fixture\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			directory := filepath.Join(home, ".local/share/streamfusion-ops/git-accounts", "11111111-1111-4111-8111-111111111111")
+			run := func(action string) ([]byte, error) {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				return exec.CommandContext(ctx, "/usr/bin/env", "-i", "--chdir="+home, "HOME="+home, "PATH=/usr/bin:/bin", "LC_ALL=C", "/bin/bash", "--noprofile", "--norc", "-c", gitAccountScript, "sfops-account-acl-fixture", action, directory, stage, strconv.Itoa(os.Getuid()), "HTTPS", "credential.https://first@git.example.test.helper", "store --file "+gitQuote(filepath.Join(directory, "credentials")), "1", "includeIf.hasconfig:remote.*.url:https://first@git.example.test/**.path", "yes").CombinedOutput()
+			}
+			if mode == 0664 {
+				if _, err := run("GIT_ACCOUNT_CONFIGURE"); err == nil {
+					t.Fatal("existing unsafe global config accepted")
+				}
+				data, err := os.ReadFile(global)
+				if err != nil || !bytes.Equal(data, original) {
+					t.Fatal("unsafe existing contents changed", err)
+				}
+				info, err := os.Stat(global)
+				if err != nil || info.Mode().Perm() != mode {
+					t.Fatal("unsafe existing mode changed", err)
+				}
+				return
+			}
+			for _, action := range []string{"GIT_ACCOUNT_CONFIGURE", "GIT_ACCOUNT_CONFIGURE", "GIT_ACCOUNT_REMOVE"} {
+				if out, err := run(action); err != nil {
+					t.Fatalf("%s: %v %s", action, err, strings.ReplaceAll(string(out), "fixture-token", "[redacted]"))
+				}
+				info, err := os.Stat(global)
+				expected := mode
+				if expected == 0 {
+					expected = 0600
+				}
+				if err != nil || info.Mode().Perm() != expected {
+					t.Fatal("global config mode changed", err)
+				}
+				data, err := os.ReadFile(global)
+				if err != nil || bytes.Contains(data, []byte("fixture-token")) || mode != 0 && !bytes.Contains(data, []byte("keep = original")) {
+					t.Fatal("global config contents changed or token leaked", err)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(directory, "credentials")); !os.IsNotExist(err) {
+				t.Fatal("credential survived removal", err)
+			}
+		})
+	}
+}
 
 // Keep protected CI failures actionable without substituting a fake command
 // runner or publishing credential material from even an isolated fixture.
