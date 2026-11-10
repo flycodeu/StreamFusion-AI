@@ -6,6 +6,8 @@ import type { PageResult } from "./jobs";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
 import { findErrorReference } from "./errorReference";
 import { hostTime, type Host } from "./hosts";
+import OpsPagination from "./OpsPagination.vue";
+import { usePagination } from "./pagination";
 
 type Rule = {
   id: string;
@@ -96,8 +98,12 @@ const sourceMode = ref("any4"),
   submissionAttempted = ref(false);
 const jobLogs = ref(""),
   now = ref(Date.now());
+const errorDetails = ref<{ code: string; timestamp: string; traceId: string }>();
+const historyPage = ref(1), historyPageSize = ref(10), historyCursors = ref([""]), nextCursor = ref(""), historyLoading = ref(false);
 let disposed = false,
   generation = 0,
+  historyGeneration = 0,
+  logGeneration = 0,
   poll: ReturnType<typeof setTimeout> | undefined,
   clock: ReturnType<typeof setInterval> | undefined;
 const states: Record<string, string> = {
@@ -124,6 +130,8 @@ const filtered = computed(() =>
       .includes(search.value.trim().toLowerCase()),
   ),
 );
+const { page: portPage, pageSize: portPageSize, pageItems: portRows, total: portTotal } = usePagination(() => filtered.value, [hostId, search]);
+const { page: rulePage, pageSize: rulePageSize, pageItems: ruleRows, total: ruleTotal } = usePagination(() => snapshot.value?.managedRules || [], [hostId]);
 const currentJobs = computed(() =>
   jobs.value.filter(
     (j) => j.kind === "FIREWALL_CHANGE" && j.targetId === hostId.value,
@@ -145,21 +153,59 @@ function confirmationExpired(job: Job) {
 }
 async function act(fn: () => Promise<void>) {
   if (busy.value) return;
+  const rev = generation;
   busy.value = true;
   error.value = "";
+  errorDetails.value = undefined;
   try {
     await fn();
   } catch (e) {
+    if (disposed || rev !== generation) return;
     error.value =
-      e instanceof ApiError
-        ? `${e.message} · ${e.code} · ${e.timestamp} · traceId=${e.traceId}`
-        : e instanceof Error
-          ? e.message
-          : "操作未确认";
+      e instanceof Error ? e.message : "操作未确认";
+    if (e instanceof ApiError) errorDetails.value = { code: e.code, timestamp: e.timestamp, traceId: e.traceId };
     emit("error", e);
   } finally {
-    busy.value = false;
+    if (!disposed && rev === generation) busy.value = false;
   }
+}
+async function loadHistory(page = historyPage.value, size = historyPageSize.value) {
+  if (!hostId.value || historyLoading.value || page < 1 || page > historyPage.value + 1) return;
+  const cursor = page === 1 ? "" : page > historyPage.value ? nextCursor.value : historyCursors.value[page - 1];
+  if (page > 1 && !cursor) return;
+  const selected = hostId.value, rev = generation, active = ++historyGeneration;
+  historyLoading.value = true;
+  const params = new URLSearchParams({ limit: String(size), kind: "FIREWALL_CHANGE", hostId: selected });
+  if (cursor) params.set("before", cursor);
+  try {
+    const result = await request<PageResult<Job>>(`/jobs?${params}`);
+    if (disposed || rev !== generation || active !== historyGeneration || selected !== hostId.value) return;
+    if (page !== historyPage.value || size !== historyPageSize.value) { logGeneration++; jobLogs.value = ""; }
+    jobs.value = result.items;
+    nextCursor.value = result.nextCursor;
+    historyCursors.value = [...historyCursors.value.slice(0, page - 1), cursor || ""];
+    historyPage.value = page;
+    historyPageSize.value = size;
+  } finally {
+    if (!disposed && rev === generation && active === historyGeneration) historyLoading.value = false;
+  }
+}
+async function changeHistoryPage(page: number) {
+  if (page === historyPage.value) return;
+  await act(() => loadHistory(page));
+}
+async function changeHistorySize(size: number) {
+  if (size !== historyPageSize.value) await act(() => loadHistory(1, size));
+}
+function resetHistory() {
+  historyGeneration++;
+  historyLoading.value = false;
+  jobs.value = [];
+  historyPage.value = 1;
+  historyCursors.value = [""];
+  nextCursor.value = "";
+  logGeneration++;
+  jobLogs.value = "";
 }
 async function refresh() {
   if (loading.value) return;
@@ -167,13 +213,12 @@ async function refresh() {
   const selected = hostId.value,
     rev = generation;
   try {
-    const [all, entries] = await Promise.all([
+    const [all] = await Promise.all([
       request<Host[]>("/hosts"),
-      request<PageResult<Job>>(`/jobs?limit=100&kind=FIREWALL_CHANGE${selected ? `&hostId=${encodeURIComponent(selected)}` : ""}`),
+      selected ? loadHistory() : Promise.resolve(),
     ]);
     if (disposed || rev !== generation) return;
     hosts.value = all;
-    jobs.value = entries.items;
     if (!hostId.value && all.length) {
       hostId.value = all[0]!.id;
       return;
@@ -184,17 +229,18 @@ async function refresh() {
         view.value = result;
     }
   } finally {
-    loading.value = false;
+    if (!disposed && rev === generation) loading.value = false;
   }
 }
 function schedule() {
   if (poll) clearTimeout(poll);
   if (disposed) return;
   poll = setTimeout(async () => {
+    const rev = generation;
     try {
       if (!document.hidden) await refresh();
     } catch (e) {
-      emit("error", e);
+      if (!disposed && rev === generation) emit("error", e);
     } finally {
       schedule();
     }
@@ -209,7 +255,7 @@ async function detect() {
     "POST",
     { expectedVersion: host.value.version },
   );
-  if (rev === generation && selected === hostId.value) view.value = result;
+  if (!disposed && rev === generation && selected === hostId.value) view.value = result;
 }
 function open(op: string, selected?: Rule) {
   operation.value = op;
@@ -219,6 +265,7 @@ function open(op: string, selected?: Rule) {
   submitKey.value = crypto.randomUUID();
   submissionAttempted.value = false;
   error.value = "";
+  errorDetails.value = undefined;
   rule.value = selected
     ? { ...selected }
     : {
@@ -235,6 +282,7 @@ function open(op: string, selected?: Rule) {
 }
 async function preflight() {
   if (!host.value || !snapshot.value) return;
+  const selected = hostId.value, rev = generation;
   const r = { ...rule.value };
   if (operation.value === "ADD") {
     if (!range.value) r.end = r.start;
@@ -247,8 +295,8 @@ async function preflight() {
     if (!r.source.includes("/"))
       r.source += r.source.includes(":") ? "/128" : "/32";
   }
-  plan.value = await request<Plan>(
-    `/hosts/${hostId.value}/firewall-plans`,
+  const result = await request<Plan>(
+    `/hosts/${selected}/firewall-plans`,
     "POST",
     {
       expectedVersion: host.value.version,
@@ -257,9 +305,11 @@ async function preflight() {
       rule: r,
     },
   );
+  if (!disposed && rev === generation && selected === hostId.value) plan.value = result;
 }
 async function submit() {
   if (!plan.value || (expired.value && !submissionAttempted.value)) return;
+  const selected = hostId.value, rev = generation;
   // The server may have accepted a request whose response was lost. Keep the
   // same plan/key so retry can find that job even after the plan expires.
   submissionAttempted.value = true;
@@ -268,19 +318,24 @@ async function submit() {
     "POST",
     { confirmed: true, idempotencyKey: submitKey.value },
   );
+  if (disposed || rev !== generation || selected !== hostId.value) return;
   receipt.value = accepted.jobId;
   dialog.value = false;
   tab.value = "jobs";
+  resetHistory();
+  await loadHistory();
   await refresh();
-  ElMessage.success("已提交，执行结果见操作记录");
+  if (!disposed && rev === generation && selected === hostId.value) ElMessage.success("已提交，执行结果见操作记录");
 }
 async function jobAction(j: Job, action: string) {
+  const rev = generation;
   await request(`/jobs/${j.id}/${action}`, "POST", {});
-  await refresh();
+  if (!disposed && rev === generation) await refresh();
 }
 async function logs(j: Job) {
+  const rev = generation, active = ++logGeneration;
   const result = await request<{ text: string }>(`/jobs/${j.id}/logs`);
-  jobLogs.value = result.text;
+  if (!disposed && rev === generation && active === logGeneration) jobLogs.value = result.text;
 }
 function guardSSH() {
   if (!snapshot.value?.managementSource || !snapshot.value.managementPort)
@@ -292,10 +347,15 @@ function guardSSH() {
 }
 watch(hostId, () => {
   generation++;
+  busy.value = false;
+  loading.value = false;
+  resetHistory();
+  search.value = "";
+  error.value = "";
+  errorDetails.value = undefined;
   view.value = undefined;
   plan.value = undefined;
   dialog.value = false;
-  jobLogs.value = "";
   void act(refresh);
 });
 onMounted(() => {
@@ -342,7 +402,11 @@ onUnmounted(() => {
       </div>
     </header>
     <div v-if="!hosts.length" class="empty">请先添加主机</div>
-    <template v-else>
+    <div v-if="error && !dialog" role="alert" class="port-error">
+      {{ error }}
+      <details v-if="errorDetails"><summary>诊断信息</summary><ErrorHelpLink :code="errorDetails.code" /><code>{{ errorDetails.code }} · {{ hostTime(errorDetails.timestamp) }}</code><code>{{ errorDetails.traceId }}</code></details>
+    </div>
+    <template v-if="hosts.length">
       <div class="port-summary">
         <div>
           <small>UFW 防火墙</small
@@ -417,7 +481,7 @@ onUnmounted(() => {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="(p, i) in filtered" :key="i">
+                  <tr v-for="(p, i) in portRows" :key="i">
                     <td>
                       <strong>{{ p.port }}</strong>
                     </td>
@@ -441,6 +505,7 @@ onUnmounted(() => {
                 暂无已确认监听端口
               </div>
             </div>
+            <OpsPagination v-model:page="portPage" v-model:page-size="portPageSize" :total="portTotal" label="监听端口分页" />
             <details v-if="snapshot?.dockerPorts" class="port-docker">
               <summary>Docker 发布端口</summary>
               <pre>{{ snapshot.dockerPorts }}</pre>
@@ -486,7 +551,7 @@ onUnmounted(() => {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="r in snapshot?.managedRules || []" :key="r.id">
+                  <tr v-for="r in ruleRows" :key="r.id">
                     <td>
                       <span :class="r.action === 'deny' ? 'deny' : 'enabled'">{{
                         r.action === "allow" ? "允许" : "禁止"
@@ -515,6 +580,7 @@ onUnmounted(() => {
                 暂无 Ops 访问规则
               </div>
             </div>
+            <OpsPagination v-model:page="rulePage" v-model:page-size="rulePageSize" :total="ruleTotal" label="访问规则分页" />
             <details class="port-docker">
               <summary>系统规则与默认策略</summary>
               <p>
@@ -592,6 +658,7 @@ onUnmounted(() => {
                 暂无防火墙操作
               </div>
             </div>
+            <OpsPagination :page="historyPage" :page-size="historyPageSize" :has-next="!!nextCursor" :disabled="busy || loading || historyLoading" label="防火墙操作分页" @update:page="changeHistoryPage" @update:page-size="changeHistorySize" />
             <pre v-if="jobLogs" class="port-log">{{ jobLogs }}</pre>
           </ElTabPane>
         </ElTabs>
@@ -693,6 +760,7 @@ onUnmounted(() => {
           </p></template
         >
         <p v-if="error" role="alert" class="port-error">{{ error }}</p>
+        <details v-if="errorDetails" class="port-error"><summary>诊断信息</summary><ErrorHelpLink :code="errorDetails.code" /><code>{{ errorDetails.code }} · {{ hostTime(errorDetails.timestamp) }}</code><code>{{ errorDetails.traceId }}</code></details>
       </div>
       <template #footer
         ><div class="port-actions">
@@ -967,6 +1035,9 @@ onUnmounted(() => {
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+.port-error details { margin-top: 8px; }
+.port-error summary { cursor: pointer; }
+.port-error code { display: block; margin-top: 6px; color: var(--muted); }
 .port-page :deep(.el-tabs),
 .port-page :deep(.el-tabs__content) {
   min-width: 0;

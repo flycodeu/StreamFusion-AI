@@ -61,7 +61,7 @@ function harness(request, fetch = async () => Response.json({}), options = {}) {
     computed, ref,
     (_sources, callback) => { change = callback; callback(); },
     (callback) => { unmount = callback; },
-    () => props, () => (name) => { if (name !== "closeBlocked") emitted.push(name); }, TestApiError, request,
+    () => props, () => (name) => emitted.push(name), TestApiError, request,
     (callback, delay) => { const id = ++timerId; timers.set(id, { callback, delay }); return id; },
     (id) => timers.delete(id), fetch, { origin: "http://ops.test" },
     { createElement: () => ({ click() { clicks.push(this.download); } }) },
@@ -235,6 +235,67 @@ test("an update completion from a previous host cannot close the current inline 
   await flush();
   assert.equal(h.emitted.includes("updated"), false);
   h.unmount();
+});
+
+test("closing preparation keeps the submitted installation running and reopening follows the saved job", async () => {
+  const completion = deferred(), mutations = [];
+  let latest;
+  const request = async (path, method, input, signal) => {
+    if (path.endsWith("/install")) {
+      mutations.push({ input, signal });
+      latest = { id: "background-install", status: "RUNNING", phase: "UPLOADING_EXECUTOR" };
+      return completion.promise;
+    }
+    if (path.endsWith("/checks")) return {};
+    return preparation("host-a", latest);
+  };
+  const h = harness(request);
+  await flush();
+  h.panel.sudoPassword.value = "transient-password";
+  const pending = h.panel.install();
+  h.unmount();
+  assert.equal(h.panel.sudoPassword.value, "");
+  assert.equal(h.timers.size, 0);
+  assert.equal(mutations[0].signal, undefined);
+  const reopened = harness(request, undefined, { automaticUpdate: { ...automaticUpdate, mode: "INSTALL" } });
+  await flush();
+  assert.equal(reopened.panel.data.value.remoteJob.id, "background-install");
+  assert.equal(reopened.panel.visibleStatus.value, "RUNNING");
+  await reopened.panel.install();
+  assert.equal(mutations.length, 1);
+  latest = { ...latest, status: "SUCCEEDED", phase: "VERIFYING_EXECUTOR" };
+  completion.resolve(latest);
+  await pending;
+  assert.equal(mutations[0].input.sudoPassword, "");
+  assert.deepEqual(h.emitted, []);
+  await reopened.tick();
+  assert.equal(reopened.panel.visibleStatus.value, "SUCCEEDED");
+  assert.equal(mutations.length, 1);
+  reopened.unmount();
+});
+
+test("closing a permission repair does not abort it or write its result to another host", async () => {
+  const completion = deferred();
+  let repairInput, repairSignal;
+  const h = harness(async (path, method, input, signal) => {
+    if (path.endsWith("/repair")) { repairInput = input; repairSignal = signal; return completion.promise; }
+    return preparation(path.includes("host-b") ? "host-b" : "host-a", { id: "repair-job", status: "UNKNOWN" });
+  });
+  await flush();
+  h.panel.checkResult.value = { ready: false, code: "EXECUTOR_MISSING" };
+  h.panel.sudoPassword.value = "transient-password";
+  const pending = h.panel.repair();
+  h.changeHost("host-b");
+  await flush();
+  h.unmount();
+  assert.equal(repairSignal, undefined);
+  assert.equal(h.panel.sudoPassword.value, "");
+  completion.resolve({ id: "repair-job", status: "SUCCEEDED" });
+  await pending;
+  assert.equal(repairInput.sudoPassword, "");
+  assert.equal(h.panel.data.value.hostId, "host-b");
+  assert.equal(h.panel.data.value.remoteJob.status, "UNKNOWN");
+  assert.deepEqual(h.emitted, []);
 });
 
 test("download uses its initial file name and ignores completion after a host switch", async () => {

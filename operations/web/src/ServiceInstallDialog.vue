@@ -63,7 +63,6 @@ const host = computed(() => checkedHost.value || props.host);
 const checkingHost = ref(false);
 const hostCheckError = ref("");
 const engineInstalling = ref(false);
-const preparationBusy = ref(false);
 const parameterBusy = ref(false);
 const parameterFields = ref<InstanceType<typeof SoftwareParameterFields>>();
 let manualMode = false;
@@ -271,12 +270,11 @@ async function checkInstallation() {
 }
 watch(() => props.open, () => { touched.value = false; });
 const operationPending = computed(() => busy.value || parameterBusy.value || preparationOpen.value || (submissionAttempted.value && !receipt.value));
-const closeBlocked = computed(() => engineInstalling.value || operationPending.value);
 const alreadyInstalled = computed(() => actionError.value?.code === "OFFICIAL_PACKAGE_ALREADY_INSTALLED");
 async function close(done?: () => void) {
-  if (closeBlocked.value) return;
   const revision = checkGeneration;
-  if (!(await confirmDiscard()) || revision !== checkGeneration || !props.open) return;
+  if (!operationPending.value && !engineInstalling.value && !(await confirmDiscard())) return;
+  if (revision !== checkGeneration || !props.open) return;
   if (done) done(); else closeFlow();
 }
 async function confirmDiscard() {
@@ -318,7 +316,7 @@ const installedWeb = computed(() => existing.value ? softwareWebAccess(existing.
 const successfulChecks = computed(() => plan.value?.checks.filter(check => check.status !== "WARNING") || []);
 const warningChecks = computed(() => plan.value?.checks.filter(check => check.status === "WARNING") || []);
 function showJobLogs(id = receipt.value?.jobId) {
-  if (!id || closeBlocked.value) return;
+  if (!id) return;
   emit("logs", id);
   if (!props.embedded) closeFlow();
 }
@@ -346,10 +344,10 @@ async function uploadInstallationPackage() {
     width="min(1120px, calc(100vw - 40px))"
     align-center
     destroy-on-close
-    :close-on-click-modal="!closeBlocked"
+    :close-on-click-modal="true"
     :before-close="close"
-    :close-on-press-escape="!closeBlocked"
-    :show-close="!closeBlocked"
+    :close-on-press-escape="true"
+    :show-close="true"
     @close="closeFlow"
   >
     <template #header>
@@ -760,7 +758,7 @@ async function uploadInstallationPackage() {
         <div class="inline-actions">
           <button v-if="canRetryInstallation && retryRecipe" class="primary" @click="retryFailedInstallation()">重新安装</button>
           <a v-if="installedWeb?.url" class="primary installed-web-link" :href="installedWeb.url" target="_blank" rel="noopener noreferrer">进入系统 ↗</a>
-          <button class="secondary" :disabled="closeBlocked" @click="showJobLogs()">查看日志</button>
+          <button class="secondary" @click="showJobLogs()">查看日志</button>
         </div>
       </section>
       </main>
@@ -795,15 +793,15 @@ async function uploadInstallationPackage() {
     <ServiceInstallDialog v-if="engineInstalling && props.dockerRecipe" embedded :open="true" :recipe="props.dockerRecipe" :recipes="[props.dockerRecipe]" :official-recipes="props.dockerOfficialRecipes" :host="host" @close="resumeSoftware" @submitted="emit('submitted', $event)" @logs="showEngineLogs" />
     <section v-if="preparationOpen && host" class="inline-preparation">
       <h3>准备安装环境</h3>
-      <HostPreparationPanel :key="`${host.id}:${automaticUpdate?.mode || 'UPDATE'}`" :host="readinessHost || host" :automatic-update="automaticUpdate" :update-only="!automaticUpdate || automaticUpdate.mode === 'UPDATE'" @updated="preparationChecked" @close-blocked="preparationBusy = $event" />
-      <button class="secondary" :disabled="preparationBusy" @click="preparationOpen = false">返回安装设置</button>
+      <HostPreparationPanel :key="`${host.id}:${automaticUpdate?.mode || 'UPDATE'}`" :host="readinessHost || host" :automatic-update="automaticUpdate" :update-only="!automaticUpdate || automaticUpdate.mode === 'UPDATE'" @updated="preparationChecked" />
+      <button class="secondary" @click="preparationOpen = false">返回安装设置</button>
     </section>
     <template #footer
-      ><div v-if="!engineInstalling && !preparationOpen" class="install-footer">
-        <button class="secondary" :disabled="closeBlocked" @click="close()">
-          {{ embedded ? "返回软件安装" : submitted ? "关闭" : "取消" }}</button
+      ><div class="install-footer">
+        <button class="secondary" @click="close()">
+          {{ embedded ? "返回软件安装" : submitted || operationPending || engineInstalling ? "关闭" : "取消" }}</button
         ><span class="footer-spacer"></span
-        ><button
+        ><template v-if="!engineInstalling && !preparationOpen"><button
           v-if="method !== 'SELF' && step === 3"
           class="secondary"
           :disabled="busy || submissionAttempted"
@@ -834,6 +832,7 @@ async function uploadInstallationPackage() {
         >
           {{ busy ? "提交中…" : "确认安装" }}
         </button>
+        </template>
       </div></template
     >
   </component>

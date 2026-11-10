@@ -2,6 +2,8 @@
 import { computed, nextTick, onMounted, ref } from "vue";
 import { ElDialog, ElDropdown, ElDropdownItem, ElDropdownMenu, ElMessageBox } from "element-plus";
 import { ApiError, request } from "./api";
+import OpsPagination from "./OpsPagination.vue";
+import { usePagination } from "./pagination";
 import { hostTime } from "./hosts";
 import { recipeCatalogKey, type ServiceRecipe } from "./serviceInstallation";
 import SoftwareIcon from "./SoftwareIcon.vue";
@@ -85,6 +87,9 @@ const softwareGroups = computed(() => {
   return Array.from(groups.values()).sort((a, b) => a.name.localeCompare(b.name, "zh-CN", { numeric: true }));
 });
 const selectedGroupKey = computed(() => draft.value ? recipeCatalogKey(draft.value) : "");
+const { page, pageSize, total, pageItems: pagedSoftwareGroups } = usePagination(
+  () => softwareGroups.value, [search, statusFilter],
+);
 const selectedGroupName = computed(() => softwareNames[selectedGroupKey.value] || draft.value?.name || "新建软件");
 const groupRecords = computed(() => records.value.filter(record => recipeCatalogKey(record.draft) === selectedGroupKey.value));
 const versionChoices = computed(() => Array.from(new Set(groupRecords.value.map(item => item.draft.version))));
@@ -402,7 +407,7 @@ onMounted(refresh);
       </div>
     </div>
     <div class="library-list" aria-label="软件配置列表">
-      <button v-for="group in softwareGroups" :key="group.key" class="software-option" :disabled="busy" @click="selectGroup(group.key)">
+      <button v-for="group in pagedSoftwareGroups" :key="group.key" class="software-option" :disabled="busy" @click="selectGroup(group.key)">
         <SoftwareIcon :type="group.key" />
         <span><strong>{{ group.name }}</strong><small>{{ group.records.length }} 个安装方案</small></span>
         <span v-if="group.records.some(item => templateStatus(item) !== '已发布')" class="draft-dot" title="有待发布配置" />
@@ -410,6 +415,7 @@ onMounted(refresh);
       </button>
       <p v-if="!softwareGroups.length" class="library-empty">{{ busy ? '正在加载配置…' : search ? '没有匹配的软件' : '暂无软件配置' }}</p>
     </div>
+    <OpsPagination v-model:page="page" v-model:page-size="pageSize" :total="total" label="软件配置分页" />
 
     <ElDialog
       v-if="active"

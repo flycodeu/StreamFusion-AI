@@ -10,6 +10,7 @@ function load(source,imports={},globals={}) {
   return module.exports;
 }
 const model=load(await readFile(new URL("../src/gitManagement.ts",import.meta.url),"utf8"));
+const pagination=load(await readFile(new URL("../src/pagination.ts",import.meta.url),"utf8"),{vue});
 const source=(await readFile(new URL("../src/GitManagementPanel.vue",import.meta.url),"utf8")).split('<script setup lang="ts">')[1].split("</script>")[0];
 const profile={...model.newGitProfile(),id:"profile",hostId:"host",systemAccount:"flycode",name:"工作账号",sshHost:"git.example.test",username:"developer",credentialId:"saved-token",credentialRevision:"1",version:"1",configuredVersion:"1"};
 test("a configured Git account can be reused for GitHub and self-hosted GitLab URLs", () => {
@@ -33,8 +34,8 @@ function harness(custom) {
     throw Error("Unexpected "+path);
   };
   const scope=vue.effectScope();
-  const flow=scope.run(()=>load(source+"\nexport const flow={profiles,profileDraft,token,generatedKey,error,busy,preparationOpen,editProfile,generateTargetKey,scanHostKey,resetTargetKey,saveProfile,configureProfile,removeProfile,clearDraft,changeMethod,preparationUpdated};",{
-    vue:{...vue,onUnmounted:fn=>unmount.push(fn)},"./api":{request,ApiError},"./gitManagement":model,
+  const flow=scope.run(()=>load(source+"\nexport const flow={profiles,profileDraft,token,generatedKey,error,busy,preparationOpen,editProfile,generateTargetKey,scanHostKey,resetTargetKey,saveProfile,configureProfile,removeProfile,clearDraft,changeMethod,preparationUpdated,page,pageSize,pagedProfiles,usageProfile,repository};",{
+    vue:{...vue,onUnmounted:fn=>unmount.push(fn)},"./api":{request,ApiError},"./gitManagement":model,"./pagination":pagination,
   },{defineProps:()=>props,withDefaults:x=>x,defineEmits:()=>()=>{}}).flow);
   return {flow,calls,props,close(){unmount.forEach(fn=>fn());scope.stop();}};
 }
@@ -48,6 +49,20 @@ test("Git defaults to HTTPS and saves token through the credential API without i
   assert.equal(JSON.stringify(saved.body).includes("fixture-token"),false);
   assert.equal(h.flow.token.value,"");assert.equal(saved.body.authorEmail,"");assert.equal(saved.body.hostPublicKey,"");
   assert.equal(h.calls.some(c=>c.path.includes("repository")),false);h.close();
+});
+
+test("Git pagination preserves an account usage draft and clamps after deletion",async()=>{
+  const h=harness();await flush();
+  h.flow.profiles.value=Array.from({length:21},(_,index)=>({...profile,id:`profile-${index}`}));
+  h.flow.usageProfile.value="profile-0";h.flow.repository.value="https://git.example.test/team/project.git";
+  h.flow.page.value=3;
+  assert.equal(h.flow.pagedProfiles.value.length,1);
+  h.flow.profiles.value=h.flow.profiles.value.slice(0,20);
+  assert.equal(h.flow.page.value,2);
+  assert.equal(h.flow.pagedProfiles.value.length,10);
+  assert.equal(h.flow.usageProfile.value,"profile-0");
+  assert.equal(h.flow.repository.value,"https://git.example.test/team/project.git");
+  h.flow.pageSize.value=20;assert.equal(h.flow.page.value,1);h.close();
 });
 test("SSH key retry reuses the target key, saved identity edits reuse its public key, and host trust stays explicit",async()=>{
   let count=0;

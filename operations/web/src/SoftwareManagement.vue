@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElDrawer, ElMessage, ElMessageBox } from "element-plus";
 import { request } from "./api";
+import OpsPagination from "./OpsPagination.vue";
+import { usePagination } from "./pagination";
+import { requestAllPages } from "./listPages";
 import type { Host } from "./hosts";
 import ObservationBatchPanel from "./ObservationBatchPanel.vue";
 import type { ObservationBatch } from "./observation";
@@ -48,6 +51,7 @@ const props = withDefaults(defineProps<{ view?: "manage" | "install"; dockerHost
   view: "manage",
 });
 const rows = ref<SoftwareInstance[]>([]);
+const isActive = ref(true);
 const hosts = ref<Host[]>([]);
 const hostId = ref("");
 const nodeEnvironmentId = ref("");
@@ -60,7 +64,7 @@ const gitHost = computed(() => hosts.value.find((host) => host.id === gitHostId.
 async function openGit(targetId: string) {
   await act(async () => {
     hosts.value = await request<Host[]>("/hosts");
-    if (disposed) return;
+    if (disposed || !isActive.value) return;
     gitHostId.value = targetId;
     gitOpen.value = true;
   });
@@ -72,7 +76,7 @@ async function closeGit(done: () => void) {
   }
   done();
 }
-const nodeCloseState = ref({ blocked: false, dirty: false });
+const nodeCloseState = ref({ blocked: false, dirty: false, hostChangeBlocked: false });
 async function closeNode(done: () => void) {
   if (nodeCloseState.value.blocked) return;
   // The mounted panel retains its draft when this drawer is hidden.
@@ -80,9 +84,13 @@ async function closeNode(done: () => void) {
 }
 const nodeHost = computed(() => hosts.value.find((host) => host.id === nodeHostId.value));
 async function openNode(targetId: string, environmentId = "") {
+  if (targetId !== nodeHostId.value && nodeCloseState.value.hostChangeBlocked) {
+    ElMessage.info("当前主机正在完成 Node 安装，请完成或核对原操作后再切换主机");
+    return;
+  }
   await act(async () => {
     const latestHosts = await request<Host[]>("/hosts");
-    if (disposed) return;
+    if (disposed || !isActive.value) return;
     hosts.value = latestHosts;
     nodeHostId.value = targetId;
     nodeEnvironmentId.value = environmentId;
@@ -92,7 +100,7 @@ async function openNode(targetId: string, environmentId = "") {
 async function discoverInstalled(targetId: string) {
   await act(async () => {
     const latestHosts = await request<Host[]>("/hosts");
-    if (disposed) return;
+    if (disposed || !isActive.value) return;
     hosts.value = latestHosts;
     hostId.value = targetId;
     emit("navigate", "manage");
@@ -164,6 +172,9 @@ const visible = computed(() => {
           .includes(term)),
   );
 });
+const { page, pageSize, total, pageItems: pagedSoftware } = usePagination(
+  () => visible.value, [query, hostId, mode],
+);
 const detail = computed(() =>
   rows.value.find((item) => item.id === detailId.value),
 );
@@ -202,7 +213,7 @@ function refresh(): Promise<void> {
 }
 async function refreshView() {
   try { await refresh(); }
-  catch (error) { if (!disposed) emit("error", error); }
+  catch (error) { if (!disposed && isActive.value) emit("error", error); }
 }
 async function loadSnapshot() {
   if (disposed || loading.value) return;
@@ -212,7 +223,7 @@ async function loadSnapshot() {
   const revision = detailRevision;
   try {
     const [items, targetHosts] = await Promise.all([
-      request<SoftwareInstance[]>("/software-instances"),
+      requestAllPages<SoftwareInstance>("/software-instances"),
       request<Host[]>("/hosts"),
     ]);
     if (disposed) return;
@@ -482,8 +493,10 @@ async function cancel() {
   });
 }
 function poll() {
+  if (disposed || !isActive.value || timer) return;
   timer = setTimeout(async () => {
-    if (disposed) return;
+    timer = undefined;
+    if (disposed || !isActive.value) return;
     if (
       !document.hidden &&
       !busy.value &&
@@ -492,15 +505,31 @@ function poll() {
       props.view === "manage"
     )
       await refreshView();
-    if (!disposed) poll();
+    poll();
   }, 5000);
 }
 watch(() => props.view, (view) => {
-  if (view === "manage") void refreshView();
+  if (isActive.value && view === "manage") void refreshView();
 });
-onMounted(async () => {
-  await refreshView();
-  if (!disposed) poll();
+onMounted(() => { void refreshView(); });
+onActivated(() => {
+  const resumed = !isActive.value;
+  isActive.value = true;
+  if (resumed) void refreshView();
+  poll();
+});
+onDeactivated(() => {
+  isActive.value = false;
+  if (timer) clearTimeout(timer);
+  timer = undefined;
+  nodeOpen.value = false;
+  gitOpen.value = false;
+  registration.value = false;
+  discovery.value = false;
+  uninstallOpen.value = false;
+  configurationItem.value = undefined;
+  queuedConfiguration.value = undefined;
+  selectDetail("");
 });
 onUnmounted(() => {
   disposed = true;
@@ -511,7 +540,7 @@ onUnmounted(() => {
 <template>
   <section class="content software-management" :aria-label="view === 'install' ? '软件安装' : '软件管理'">
     <SoftwareRecipes
-      v-if="view === 'install'"
+      v-if="isActive && view === 'install'"
       :host-id="hostId"
       :initial-recipe-key="dockerHostId ? 'docker' : undefined"
       @open-instance="(id) => openInstance(id).catch((error) => emit('error', error))"
@@ -610,7 +639,7 @@ onUnmounted(() => {
       <div v-else-if="!visible.length" class="empty">没有匹配的软件</div>
       <div v-else class="software-cards">
         <article
-          v-for="item in visible"
+          v-for="item in pagedSoftware"
           :key="item.id"
           class="software-card"
           :aria-label="item.name"
@@ -684,6 +713,7 @@ onUnmounted(() => {
           </footer>
         </article>
       </div>
+      <OpsPagination v-if="rows.length" v-model:page="page" v-model:page-size="pageSize" :total="total" label="软件管理分页" />
     </div>
   </section>
   <ElDrawer v-model="nodeOpen" title="Node.js" size="min(1080px, 100vw)" append-to-body :destroy-on-close="false" :close-on-click-modal="!nodeCloseState.blocked" :close-on-press-escape="!nodeCloseState.blocked" :show-close="!nodeCloseState.blocked" :before-close="closeNode">

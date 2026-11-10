@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { request } from "./api";
+import { requestAllPages } from "./listPages";
 import { ElMessage } from "element-plus";
 import {
   metricBytes as bytes,
@@ -58,7 +59,7 @@ async function refresh() {
   try {
     const [hs, ss] = await Promise.all([
       request<Host[]>("/hosts"),
-      request<SoftwareInstance[]>("/software-instances"),
+      requestAllPages<SoftwareInstance>("/software-instances"),
     ]);
     if (disposed) return;
     hosts.value = hs;

@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from "vue";
+import { computed, onDeactivated, onUnmounted, ref, watch } from "vue";
 import { ElDialog } from "element-plus";
 import { ApiError, request } from "./api";
+import OpsPagination from "./OpsPagination.vue";
+import { usePagination } from "./pagination";
+import type { ListPage } from "./listPages";
 import {
   automaticPreparationUpdate,
   type AutomaticPreparationUpdate,
@@ -42,7 +45,7 @@ import {
 } from "./nodeEnvironment";
 
 const props = defineProps<{ host: Host; initialEnvironmentId?: string }>();
-const emit = defineEmits<{ changed: []; closeState: [state: { blocked: boolean; dirty: boolean }] }>();
+const emit = defineEmits<{ changed: []; closeState: [state: { blocked: boolean; dirty: boolean; hostChangeBlocked: boolean }] }>();
 const registryCloseState = ref({ busy: false, dirty: false });
 const environments = ref<NodeEnvironment[]>([]);
 const selectedId = ref("");
@@ -58,6 +61,7 @@ const error = ref<{
   at: string;
 }>();
 const draft = ref<NodeDraft>();
+const actionOpen = ref(false);
 const plan = ref<NodePlan>();
 const initialIntent = ref<NodeInitialIntent>();
 const continuationRetry = ref<{ path: string; key: string }>();
@@ -66,13 +70,19 @@ const attempted = ref(false);
 const submitKey = ref("");
 const submission = ref<{ path: string; body: unknown }>();
 const jobs = ref<SoftwareJob[]>([]);
+const historyPage = ref(1), historyPageSize = ref(10), historyTotal = ref(0);
+let historyRevision = 0;
 const job = ref<SoftwareJob>();
 const logs = ref("");
 const logsJobId = ref("");
 watch(selectedId, () => {
   logs.value = "";
   logsJobId.value = "";
-});
+  historyPage.value = 1;
+  historyTotal.value = 0;
+  jobs.value = [];
+  historyRevision++;
+}, { flush: "sync" });
 const tab = ref("versions");
 const discoveryOpen = ref(false);
 const discoveryAccount = ref("");
@@ -80,7 +90,6 @@ const discoveryPath = ref("");
 const discovery = ref<NodeDiscovery>();
 const terminalOpen = ref(false);
 const preparationOpen = ref(false);
-const preparationBusy = ref(false);
 const automaticUpdate = ref<AutomaticPreparationUpdate>();
 const currentHost = ref(props.host);
 let revision = 0;
@@ -97,6 +106,13 @@ const desiredDefault = computed(
     )?.softwareVersion || "未设置",
 );
 const versions = computed(() => environment.value?.observation?.versions || []);
+const { page: versionPage, pageSize: versionPageSize, total: versionTotal, pageItems: pagedVersions } = usePagination(
+  () => versions.value, [selectedId],
+);
+const readyVersions = computed(() => environment.value?.versions.filter(item => item.installationStatus === "READY") || []);
+const { page: sourcePage, pageSize: sourcePageSize, total: sourceTotal, pageItems: pagedSources } = usePagination(
+  () => readyVersions.value, [selectedId],
+);
 const pending = computed(
   () =>
     !!initialIntent.value ||
@@ -109,9 +125,10 @@ const writable = computed(
     !currentHost.value.maintenance &&
     !pending.value,
 );
-watch(() => [busy.value, attempted.value, pending.value, !!draft.value, discoveryOpen.value, preparationOpen.value, terminalOpen.value, registryCloseState.value], () => emit("closeState", {
-  blocked: busy.value || pending.value || !!draft.value || discoveryOpen.value || preparationOpen.value || terminalOpen.value || registryCloseState.value.busy,
-  dirty: registryCloseState.value.dirty,
+watch(() => [busy.value, attempted.value, pending.value, initialIntent.value, continuationRetry.value, !!draft.value, discoveryOpen.value, preparationOpen.value, terminalOpen.value, registryCloseState.value], () => emit("closeState", {
+  blocked: false,
+  dirty: !!draft.value || registryCloseState.value.dirty,
+  hostChangeBlocked: !!initialIntent.value || !!continuationRetry.value,
 }), { immediate: true, deep: true });
 function selectRegistry(entry: NodeRegistry) {
   openAction("SET_NPM_REGISTRY");
@@ -191,19 +208,32 @@ async function loadDetail(id = selectedId.value) {
     job.value = undefined;
     return;
   }
-  const [detail, history] = await Promise.all([
+  const [detail] = await Promise.all([
     request<NodeEnvironment>("/node-environments/" + id),
-    request<SoftwareJob[]>("/node-environments/" + id + "/jobs"),
+    loadHistory(historyPage.value, historyPageSize.value, id),
   ]);
   if (token !== revision || disposed || id !== selectedId.value) return;
   environment.value = detail;
-  jobs.value = history;
   if (detail.lastJobId) {
     const latestJob = await request<SoftwareJob>("/jobs/" + detail.lastJobId);
     if (token === revision && !disposed && id === selectedId.value)
       job.value = latestJob;
   } else job.value = undefined;
   await continueInitialInstallation();
+}
+async function loadHistory(page = historyPage.value, pageSize = historyPageSize.value, id = selectedId.value) {
+  if (!id) return;
+  const token = revision, generation = ++historyRevision;
+  const read = (value: number) => request<ListPage<SoftwareJob>>(`/node-environments/${id}/jobs?page=${value}&pageSize=${pageSize}`);
+  let result = await read(page);
+  if (token !== revision || disposed || generation !== historyRevision || id !== selectedId.value) return;
+  const lastPage = Math.max(1, Math.ceil(result.total / pageSize));
+  if (page > lastPage) { page = lastPage; result = await read(page); }
+  if (token !== revision || disposed || generation !== historyRevision || id !== selectedId.value) return;
+  jobs.value = result.items;
+  historyTotal.value = result.total;
+  historyPage.value = page;
+  historyPageSize.value = pageSize;
 }
 async function continueInitialInstallation() {
   const intent = initialIntent.value,
@@ -318,6 +348,7 @@ async function refresh() {
   }
 }
 function openAction(action: NodeAction, nodeVersion = "") {
+  actionOpen.value = true;
   const key = action.includes("PNPM")
     ? "pnpm"
     : action === "UPDATE_NPM"
@@ -358,6 +389,15 @@ function openAction(action: NodeAction, nodeVersion = "") {
   submission.value = undefined;
   submitKey.value = crypto.randomUUID();
   error.value = undefined;
+}
+function closeAction() {
+  actionOpen.value = false;
+  preparationOpen.value = false;
+  if (!busy.value && !attempted.value) {
+    draft.value = undefined;
+    plan.value = undefined;
+    automaticUpdate.value = undefined;
+  }
 }
 function initialMaterialReady(item: InstallationMaterial) {
   materialReady(item);
@@ -492,14 +532,14 @@ async function runPreflight(allowAutomaticUpdate: boolean) {
           },
         );
       }
-      if (token === revision && !disposed) plan.value = result;
+      if (token === revision && !disposed && draft.value === d) plan.value = result;
     } catch (cause) {
-      if (token !== revision || disposed) return;
+      if (token !== revision || disposed || draft.value !== d) return;
       if (allowAutomaticUpdate && currentHost.value.kind === "SSH" && cause instanceof ApiError && ["NODE_CAPABILITY_REQUIRED", "NODE_TERMINAL_CAPABILITY_REQUIRED", "NODE_REGISTRY_CAPABILITY_REQUIRED", "EXECUTOR_UPGRADE_REQUIRED"].includes(cause.code)) {
         const checked = await request<PreparationUpdateCheck>(
           `/hosts/${currentHost.value.id}/preparation?checkUpdate=1`,
         );
-        if (token !== revision || disposed) return;
+        if (token !== revision || disposed || draft.value !== d) return;
         if (
           checked.hostId !== currentHost.value.id ||
           checked.expectedHostVersion !== currentHost.value.version
@@ -781,6 +821,7 @@ watch(
     selectedId.value = props.initialEnvironmentId || "";
     environment.value = undefined;
     draft.value = undefined;
+    actionOpen.value = false;
     discoveryOpen.value = false;
     job.value = undefined;
     busy.value = false;
@@ -808,6 +849,11 @@ onUnmounted(() => {
   revision++;
   if (timer) clearTimeout(timer);
 });
+onDeactivated(() => {
+  closeAction();
+  discoveryOpen.value = false;
+  terminalOpen.value = false;
+});
 poll();
 </script>
 
@@ -815,6 +861,7 @@ poll();
   <section class="node-environments" aria-label="Node.js 环境管理">
     <header class="node-header">
       <div class="actions">
+        <button v-if="draft && !actionOpen" class="secondary" @click="actionOpen = true">查看当前操作</button>
         <button class="secondary" :disabled="busy" @click="openDiscovery">
           检测已有安装</button
         ><button
@@ -967,7 +1014,7 @@ poll();
           </button>
         </div>
         <article
-          v-for="item in versions"
+          v-for="item in pagedVersions"
           :key="item.version"
           class="node-version"
         >
@@ -1046,12 +1093,11 @@ poll();
               : "未检测到可用版本。"
           }}
         </p>
+        <OpsPagination v-model:page="versionPage" v-model:page-size="versionPageSize" :total="versionTotal" label="Node 版本分页" />
       </section>
       <section v-else-if="tab === 'sources'" class="environment-details">
         <details
-          v-for="item in environment.versions.filter(
-            (v) => v.installationStatus === 'READY',
-          )"
+          v-for="item in pagedSources"
           :key="item.id"
         >
           <summary>
@@ -1079,6 +1125,7 @@ poll();
             ><code>SHA-256 {{ part.sha256 }}</code>
           </div>
         </details>
+        <OpsPagination v-model:page="sourcePage" v-model:page-size="sourcePageSize" :total="sourceTotal" label="Node 安装来源分页" />
         <dl>
           <dt>环境目录</dt>
           <dd>
@@ -1127,6 +1174,7 @@ poll();
           ><span>查看日志</span>
         </button>
         <p v-if="!jobs.length" class="empty">暂无操作记录</p>
+        <OpsPagination :page="historyPage" :page-size="historyPageSize" :total="historyTotal" :disabled="busy" label="Node 操作记录分页" @update:page="act(() => loadHistory($event))" @update:page-size="act(() => loadHistory(1, $event))" />
         <p v-if="logsJobId" class="hint">作业 {{ logsJobId }}</p>
         <pre v-if="logs">{{ logs }}</pre>
       </section>
@@ -1167,7 +1215,7 @@ poll();
       </div>
     </template>
     <NodeVersionDialog
-      v-if="draft"
+      v-if="draft && actionOpen"
       :draft="draft"
       :environment="environment"
       :choices="choices"
@@ -1190,8 +1238,7 @@ poll();
       "
       :host="currentHost"
       :preparing="preparationOpen"
-      :preparation-busy="preparationBusy"
-      @close="preparationOpen = false; draft = undefined"
+      @close="closeAction"
       @back="preparationOpen = false"
       @change="changedDraft"
       @preflight="preflight"
@@ -1210,7 +1257,6 @@ poll();
           :host="currentHost"
           :automatic-update="automaticUpdate"
           update-only
-          @close-blocked="preparationBusy = $event"
           @updated="updatedPreparation"
         />
       </template>
@@ -1289,8 +1335,6 @@ poll();
       :title="automaticUpdate ? '正在准备安装环境' : '更新接入组件'"
       width="min(720px,94vw)"
       align-center
-      :close-on-click-modal="false"
-      :close-on-press-escape="false"
       ><HostPreparationPanel
         v-if="preparationOpen"
         :host="currentHost"

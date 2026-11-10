@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
 import { ApiError, request } from "./api";
+import OpsPagination from "./OpsPagination.vue";
+import { usePagination } from "./pagination";
 import { hostTime, type Host } from "./hosts";
 import HostPreparationPanel from "./HostPreparationPanel.vue";
 import BlockingJobAction, { type BlockingJob } from "./BlockingJobAction.vue";
@@ -9,6 +11,9 @@ import { gitAccountRemote, gitProfileError, newGitProfile, type GitKeyEvidence, 
 const props = withDefaults(defineProps<{ host: Host; active?: boolean }>(), { active: true });
 const emit = defineEmits<{ changed: []; closeState: [{ blocked: boolean; dirty: boolean }] }>();
 const profiles = ref<GitProfile[]>([]);
+const { page, pageSize, total, pageItems: pagedProfiles } = usePagination(
+  () => profiles.value, [() => props.host.id],
+);
 const profileDraft = ref<GitProfileDraft>();
 const editingProfile = ref<GitProfile>();
 const generatedKey = ref<GitKeyEvidence>();
@@ -226,7 +231,7 @@ onUnmounted(() => { stopped = true; generation++; abort?.abort();token.value="";
         <template v-else>
           <header class="git-toolbar"><h3>Git 账号</h3><button class="secondary" :disabled="busy" @click="refresh">刷新</button><button class="primary" :disabled="!writable" @click="editProfile()">新增账号</button></header>
           <div v-if="!profiles.length" class="empty">暂无 Git 账号</div>
-          <article v-for="profile in profiles" :key="profile.id" class="git-row">
+          <article v-for="profile in pagedProfiles" :key="profile.id" class="git-row">
             <div class="git-row-main">
               <strong>{{ profile.name }}</strong>
               <span>{{ profile.authMethod === 'HTTPS' ? profile.username : profile.sshUser }}@{{ profile.sshHost }} · {{ profile.authMethod }}</span>
@@ -243,6 +248,7 @@ onUnmounted(() => { stopped = true; generation++; abort?.abort();token.value="";
               </template>
             </div>
           </article>
+          <OpsPagination v-model:page="page" v-model:page-size="pageSize" :total="total" label="Git 账号分页" />
         </template>
     </template>
   </section>

@@ -308,7 +308,21 @@ func (h *HTTP) listNodeEnvironmentJobs(w http.ResponseWriter, r *http.Request, i
 		h.opsError(w, r, err)
 		return
 	}
-	rows, err := h.store.DB.Query(`SELECT j.id,j.kind,coalesce(j.target_id,''),j.status,j.phase,j.error_code,j.target_ack_pending,j.trace_id,j.result_json,j.created_at,j.updated_at FROM jobs j WHERE j.node_environment_plan_id IN (SELECT id FROM node_environment_plans WHERE environment_id=?) OR CASE WHEN json_valid(j.input_json) THEN json_extract(j.input_json,'$.installation.node.environmentId') END=? OR CASE WHEN json_valid(j.input_json) THEN json_extract(j.input_json,'$.uninstallation.installation.node.environmentId') END=? ORDER BY j.created_at DESC LIMIT 100`, id, id, id)
+	page, err := parseListPage(r)
+	if err != nil {
+		h.fail(w, r, 400, "INVALID_INPUT", "分页参数无效")
+		return
+	}
+	where := ` FROM jobs j WHERE j.node_environment_plan_id IN (SELECT id FROM node_environment_plans WHERE environment_id=?) OR CASE WHEN json_valid(j.input_json) THEN json_extract(j.input_json,'$.installation.node.environmentId') END=? OR CASE WHEN json_valid(j.input_json) THEN json_extract(j.input_json,'$.uninstallation.installation.node.environmentId') END=?`
+	limit, total := 100, 0
+	if page.Enabled {
+		limit = page.PageSize
+		if err = h.store.DB.QueryRow("SELECT count(*)"+where, id, id, id).Scan(&total); err != nil {
+			h.internal(w, r, err)
+			return
+		}
+	}
+	rows, err := h.store.DB.Query(`SELECT j.id,j.kind,coalesce(j.target_id,''),j.status,j.phase,j.error_code,j.target_ack_pending,j.trace_id,j.result_json,j.created_at,j.updated_at`+where+` ORDER BY j.created_at DESC,j.id DESC LIMIT ? OFFSET ?`, id, id, id, limit, page.Offset)
 	if err != nil {
 		h.internal(w, r, err)
 		return
@@ -328,7 +342,7 @@ func (h *HTTP) listNodeEnvironmentJobs(w http.ResponseWriter, r *http.Request, i
 		h.internal(w, r, err)
 		return
 	}
-	h.success(w, r, out)
+	h.success(w, r, page.reply(out, total))
 }
 
 func (h *HTTP) discoverNodeEnvironments(w http.ResponseWriter, r *http.Request, hostID string) {

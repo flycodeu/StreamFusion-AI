@@ -57,8 +57,22 @@ func (h *HTTP) softwareRoute(w http.ResponseWriter, r *http.Request, s *session,
 }
 
 func (h *HTTP) listSoftware(w http.ResponseWriter, r *http.Request) {
+	page, e := parseListPage(r)
+	if e != nil {
+		h.fail(w, r, 400, "INVALID_INPUT", "分页参数无效")
+		return
+	}
 	host := r.URL.Query().Get("hostId")
-	rows, e := h.store.DB.Query("SELECT "+softwareColumns+" FROM software_instances s JOIN targets t ON t.id=s.host_id WHERE (?='' OR s.host_id=?) ORDER BY s.created_at DESC LIMIT 1000", host, host)
+	limit := 1000
+	total := 0
+	if page.Enabled {
+		limit = page.PageSize
+		if e = h.store.DB.QueryRow("SELECT count(*) FROM software_instances WHERE (?='' OR host_id=?)", host, host).Scan(&total); e != nil {
+			h.internal(w, r, e)
+			return
+		}
+	}
+	rows, e := h.store.DB.Query("SELECT "+softwareColumns+" FROM software_instances s JOIN targets t ON t.id=s.host_id WHERE (?='' OR s.host_id=?) ORDER BY s.created_at DESC,s.id DESC LIMIT ? OFFSET ?", host, host, limit, page.Offset)
 	if e != nil {
 		h.internal(w, r, e)
 		return
@@ -85,7 +99,7 @@ func (h *HTTP) listSoftware(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	h.success(w, r, out)
+	h.success(w, r, page.reply(out, total))
 }
 
 func (h *HTTP) registerSoftware(w http.ResponseWriter, r *http.Request, s *session) {

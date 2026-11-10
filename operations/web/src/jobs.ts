@@ -12,7 +12,7 @@ export interface JobSummary extends SoftwareJob {
   createdAt: string;
 }
 
-const kindLabels: Record<string, string> = {
+export const jobKindLabels: Record<string, string> = {
   SOFTWARE_INSTALL: "软件安装", SOFTWARE_CONFIGURE: "软件配置", SOFTWARE_UNINSTALL: "软件卸载",
   SOFTWARE_START: "启动服务", SOFTWARE_STOP: "停止服务", SOFTWARE_RESTART: "重启服务",
   SOFTWARE_RELOAD: "重载配置", SOFTWARE_PAUSE: "暂停服务", SOFTWARE_UNPAUSE: "继续服务",
@@ -21,6 +21,6 @@ const kindLabels: Record<string, string> = {
   GIT_REPOSITORY_CHANGE: "Git 仓库操作", GIT_ACCOUNT_CHANGE: "Git 账号配置",
   PLUGIN_INSTALL: "工具安装", PLUGIN_REMOVE: "工具卸载",
 };
-export function jobKindLabel(kind: string) { return kindLabels[kind] || "软件操作"; }
+export function jobKindLabel(kind: string) { return jobKindLabels[kind] || "软件操作"; }
 
 export interface LogSelection { jobId?: string; softwareId?: string; title?: string }

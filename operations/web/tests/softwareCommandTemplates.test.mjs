@@ -7,6 +7,10 @@ import ts from "typescript";
 const component = await readFile(new URL("../src/SoftwareCommandTemplates.vue", import.meta.url), "utf8");
 const source = component.split('<script setup lang="ts">')[1].split("</script>")[0];
 const installation = {};
+const pagination = {};
+new Function("require", "exports", ts.transpileModule(await readFile(new URL("../src/pagination.ts", import.meta.url), "utf8"), {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText)(() => vue, pagination);
 new Function("exports", ts.transpileModule(await readFile(new URL("../src/serviceInstallation.ts", import.meta.url), "utf8"), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText)(installation);
@@ -51,6 +55,7 @@ function harness() {
     if (name === "vue") return { ...vue, onMounted: () => {} };
     if (name === "./api") return { request, ApiError };
     if (name === "./serviceInstallation") return installation;
+    if (name === "./pagination") return pagination;
     if (name === "element-plus") return { ElMessageBox: { confirm: async () => {} } };
     return {};
   }, module, module.exports, () => (...args) => events.push(args), () => ({ active: true })));

@@ -2,11 +2,16 @@
 import { computed, onUnmounted, ref, watch } from "vue";
 import { ElMessageBox } from "element-plus";
 import { ApiError, request } from "./api";
+import OpsPagination from "./OpsPagination.vue";
+import { usePagination } from "./pagination";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
 import { nodeRegistryURLValid, type NodeEnvironment, type NodeRegistry } from "./nodeEnvironment";
 const props = defineProps<{ environment: NodeEnvironment; disabled: boolean }>();
 const emit = defineEmits<{ select: [NodeRegistry]; closeState: [state: { busy: boolean; dirty: boolean }] }>();
 const entries = ref<NodeRegistry[]>([]);
+const { page, pageSize, total, pageItems: pagedEntries } = usePagination(
+  () => entries.value, [() => props.environment.id],
+);
 const busy = ref(false);
 const name = ref("");
 const editing = ref<NodeRegistry>();
@@ -61,7 +66,7 @@ onUnmounted(() => { generation++; emit("closeState", { busy: false, dirty: false
       <details><summary>配置范围</summary><p>修改此账号的 registry，保留其他配置。项目、环境变量和命令参数可覆盖此值。</p><code v-if="observed?.configPath">{{ observed.configPath }}</code></details>
     </div>
     <div class="registry-heading"><strong>平台地址</strong><button class="quiet" :disabled="busy" @click="act(refresh)">刷新列表</button></div>
-    <article v-for="entry in entries" :key="entry.id" class="registry-row">
+    <article v-for="entry in pagedEntries" :key="entry.id" class="registry-row">
       <div><strong>{{ entry.name }}</strong><code>{{ entry.url }}</code></div>
       <div class="registry-actions">
         <span v-if="observed?.status === 'DEFAULT' && currentURL === entry.url" class="current-tag">默认</span>
@@ -71,6 +76,7 @@ onUnmounted(() => { generation++; emit("closeState", { busy: false, dirty: false
         <button v-if="!entry.builtIn" class="quiet" :disabled="busy || disabled" @click="remove(entry)">删除</button>
       </div>
     </article>
+    <OpsPagination v-model:page="page" v-model:page-size="pageSize" :total="total" label="npm 镜像分页" />
     <form class="registry-add" @submit.prevent="add">
       <label>名称<input v-model="name" aria-label="npm 镜像名称" maxlength="80" :disabled="busy || disabled" /></label>
       <label>地址<input v-model="url" aria-label="npm 镜像地址" maxlength="2048" placeholder="https://registry.example.com/npm/" :disabled="busy || disabled" /></label>

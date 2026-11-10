@@ -35,7 +35,6 @@ const props = defineProps<{
   diagnostic?: string;
   host: Host;
   preparing?: boolean;
-  preparationBusy?: boolean;
 }>();
 const emit = defineEmits<{
   close: [];
@@ -58,8 +57,7 @@ const plannedSteps = computed(() => {
   );
 });
 async function confirmClose(done?: () => void) {
-  if (props.busy || props.attempted || props.preparationBusy) return;
-  if (JSON.stringify(props.draft) !== initialDraft) {
+  if (!props.busy && !props.attempted && JSON.stringify(props.draft) !== initialDraft) {
     try { await ElMessageBox.confirm("放弃本次修改？", "关闭安装窗口", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); } catch { return; }
   }
   if (done) done(); else emit("close");
@@ -122,10 +120,7 @@ const canSubmit = computed(
     append-to-body
     modal-class="node-action-overlay"
     class="node-action-drawer"
-    :close-on-click-modal="!busy && !attempted && !preparationBusy"
     :before-close="confirmClose"
-    :close-on-press-escape="!busy && !attempted && !preparationBusy"
-    :show-close="!busy && !attempted && !preparationBusy"
     @close="emit('close')"
   >
     <section v-if="preparing" aria-label="接入组件更新">
@@ -451,16 +446,15 @@ const canSubmit = computed(
     </form>
     <template #footer>
       <footer v-if="preparing">
-        <button class="secondary" :disabled="busy || preparationBusy" @click="emit('back')">返回</button>
+        <button class="secondary" @click="confirmClose()">关闭</button>
       </footer>
       <footer v-else>
         <button
           type="button"
           class="secondary"
-          :disabled="busy || attempted"
           @click="confirmClose()"
         >
-          取消
+          {{ busy || attempted ? '关闭' : '取消' }}
         </button>
         <button
           v-if="needsPlan && (!plan || expired)"

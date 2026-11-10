@@ -29,7 +29,19 @@ func (h *HTTP) bindingsRoute(w http.ResponseWriter, r *http.Request, s *session,
 		return false
 	}
 	if r.Method == "GET" {
-		rows, e := h.store.DB.Query("SELECT config_json FROM component_bindings ORDER BY created_at DESC LIMIT 100")
+		p, e := parseListPage(r)
+		if e != nil {
+			h.fail(w, r, 400, "INVALID_INPUT", e.Error())
+			return true
+		}
+		var total int
+		if p.Enabled {
+			if e = h.store.DB.QueryRowContext(r.Context(), "SELECT count(*) FROM component_bindings").Scan(&total); e != nil {
+				h.internal(w, r, e)
+				return true
+			}
+		}
+		rows, e := h.store.DB.QueryContext(r.Context(), "SELECT config_json FROM component_bindings ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?", p.PageSize, p.Offset)
 		if e != nil {
 			h.internal(w, r, e)
 			return true
@@ -44,7 +56,11 @@ func (h *HTTP) bindingsRoute(w http.ResponseWriter, r *http.Request, s *session,
 			}
 			items = append(items, json.RawMessage(raw))
 		}
-		h.success(w, r, items)
+		if e = rows.Err(); e != nil {
+			h.internal(w, r, e)
+			return true
+		}
+		h.success(w, r, p.reply(items, total))
 		return true
 	}
 	if r.Method != "POST" {

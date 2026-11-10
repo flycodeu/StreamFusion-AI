@@ -927,10 +927,10 @@ export function useServiceInstallation(
         }
         throw error;
       }
+      onSubmitted(result);
       if (!current(revision)) return;
       receipt.value = result;
       step.value = 4;
-      onSubmitted(result);
       await refreshExecution();
     });
   }
@@ -981,7 +981,7 @@ export function useServiceInstallation(
     await refreshExecution(true);
   }
   function close() {
-    if (!busy.value) onClose();
+    onClose();
   }
   onUnmounted(() => {
     disposed = true;

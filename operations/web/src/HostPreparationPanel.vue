@@ -18,7 +18,7 @@ interface HostPreparation {
   remoteJob?: PreparationJob;
 }
 const props = defineProps<{ host: Host; updateOnly?: boolean; automaticUpdate?: AutomaticPreparationUpdate }>();
-const emit = defineEmits<{ checked: []; updated: []; closeBlocked: [boolean] }>();
+const emit = defineEmits<{ checked: []; updated: [] }>();
 const data = ref<HostPreparation>();
 const busy = ref(false);
 const mode = ref<"online" | "offline">("online");
@@ -98,9 +98,7 @@ let hostGeneration = 0;
 let operation = 0;
 let pollFailures = 0;
 const installationIntent = ref<{ key: string; previousJobId?: string; jobId?: string }>();
-watch(() => busy.value || installing.value || repairing.value || !!installationIntent.value || ["RUNNING", "UNKNOWN"].includes(job.value?.status || ""), value => emit("closeBlocked", value));
 let polling: ReturnType<typeof setTimeout> | undefined;
-let installAbort: AbortController | undefined;
 function report(cause: unknown, source?: "poll") {
   error.value = { message: cause instanceof Error ? cause.message : "操作未完成，请重新加载", source, ...(cause instanceof ApiError ? {code:cause.code,traceId:cause.traceId,timestamp:cause.timestamp} : {}) };
 }
@@ -162,7 +160,7 @@ async function load(quiet = false) {
 }
 watch([() => props.host.id, () => props.host.version], () => {
   hostGeneration++; generation++; operation++;
-  installAbort?.abort(); clearTimeout(polling); data.value = undefined;
+  clearTimeout(polling); data.value = undefined;
   busy.value = false; installing.value = false; repairing.value = false; pollFailures = 0; installationIntent.value = undefined;
   updateRequested.value = !!props.updateOnly || !!props.automaticUpdate; explicitUpdate = false; automaticStarted = false;
   checkResult.value = undefined; copied.value = "";
@@ -182,7 +180,7 @@ watch([() => props.host.id, () => props.host.version], () => {
     await install();
   });
 }, { immediate: true });
-onUnmounted(() => { emit("closeBlocked", false); generation++; hostGeneration++; clearTimeout(polling); installAbort?.abort(); sudoPassword.value = ""; });
+onUnmounted(() => { generation++; hostGeneration++; clearTimeout(polling); sudoPassword.value = ""; });
 async function refreshHostStatus(revision = hostGeneration) {
   try {
     await request<Host>(`/hosts/${props.host.id}/checks`, "POST", {});
@@ -226,7 +224,6 @@ async function install() {
   explicitUpdate = updateRequested.value || !!props.automaticUpdate;
   const active = beginOperation();
   installing.value = true; pollFailures = 0; checkResult.value = undefined;
-  installAbort = new AbortController();
   installationIntent.value ??= { key: crypto.randomUUID(), previousJobId: job.value?.id };
   const input = { expectedVersion: data.value.expectedHostVersion, idempotencyKey: installationIntent.value.key, confirmed: true, sudoPassword: sudoPassword.value,
     ...(props.automaticUpdate && props.automaticUpdate.mode !== "INSTALL" ? {
@@ -236,7 +233,8 @@ async function install() {
     } : {}) };
   sudoPassword.value = ""; schedulePoll(1000);
   try {
-    const result = await request<PreparationJob>(`/hosts/${hostId}/preparation/install`, "POST", input, installAbort.signal);
+    // Closing the panel stops observation, not an already submitted installation.
+    const result = await request<PreparationJob>(`/hosts/${hostId}/preparation/install`, "POST", input);
     if (!currentOperation(active) || !data.value) return;
     data.value.remoteJob = result;
     observeJob(result);
@@ -250,7 +248,7 @@ async function install() {
   finally {
     input.sudoPassword = "";
     if (currentOperation(active)) {
-      installing.value = false; installAbort = undefined;
+      installing.value = false;
       clearTimeout(polling);
       await load(true);
       if (currentOperation(active)) busy.value = false;
@@ -304,11 +302,10 @@ async function repair() {
   const active = beginOperation();
   const hostId = props.host.id;
   repairing.value = true;
-  installAbort = new AbortController();
   const input = { jobId: job.value.id, expectedVersion: data.value.expectedHostVersion, confirmed: true, sudoPassword: sudoPassword.value };
   sudoPassword.value = "";
   try {
-    const result = await request<PreparationJob>(`/hosts/${hostId}/preparation/repair`, "POST", input, installAbort.signal);
+    const result = await request<PreparationJob>(`/hosts/${hostId}/preparation/repair`, "POST", input);
     if (!currentOperation(active) || !data.value) return;
     data.value.remoteJob = result;
     needsSudoPassword.value = false;
@@ -330,7 +327,7 @@ async function repair() {
   } finally {
     input.sudoPassword = "";
     if (currentOperation(active)) {
-      repairing.value = false; installAbort = undefined;
+      repairing.value = false;
       await load(true);
       if (currentOperation(active)) busy.value = false;
     }

@@ -18,6 +18,7 @@ const installationSource = await readFile(new URL("../src/serviceInstallation.ts
 const installation = moduleFrom(installationSource);
 const software = moduleFrom(await readFile(new URL("../src/software.ts", import.meta.url), "utf8"));
 const softwareCatalog = moduleFrom(await readFile(new URL("../src/softwareCatalog.ts", import.meta.url), "utf8"));
+const pagination = moduleFrom(await readFile(new URL("../src/pagination.ts", import.meta.url), "utf8"), { vue });
 const webAccess = moduleFrom(await readFile(new URL("../src/webAccess.ts", import.meta.url), "utf8"));
 test("operator labels hide protocol codes without claiming unknown work succeeded", () => {
   assert.equal(software.softwareJobPhaseLabel("SERVICE_INSTALLED"), "软件已安装");
@@ -37,6 +38,7 @@ const uninstallComponent = await readFile(new URL("../src/SoftwareUninstallDialo
 const uninstallScript = uninstallComponent.split('<script setup lang="ts">')[1].split("</script>")[0];
 const catalogComponent = await readFile(new URL("../src/SoftwareRecipes.vue", import.meta.url), "utf8");
 const catalogScript = catalogComponent.split('<script setup lang="ts">')[1].split("</script>")[0];
+const managementScript = (await readFile(new URL("../src/SoftwareManagement.vue", import.meta.url), "utf8")).split('<script setup lang="ts">')[1].split("</script>")[0];
 const installComponent = await readFile(new URL("../src/ServiceInstallDialog.vue", import.meta.url), "utf8");
 const installScript = installComponent.split('<script setup lang="ts">')[1].split("</script>")[0];
 const recipe = {
@@ -85,7 +87,7 @@ function installationHarness(materials, options = {}) {
     "./webAccess": webAccess,
   }, options.timers);
   const scope = vue.effectScope();
-  const flow = scope.run(() => composable.useServiceInstallation(props, () => {}, () => {}));
+  const flow = scope.run(() => composable.useServiceInstallation(props, options.onClose || (() => {}), options.onSubmitted || (() => {})));
   return { flow, props, calls, dispose() { scopes.forEach((fn) => fn()); scope.stop(); } };
 }
 
@@ -222,7 +224,7 @@ function installDialogHarness(properties, respond = () => [], ui = {}) {
   const props = vue.reactive({ open: true, host: { id: "host-a", version: "1", address: "10.1.2.3" }, ...properties });
   const module = { exports: {} }, scope = vue.effectScope();
   scope.run(() => new Function("require", "module", "exports", "defineProps", "defineEmits", compile(
-    installScript + "\nexport { javaVersion, selectedVersion, sourceChoice, sourceMode, recipe, method, nativeAvailable, onlineAvailable, archivePackages, choices, configuration, credentialChoices, mode, installCommands, next, engineInstalling, touched, receipt, job, canRetryInstallation, retryFailedInstallation, showJobLogs, showEngineLogs, resumeSoftware, close };",
+    installScript + "\nexport { javaVersion, selectedVersion, sourceChoice, sourceMode, recipe, method, nativeAvailable, onlineAvailable, archivePackages, choices, configuration, credentialChoices, mode, installCommands, next, engineInstalling, preparationOpen, busy, submissionAttempted, touched, receipt, job, canRetryInstallation, retryFailedInstallation, showJobLogs, showEngineLogs, resumeSoftware, close };",
   ))(name => name === "./useServiceInstallation" ? composable : imports[name] || {}, module, module.exports, () => props, () => (event, ...args) => events.push([event, ...args])));
   return { calls, requests, props, events, form: module.exports, dispose() { cleanups.forEach(fn => fn()); scope.stop(); } };
 }
@@ -269,6 +271,53 @@ test("a delayed discard confirmation cannot close a different installation conte
   accept();
   await closing;
   assert.deepEqual(h.events, []);
+  h.dispose();
+});
+
+test("install and preparation views remain closable while work is pending", async () => {
+  for (const state of ["busy", "preparationOpen", "engineInstalling", "submissionAttempted"]) {
+    let confirmations = 0;
+    const h = installDialogHarness({ recipe }, () => [], { confirm: async () => { confirmations++; } });
+    await flush();
+    h.form.touched.value = true;
+    h.form[state].value = true;
+    await h.form.close();
+    assert.deepEqual(h.events, [["close"]], state);
+    assert.equal(confirmations, 0, state);
+    h.dispose();
+  }
+  assert.match(installComponent, /:show-close="true"/);
+  assert.match(installComponent, /:close-on-click-modal="true"/);
+  assert.match(installComponent, /:close-on-press-escape="true"/);
+});
+
+test("an accepted submit still refreshes saved records after closing without resubmitting or populating another view", async () => {
+  let accept, closes = 0;
+  const received = [];
+  const h = installationHarness([], { sourceMode: "ONLINE", runtimeMode: "NATIVE", onClose: () => closes++, onSubmitted: result => received.push(result), request: async (path, method, data) => {
+    if (path === "/credentials") return [];
+    if (path.endsWith("/software-install-plans")) return { id: "plan-original", expiresAt: "2099-01-01T00:00:00Z", source: data.source };
+    if (path.endsWith("/submit")) return new Promise(resolve => { accept = resolve; });
+    throw new Error(`Unexpected request ${path}`);
+  } });
+  await flush();
+  await h.flow.preflight();
+  const pending = h.flow.submit();
+  await h.flow.submit();
+  h.flow.close();
+  assert.equal(closes, 1);
+  h.props.open = false;
+  await flush();
+  h.props.host.id = "host-b";
+  h.props.open = true;
+  await flush();
+  const receipt = { jobId: "original-job", softwareInstanceId: "original-software" };
+  accept(receipt);
+  await pending;
+  assert.deepEqual(received, [receipt]);
+  assert.equal(h.calls.filter(call => call.path.endsWith("/submit")).length, 1);
+  assert.equal(h.flow.receipt.value, undefined);
+  assert.equal(h.flow.step.value, 0);
   h.dispose();
 });
 
@@ -784,7 +833,7 @@ test("catalog keeps selected versions and classifies custom software without a b
   scope.run(() => new Function("require", "module", "exports", "defineProps", "defineEmits", "setTimeout", "clearTimeout", compile(
     catalogScript + "\nexport { refresh, selectedVersions, officialDefinitions, recipeSubtitle, category, catalogEntries };",
   ))((name) => name === "vue" ? { ...vue, onMounted: () => {}, onUnmounted: () => {} } :
-    name === "./api" ? { request } : name === "./serviceInstallation" ? installation : name === "./softwareCatalog" ? softwareCatalog : {}, module, module.exports,
+    name === "./api" ? { request } : name === "./listPages" ? { requestAllPages: request } : name === "./serviceInstallation" ? installation : name === "./softwareCatalog" ? softwareCatalog : name === "./pagination" ? pagination : {}, module, module.exports,
     () => ({ hostId: "" }), () => () => {}, () => 1, () => {}));
   await module.exports.refresh();
   assert.equal(module.exports.selectedVersions.value.java, "8");
@@ -798,6 +847,66 @@ test("catalog keeps selected versions and classifies custom software without a b
   assert.equal(module.exports.recipeSubtitle(custom), "程序工具");
   module.exports.category.value = "CUSTOM";
   assert.deepEqual(module.exports.catalogEntries.value.map(item => item.key), ["custom-demo", "java"]);
+  scope.stop();
+});
+
+test("catalog pagination counts Node as one software and retains version choices across pages", () => {
+  const module = { exports: {} }, scope = vue.effectScope();
+  scope.run(() => new Function("require", "module", "exports", "defineProps", "defineEmits", compile(
+    catalogScript + "\nexport { serviceDefinitions, selectedVersions, search, category, page, pageSize, total, pagedCatalog, nodeOnPage, pagedCatalogEntries };",
+  ))(name => name === "vue" ? { ...vue, onMounted() {}, onUnmounted() {} } : name === "./pagination" ? pagination : name === "./serviceInstallation" ? installation : name === "./softwareCatalog" ? softwareCatalog : {}, module, module.exports,
+    () => ({ hostId: "" }), () => () => {}));
+  const flow = module.exports;
+  flow.serviceDefinitions.value = Array.from({ length: 14 }, (_, i) => ({ ...recipe, key: `tool-${i}`, name: `Tool ${i}` }));
+  flow.selectedVersions.value["tool-1"] = "21";
+  assert.equal(flow.total.value, 15);
+  assert.equal(flow.nodeOnPage.value, true);
+  assert.equal(flow.pagedCatalogEntries.value.length, 9);
+  flow.page.value = 2;
+  assert.equal(flow.nodeOnPage.value, false);
+  assert.equal(flow.pagedCatalogEntries.value.length, 5);
+  assert.equal(flow.selectedVersions.value["tool-1"], "21");
+  flow.search.value = "Tool 13";
+  assert.equal(flow.page.value, 1);
+  assert.deepEqual(flow.pagedCatalogEntries.value.map(item => item.key), ["tool-13"]);
+  scope.stop();
+});
+
+test("software pagination keeps checks and details across pages while protecting only pending Node continuations from host changes", async () => {
+  const module = { exports: {} }, scope = vue.effectScope(), messages = [], calls = [], lifecycle = {}, timers = new Map();
+  let nextTimer = 0;
+  scope.run(() => new Function("require", "module", "exports", "defineProps", "withDefaults", "defineEmits", "setTimeout", "clearTimeout", compile(
+    managementScript + "\nexport { rows, query, page, pageSize, pagedSoftware, detectionCount, detailId, detail, openNode, nodeHostId, nodeCloseState, nodeOpen, gitOpen, isActive };",
+  ))(name => name === "vue" ? { ...vue, onMounted() {}, onActivated: fn => lifecycle.activate = fn, onDeactivated: fn => lifecycle.deactivate = fn, onUnmounted() {} } : name === "./pagination" ? pagination : name === "./software" ? software : name === "./listPages" ? { requestAllPages: async () => [] } : name === "./api" ? { request: async path => { calls.push(path); return []; } } : name === "element-plus" ? { ElMessage: { info: message => messages.push(message) } } : {}, module, module.exports,
+    () => ({ view: "manage" }), value => value, () => () => {}, callback => { const id = ++nextTimer; timers.set(id, callback); return id; }, id => timers.delete(id)));
+  const flow = module.exports;
+  flow.rows.value = Array.from({ length: 23 }, (_, index) => ({ id: `app-${index}`, name: `App ${index}`, softwareType: "JAVA", runtimeKind: "TOOL", managementMode: "MANAGED", installationStatus: "READY", locator: `/opt/app-${index}` }));
+  flow.detailId.value = "app-0";
+  flow.page.value = 2;
+  assert.equal(flow.pagedSoftware.value.length, 10);
+  assert.equal(flow.detectionCount.value, 23);
+  assert.equal(flow.detail.value.id, "app-0");
+  flow.query.value = "App 22";
+  assert.equal(flow.page.value, 1);
+  assert.deepEqual(flow.pagedSoftware.value.map(item => item.id), ["app-22"]);
+  assert.equal(flow.detail.value.id, "app-0");
+  flow.nodeHostId.value = "original-host";
+  flow.nodeCloseState.value.hostChangeBlocked = true;
+  await flow.openNode("other-host");
+  assert.equal(flow.nodeHostId.value, "original-host");
+  assert.equal(calls.length, 0);
+  assert.match(messages[0], /Node 安装/);
+  await flow.openNode("original-host");
+  assert.equal(calls.length, 1);
+  flow.nodeCloseState.value.hostChangeBlocked = false;
+  await flow.openNode("other-host");
+  assert.equal(flow.nodeHostId.value, "other-host");
+  lifecycle.activate();lifecycle.activate();assert.equal(timers.size,1);
+  flow.nodeOpen.value=true;flow.gitOpen.value=true;lifecycle.deactivate();
+  assert.equal(timers.size,0);assert.equal(flow.isActive.value,false);assert.equal(flow.nodeOpen.value,false);assert.equal(flow.gitOpen.value,false);
+  assert.equal(flow.nodeHostId.value,"other-host");
+  lifecycle.activate();assert.equal(timers.size,1);assert.equal(flow.isActive.value,true);
+  lifecycle.deactivate();
   scope.stop();
 });
 

@@ -39,8 +39,21 @@ func (h *HTTP) listPluginVersions(w http.ResponseWriter, r *http.Request, key st
 }
 
 func (h *HTTP) listPluginInstallations(w http.ResponseWriter, r *http.Request) {
+	page, e := parseListPage(r)
+	if e != nil {
+		h.fail(w, r, 400, "INVALID_INPUT", "分页参数无效")
+		return
+	}
 	targetID, status := r.URL.Query().Get("targetId"), r.URL.Query().Get("status")
-	rows, e := h.store.DB.Query("SELECT "+pluginColumns+" FROM plugin_installations WHERE (?='' OR target_id=?) AND (?='' OR status=?) ORDER BY created_at DESC LIMIT 200", targetID, targetID, status, status)
+	limit, total := 200, 0
+	if page.Enabled {
+		limit = page.PageSize
+		if e = h.store.DB.QueryRow("SELECT count(*) FROM plugin_installations WHERE (?='' OR target_id=?) AND (?='' OR status=?)", targetID, targetID, status, status).Scan(&total); e != nil {
+			h.internal(w, r, e)
+			return
+		}
+	}
+	rows, e := h.store.DB.Query("SELECT "+pluginColumns+" FROM plugin_installations WHERE (?='' OR target_id=?) AND (?='' OR status=?) ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?", targetID, targetID, status, status, limit, page.Offset)
 	if e != nil {
 		h.internal(w, r, e)
 		return
@@ -68,7 +81,7 @@ func (h *HTTP) listPluginInstallations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	h.success(w, r, out)
+	h.success(w, r, page.reply(out, total))
 }
 
 func (h *HTTP) getPluginInstallation(w http.ResponseWriter, r *http.Request, id string) {

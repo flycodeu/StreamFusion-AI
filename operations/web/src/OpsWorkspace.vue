@@ -2,7 +2,9 @@
 import { ref, onMounted, onUnmounted, watch, computed } from "vue";
 import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
 import { request, upload } from "./api";
-import type { PageResult } from "./jobs";
+import { jobKindLabels as softwareJobKindLabels, type PageResult } from "./jobs";
+import OpsPagination from "./OpsPagination.vue";
+import { requestAllPages } from "./listPages";
 import PreviewConfigForm from "./PreviewConfigForm.vue";
 import { previewDefaults, type PreviewConfig } from "./preview";
 import ZLMConfigForm from "./ZLMConfigForm.vue";
@@ -136,11 +138,13 @@ interface Job {
   result: Record<string, unknown>;
 }
 const targets = ref<Host[]>([]),
-  artifacts = ref<Artifact[]>([]),
-  instances = ref<Instance[]>([]),
   jobs = ref<Job[]>([]),
   credentials = ref<Credential[]>([]),
-  bindings = ref<Binding[]>([]);
+  artifactOptions = ref<Artifact[]>([]),
+  instanceOptions = ref<Instance[]>([]),
+  bindingOptions = ref<Binding[]>([]),
+  bindingsExpanded = ref(false),
+  optionsLoading = ref(false);
 const runtimeInstallations = ref<RuntimeInstallation[]>([]),
   importSource = ref("DOCKER_ARCHIVE"),
   importRuntime = ref("");
@@ -150,7 +154,7 @@ const maintenancePermit = ref(""),
   planKind = ref("PUBLISH"),
   registration = ref<unknown>(null);
 const eligibleArtifacts = computed(() =>
-  artifacts.value.filter(
+  artifactOptions.value.filter(
     (a) =>
       a.available &&
       a.recipe ===
@@ -211,8 +215,15 @@ const busy = ref(false),
   planInstance = ref<Instance>(),
   detail = ref<Job>(),
   logs = ref(""),
-  releases = ref<Release[]>([]),
   artifactChoice = ref("");
+const artifactList = useListPage<Artifact>(() => "/artifacts");
+const instanceList = useListPage<Instance>(() => "/instances");
+const bindingList = useListPage<Binding>(() => "/bindings");
+const releaseList = useListPage<Release>(() => `/instances/${selected.value?.id}/releases`);
+const { items: artifacts, page: artifactPage, pageSize: artifactPageSize, total: artifactTotal, loading: artifactsLoading } = artifactList;
+const { items: instances, page: instancePage, pageSize: instancePageSize, total: instanceTotal, loading: instancesLoading } = instanceList;
+const { items: bindings, page: bindingPage, pageSize: bindingPageSize, total: bindingTotal, loading: bindingsLoading } = bindingList;
+const { items: releases, page: releasePage, pageSize: releasePageSize, total: releaseTotal, loading: releasesLoading } = releaseList;
 const configDefault = (): Config => ({
   environment: "test",
   profile: "",
@@ -260,13 +271,12 @@ const credentialOptions = computed(() =>
 );
 const jobStatusFilter = ref("");
 const jobKindFilter = ref("");
-const filteredJobs = computed(() =>
-  jobs.value.filter(
-    (j) =>
-      (!jobStatusFilter.value || j.status === jobStatusFilter.value) &&
-      (!jobKindFilter.value || j.kind === jobKindFilter.value),
-  ),
-);
+const jobPage = ref(1), jobPageSize = ref(10), jobCursors = ref([""]),
+  jobNextCursor = ref(""), jobsLoading = ref(false);
+let jobsController: AbortController | undefined, detailController: AbortController | undefined,
+  optionsController: AbortController | undefined;
+let appliedJobFilters = { status: "", kind: "" }, restoringJobFilters = false;
+const jobStatus = (job: Job) => job.phase === "CANCELLED" ? "CANCELLED" : job.status;
 const statusLabels: Record<string, string> = {
   QUEUED: "排队中",
   RUNNING: "执行中",
@@ -276,23 +286,12 @@ const statusLabels: Record<string, string> = {
   CANCELLED: "已取消",
 };
 const jobKindLabels: Record<string, string> = {
+  ...softwareJobKindLabels,
   FIREWALL_CHANGE: "防火墙变更",
   HOST_PREPARE: "主机接入",
-  PLUGIN_INSTALL: "安装环境",
-  PLUGIN_REMOVE: "卸载环境",
   IMPORT: "导入制品",
   PUBLISH: "发布",
   ROLLBACK: "回滚",
-  SOFTWARE_ADOPT: "接管软件",
-  SOFTWARE_START: "启动软件",
-  SOFTWARE_STOP: "停止软件",
-  SOFTWARE_UNMANAGE: "解除管理",
-  SOFTWARE_DOCKER_ACCESS: "Docker 账号权限",
-  SOFTWARE_INSTALL: "安装软件",
-  SOFTWARE_UNINSTALL: "卸载软件",
-  SOFTWARE_CONFIGURE: "修改软件配置",
-  NODE_ENVIRONMENT_CHANGE: "更新 Node 环境",
-  GIT_REPOSITORY_CHANGE: "配置仓库账号",
 };
 const phaseLabels: Record<string, string> = {
   ...softwareJobPhaseLabels,
@@ -339,31 +338,107 @@ async function act(fn: () => Promise<void>) {
     busy.value = false;
   }
 }
-async function refresh() {
-  const [t, a, i, j, b, c, environments] = await Promise.all([
-    request<Host[]>("/hosts"),
-    request<Artifact[]>("/artifacts"),
-    request<Instance[]>("/instances"),
-    request<PageResult<Job>>("/jobs?limit=100"),
-    request<Binding[]>("/bindings"),
-    request<Credential[]>("/credentials"),
-    request<RuntimeInstallation[]>("/plugin-installations"),
-  ]);
-  targets.value = t;
-  for (const binding of b) {
-    if (
-      !t.some((target) => target.id === bindingProbeTargets.value[binding.id])
-    ) {
-      bindingProbeTargets.value[binding.id] = t.length === 1 ? t[0].id : "";
+function useListPage<T>(path: () => string) {
+  const items = ref<T[]>([]), page = ref(1), pageSize = ref(10), total = ref(0), loading = ref(false);
+  let controller: AbortController | undefined;
+  async function load(nextPage = page.value, nextSize = pageSize.value): Promise<void> {
+    controller?.abort();
+    const current = new AbortController();
+    controller = current;
+    loading.value = true;
+    const requestedPath = path();
+    try {
+      const out = await request<{ items: T[]; total: number }>(`${requestedPath}?page=${nextPage}&pageSize=${nextSize}`, "GET", undefined, current.signal);
+      if (current.signal.aborted || requestedPath !== path()) return;
+      const last = Math.max(1, Math.ceil(out.total / nextSize));
+      if (nextPage > last) {
+        await load(last, nextSize);
+        return;
+      }
+      total.value = out.total;
+      items.value = out.items as typeof items.value;
+      page.value = nextPage;
+      pageSize.value = nextSize;
+    } catch (error) {
+      if (!current.signal.aborted) throw error;
+    } finally {
+      if (controller === current) loading.value = false;
     }
   }
-  artifacts.value = a;
-  instances.value = i;
-  jobs.value = j.items;
-  bindings.value = b;
-  credentials.value = c;
-  runtimeInstallations.value = environments;
-  if (detail.value) detail.value = j.items.find((x) => x.id === detail.value?.id);
+  function changePage(value: number) {
+    void load(value).catch(error => emit("error", error));
+  }
+  function changeSize(value: number) {
+    void load(1, value).catch(error => emit("error", error));
+  }
+  onUnmounted(() => controller?.abort());
+  return { items, page, pageSize, total, loading, load, changePage, changeSize };
+}
+async function loadJobs(nextPage = jobPage.value, nextSize = jobPageSize.value, cursors = jobCursors.value.slice()) {
+  jobsController?.abort();
+  const current = new AbortController();
+  jobsController = current;
+  jobsLoading.value = true;
+  const filters = { status: jobStatusFilter.value, kind: jobKindFilter.value };
+  const query = new URLSearchParams({ limit: String(nextSize) });
+  if (cursors[nextPage - 1]) query.set("before", cursors[nextPage - 1]);
+  if (filters.status) query.set("status", filters.status);
+  if (filters.kind) query.set("kind", filters.kind);
+  try {
+    const out = await request<PageResult<Job>>(`/jobs?${query}`, "GET", undefined, current.signal);
+    if (current.signal.aborted) return;
+    jobs.value = out.items;
+    jobPage.value = nextPage;
+    jobPageSize.value = nextSize;
+    jobNextCursor.value = out.nextCursor;
+    jobCursors.value = cursors.slice(0, nextPage);
+    appliedJobFilters = filters;
+  } catch (error) {
+    if (!current.signal.aborted) {
+      if (filters.status !== appliedJobFilters.status || filters.kind !== appliedJobFilters.kind) {
+        restoringJobFilters = true;
+        jobStatusFilter.value = appliedJobFilters.status;
+        jobKindFilter.value = appliedJobFilters.kind;
+      }
+      throw error;
+    }
+  } finally {
+    if (jobsController === current) jobsLoading.value = false;
+  }
+}
+function changeJobPage(value: number) {
+  const cursors = jobCursors.value.slice();
+  if (value > jobPage.value) {
+    if (!jobNextCursor.value) return;
+    cursors[jobPage.value] = jobNextCursor.value;
+  }
+  void loadJobs(value, jobPageSize.value, cursors).catch(error => emit("error", error));
+}
+function changeJobSize(value: number) {
+  void loadJobs(1, value, [""]).catch(error => emit("error", error));
+}
+async function refreshJobDetail() {
+  if (!detail.value || dialog.value !== "job" || detailController) return;
+  const current = new AbortController(), id = detail.value.id;
+  detailController = current;
+  try {
+    const out = await request<Job>(`/jobs/${id}`, "GET", undefined, current.signal);
+    if (!current.signal.aborted && dialog.value === "job" && detail.value?.id === id) detail.value = out;
+  } catch (error) {
+    if (!current.signal.aborted) throw error;
+  } finally {
+    if (detailController === current) detailController = undefined;
+  }
+}
+async function refresh() {
+  await Promise.all([
+    props.page === "artifacts" ? !artifactsLoading.value && artifactList.load()
+      : props.page === "instances" ? !instancesLoading.value && instanceList.load()
+      : !jobsLoading.value && loadJobs(),
+    props.page === "instances" && bindingsExpanded.value && !bindingsLoading.value && bindingList.load(),
+    dialog.value === "history" && !releasesLoading.value && releaseList.load(),
+    refreshJobDetail(),
+  ]);
 }
 function poll() {
   timer = setTimeout(async () => {
@@ -379,7 +454,7 @@ function poll() {
 }
 onMounted(async () => {
   try {
-    await refresh();
+    await Promise.all([refresh(), request<Host[]>("/hosts").then(items => { targets.value = items; })]);
   } catch (e) {
     emit("error", e);
   }
@@ -388,6 +463,9 @@ onMounted(async () => {
 onUnmounted(() => {
   alive = false;
   if (timer) clearTimeout(timer);
+  jobsController?.abort();
+  detailController?.abort();
+  optionsController?.abort();
 });
 watch(
   () => props.page,
@@ -398,10 +476,48 @@ watch(
   },
 );
 watch(dialog, (value) => {
-  if (value === "instance" || value === "binding") {
-    void refresh().catch((e) => emit("error", e));
+  detailController?.abort();
+  detailController = undefined;
+  optionsController?.abort();
+  optionsLoading.value = false;
+  if (!["instance", "binding", "import", "candidate"].includes(value)) return;
+  const current = new AbortController();
+  optionsController = current;
+  optionsLoading.value = true;
+  void (async () => {
+    const [c, b, environments, a] = await Promise.all([
+      value === "instance" || value === "binding" ? request<Credential[]>("/credentials", "GET", undefined, current.signal) : undefined,
+      value === "instance" ? requestAllPages<Binding>("/bindings", current.signal) : undefined,
+      value === "import" ? requestAllPages<RuntimeInstallation>("/plugin-installations", current.signal) : undefined,
+      value === "candidate" && planKind.value === "PUBLISH" ? requestAllPages<Artifact>("/artifacts", current.signal) : undefined,
+    ]);
+    if (current.signal.aborted) return;
+    if (c) credentials.value = c;
+    if (b) bindingOptions.value = b;
+    if (environments) runtimeInstallations.value = environments;
+    if (a) {
+      artifactOptions.value = a;
+      if (!eligibleArtifacts.value.some(item => item.id === artifactChoice.value)) artifactChoice.value = eligibleArtifacts.value[0]?.id || "";
+    }
+  })().catch(error => { if (!current.signal.aborted) emit("error", error); })
+    .finally(() => { if (optionsController === current) optionsLoading.value = false; });
+});
+watch([jobStatusFilter, jobKindFilter], () => {
+  if (restoringJobFilters) { restoringJobFilters = false; return; }
+  if (props.page !== "artifacts" && props.page !== "instances") void loadJobs(1, jobPageSize.value, [""]).catch(error => emit("error", error));
+});
+watch([bindings, targets], ([items]) => {
+  for (const binding of items) {
+    if (!targets.value.some(target => target.id === bindingProbeTargets.value[binding.id])) bindingProbeTargets.value[binding.id] = targets.value.length === 1 ? targets.value[0].id : "";
   }
 });
+async function toggleBindings(event: Event) {
+  bindingsExpanded.value = (event.target as HTMLDetailsElement).open;
+  if (!bindingsExpanded.value) return;
+  try {
+    await Promise.all([bindingList.load(), requestAllPages<Instance>("/instances").then(items => { instanceOptions.value = items; })]);
+  } catch (error) { emit("error", error); }
+}
 function openInstance(i?: Instance) {
   selected.value = i;
   recipe.value = i?.config.preview
@@ -453,7 +569,7 @@ async function bindingProbe(b: Binding) {
       (item) => item.id === bindingProbeTargets.value[b.id],
     );
     if (!target) throw new Error("请先选择检查来源主机");
-    const instance = instances.value.find(
+    const instance = instanceOptions.value.find(
       (item) =>
         item.id === bindingProbeInstances.value[b.id] &&
         item.targetId === target.id,
@@ -528,7 +644,7 @@ function choosePublish(i: Instance, kind = "PUBLISH") {
   planInstance.value = i;
   planKind.value = kind;
   maintenancePermit.value = "";
-  artifactChoice.value = eligibleArtifacts.value[0]?.id || "";
+  artifactChoice.value = "";
   plan.value = undefined;
   dialog.value = "candidate";
 }
@@ -567,7 +683,8 @@ async function observe(i: Instance) {
 async function history(i: Instance) {
   await act(async () => {
     selected.value = i;
-    releases.value = await request<Release[]>(`/instances/${i.id}/releases`);
+    releasePage.value = 1;
+    await releaseList.load();
     dialog.value = "history";
   });
 }
@@ -658,6 +775,7 @@ function credentialSelected(
           </tbody>
         </table>
       </div>
+      <OpsPagination :page="artifactPage" :page-size="artifactPageSize" :total="artifactTotal" :disabled="artifactsLoading" label="制品分页" @update:page="artifactList.changePage" @update:page-size="artifactList.changeSize" />
     </template>
     <template v-else-if="page === 'instances'">
       <div class="section-head">
@@ -775,8 +893,9 @@ function credentialSelected(
           </tbody>
         </table>
       </div>
-      <details class="dependency-section">
-        <summary>外部依赖连接（{{ bindings.length }}）</summary>
+      <OpsPagination :page="instancePage" :page-size="instancePageSize" :total="instanceTotal" :disabled="instancesLoading" label="实例分页" @update:page="instanceList.changePage" @update:page-size="instanceList.changeSize" />
+      <details class="dependency-section" @toggle="toggleBindings">
+        <summary>外部依赖连接</summary>
         <div class="section-head">
           <h2>外部依赖</h2>
           <button
@@ -826,7 +945,7 @@ function credentialSelected(
                     >
                       <option value="">仅检查主机 TCP</option>
                       <option
-                        v-for="i in instances.filter(
+                        v-for="i in instanceOptions.filter(
                           (item) =>
                             item.targetId === bindingProbeTargets[b.id] &&
                             item.currentReleaseId &&
@@ -938,6 +1057,7 @@ function credentialSelected(
             </tbody>
           </table>
         </div>
+        <OpsPagination :page="bindingPage" :page-size="bindingPageSize" :total="bindingTotal" :disabled="bindingsLoading" label="外部依赖分页" @update:page="bindingList.changePage" @update:page-size="bindingList.changeSize" />
       </details>
     </template>
     <template v-else>
@@ -969,7 +1089,7 @@ function credentialSelected(
           </button>
         </div>
       </div>
-      <div v-if="!filteredJobs.length" class="empty">暂无作业</div>
+      <div v-if="!jobs.length" class="empty">暂无作业</div>
       <div v-else class="table-scroll">
         <table>
           <thead>
@@ -982,7 +1102,7 @@ function credentialSelected(
             </tr>
           </thead>
           <tbody>
-            <tr v-for="j in filteredJobs" :key="j.id">
+            <tr v-for="j in jobs" :key="j.id">
               <td>
                 {{ time(j.createdAt) }}<small>{{ short(j.id) }}</small>
               </td>
@@ -999,11 +1119,11 @@ function credentialSelected(
                   :class="
                     j.status === 'SUCCEEDED'
                       ? 'state-success'
-                      : j.status === 'FAILED'
+                      : jobStatus(j) === 'FAILED'
                         ? 'state-error'
                         : 'state-muted'
                   "
-                  >{{ statusLabels[j.status] || '状态待确认' }}</span
+                  >{{ statusLabels[jobStatus(j)] || '状态待确认' }}</span
                 >
               </td>
               <td>
@@ -1049,6 +1169,7 @@ function credentialSelected(
           </tbody>
         </table>
       </div>
+      <OpsPagination :page="jobPage" :page-size="jobPageSize" :has-next="!!jobNextCursor" :disabled="jobsLoading" label="作业分页" @update:page="changeJobPage" @update:page-size="changeJobSize" />
     </template>
   </section>
   <ElDialog
@@ -1232,7 +1353,7 @@ function credentialSelected(
         </div>
         <label
           >外部依赖<select v-model="instanceDraft.config.bindingIds" multiple>
-            <option v-for="b in bindings" :key="b.id" :value="b.id">
+            <option v-for="b in bindingOptions" :key="b.id" :value="b.id">
               {{ b.kind }} · {{ b.host }}:{{ b.port }}
             </option>
           </select></label
@@ -1424,7 +1545,7 @@ function credentialSelected(
         >
           取消
         </button>
-        <button class="primary" :disabled="busy">生成预检计划</button>
+        <button class="primary" :disabled="busy || optionsLoading">生成预检计划</button>
       </div>
     </form>
     <div v-else-if="dialog === 'plan' && plan" class="dialog-form">
@@ -1435,7 +1556,7 @@ function credentialSelected(
           {{ planInstance?.name }}
         </dd>
         <dt>版本来源</dt>
-        <dd>{{ artifacts.find((item) => item.id === plan?.candidate.artifactId)?.name || '所选制品' }}</dd>
+        <dd>{{ artifactOptions.find((item) => item.id === plan?.candidate.artifactId)?.name || '所选制品' }}</dd>
         <dt>失败处理</dt><dd>{{ plan.baseline ? '恢复上一成功版本' : '停止未成功的候选' }}</dd>
         <template v-if="plan.candidate.runtimeEnvironment">
           <dt>冻结运行环境</dt>
@@ -1504,6 +1625,7 @@ function credentialSelected(
         </details>
       </article>
       <div v-if="!releases.length" class="empty">暂无版本</div>
+      <OpsPagination :page="releasePage" :page-size="releasePageSize" :total="releaseTotal" :disabled="releasesLoading" label="发布版本分页" @update:page="releaseList.changePage" @update:page-size="releaseList.changeSize" />
     </div>
     <div v-else-if="dialog === 'registration'" class="dialog-form">
       <p>
@@ -1525,7 +1647,7 @@ function credentialSelected(
       <dl class="plan-detail">
         <dt>状态</dt>
         <dd>
-          {{ statusLabels[detail.status] }} ·
+          {{ statusLabels[jobStatus(detail)] }} ·
           {{ phaseLabels[detail.phase] || '阶段待确认' }}
         </dd>
         <dt>时间</dt>

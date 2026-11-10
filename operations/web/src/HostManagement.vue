@@ -11,6 +11,8 @@ import { request } from "./api";
 import HostConnectionDialog from "./HostConnectionDialog.vue";
 import HostPreparationPanel from "./HostPreparationPanel.vue";
 import HostSystemPanel from "./HostSystemPanel.vue";
+import OpsPagination from "./OpsPagination.vue";
+import { usePagination } from "./pagination";
 import {
   hostCapabilityLabels,
   hostObservationExpired,
@@ -36,11 +38,8 @@ const stateFilter = ref("");
 const dialog = ref(false);
 const editingHost = ref<Host>();
 const detailId = ref("");
-const preparationCloseBlocked = ref(false);
-function closeDetail(done: () => void) { if (!preparationCloseBlocked.value) done(); }
 const detailTab = ref("connection");
 watch(detailId, () => {
-  preparationCloseBlocked.value = false;
   detailTab.value = "connection";
 });
 watch(
@@ -113,6 +112,7 @@ const visibleHosts = computed(() => {
             : connectionState(host).label !== "已连接")),
   );
 });
+const { page, pageSize, total, pageItems: pagedHosts } = usePagination(() => visibleHosts.value, [query, stateFilter]);
 const detail = computed(() =>
   hosts.value.find((host) => host.id === detailId.value),
 );
@@ -340,7 +340,7 @@ onUnmounted(() => {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="host in visibleHosts" :key="host.id">
+          <tr v-for="host in pagedHosts" :key="host.id">
             <td data-label="主机状态">
               <div class="host-status">
                 <span class="state-tag" :class="connectionState(host).tone">
@@ -415,6 +415,7 @@ onUnmounted(() => {
         </tbody>
       </table>
     </div>
+    <OpsPagination v-if="hosts.length" v-model:page="page" v-model:page-size="pageSize" :total="total" label="主机分页" />
   </section>
   <HostConnectionDialog
     :open="dialog"
@@ -429,7 +430,7 @@ onUnmounted(() => {
     :model-value="!!detail"
     :title="detail?.name || '主机详情'"
     size="min(900px, 100vw)"
-    :close-on-click-modal="!preparationCloseBlocked" :close-on-press-escape="!preparationCloseBlocked" :show-close="!preparationCloseBlocked" :before-close="closeDetail"
+    :close-on-click-modal="true" :close-on-press-escape="true" :show-close="true"
     @close="detailId = ''"
   >
     <div v-if="detail" class="host-detail">
@@ -488,20 +489,20 @@ onUnmounted(() => {
           <div class="capability-details">
             <article v-for="key in capabilityKeys" :key="key">
               <header>
-                <strong>
+                <div class="capability-heading"><strong>
                   {{
                     detail.kind === "LOCAL" && key === "reachability"
                       ? "本机连通"
                       : hostCapabilityLabels[key]
                   }}
                 </strong>
+                <button v-if="key === 'docker'" class="quiet capability-action" :disabled="!!actionHost || detail.maintenance"
+                  @click="emit('docker', detail.id)">安装与管理</button></div>
                 <span :class="capabilityTone(detail, key)">
                   {{ capabilityLabel(detail, key) }}
                 </span>
               </header>
               <p v-if="detail.capabilities?.[key]?.status !== 'AVAILABLE'">{{ detail.capabilities?.[key]?.message || "尚未检查" }}</p>
-              <button v-if="key === 'docker'" class="secondary" :disabled="!!actionHost || detail.maintenance"
-                @click="emit('docker', detail.id)">Docker Engine 安装与管理</button>
               <details
                 v-if="
                   detail.capabilities?.[key]?.observedAt ||
@@ -530,7 +531,7 @@ onUnmounted(() => {
           ><HostPreparationPanel
             v-if="detailTab === 'preparation'"
             :host="detail"
-            @checked="load" @close-blocked="preparationCloseBlocked = $event"
+            @checked="load"
         /></ElTabPane>
         <ElTabPane label="项目目录" name="directory">
           <div class="host-identifiers">
@@ -825,6 +826,9 @@ onUnmounted(() => {
   font-size: 13px;
   font-weight: 500;
 }
+.capability-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.capability-heading strong, .capability-details header > span { white-space: nowrap; }
+.capability-action { padding: 0; font-size: 12px; white-space: nowrap; }
 .capability-details p {
   color: #435269;
   font-size: 12px;

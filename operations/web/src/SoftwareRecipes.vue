@@ -2,6 +2,9 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElDialog, ElDropdown, ElDropdownMenu, ElDropdownItem, ElMessage, ElMessageBox } from "element-plus";
 import { request } from "./api";
+import OpsPagination from "./OpsPagination.vue";
+import { usePagination } from "./pagination";
+import { requestAllPages } from "./listPages";
 import { findErrorReference } from "./errorReference";
 import SoftwareIcon from "./SoftwareIcon.vue";
 import ServiceInstallDialog from "./ServiceInstallDialog.vue";
@@ -169,8 +172,20 @@ const catalogEntries = computed(() => {
   }));
 });
 const showNode = computed(() => ["ALL", "JAVA_RUNTIME"].includes(category.value) && (!search.value.trim() || /node|npm|pnpm|nvm|运行环境/i.test(search.value)));
+const catalogItems = computed(() => [
+  ...(showNode.value ? [{ kind: "node" as const }] : []),
+  ...catalogEntries.value.map(entry => ({ kind: "recipe" as const, entry })),
+]);
+const { page, pageSize, total, pageItems: pagedCatalog } = usePagination(
+  () => catalogItems.value, [search, category, targetId],
+);
+const nodeOnPage = computed(() => pagedCatalog.value.some(item => item.kind === "node"));
+const pagedCatalogEntries = computed(() => pagedCatalog.value.flatMap(item => item.kind === "recipe" ? [item.entry] : []));
 const legacyInstallations = computed(() =>
   installations.value.filter((item) => item.targetId === targetId.value),
+);
+const { page: legacyPage, pageSize: legacyPageSize, total: legacyTotal, pageItems: pagedLegacy } = usePagination(
+  () => legacyInstallations.value, [targetId],
 );
 const legacyName = (item: Installation) =>
   item.pluginKey === "java-runtime" ? "Java" : "Maven";
@@ -234,7 +249,7 @@ async function refresh() {
   try {
     const [ts, rows, services, materials, official] = await Promise.all([
       request<Host[]>("/hosts"),
-      request<Installation[]>("/plugin-installations"),
+      requestAllPages<Installation>("/plugin-installations"),
       request<ServiceRecipe[]>("/software-recipes"),
       request<InstallationMaterial[]>("/installation-materials"),
       request<ServiceRecipe[]>("/software-official-recipes"),
@@ -266,7 +281,7 @@ async function refresh() {
         ? props.hostId
         : ts[0]!.id;
     const hostId = targetId.value;
-    const software = hostId ? await request<SoftwareInstance[]>("/software-instances?hostId=" + encodeURIComponent(hostId)) : [];
+    const software = hostId ? await requestAllPages<SoftwareInstance>("/software-instances?hostId=" + encodeURIComponent(hostId)) : [];
     if (!disposed && hostId === targetId.value) softwareInstances.value = software;
     if (dialog.value && selected.value?.lastJobId)
       detailJob.value = await request<Job>("/jobs/" + selected.value.lastJobId);
@@ -484,14 +499,14 @@ onUnmounted(() => {
       没有匹配的软件
     </div>
     <div v-else class="plugin-grid">
-      <article v-if="showNode" class="plugin-card node-catalog-card">
+      <article v-if="nodeOnPage" class="plugin-card node-catalog-card">
         <div class="plugin-heading"><SoftwareIcon type="NODE" /><div class="plugin-title"><h3>Node.js</h3><span>多版本运行环境</span></div><span v-if="nodeInstances.length" class="state-tag success catalog-installed">已安装{{ nodeVersionCount ? ` · ${nodeVersionCount} 个版本` : '' }}</span></div>
         <p class="plugin-description">安装 Node.js，管理 npm、pnpm 和默认版本。</p>
         <div class="plugin-meta"><span>官方在线 / Ops 离线 / 自行安装</span></div>
         <footer><span class="recipe-kind">nvm · 多版本</span><button class="primary" :disabled="!currentTarget" @click="emit('node', targetId)">{{ nodeInstances.length ? '版本管理' : '安装与管理' }}</button></footer>
       </article>
       <article
-        v-for="{ key, name, definition, versions, versionChoices } in catalogEntries"
+        v-for="{ key, name, definition, versions, versionChoices } in pagedCatalogEntries"
         :key="key"
         class="plugin-card"
       >
@@ -546,10 +561,11 @@ onUnmounted(() => {
         </footer>
       </article>
     </div>
+    <OpsPagination v-model:page="page" v-model:page-size="pageSize" :total="total" label="软件安装分页" />
     <details v-if="legacyInstallations.length" class="legacy-installations">
       <summary>已有工具镜像（{{ legacyInstallations.length }}）</summary>
       <div
-        v-for="item in legacyInstallations"
+        v-for="item in pagedLegacy"
         :key="item.id"
         class="legacy-row"
       >
@@ -573,6 +589,7 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
+      <OpsPagination v-model:page="legacyPage" v-model:page-size="legacyPageSize" :total="legacyTotal" label="工具镜像分页" />
     </details>
   </section>
   <ServiceInstallDialog

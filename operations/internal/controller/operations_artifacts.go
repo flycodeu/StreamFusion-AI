@@ -15,7 +15,19 @@ import (
 )
 
 func (h *HTTP) listArtifacts(w http.ResponseWriter, r *http.Request) {
-	rows, e := h.store.DB.Query("SELECT id,name,archive_sha256,byte_size,image_id,created_at,recipe,coalesce(runtime_environment_json,'null') FROM artifacts ORDER BY created_at DESC LIMIT 100")
+	p, e := parseListPage(r)
+	if e != nil {
+		h.fail(w, r, 400, "INVALID_INPUT", e.Error())
+		return
+	}
+	var total int
+	if p.Enabled {
+		if e = h.store.DB.QueryRowContext(r.Context(), "SELECT count(*) FROM artifacts").Scan(&total); e != nil {
+			h.internal(w, r, e)
+			return
+		}
+	}
+	rows, e := h.store.DB.QueryContext(r.Context(), "SELECT id,name,archive_sha256,byte_size,image_id,created_at,recipe,coalesce(runtime_environment_json,'null') FROM artifacts ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?", p.PageSize, p.Offset)
 	if e != nil {
 		h.internal(w, r, e)
 		return
@@ -32,7 +44,11 @@ func (h *HTTP) listArtifacts(w http.ResponseWriter, r *http.Request) {
 		_, e := os.Stat(h.store.artifactPath(id))
 		out = append(out, map[string]any{"id": id, "name": name, "archiveSha256": sha, "byteSize": size, "imageId": image, "platform": "linux/amd64", "available": e == nil, "createdAt": created, "recipe": recipe, "runtimeEnvironment": json.RawMessage(environment)})
 	}
-	h.success(w, r, out)
+	if e = rows.Err(); e != nil {
+		h.internal(w, r, e)
+		return
+	}
+	h.success(w, r, p.reply(out, total))
 }
 func (h *HTTP) acceptImport(w http.ResponseWriter, r *http.Request, s *session) {
 	var in importInput

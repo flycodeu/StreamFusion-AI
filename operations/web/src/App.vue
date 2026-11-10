@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, KeepAlive, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, prepare, request, send, setCSRF } from "./api";
 import OpsWorkspace from "./OpsWorkspace.vue";
@@ -13,6 +13,8 @@ import PortManagement from "./PortManagement.vue";
 import HostOverview from "./HostOverview.vue";
 import ErrorReference from "./ErrorReference.vue";
 import SystemMonitor from "./SystemMonitor.vue";
+import OpsPagination from "./OpsPagination.vue";
+import { usePagination } from "./pagination";
 import { errorHelp, showErrorHelp } from "./errorHelp";
 
 interface Status {
@@ -157,8 +159,11 @@ const diagnostic = ref<ApiError | null>(null);
 const status = ref<Status>();
 const settings = ref<Settings>();
 const audits = ref<Audit[]>([]);
-const nextCursor = ref("");
+const auditPage = ref(1), auditPageSize = ref(10), auditLoading = ref(false);
+const auditCursors = ref([""]), auditNextCursor = ref("");
+let auditRequest = 0;
 const credentials = ref<Credential[]>([]);
+const { page: credentialPage, pageSize: credentialPageSize, total: credentialTotal, pageItems: pagedCredentials } = usePagination(() => credentials.value);
 const credentialDialog = ref(false);
 const selected = ref<Credential | null>(null);
 const credentialName = ref("");
@@ -361,12 +366,35 @@ async function refreshStatus() {
     throw e;
   }
 }
-async function loadAudit(cursor = "") {
-  const data = await request<{ items: Audit[]; nextCursor: string }>(
-    "/audit?limit=20&before=" + encodeURIComponent(cursor),
-  );
-  audits.value = data.items;
-  nextCursor.value = data.nextCursor;
+async function loadAudit(page = auditPage.value, size = auditPageSize.value) {
+  const revision = ++auditRequest;
+  auditLoading.value = true;
+  try {
+    const params = new URLSearchParams({ limit: String(size), before: page === 1 ? "" : auditCursors.value[page - 1] || "" });
+    const data = await request<{ items: Audit[]; nextCursor: string }>(`/audit?${params}`);
+    if (revision !== auditRequest) return;
+    auditPage.value = page;
+    auditPageSize.value = size;
+    audits.value = data.items;
+    auditNextCursor.value = data.nextCursor;
+    auditCursors.value = auditCursors.value.slice(0, page);
+    if (data.nextCursor) auditCursors.value[page] = data.nextCursor;
+  } catch (error) {
+    if (revision === auditRequest) throw error;
+  } finally {
+    if (revision === auditRequest) auditLoading.value = false;
+  }
+}
+async function changeAuditPage(page: number) {
+  if (page >= 1 && page <= auditCursors.value.length && !auditLoading.value) {
+    try { await loadAudit(page); } catch (error) { report(error); }
+  }
+}
+async function latestAudit() {
+  await loadAudit(1);
+}
+async function changeAuditSize(size: number) {
+  try { await loadAudit(1, size); } catch (error) { report(error); }
 }
 async function load() {
   const [config, items] = await Promise.all([
@@ -520,6 +548,8 @@ watch(
 );
 watch(loggedIn, (value) => {
   if (!value) {
+    auditRequest += 1;
+    auditLoading.value = false;
     logDialogSelection.value = undefined;
     showLoginPassword.value = false;
     loginCapsLock.value = false;
@@ -548,6 +578,7 @@ onMounted(async () => {
   }
 });
 onUnmounted(() => {
+  auditRequest += 1;
   if (timer) clearTimeout(timer);
 });
 </script>
@@ -878,6 +909,17 @@ onUnmounted(() => {
           </div>
         </div>
         <SoftwareCommandTemplates v-if="commandsVisited" v-show="active === 'commands'" :active="active === 'commands'" />
+        <KeepAlive>
+          <SoftwareManagement
+            v-if="active === 'software' || active === 'software-install'"
+            :view="active === 'software-install' ? 'install' : 'manage'"
+            :docker-host-id="dockerHostId"
+            @error="report"
+            @preparation="showHostPreparation"
+            @navigate="active = $event === 'install' ? 'software-install' : 'software'"
+            @logs="openLogs"
+          />
+        </KeepAlive>
         <HostManagement
           v-if="active === 'hosts'"
           :preparation-host-id="preparationHostId"
@@ -890,15 +932,6 @@ onUnmounted(() => {
           v-else-if="active === 'ports'"
           @error="report"
           @preparation="showHostPreparation"
-        />
-        <SoftwareManagement
-          v-else-if="active === 'software' || active === 'software-install'"
-          :view="active === 'software-install' ? 'install' : 'manage'"
-          :docker-host-id="dockerHostId"
-          @error="report"
-          @preparation="showHostPreparation"
-          @navigate="active = $event === 'install' ? 'software-install' : 'software'"
-          @logs="openLogs"
         />
         <OpsWorkspace
           v-else-if="['instances', 'artifacts', 'jobs'].includes(active)"
@@ -948,7 +981,7 @@ onUnmounted(() => {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="item in credentials" :key="item.id + item.revision">
+                <tr v-for="item in pagedCredentials" :key="item.id + item.revision">
                   <td>{{ item.name }}</td>
                   <td>{{ credentialKindLabels[item.kind] || item.kind }}</td>
                   <td>r{{ item.revision }}</td>
@@ -983,6 +1016,7 @@ onUnmounted(() => {
             </table>
           </div>
           <div v-else class="empty">尚未保存凭据</div>
+          <OpsPagination v-if="credentials.length" v-model:page="credentialPage" v-model:page-size="credentialPageSize" :total="credentialTotal" label="凭据分页" />
         </section>
         <section v-else-if="active === 'audit'" class="content panel-card">
           <div class="log-record-tabs" role="tablist" aria-label="日志类型">
@@ -996,8 +1030,8 @@ onUnmounted(() => {
             <h2>操作记录</h2>
             <button
               class="secondary"
-              :disabled="busy"
-              @click="execute(() => loadAudit())"
+              :disabled="busy || auditLoading"
+              @click="execute(latestAudit)"
             >
               最新记录
             </button>
@@ -1036,14 +1070,7 @@ onUnmounted(() => {
             </table>
           </div>
           <div v-else class="empty">暂无操作记录</div>
-          <button
-            v-if="nextCursor"
-            class="secondary pagination"
-            :disabled="busy"
-            @click="execute(() => loadAudit(nextCursor))"
-          >
-            更早记录
-          </button>
+          <OpsPagination :page="auditPage" :page-size="auditPageSize" :has-next="!!auditNextCursor" :disabled="auditLoading" label="操作记录分页" @update:page="changeAuditPage" @update:page-size="changeAuditSize" />
           </template>
         </section>
         <section v-else-if="active === 'settings'" class="content settings">

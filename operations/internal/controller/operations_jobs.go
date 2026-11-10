@@ -95,7 +95,7 @@ func (h *HTTP) listJobs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if status != "" && status != "QUEUED" && status != "RUNNING" && status != "SUCCEEDED" && status != "FAILED" && status != "UNKNOWN" {
+	if status != "" && status != "QUEUED" && status != "RUNNING" && status != "SUCCEEDED" && status != "FAILED" && status != "UNKNOWN" && status != "CANCELLED" {
 		h.fail(w, r, 400, "INVALID_INPUT", "任务状态无效")
 		return
 	}
@@ -105,11 +105,11 @@ func (h *HTTP) listJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	search = "%" + strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`).Replace(search) + "%"
 	rows, e := h.store.DB.QueryContext(r.Context(), jobHistorySQL+` WHERE
- (?='' OR target_id=?) AND (?='' OR status=?)
+ (?='' OR target_id=?) AND (?='' OR (?='CANCELLED' AND (status='CANCELLED' OR phase='CANCELLED')) OR (?<>'CANCELLED' AND status=? AND phase<>'CANCELLED'))
  AND (?='' OR kind=? OR (?='SOFTWARE' AND (substr(kind,1,9)='SOFTWARE_' OR substr(kind,1,7)='PLUGIN_' OR kind IN ('NODE_ENVIRONMENT_CHANGE','GIT_REPOSITORY_CHANGE','GIT_ACCOUNT_CHANGE'))))
  AND (subject_name LIKE ? ESCAPE '\' OR host_name LIKE ? ESCAPE '\')
  AND (?='' OR created_at<? OR (created_at=? AND id<?))
- ORDER BY created_at DESC,id DESC LIMIT ?`, host, host, status, status, kind, kind, kind,
+ ORDER BY created_at DESC,id DESC LIMIT ?`, host, host, status, status, status, status, kind, kind, kind,
 		search, search, before, created, created, id, limit+1)
 	if e != nil {
 		h.internal(w, r, e)

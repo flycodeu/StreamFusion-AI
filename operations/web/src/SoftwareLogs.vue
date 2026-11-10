@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
 import { ApiError, request } from "./api";
+import { requestAllPages } from "./listPages";
 import { hostTime, type Host } from "./hosts";
 import { jobKindLabel, type JobSummary, type PageResult } from "./jobs";
 import SoftwareLogViewer from "./SoftwareLogViewer.vue";
+import OpsPagination from "./OpsPagination.vue";
 import { softwareJobStatusLabel, softwareLifecycleAvailable, softwareState, type SoftwareInstance } from "./software";
 
 const props = defineProps<{ mode?: "jobs" | "runtime"; jobId?: string; softwareId?: string }>();
@@ -15,7 +17,7 @@ const pinnedJob = ref<JobSummary>();
 const selectedId = ref(""), query = ref(""), hostId = ref(""), status = ref(""), kind = ref("SOFTWARE");
 const loading = ref(false), listError = ref("");
 const listFailure = ref<{ code: string; traceId: string; at: string }>();
-const pageSize = ref(20), page = ref(0), cursors = ref([""]), nextCursor = ref("");
+const pageSize = ref(10), page = ref(1), cursors = ref([""]), nextCursor = ref("");
 let disposed = false, generation = 0;
 let listAbort: AbortController | undefined;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -33,10 +35,10 @@ const runtimeRecords = computed(() => software.value
   .sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id)));
 const records = computed(() => mode.value === "jobs"
   ? jobs.value.map(jobRecord)
-  : runtimeRecords.value.slice(page.value * pageSize.value, (page.value + 1) * pageSize.value));
+  : runtimeRecords.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value));
 const selected = computed(() => records.value.find(item => item.id === selectedId.value) ||
-  (mode.value === "jobs" && pinnedJob.value?.id === selectedId.value ? jobRecord(pinnedJob.value) : undefined));
-const hasNext = computed(() => mode.value === "jobs" ? !!nextCursor.value : (page.value + 1) * pageSize.value < runtimeRecords.value.length);
+  (mode.value === "jobs" ? pinnedJob.value?.id === selectedId.value ? jobRecord(pinnedJob.value) : undefined : runtimeRecords.value.find(item => item.id === selectedId.value)));
+const hasNext = computed(() => mode.value === "jobs" ? !!nextCursor.value : page.value * pageSize.value < runtimeRecords.value.length);
 
 function selectRecord(id: string) {
   if (id === selectedId.value) return;
@@ -60,7 +62,7 @@ function matchesFilters(job: JobSummary) {
   return (!hostId.value || record.hostId === hostId.value) && (!status.value || job.status === status.value) &&
     `${record.name} ${record.hostName}`.toLowerCase().includes(query.value.trim().toLowerCase());
 }
-async function loadRecords(preferredId = selectedId.value) {
+async function loadRecords(preferredId = selectedId.value, requestedPage = page.value, cursor = cursors.value[requestedPage - 1] || "") {
   listAbort?.abort();
   const abort = new AbortController(), revision = generation, beforeRead = observedJob;
   listAbort = abort;
@@ -68,14 +70,14 @@ async function loadRecords(preferredId = selectedId.value) {
   listError.value = "";
   listFailure.value = undefined;
   const params = new URLSearchParams({ limit: String(pageSize.value), kind: kind.value });
-  if (cursors.value[page.value]) params.set("before", cursors.value[page.value]!);
+  if (cursor) params.set("before", cursor);
   if (hostId.value) params.set("hostId", hostId.value);
   if (status.value) params.set("status", status.value);
   if (query.value.trim()) params.set("query", query.value.trim());
   try {
     const [targets, instances, history] = await Promise.all([
       request<Host[]>("/hosts", "GET", undefined, abort.signal),
-      request<SoftwareInstance[]>(hostId.value ? `/software-instances?hostId=${encodeURIComponent(hostId.value)}` : "/software-instances", "GET", undefined, abort.signal),
+      requestAllPages<SoftwareInstance>(hostId.value ? `/software-instances?hostId=${encodeURIComponent(hostId.value)}` : "/software-instances", abort.signal),
       mode.value === "jobs" ? request<PageResult<JobSummary>>(`/jobs?${params}`, "GET", undefined, abort.signal) : Promise.resolve({ items: [], nextCursor: "" }),
     ]);
     if (disposed || revision !== generation || abort.signal.aborted) return;
@@ -99,12 +101,15 @@ async function loadRecords(preferredId = selectedId.value) {
     }
     hosts.value = targets;
     software.value = instances;
+    page.value = mode.value === "runtime" ? Math.min(requestedPage, Math.max(1, Math.ceil(runtimeRecords.value.length / pageSize.value))) : requestedPage;
+    if (mode.value === "jobs") cursors.value = [...cursors.value.slice(0, requestedPage - 1), cursor];
     jobs.value = history.items;
     pinnedJob.value = pinned;
     nextCursor.value = history.nextCursor;
     loading.value = false;
     listAbort = undefined;
-    const wanted = records.value.some(item => item.id === preferredId) || pinned?.id === preferredId ? preferredId : records.value[0]?.id || "";
+    const candidates = mode.value === "runtime" ? runtimeRecords.value : records.value;
+    const wanted = candidates.some(item => item.id === preferredId) || pinned?.id === preferredId ? preferredId : records.value[0]?.id || "";
     const lookupError = listError.value, lookupFailure = listFailure.value;
     selectRecord(wanted);
     if (lookupError) { listError.value = lookupError; listFailure.value = lookupFailure; }
@@ -129,20 +134,20 @@ function clearSelection() {
 }
 function resetFilters() {
   generation++;
-  page.value = 0;
+  page.value = 1;
   cursors.value = [""];
   nextCursor.value = "";
   clearSelection();
   if (searchTimer) clearTimeout(searchTimer);
   searchTimer = setTimeout(() => { searchTimer = undefined; void loadRecords(""); }, 250);
 }
-function turnPage(direction: number) {
-  if (loading.value || direction > 0 && !hasNext.value || direction < 0 && !page.value) return;
+function changePage(next: number) {
+  if (loading.value || next === page.value || next < 1 || next > page.value && !hasNext.value) return;
+  if (mode.value === "jobs" && Math.abs(next - page.value) !== 1) return;
+  if (searchTimer) { clearTimeout(searchTimer); searchTimer = undefined; }
   generation++;
-  if (direction > 0 && mode.value === "jobs") cursors.value = [...cursors.value.slice(0, page.value + 1), nextCursor.value];
-  page.value += direction;
-  clearSelection();
-  void loadRecords("");
+  const cursor = next > page.value ? nextCursor.value : cursors.value[next - 1] || "";
+  void loadRecords(selectedId.value, next, cursor);
 }
 watch([query, hostId, status, kind, pageSize], resetFilters);
 watch([mode, requestedId], ([source, id], previous) => {
@@ -150,7 +155,7 @@ watch([mode, requestedId], ([source, id], previous) => {
   generation++;
   if (searchTimer) clearTimeout(searchTimer);
   listAbort?.abort();
-  page.value = 0;
+  page.value = 1;
   cursors.value = [""];
   nextCursor.value = "";
   selectedId.value = "";
@@ -185,10 +190,7 @@ onUnmounted(() => { disposed = true; generation++; listAbort?.abort(); if (searc
       </aside>
       <SoftwareLogViewer :mode="mode" :job-id="mode === 'jobs' ? selectedId : undefined" :software-id="mode === 'runtime' ? selectedId : undefined" :title="selected?.name" :host-name="selected?.hostName" @updated="updated" />
     </div>
-    <footer class="logs-pagination" aria-label="日志分页">
-      <label>每页<select v-model.number="pageSize" aria-label="日志每页条数"><option :value="20">20</option><option :value="50">50</option><option :value="100">100</option></select>条</label>
-      <span>第 {{ page + 1 }} 页</span><button class="secondary" :disabled="loading || !page" @click="turnPage(-1)">上一页</button><button class="secondary" :disabled="loading || !hasNext" @click="turnPage(1)">下一页</button>
-    </footer>
+    <OpsPagination :page="page" v-model:page-size="pageSize" :total="mode === 'runtime' ? runtimeRecords.length : undefined" :has-next="hasNext" :disabled="loading" label="日志分页" @update:page="changePage" />
     <details v-if="listFailure" class="logs-list-diagnostic"><summary>诊断信息</summary><p>{{ listFailure.code }} · {{ listFailure.traceId }} · {{ hostTime(listFailure.at) }}</p></details>
   </section>
 </template>
@@ -204,8 +206,6 @@ onUnmounted(() => { disposed = true; generation++; listAbort?.abort(); if (searc
 .log-record > span:first-child { min-width: 0; }.log-record strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
 .log-record small { display: block; margin-top: 7px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }.log-record > span:last-child { white-space: nowrap; font-size: 12px; color: var(--muted); }
 .logs-error { margin: 0 0 16px; color: #b45309; font-size: 13px; }
-.logs-pagination { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 18px; color: var(--muted); font-size: 12px; }
-.logs-pagination label { display: flex; align-items: center; gap: 8px; margin-right: auto; }.logs-pagination select { width: 70px; margin: 0; }
 .logs-list-diagnostic { margin-top: 16px; color: var(--muted); font-size: 12px; }.logs-list-diagnostic p { overflow-wrap: anywhere; }
 @media (max-width: 900px) { .logs-workspace { grid-template-columns: 1fr; }.logs-list { max-height: 220px; } }
 @media (max-width: 550px) { .logs-toolbar input { width: 100%; }.logs-toolbar select { flex: 1; } }

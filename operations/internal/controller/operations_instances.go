@@ -12,7 +12,19 @@ import (
 )
 
 func (h *HTTP) listInstances(w http.ResponseWriter, r *http.Request) {
-	rows, e := h.store.DB.Query("SELECT id FROM instances ORDER BY created_at DESC LIMIT 100")
+	p, e := parseListPage(r)
+	if e != nil {
+		h.fail(w, r, 400, "INVALID_INPUT", e.Error())
+		return
+	}
+	var total int
+	if p.Enabled {
+		if e = h.store.DB.QueryRowContext(r.Context(), "SELECT count(*) FROM instances").Scan(&total); e != nil {
+			h.internal(w, r, e)
+			return
+		}
+	}
+	rows, e := h.store.DB.QueryContext(r.Context(), "SELECT id FROM instances ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?", p.PageSize, p.Offset)
 	if e != nil {
 		h.internal(w, r, e)
 		return
@@ -24,6 +36,9 @@ func (h *HTTP) listInstances(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		ids = append(ids, id)
+	}
+	if e == nil {
+		e = rows.Err()
 	}
 	rows.Close()
 	if e != nil {
@@ -39,7 +54,7 @@ func (h *HTTP) listInstances(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, i)
 	}
-	h.success(w, r, out)
+	h.success(w, r, p.reply(out, total))
 }
 func (h *HTTP) saveInstance(w http.ResponseWriter, r *http.Request, s *session, id string) {
 	var in struct {
@@ -92,7 +107,19 @@ func (h *HTTP) saveInstance(w http.ResponseWriter, r *http.Request, s *session, 
 }
 
 func (h *HTTP) listReleases(w http.ResponseWriter, r *http.Request, id string) {
-	rows, e := h.store.DB.Query("SELECT snapshot_json,created_at FROM releases WHERE instance_id=? ORDER BY created_at DESC LIMIT 100", id)
+	p, e := parseListPage(r)
+	if e != nil {
+		h.fail(w, r, 400, "INVALID_INPUT", e.Error())
+		return
+	}
+	var total int
+	if p.Enabled {
+		if e = h.store.DB.QueryRowContext(r.Context(), "SELECT count(*) FROM releases WHERE instance_id=?", id).Scan(&total); e != nil {
+			h.internal(w, r, e)
+			return
+		}
+	}
+	rows, e := h.store.DB.QueryContext(r.Context(), "SELECT snapshot_json,created_at FROM releases WHERE instance_id=? ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?", id, p.PageSize, p.Offset)
 	if e != nil {
 		h.internal(w, r, e)
 		return
@@ -110,7 +137,11 @@ func (h *HTTP) listReleases(w http.ResponseWriter, r *http.Request, id string) {
 		v["createdAt"] = created
 		out = append(out, v)
 	}
-	h.success(w, r, out)
+	if e = rows.Err(); e != nil {
+		h.internal(w, r, e)
+		return
+	}
+	h.success(w, r, p.reply(out, total))
 }
 func (h *HTTP) observeInstance(w http.ResponseWriter, r *http.Request, id string) {
 	i, e := h.store.readInstance(id)

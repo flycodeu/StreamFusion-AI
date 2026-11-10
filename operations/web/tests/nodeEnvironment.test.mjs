@@ -13,7 +13,7 @@ const compile = (s) =>
       module: ts.ModuleKind.CommonJS,
     },
   }).outputText;
-function load(s, imports = {}, props = {}) {
+function load(s, imports = {}, props = {}, emit = () => {}) {
   const module = { exports: {} };
   new Function(
     "require",
@@ -30,7 +30,7 @@ function load(s, imports = {}, props = {}) {
     module,
     module.exports,
     () => props,
-    () => () => {},
+    () => emit,
     () => 1,
     () => {},
     { hidden: true },
@@ -40,6 +40,7 @@ function load(s, imports = {}, props = {}) {
 const model = load(
   await readFile(new URL("../src/nodeEnvironment.ts", import.meta.url), "utf8"),
 );
+const pagination = load(await readFile(new URL("../src/pagination.ts", import.meta.url), "utf8"), { vue });
 test("Node preview follows the frozen recipe order and selected operation", async () => {
   const component = await readFile(new URL("../src/NodeVersionDialog.vue", import.meta.url), "utf8");
   const script = component.split('<script setup lang="ts">')[1].split("</script>")[0];
@@ -97,7 +98,7 @@ async function flush() {
   }
 }
 function harness(options = {}) {
-  const calls = [],
+  const calls = [], events = [], deactivated = [],
     stops = [],
     props = vue.reactive({
       host: { id: "host", version: "2", sshUser: "ubuntu", kind: options.hostKind },
@@ -115,7 +116,7 @@ function harness(options = {}) {
     }
     if (path.endsWith("/node-environments")) return [env];
     if (path === "/node-environments/env") return env;
-    if (path.endsWith("/jobs")) return [];
+    if (path.includes("/jobs?")) return { items: [], total: 0 };
     if (path === "/node-environment-recipes")
       return {
         node: [recipe],
@@ -132,20 +133,24 @@ function harness(options = {}) {
     () =>
       load(
         source +
-          "\nexport const flow={draft,plan,environment,error,attempted,openAction,selectRegistry,preflight,submit,source,matchingMaterials,job,initialIntent,continuationRetry,continueInitialInstallation,automaticUpdate,preparationOpen,updatedPreparation};",
+          "\nexport const flow={draft,plan,environment,error,attempted,openAction,closeAction,actionOpen,selectRegistry,preflight,submit,source,matchingMaterials,job,initialIntent,continuationRetry,continueInitialInstallation,automaticUpdate,preparationOpen,updatedPreparation,loadHistory,historyPage,historyPageSize,historyTotal,jobs,logs,logsJobId};",
         {
-          vue: { ...vue, onUnmounted: (fn) => stops.push(fn) },
+          vue: { ...vue, onDeactivated: (fn) => deactivated.push(fn), onUnmounted: (fn) => stops.push(fn) },
           "./api": { request, ApiError },
           "./nodeEnvironment": model,
           "./preparationUpdate": preparationUpdate,
+          "./pagination": pagination,
           "./hosts": {},
         },
         props,
+        (...args) => events.push(args),
       ).flow,
   );
   return {
     flow,
     calls,
+    events,
+    deactivate() { deactivated.forEach(fn => fn()); },
     props,
     dispose() {
       stops.forEach((fn) => fn());
@@ -624,7 +629,7 @@ test("npm registry switch freezes list identity and never adds a source or versi
  assert.equal(data.nodeVersion,undefined); assert.equal(data.source,undefined);
  assert.equal(h.calls.some(c=>c.path.endsWith("/submit")),false); h.dispose();
 });
-test("Node drawer mask closes unchanged drafts and confirms dirty drafts while blocking pending work", async () => {
+test("Node drawer closes pending work without discarding its request and confirms only unsaved edits", async () => {
  const text=await readFile(new URL("../src/NodeVersionDialog.vue",import.meta.url),"utf8");
  const script=text.split('<script setup lang="ts">')[1].split("</script>")[0];
  const props={draft:{action:"INSTALL_NODE",nodeVersion:"v22",makeDefault:true},busy:false,attempted:false};
@@ -633,6 +638,39 @@ test("Node drawer mask closes unchanged drafts and confirms dirty drafts while b
  await flow.confirmClose(()=>closed++); assert.equal(closed,1); assert.equal(confirmations,0);
  props.draft.makeDefault=false; await flow.confirmClose(()=>closed++); assert.equal(closed,1); assert.equal(confirmations,1);
  accepted=true; await flow.confirmClose(()=>closed++); assert.equal(closed,2);
- props.attempted=true; await flow.confirmClose(()=>closed++); assert.equal(closed,2);
- props.attempted=false;props.busy=true;await flow.confirmClose(()=>closed++);assert.equal(closed,2);
+ props.attempted=true; await flow.confirmClose(()=>closed++); assert.equal(closed,3);
+ props.attempted=false;props.busy=true;await flow.confirmClose(()=>closed++);assert.equal(closed,4);
+});
+
+test("Node history pages beyond 100 entries and clamps refresh without clearing selected output",async()=>{
+ let entries=Array.from({length:125},(_,index)=>({id:`history-${index}`})),failed=false;
+ const h=harness({request(path){if(!path.includes('/jobs?'))return;if(failed)throw new Error('network');const query=new URL(path,'http://test').searchParams;const size=Number(query.get('pageSize')),page=Number(query.get('page'));return {items:entries.slice((page-1)*size,page*size),total:entries.length};}});
+ await flush();assert.equal(h.flow.jobs.value.length,10);assert.equal(h.flow.historyTotal.value,125);
+ h.flow.logs.value='保留已读取的输出';h.flow.logsJobId.value='history-0';
+ await h.flow.loadHistory(13);assert.equal(h.flow.jobs.value.length,5);
+ failed=true;await assert.rejects(h.flow.loadHistory(1,20),/network/);assert.equal(h.flow.historyPage.value,13);assert.equal(h.flow.historyPageSize.value,10);failed=false;
+ entries=entries.slice(0,11);await h.flow.loadHistory();
+ assert.equal(h.flow.historyPage.value,2);assert.equal(h.flow.jobs.value.length,1);
+ assert.equal(h.flow.logs.value,'保留已读取的输出');assert.equal(h.flow.logsJobId.value,'history-0');h.dispose();
+});
+
+test("closing a Node submit preserves same-key reconciliation after a lost receipt",async()=>{
+ let finish,attempts=0;
+ const h=harness({request(path){if(path.endsWith('/submit'))return ++attempts===1?new Promise((resolve,reject)=>{finish=reject;}):{jobId:'confirmed'};}});
+ await flush();h.flow.openAction('INSTALL_NODE');await h.flow.preflight();
+ const draft=h.flow.draft.value, pending=h.flow.submit();await flush();
+ h.deactivate();assert.equal(h.flow.actionOpen.value,false);assert.equal(h.flow.draft.value,draft);
+ finish(new Error('response lost'));await pending;
+ assert.equal(h.flow.draft.value,draft);h.flow.actionOpen.value=true;await h.flow.submit();
+ const requests=h.calls.filter(call=>call.path.endsWith('/submit'));
+ assert.equal(requests.length,2);assert.deepEqual(requests[0].data,requests[1].data);
+ assert.equal(h.flow.draft.value,undefined);h.dispose();
+});
+
+test("Node continuation host lock updates and releases after the final retry clears",async()=>{
+ const h=harness();await flush();
+ const state=()=>h.events.filter(event=>event[0]==='closeState').at(-1)[1];
+ const intent={initializationJobId:'pending'};h.flow.initialIntent.value=intent;await flush();h.deactivate();assert.equal(h.flow.initialIntent.value.initializationJobId,intent.initializationJobId);assert.equal(state().hostChangeBlocked,true);assert.equal(state().blocked,false);
+ h.flow.continuationRetry.value={path:'/plans/pending/submit',key:'same-key'};h.flow.initialIntent.value=undefined;await flush();assert.equal(state().hostChangeBlocked,true);
+ h.flow.continuationRetry.value=undefined;await flush();assert.equal(state().hostChangeBlocked,false);h.dispose();
 });
