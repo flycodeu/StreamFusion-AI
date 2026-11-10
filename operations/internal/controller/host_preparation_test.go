@@ -253,7 +253,7 @@ func TestHostPreparationLocalPackageMatchesSupportedPlatform(t *testing.T) {
 		}
 	}
 	readme := targetSetupReadme(p)
-	if strings.Contains(readme, "非空目录") || !strings.Contains(readme, "未知已有目录") {
-		t.Fatal("offline instructions do not describe the refusal of all unknown existing directories")
+	if !strings.Contains(readme, "预建空目录可自动初始化") || !strings.Contains(readme, "未知非空目录") {
+		t.Fatal("offline instructions do not distinguish an empty root from existing content")
 	}
 }

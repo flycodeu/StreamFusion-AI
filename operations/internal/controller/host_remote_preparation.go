@@ -81,6 +81,9 @@ var preparationMessages = map[string]string{
 	"PREPARATION_AUTHORIZATION_CONFLICT":     "服务器现有授权与本主机的账号或安装目录不匹配，已停止并保留原文件。",
 	"PREPARATION_RECOVERY_IDENTITY_MISMATCH": "现有接入文件与原作业及本次恢复材料均不匹配，已停止恢复并保留原文件。",
 	"PREPARATION_RECOVERY_MATERIAL_CHANGED":  "原作业已有已确认的恢复材料，请使用相同材料继续恢复，不能自动替换。",
+	"PREPARATION_RECOVERY_MATERIAL_MISSING":  "原作业的接入恢复材料缺失，请恢复匹配的材料后继续原任务。",
+	"PREPARATION_RECOVERY_MATERIAL_DAMAGED":  "原作业的接入恢复材料校验失败，请检查材料文件，原任务和服务器文件已保留。",
+	"PREPARATION_MATERIAL_CACHE_FAILED":      "接入材料未能完整保存，安装尚未开始，请检查控制器存储空间和权限。",
 	"CONTROLLER_RESTARTED":                   "控制器在安装期间重启，请核对原作业的安装结果。",
 }
 
@@ -119,15 +122,23 @@ func (h *HTTP) latestPreparationJob(id string) any {
 }
 
 func (h *HTTP) preparationRepairSHA(t target) string {
-	var raw, status string
-	if h.store.DB.QueryRow(`SELECT j.input_json,j.status FROM jobs j JOIN operation_locks l ON l.job_id=j.id AND l.resource_key='target:'||j.target_id WHERE j.target_id=? AND j.kind='HOST_PREPARE' ORDER BY j.created_at DESC,j.id DESC LIMIT 1`, t.ID).Scan(&raw, &status) != nil || status != "UNKNOWN" {
-		return ""
-	}
-	var snapshot preparationSnapshot
-	if deploy.StrictJSON([]byte(raw), &snapshot) != nil || !validSHA256(snapshot.BinarySHA) || snapshot.Host.ID != t.ID || snapshot.Host.sshTarget != t.sshTarget || snapshot.Host.InstallRoot != t.InstallRoot {
+	snapshot := h.preparationRepairSnapshot(t)
+	if snapshot == nil {
 		return ""
 	}
 	return snapshot.BinarySHA
+}
+
+func (h *HTTP) preparationRepairSnapshot(t target) *preparationSnapshot {
+	var raw, status string
+	if h.store.DB.QueryRow(`SELECT j.input_json,j.status FROM jobs j JOIN operation_locks l ON l.job_id=j.id AND l.resource_key='target:'||j.target_id WHERE j.target_id=? AND j.kind='HOST_PREPARE' ORDER BY j.created_at DESC,j.id DESC LIMIT 1`, t.ID).Scan(&raw, &status) != nil || status != "UNKNOWN" {
+		return nil
+	}
+	var snapshot preparationSnapshot
+	if deploy.StrictJSON([]byte(raw), &snapshot) != nil || !validSHA256(snapshot.BinarySHA) || snapshot.Host.ID != t.ID || snapshot.Host.sshTarget != t.sshTarget || snapshot.Host.InstallRoot != t.InstallRoot {
+		return nil
+	}
+	return &snapshot
 }
 
 // The request owns the transient sudo password. Only a frozen, secret-free
@@ -175,6 +186,11 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 		if in.UpdateOnly {
 			p.UpdateFromSHA = in.ExpectedCurrentSHA256
 		}
+	}
+	material, err = h.store.cachePreparationMaterial(material)
+	if err != nil {
+		h.fail(w, r, 409, err.Error(), preparationMessage(err.Error()))
+		return
 	}
 	var archive *os.File
 	if !in.AuthorizeOnly {
@@ -684,15 +700,18 @@ func (h *HTTP) repairHostPreparation(w http.ResponseWriter, r *http.Request, act
 		h.fail(w, r, 409, "PREPARATION_REPAIR_NOT_ALLOWED", "请检查原授权任务结果，不能重复执行授权")
 		return
 	}
-	p, material := preparationForHost(t, h.store.controllerID(), h.targetPackageDir)
-	p.CommandPublicKey = h.store.commandPublicKey()
-	p.RepairSHA = snapshot.BinarySHA
+	p, material, err := h.recoveryPreparation(t, snapshot)
+	if err != nil {
+		h.fail(w, r, 409, err.Error(), preparationMessage(err.Error()))
+		return
+	}
 	if !p.Package.Available {
 		h.fail(w, r, 409, p.Package.Code, p.Package.Message)
 		return
 	}
-	if snapshot.RecoveryBinarySHA != "" && (snapshot.RecoveryBinarySHA != material.Binary.Hash || snapshot.RecoveryScriptSHA != material.Script.Hash) {
-		h.fail(w, r, 409, "PREPARATION_RECOVERY_MATERIAL_CHANGED", preparationMessage("PREPARATION_RECOVERY_MATERIAL_CHANGED"))
+	material, err = h.store.cachePreparationMaterial(material)
+	if err != nil {
+		h.fail(w, r, 409, err.Error(), preparationMessage(err.Error()))
 		return
 	}
 	archive, err := createTargetPreparationArchive(p, material)
@@ -764,6 +783,9 @@ func (h *HTTP) acceptPreparationRepair(actor *session, observed target, job, exp
 	var snapshot preparationSnapshot
 	if deploy.StrictJSON([]byte(raw), &snapshot) != nil {
 		return errors.New("VERSION_CONFLICT")
+	}
+	if snapshot.RecoveryBinarySHA != "" && !targetPackageMatches(material, snapshot.RecoveryBinarySHA, snapshot.RecoveryScriptSHA) {
+		return errors.New("PREPARATION_RECOVERY_MATERIAL_CHANGED")
 	}
 	snapshot.RecoveryBinarySHA, snapshot.RecoveryScriptSHA = material.Binary.Hash, material.Script.Hash
 	if _, err = tx.Exec("UPDATE jobs SET input_json=? WHERE id=?", jsonText(snapshot), job); err != nil {

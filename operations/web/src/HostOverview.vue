@@ -1,39 +1,23 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { request } from "./api";
 import { ElMessage } from "element-plus";
-import type { ObservationAttempt } from "./observation";
+import {
+  metricBytes as bytes,
+  metricSnapshot,
+  metricsLive as live,
+  type HostObservation,
+  type HostMetricSnapshot,
+} from "./hostMetrics";
+import HostResourceDetails from "./HostResourceDetails.vue";
 import { hostTime, type Host } from "./hosts";
-import { softwareIsHistoryOnly, softwareState, type SoftwareInstance } from "./software";
+import {
+  softwareIsHistoryOnly,
+  softwareState,
+  type SoftwareInstance,
+} from "./software";
 import SoftwareIcon from "./SoftwareIcon.vue";
 
-interface Metrics {
-  latestAttempt?: ObservationAttempt;
-  freshness?: string;
-  enabled?: boolean;
-  code: string;
-  observedAt: string;
-  hostname?: string;
-  os?: string;
-  kernel?: string;
-  cpuModel?: string;
-  cpuCores?: number;
-  cpuPercent?: number;
-  uptimeSeconds?: number;
-  memoryTotalBytes?: number;
-  memoryAvailableBytes?: number;
-  rootTotalBytes?: number;
-  rootUsedBytes?: number;
-  load?: number[];
-  network?: {
-    name: string;
-    kind: string;
-    receivedBytes: number;
-    sentBytes: number;
-    receiveBytesPerSecond?: number;
-    sendBytesPerSecond?: number;
-  }[];
-}
 const props = defineProps<{
   controller?: {
     release: string;
@@ -48,7 +32,7 @@ const props = defineProps<{
 const emit = defineEmits<{ error: [unknown] }>();
 const hosts = ref<Host[]>([]),
   software = ref<SoftwareInstance[]>([]),
-  metrics = ref<Record<string, Metrics>>({});
+  metrics = ref<Record<string, HostMetricSnapshot>>({});
 const selectedId = ref(""),
   loading = ref(false);
 const selected = computed(() =>
@@ -57,90 +41,15 @@ const selected = computed(() =>
 const current = computed(() => metrics.value[selectedId.value]);
 const softwareOnHost = computed(() =>
   software.value.filter(
-    (s) => s.hostId === selectedId.value && s.managementMode !== "RELEASED" && !softwareIsHistoryOnly(s),
+    (s) =>
+      s.hostId === selectedId.value &&
+      s.managementMode !== "RELEASED" &&
+      !softwareIsHistoryOnly(s),
   ),
 );
-const available = (m?: Metrics) => !!m && ["READY", "PARTIAL"].includes(m.code);
-const live = (m?: Metrics) =>
-  available(m) &&
-  m?.freshness === "FRESH" &&
-  ["READY", "PARTIAL"].includes(m.latestAttempt?.code || "") &&
-  m.enabled !== false;
 const observedCount = computed(
-  () => hosts.value.filter((h) => live(metrics.value[h.id])).length,
+  () => hosts.value.filter((host) => live(metrics.value[host.id])).length,
 );
-const percent = (used?: number, total?: number) =>
-  used !== undefined && total && total > 0
-    ? Math.max(0, Math.min(100, (used / total) * 100))
-    : undefined;
-const gauges = computed(() => [
-  {
-    label: "CPU",
-    value: current.value?.cpuPercent,
-    detail: current.value?.cpuCores
-      ? `${current.value.cpuCores} 逻辑核心`
-      : "核心数未获取",
-  },
-  {
-    label: "内存",
-    value: percent(
-      current.value?.memoryTotalBytes !== undefined &&
-        current.value.memoryAvailableBytes !== undefined
-        ? current.value.memoryTotalBytes - current.value.memoryAvailableBytes
-        : undefined,
-      current.value?.memoryTotalBytes,
-    ),
-    detail: `${bytes(current.value?.memoryTotalBytes !== undefined && current.value.memoryAvailableBytes !== undefined ? current.value.memoryTotalBytes - current.value.memoryAvailableBytes : undefined)} / ${bytes(current.value?.memoryTotalBytes)}`,
-  },
-  {
-    label: "根分区 /",
-    value: percent(current.value?.rootUsedBytes, current.value?.rootTotalBytes),
-    detail: `${bytes(current.value?.rootUsedBytes)} / ${bytes(current.value?.rootTotalBytes)}`,
-  },
-]);
-const interfaces = computed(() => current.value?.network || []);
-const interfaceName = ref("");
-watch(selectedId, () => {
-  interfaceName.value = "";
-});
-const visibleInterface = computed(() => {
-  const nic =
-    interfaces.value.find((item) => item.name === interfaceName.value) ||
-    interfaces.value.find(
-      (item) =>
-        item.kind === "PHYSICAL" && item.receivedBytes + item.sentBytes > 0,
-    ) ||
-    interfaces.value[0];
-  return nic ? [nic] : [];
-});
-const codeLabels: Record<string, string> = {
-  PLATFORM_UNSUPPORTED: "当前仅支持 Linux 资源采集",
-  PROBE_FAILED: "只读采集失败，请检查主机命令权限",
-  RESPONSE_INVALID: "采集结果格式异常，请检查 Linux 环境",
-  SSH_TIMEOUT: "SSH 超时，请检查网络与端口",
-  SSH_UNAVAILABLE: "SSH 无法连接，请检查主机连接",
-  SSH_AUTH_FAILED: "SSH 认证失败，请检查凭据",
-  SSH_HOST_KEY_CHANGED: "主机指纹已变化，请重新核对",
-  CREDENTIAL_UNAVAILABLE: "连接凭据不可用，请检查凭据",
-  HOST_METRICS_BUSY: "主机正在采集，请稍后刷新",
-};
-function bytes(n?: number): string {
-  if (n === undefined || !Number.isFinite(n)) return "—";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let i = 0;
-  while (n >= 1024 && i < units.length - 1) {
-    n /= 1024;
-    i++;
-  }
-  return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
-}
-function duration(n?: number) {
-  return n === undefined
-    ? "—"
-    : n >= 86400
-      ? `${Math.floor(n / 86400)} 天 ${Math.floor((n % 86400) / 3600)} 小时`
-      : `${Math.floor(n / 3600)} 小时 ${Math.floor((n % 3600) / 60)} 分钟`;
-}
 let disposed = false,
   timer: ReturnType<typeof setTimeout> | undefined;
 async function refresh() {
@@ -156,28 +65,12 @@ async function refresh() {
     software.value = ss;
     if (!hs.some((h) => h.id === selectedId.value))
       selectedId.value = hs[0]?.id || "";
-    const snapshots = await request<
-      {
-        hostId: string;
-        lastConfirmed?: Metrics;
-        latestAttempt: ObservationAttempt;
-        freshness: string;
-        enabled: boolean;
-      }[]
-    >("/host-observations");
+    const snapshots = await request<HostObservation[]>("/host-observations");
     if (disposed) return;
     metrics.value = Object.fromEntries(
-      snapshots.map((o) => [
-        o.hostId,
-        {
-          ...(o.lastConfirmed || {
-            code: o.latestAttempt.code || "NOT_CHECKED",
-            observedAt: "",
-          }),
-          latestAttempt: o.latestAttempt,
-          freshness: o.freshness,
-          enabled: o.enabled,
-        },
+      snapshots.map((observation) => [
+        observation.hostId,
+        metricSnapshot(observation),
       ]),
     );
   } catch (error) {
@@ -186,7 +79,8 @@ async function refresh() {
     loading.value = false;
   }
 }
-const detecting = ref(false);
+const detecting = ref(false),
+  monitoring = ref(false);
 async function detect() {
   if (!selectedId.value || detecting.value) return;
   detecting.value = true;
@@ -204,7 +98,8 @@ async function detect() {
   }
 }
 async function toggleMonitoring() {
-  if (!selected.value) return;
+  if (!selected.value || monitoring.value) return;
+  monitoring.value = true;
   try {
     await request("/hosts/" + selected.value.id + "/monitoring", "PATCH", {
       enabled: current.value?.enabled === false,
@@ -213,6 +108,8 @@ async function toggleMonitoring() {
     await refresh();
   } catch (error) {
     emit("error", error);
+  } finally {
+    monitoring.value = false;
   }
 }
 function poll() {
@@ -248,7 +145,12 @@ onUnmounted(() => {
       <article>
         <span>软件实例</span>
         <strong>
-          {{ software.filter((s) => s.managementMode !== "RELEASED" && !softwareIsHistoryOnly(s)).length }}
+          {{
+            software.filter(
+              (s) =>
+                s.managementMode !== "RELEASED" && !softwareIsHistoryOnly(s),
+            ).length
+          }}
         </strong>
       </article>
       <article>
@@ -262,14 +164,6 @@ onUnmounted(() => {
     <section class="overview-panel">
       <header class="overview-panel-head">
         <h2>服务器状态</h2>
-        <span class="spacer"></span>
-        <button
-          class="secondary"
-          :disabled="detecting || !selectedId"
-          @click="detect"
-        >
-          {{ detecting ? "提交中…" : "立即检测" }}
-        </button>
       </header>
       <div v-if="!hosts.length" class="empty">
         尚未接入主机，请在主机管理添加服务器
@@ -295,170 +189,17 @@ onUnmounted(() => {
         </button>
       </div>
     </section>
-    <template v-if="selected">
-      <div
-        v-if="current && !live(current)"
-        class="observation-notice"
-        role="status"
-      >
-        {{
-          current.enabled === false
-            ? "监测已暂停"
-            : current.latestAttempt?.code &&
-                !["READY", "PARTIAL", "NOT_CHECKED"].includes(
-                  current.latestAttempt.code,
-                )
-              ? codeLabels[current.latestAttempt.code] ||
-                "当前无法确认，请检查连接与读取权限"
-              : available(current)
-                ? "上次结果 · 等待后台更新"
-                : "尚未采集 · 等待后台检测"
-        }}
-        <small v-if="current.observedAt"
-          >上次确认 {{ hostTime(current.observedAt) }}</small
-        >
-        <small v-if="current.latestAttempt?.at"
-          >最近尝试 {{ hostTime(current.latestAttempt.at) }}</small
-        >
-      </div>
-      <div class="overview-columns">
-        <section class="overview-panel resource-panel">
-          <header class="overview-panel-head">
-            <h2>{{ live(current) ? "资源使用" : "上次资源" }}</h2>
-            <button class="quiet" @click="toggleMonitoring">
-              {{ current?.enabled === false ? "恢复监测" : "暂停监测" }}
-            </button>
-            <small>
-              {{ current ? hostTime(current.observedAt) : "等待采集" }}
-            </small>
-          </header>
-          <div class="resource-gauges">
-            <article v-for="gauge in gauges" :key="gauge.label">
-              <div
-                class="resource-gauge"
-                :class="{
-                  'usage-critical':
-                    available(current) && (gauge.value ?? 0) >= 90,
-                  'usage-high':
-                    available(current) &&
-                    (gauge.value ?? 0) >= 80 &&
-                    (gauge.value ?? 0) < 90,
-                }"
-                :style="{
-                  '--usage': `${available(current) ? (gauge.value ?? 0) : 0}%`,
-                }"
-                :aria-label="`${gauge.label} ${available(current) && gauge.value !== undefined ? gauge.value.toFixed(1) + '%' : '未获取'}`"
-              >
-                <div>
-                  <strong>
-                    {{
-                      available(current) && gauge.value !== undefined
-                        ? gauge.value.toFixed(1)
-                        : "—"
-                    }}
-                    <small
-                      v-if="available(current) && gauge.value !== undefined"
-                    >
-                      %
-                    </small>
-                  </strong>
-                  <span>{{ gauge.label }}</span>
-                </div>
-              </div>
-              <small>{{ gauge.detail }}</small>
-            </article>
-          </div>
-          <div class="load-summary">
-            <span>
-              系统负载
-              <b>
-                {{
-                  available(current) && current?.load?.length
-                    ? current.load.map((n) => n.toFixed(2)).join(" / ")
-                    : "—"
-                }}
-              </b>
-            </span>
-            <small>1 / 5 / 15 分钟</small>
-          </div>
-        </section>
-        <section class="overview-panel">
-          <header class="overview-panel-head">
-            <h2>系统信息</h2>
-            <span class="state-tag state-muted">
-              {{ selected.maintenance ? "维护中" : "已登记" }}
-            </span>
-          </header>
-          <dl class="system-facts">
-            <dt>主机名称</dt>
-            <dd>{{ current?.hostname || selected.name }}</dd>
-            <dt>系统版本</dt>
-            <dd>{{ current?.os || "未获取" }}</dd>
-            <dt>内核版本</dt>
-            <dd>{{ current?.kernel || "未获取" }}</dd>
-            <dt>处理器</dt>
-            <dd>{{ current?.cpuModel || "未获取" }}</dd>
-            <dt>运行时间</dt>
-            <dd>{{ duration(current?.uptimeSeconds) }}</dd>
-            <dt>项目目录</dt>
-            <dd>
-              <code>{{ selected.installRoot }}</code>
-            </dd>
-          </dl>
-        </section>
-      </div>
-      <div class="overview-columns">
-        <section class="overview-panel">
-          <header class="overview-panel-head">
-            <h2>网络流量</h2>
-            <select
-              v-if="interfaces.length"
-              v-model="interfaceName"
-              aria-label="监测网卡"
-            >
-              <option value="">自动选择</option>
-              <option
-                v-for="nic in interfaces"
-                :key="nic.name"
-                :value="nic.name"
-              >
-                {{ nic.name }}{{ nic.kind === "PHYSICAL" ? " · 物理网卡" : "" }}
-              </option>
-            </select>
-          </header>
-          <div v-if="!interfaces.length" class="empty">
-            {{ loading ? "正在采集流量" : "尚无网络采样" }}
-          </div>
-          <div
-            v-for="nic in visibleInterface"
-            :key="nic.name"
-            class="network-interface"
-          >
-            <strong>{{ nic.name }}</strong>
-            <div>
-              <span>
-                接收
-                <b>
-                  {{
-                    available(current) ? bytes(nic.receiveBytesPerSecond) : "—"
-                  }}/s
-                </b>
-              </span>
-              <span>
-                发送
-                <b>
-                  {{
-                    available(current) ? bytes(nic.sendBytesPerSecond) : "—"
-                  }}/s
-                </b>
-              </span>
-              <small>
-                累计接收 {{ bytes(nic.receivedBytes) }} · 发送
-                {{ bytes(nic.sentBytes) }}
-              </small>
-            </div>
-          </div>
-        </section>
+    <HostResourceDetails
+      v-if="selected"
+      :host="selected"
+      :metrics="current"
+      :loading="loading"
+      :detecting="detecting"
+      :monitoring="monitoring"
+      @detect="detect"
+      @monitoring="toggleMonitoring"
+    >
+      <template #software>
         <section class="overview-panel">
           <header class="overview-panel-head">
             <h2>软件与端口</h2>
@@ -489,8 +230,8 @@ onUnmounted(() => {
             </div>
           </div>
         </section>
-      </div>
-    </template>
+      </template>
+    </HostResourceDetails>
     <details class="overview-controller">
       <summary>控制器信息</summary>
       <dl class="system-facts">
@@ -509,14 +250,6 @@ onUnmounted(() => {
   </section>
 </template>
 <style scoped>
-.overview-panel-head select {
-  width: auto;
-  max-width: 210px;
-  min-width: 0;
-  margin: 0;
-  height: 34px;
-  font-size: 12px;
-}
 .host-overview {
   display: grid;
   gap: 20px;
@@ -637,89 +370,6 @@ onUnmounted(() => {
 .host-dot.available {
   background: var(--success);
 }
-.overview-columns {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-  gap: 20px;
-  align-items: stretch;
-}
-.resource-panel {
-  display: flex;
-  flex-direction: column;
-}
-.resource-gauges {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-  padding: 12px 0 26px;
-}
-.resource-gauges article {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 17px;
-  min-width: 0;
-}
-.resource-gauge {
-  width: 130px;
-  max-width: 100%;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: conic-gradient(var(--accent) var(--usage), #edf2f8 0);
-  padding: 5px;
-}
-.resource-gauge.usage-high {
-  background: conic-gradient(var(--warning) var(--usage), #edf2f8 0);
-}
-.resource-gauge.usage-critical {
-  background: conic-gradient(var(--danger) var(--usage), #edf2f8 0);
-}
-.resource-gauge > div {
-  height: 100%;
-  border: 7px solid white;
-  border-radius: 50%;
-  background: #fafbfd;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-}
-.resource-gauge strong {
-  font-size: 25px;
-  font-weight: 500;
-}
-.resource-gauge strong small {
-  font-size: 12px;
-  margin-left: 3px;
-  color: var(--muted);
-}
-.resource-gauge span,
-.resource-gauges article > small {
-  font-size: 11px;
-  color: var(--muted);
-  text-align: center;
-  line-height: 1.7;
-}
-.load-summary {
-  margin-top: auto;
-  border-top: 1px solid var(--border);
-  padding-top: 17px;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  font-size: 12px;
-  color: var(--muted);
-}
-.load-summary b {
-  font: 12px var(--mono);
-  color: var(--text);
-  margin-left: 12px;
-}
-.load-summary small {
-  font-size: 11px;
-}
 .system-facts {
   display: grid;
   grid-template-columns: 78px minmax(0, 1fr);
@@ -737,38 +387,6 @@ onUnmounted(() => {
 }
 .system-facts code {
   font: 11px var(--mono);
-}
-.network-interface {
-  display: flex;
-  gap: 20px;
-  padding: 15px 0;
-  border-top: 1px solid var(--border);
-}
-.network-interface > strong {
-  font: 12px var(--mono);
-  width: 80px;
-  overflow-wrap: anywhere;
-}
-.network-interface > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 22px;
-  flex: 1;
-  min-width: 0;
-}
-.network-interface span {
-  font-size: 12px;
-  color: var(--muted);
-}
-.network-interface b {
-  color: var(--text);
-  font: 12px var(--mono);
-  margin-left: 6px;
-}
-.network-interface small {
-  font-size: 11px;
-  color: var(--muted);
-  flex-basis: 100%;
 }
 .overview-software-list {
   max-height: 280px;
@@ -831,37 +449,9 @@ onUnmounted(() => {
   padding-top: 14px;
   border-top: 1px solid var(--border-subtle);
 }
-.observation-notice {
-  background: #fff9ed;
-  color: #946619;
-  border: 1px solid #f0dfbd;
-  border-radius: 6px;
-  padding: 14px 18px;
-  font-size: 13px;
-  line-height: 1.8;
-}
-.observation-notice small {
-  display: block;
-  font-size: 11px;
-  line-height: 1.7;
-}
-.observation-notice details {
-  margin-top: 5px;
-  font-size: 11px;
-}
-.observation-notice summary {
-  cursor: pointer;
-}
 @media (max-width: 1200px) {
-  .overview-columns {
-    grid-template-columns: 1fr;
-  }
   .overview-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .resource-gauges {
-    max-width: 620px;
-    margin: auto;
   }
 }
 @media (max-width: 650px) {
@@ -880,29 +470,8 @@ onUnmounted(() => {
   .overview-summary .controller-state {
     font-size: 18px;
   }
-  .resource-gauge {
-    width: 96px;
-  }
-  .resource-gauge > div {
-    border-width: 4px;
-  }
-  .resource-gauge strong {
-    font-size: 20px;
-  }
-  .resource-gauges {
-    gap: 8px;
-  }
-  .resource-gauges article > small {
-    font-size: 10px;
-  }
   .overview-panel-head {
     gap: 10px;
-  }
-  .network-interface {
-    gap: 10px;
-  }
-  .network-interface > strong {
-    width: 60px;
   }
 }
 </style>

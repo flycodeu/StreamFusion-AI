@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
@@ -45,7 +47,7 @@ func TestHostMetricsParsingAndReset(t *testing.T) {
 	if e != nil || m.Network[0].ReceiveBytesPerSecond != nil {
 		t.Fatal("counter reset accepted", m, e)
 	}
-	for _, bad := range []string{"bad", strings.Repeat("x", 16385), strings.Replace(hostMetricFixture, "CORES\t8", "CORES\tNaN", 1)} {
+	for _, bad := range []string{"bad", strings.Repeat("x", hostMetricsOutputLimit+1), strings.Replace(hostMetricFixture, "CORES\t8", "CORES\tNaN", 1)} {
 		if _, e = parseHostMetrics(bad); e == nil {
 			t.Fatal("invalid response accepted")
 		}
@@ -56,10 +58,88 @@ func TestHostMetricsParsingAndReset(t *testing.T) {
 	}
 }
 
+func TestHostMetricsDetailsKeepOptionalFieldsAndBoundedLists(t *testing.T) {
+	output := hostMetricFixture + "ARCH\tx86_64\nBOOT\t1700000000\nSWAPTOTAL\t8192\nSWAPFREE\t2048\nPRIMARY\teth0\nPHYSICAL\teth0\nPROCESS_CPU_BASIS\tLIFETIME_AVERAGE\n"
+	for i := 1; i <= 6; i++ {
+		output += fmt.Sprintf("NETADDR\teth0\t192.0.2.%d/24\n", i)
+	}
+	for i := 1; i <= 25; i++ {
+		output += fmt.Sprintf("PROCESS\t%d\tubuntu\t300.5\t5242880\tworker name\n", i)
+	}
+	output += "PROCESS\t1\tother\t0\t0\tduplicate\nNETADDR\teth0\t192.0.2.1/24\n"
+	m, err := parseHostMetrics(output)
+	if err != nil || m.Code != "READY" || m.Arch != "x86_64" || m.BootTime != "2023-11-14T22:13:20Z" || m.SwapTotalBytes == nil || *m.SwapTotalBytes != 8192 || m.SwapFreeBytes == nil || *m.SwapFreeBytes != 2048 {
+		t.Fatal(m, err)
+	}
+	if m.PrimaryInterface != "eth0" || len(m.Network) != 1 || m.Network[0].Kind != "PHYSICAL" || len(m.Network[0].Addresses) != 4 || m.Network[0].Addresses[0] != "192.0.2.1/24" {
+		t.Fatal("interface information changed", m.Network)
+	}
+	if m.ProcessCPUBasis != "LIFETIME_AVERAGE" || len(m.Processes) != 20 || m.Processes[0].CPUPercent != 300.5 || m.Processes[0].MemoryBytes != 5242880 || m.Processes[0].Name != "worker name" || m.Processes[0].User != "ubuntu" {
+		t.Fatal("process information lost or unbounded", m.Processes)
+	}
+}
+
+func TestHostMetricsInvalidOptionalDataDoesNotLoseCoreResources(t *testing.T) {
+	output := hostMetricFixture + "BOOT\t253402300800\nSWAPTOTAL\t100\nSWAPFREE\t101\nPRIMARY\tmissing0\nNETADDR\teth0\tbad-address\nNETADDR\t../other\t192.0.2.1/24\nPROCESS_CPU_BASIS\tLIFETIME_AVERAGE\n"
+	for _, row := range []string{
+		"0\tubuntu\t1\t1\tzero-pid", "4294967296\tubuntu\t1\t1\tlarge-pid",
+		"1\tubuntu\tNaN\t1\tbad-cpu", "2\tubuntu\t1\t-1\tbad-memory", "3\tubuntu\t1\t1\tbad\x1bname",
+		"4\t" + strings.Repeat("u", 65) + "\t1\t1\tlong-user", "5\tubuntu\t1\t1\t" + strings.Repeat("x", 129),
+	} {
+		output += "PROCESS\t" + row + "\n"
+	}
+	output += "PROCESS\t6\tubuntu\t1\t1\tvalid\nPROCESS\t6\tother\t3\t3\tduplicate\n"
+	m, err := parseHostMetrics(output)
+	if err != nil || m.Code != "READY" || m.BootTime != "" || m.SwapTotalBytes != nil || m.SwapFreeBytes != nil || m.PrimaryInterface != "" || len(m.Network[0].Addresses) != 0 || len(m.Processes) != 1 || m.Processes[0].PID != 6 || m.Processes[0].Name != "valid" {
+		t.Fatal("malformed optional data affected valid resources", m, err)
+	}
+	m, err = parseHostMetrics(strings.Replace(output, "PROCESS_CPU_BASIS\tLIFETIME_AVERAGE", "PROCESS_CPU_BASIS\tUNKNOWN", 1))
+	if err != nil || len(m.Processes) != 0 || m.ProcessCPUBasis != "" {
+		t.Fatal("process CPU accepted without a known basis", m, err)
+	}
+	m, err = parseHostMetrics(hostMetricFixture + "SWAPTOTAL\t0\nSWAPFREE\t0\n")
+	if err != nil || m.SwapTotalBytes == nil || *m.SwapTotalBytes != 0 || m.SwapFreeBytes == nil || *m.SwapFreeBytes != 0 {
+		t.Fatal("disabled swap was reported as unknown", m, err)
+	}
+}
+
+func TestHostMetricsOutputRemainsBounded(t *testing.T) {
+	output := hostMetricFixture + strings.Repeat("IGNORED\t0\n", 2000)
+	if len(output) <= 16<<10 || len(output) >= hostMetricsOutputLimit {
+		t.Fatal("fixture does not exercise the expanded bounded output")
+	}
+	if _, err := parseHostMetrics(output); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parseHostMetrics(output + strings.Repeat("x", hostMetricsOutputLimit)); err == nil {
+		t.Fatal("oversized metrics accepted")
+	}
+}
+
+func TestHostMetricsInterfacesAndAddressesHaveGlobalBounds(t *testing.T) {
+	output := hostMetricFixture
+	for i := 0; i < 80; i++ {
+		output += fmt.Sprintf("NET1\tnic%d\t1\t2\nNETADDR\tnic%d\t192.0.2.1/24\nPHYSICAL\tnic%d\n", i, i, i)
+	}
+	m, err := parseHostMetrics(output)
+	if err != nil || len(m.Network) != 64 {
+		t.Fatal("unbounded network interfaces", m, err)
+	}
+	count := 0
+	for _, nic := range m.Network {
+		count += len(nic.Addresses)
+	}
+	if count > 64 {
+		t.Fatal("unbounded network addresses", count)
+	}
+}
+
 func TestHostMetricsSSHReadOnlyPersistenceAndCredentialFailure(t *testing.T) {
 	s, b := setup(t)
 	b.login()
-	f := hostSSHServer(t, s, b, false, false, func(command string) ([]byte, bool) { return []byte(hostMetricFixture), command == hostMetricsCommand })
+	f := hostSSHServer(t, s, b, false, false, func(command string) ([]byte, bool) {
+		return []byte(hostMetricFixture + strings.Repeat("IGNORED\t0\n", 2000)), command == hostMetricsCommand
+	})
 	host := f.create(t, b, "metric-host")
 	id := host["id"].(string)
 	empty := dataOf(t, b.call("GET", "/hosts/"+id+"/metrics", nil, 200))
@@ -110,6 +190,12 @@ func TestHostMetricsLocalLinuxProbe(t *testing.T) {
 	m := localHostMetrics(ctx)
 	if m.Code != "READY" || m.CPUPercent == nil || m.CPUCores < 1 {
 		t.Fatal(m)
+	}
+	if m.Arch == "" || m.BootTime == "" || m.SwapTotalBytes == nil || m.SwapFreeBytes == nil || *m.SwapFreeBytes > *m.SwapTotalBytes {
+		t.Fatal("Linux system details missing", m)
+	}
+	if _, err := exec.LookPath("ps"); err == nil && (m.ProcessCPUBasis != "LIFETIME_AVERAGE" || len(m.Processes) == 0 || len(m.Processes) > 20) {
+		t.Fatal("Linux process snapshot missing or unbounded", m.Processes)
 	}
 }
 

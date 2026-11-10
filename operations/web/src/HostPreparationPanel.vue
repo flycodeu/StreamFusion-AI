@@ -292,7 +292,7 @@ async function reconcile() {
       const messages: Record<string, string> = {
         EXECUTOR_PATH_UNSAFE: "接入目录权限有误，点击下方按钮修复。",
         EXECUTOR_MISSING: "点击下方按钮恢复安装。",
-        SUDO_AUTHORIZATION_REQUIRED: "请使用 root 账号，或提供当前连接账号的 sudo 权限后再试。",
+        SUDO_AUTHORIZATION_REQUIRED: "请确认当前连接账号的 sudo 权限，并完成权限验证后重试。",
       };
       checkResult.value = { ready: false, title: titles[cause.code] || "安装结果仍待确认", message: messages[cause.code] || cause.message, code: cause.code };
     } else report(cause);
@@ -325,7 +325,7 @@ async function repair() {
         EXECUTOR_RESPONSE_INVALID: "安装结果检查未完成",
       };
       if (cause.code === "PREPARATION_SUDO_REQUIRED") needsSudoPassword.value = true;
-      checkResult.value = { ready: false, title: titles[cause.code] || "权限修复未完成", message: cause.message, code: cause.code };
+      checkResult.value = { ready: false, title: titles[cause.code] || "接入恢复未完成", message: cause.message, code: cause.code };
     } else report(cause);
   } finally {
     input.sudoPassword = "";
@@ -389,7 +389,7 @@ async function check() {
         <div class="verification-copy"><strong>{{ checkResult.title }}</strong><p>{{ checkResult.message }}</p>
           <div v-if="canRecover" class="repair-panel">
             <label v-if="data.account !== 'root' && needsSudoPassword" class="password-field">{{ data.account }} 的登录密码 <span>用于 sudo 提权，仅本次使用</span><input v-model="sudoPassword" type="password" autocomplete="off" maxlength="1024" :disabled="busy" :aria-label="`${data.account} 的登录密码`" placeholder="请输入该账号的系统密码" /></label>
-            <div class="repair-actions"><button class="primary" :disabled="busy" @click="repair">{{ repairing ? '正在恢复并检查…' : missingFiles ? '恢复接入并继续安装' : '修复权限并继续安装' }}</button><button class="quiet" :disabled="busy" @click="reconcile">只重新检查</button></div>
+            <div class="repair-actions"><button class="primary" :disabled="busy" @click="repair">{{ repairing ? '正在恢复并检查…' : missingFiles ? '恢复接入并继续安装' : '验证并继续安装' }}</button><button class="quiet" :disabled="busy" @click="reconcile">只重新检查</button></div>
           </div>
         </div>
         <button v-if="!checkResult.ready && job?.status === 'UNKNOWN' && !canRecover" class="secondary" :disabled="busy" @click="reconcile">重新检查</button>

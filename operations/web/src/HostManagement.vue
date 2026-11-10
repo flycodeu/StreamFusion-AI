@@ -10,6 +10,7 @@ import {
 import { request } from "./api";
 import HostConnectionDialog from "./HostConnectionDialog.vue";
 import HostPreparationPanel from "./HostPreparationPanel.vue";
+import HostSystemPanel from "./HostSystemPanel.vue";
 import {
   hostCapabilityLabels,
   hostObservationExpired,
@@ -424,6 +425,7 @@ onUnmounted(() => {
     @error="emit('error', $event)"
   />
   <ElDrawer
+    class="host-detail-drawer"
     :model-value="!!detail"
     :title="detail?.name || '主机详情'"
     size="min(900px, 100vw)"
@@ -446,6 +448,10 @@ onUnmounted(() => {
         </button>
       </div>
       <ElTabs v-model="detailTab">
+        <ElTabPane label="系统信息" name="system">
+          <HostSystemPanel v-if="detailTab === 'system'" :key="detail.id" :host="detail"
+            @error="emit('error', $event)" />
+        </ElTabPane>
         <ElTabPane label="连接信息" name="connection">
           <dl class="host-facts">
             <dt>连接地址</dt>
@@ -759,6 +765,14 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 22px;
+  min-width: 0;
+  max-width: 100%;
+}
+.host-detail :deep(.el-tabs),
+.host-detail :deep(.el-tabs__header),
+.host-detail :deep(.el-tabs__content) {
+  min-width: 0;
+  max-width: 100%;
 }
 .detail-status {
   display: flex;
@@ -942,5 +956,16 @@ onUnmounted(() => {
   .capability-details article:not(:last-child) {
     border-bottom: 1px solid var(--border);
   }
+}
+</style>
+<style>
+.host-detail-drawer.el-drawer {
+  min-width: 0;
+  min-inline-size: 0;
+  max-width: 100vw;
+}
+.host-detail-drawer .el-drawer__body {
+  min-width: 0;
+  max-width: 100%;
 }
 </style>

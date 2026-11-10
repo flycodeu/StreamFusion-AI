@@ -16,6 +16,7 @@ func targetInstaller(p hostPreparation, helper string) string {
 		"@ROOT@", p.InstallRoot, "@CONTROLLER@", p.ControllerID,
 		"@TARGET@", p.TargetID, "@ACCOUNT@", p.Account, "@SHA@", p.Package.SHA256,
 		"@REPAIR_SHA@", p.RepairSHA,
+		"@EMPTY_ROOT@", controllerScript("preparation/empty-root.sh"),
 		"@COMMAND_PUBLIC_KEY@", p.CommandPublicKey,
 		"@HELPER_MARKER@", marker, "@HELPER@", helper,
 	).Replace(controllerScript("preparation/install.sh.tmpl"))

@@ -324,8 +324,13 @@ func TestPreparationRecoveryRejectsChangedMaterialsBeforeSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := b.call("POST", "/hosts/"+target.ID+"/preparation/repair", preparationRepairInput{JobID: job, ExpectedVersion: target.Version, Confirmed: true}, 409)
-	if !strings.Contains(response.Body.String(), "PREPARATION_RECOVERY_MATERIAL_CHANGED") || f.Commands.Load() != 0 {
+	if !strings.Contains(response.Body.String(), "PREPARATION_RECOVERY_MATERIAL_MISSING") || f.Commands.Load() != 0 {
 		t.Fatal("changed recovery materials reached SSH", response.Body.String())
+	}
+	preparation := dataOf(t, b.call("GET", "/hosts/"+target.ID+"/preparation", nil, 200))
+	pack := preparation["package"].(map[string]any)
+	if pack["available"] != false || pack["code"] != "PREPARATION_RECOVERY_MATERIAL_MISSING" || pack["downloadUrl"] != "" || pack["sha256"] != "" || pack["byteSize"] != float64(0) {
+		t.Fatal("missing frozen package was presented as the current release", pack)
 	}
 }
 

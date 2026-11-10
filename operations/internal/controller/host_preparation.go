@@ -272,7 +272,12 @@ func (h *HTTP) hostPreparation(w http.ResponseWriter, r *http.Request, id string
 		h.opsError(w, r, err)
 		return
 	}
-	p, _ := preparationForHost(t, h.store.controllerID(), h.targetPackageDir)
+	var p hostPreparation
+	if snapshot := h.preparationRepairSnapshot(t); snapshot != nil {
+		p, _, _ = h.recoveryPreparation(t, *snapshot)
+	} else {
+		p, _ = preparationForHost(t, h.store.controllerID(), h.targetPackageDir)
+	}
 	p.CommandPublicKey = h.store.commandPublicKey()
 	p.RepairSHA = h.preparationRepairSHA(t)
 	p.RemoteJob = h.latestPreparationJob(id)
@@ -299,9 +304,18 @@ func (h *HTTP) downloadHostPreparation(w http.ResponseWriter, r *http.Request, i
 		h.fail(w, r, 409, "VERSION_CONFLICT", "主机连接已变化或缺少版本，请重新打开安装准备")
 		return
 	}
-	p, material := preparationForHost(t, h.store.controllerID(), h.targetPackageDir)
+	var p hostPreparation
+	var material verifiedTargetPackage
+	if snapshot := h.preparationRepairSnapshot(t); snapshot != nil {
+		p, material, err = h.recoveryPreparation(t, *snapshot)
+		if err != nil {
+			h.fail(w, r, 409, err.Error(), preparationMessage(err.Error()))
+			return
+		}
+	} else {
+		p, material = preparationForHost(t, h.store.controllerID(), h.targetPackageDir)
+	}
 	p.CommandPublicKey = h.store.commandPublicKey()
-	p.RepairSHA = h.preparationRepairSHA(t)
 	if !p.Package.Available {
 		h.fail(w, r, 409, p.Package.Code, p.Package.Message)
 		return

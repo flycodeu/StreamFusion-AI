@@ -353,7 +353,7 @@ test("operator-facing preparation is a single concise install flow", () => {
   assert.equal(component.includes("{{ checkResult.code }}"), false);
   assert.equal(hostManagement.includes("<code>{{ detail.capabilities?.[key]?.code }}</code>"), false);
   assert.equal(hostOverview.includes("<code>{{ current.latestAttempt.code }}</code>"), false);
-  assert.match(component, /修复权限并继续安装/);
+  assert.match(component, /验证并继续安装/);
   assert.match(component, /用于 sudo 提权，仅本次使用/);
   assert.equal(component.includes("Ops 会核对接入归属和可信摘要，只修复固定控制文件的权限"), false);
   assert.match(app, /HOST_PREPARATION_REPAIR_ACCEPTED: "开始修复接入权限"/);

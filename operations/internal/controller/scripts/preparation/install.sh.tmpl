@@ -26,7 +26,7 @@ echo '接入后由 Ops 通过 SSH 按需调用，无需启动额外的常驻服�
 $preview && exit 0
 if [[ $EUID != 0 ]]; then
   $automatic && fail '在线安装需要 root 或 sudo 权限。'
-  command -v sudo >/dev/null || fail '需要管理员权限，请使用 root 运行 bash install.sh。'
+  command -v sudo >/dev/null || fail '当前账号缺少 sudo，请联系管理员授权后重试。'
   echo '安装需要管理员权限，接下来可能提示输入当前账号的 sudo 密码。'
   repair_args=()
   $repair_only && repair_args+=(--repair-only)
@@ -47,6 +47,8 @@ if [[ -n '@COMMAND_PUBLIC_KEY@' ]]; then args+=(--command-public-key '@COMMAND_P
 if $repair_only; then
   [[ '@REPAIR_SHA@' =~ ^[a-f0-9]{64}$ ]] || fail '当前恢复包没有匹配的原安装记录，请重新从 Ops 下载。'
 fi
+@EMPTY_ROOT@
+prepare_empty_root '@ROOT@' '@ACCOUNT@'
 if [[ -e '@ROOT@' || -L '@ROOT@' ]]; then
 	if $repair_only; then
 	  # A prior recovery may have installed the frozen replacement before its
