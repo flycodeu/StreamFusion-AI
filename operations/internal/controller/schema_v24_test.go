@@ -89,7 +89,7 @@ func TestSchemaTwentyFourPreservesJobsGitPlanReferencesAndUnresolvedLocks(t *tes
 			var version, invalid int
 			db.QueryRow("PRAGMA user_version").Scan(&version)
 			db.QueryRow("SELECT count(*) FROM pragma_foreign_key_check").Scan(&invalid)
-			want := 24
+			want := SchemaVersion
 			if fail {
 				want = 23
 			}

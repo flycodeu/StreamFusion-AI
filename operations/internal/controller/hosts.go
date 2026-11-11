@@ -342,6 +342,9 @@ func (h *HTTP) saveHost(w http.ResponseWriter, r *http.Request, s *session, id s
 		old = current
 		identityChanged := old.Kind != in.Kind || old.Address != in.Address || old.Port != in.Port || old.InstallRoot != in.InstallRoot
 		if identityChanged {
+			if h.applicationReferenceBlocked(w, r, tx, "host", id) {
+				return
+			}
 			var deployed int
 			e = tx.QueryRow("SELECT (SELECT count(*) FROM instances i WHERE i.target_id=? AND (i.current_release_id IS NOT NULL OR i.previous_release_id IS NOT NULL OR EXISTS(SELECT 1 FROM releases WHERE instance_id=i.id)))+(SELECT count(*) FROM plugin_installations WHERE target_id=?)+(SELECT count(*) FROM software_instances WHERE host_id=?)", id, id, id).Scan(&deployed)
 			if e != nil {
@@ -481,6 +484,9 @@ func (h *HTTP) deleteHost(w http.ResponseWriter, r *http.Request, s *session, id
 		return
 	}
 	defer tx.Rollback()
+	if h.applicationReferenceBlocked(w, r, tx, "host", id) {
+		return
+	}
 	var count int
 	e = tx.QueryRow("SELECT (SELECT count(*) FROM instances WHERE target_id=?)+(SELECT count(*) FROM jobs WHERE target_id=?)+(SELECT count(*) FROM plugin_installations WHERE target_id=?)+(SELECT count(*) FROM plugin_install_plans WHERE target_id=?)+(SELECT count(*) FROM software_instances WHERE host_id=?)+(SELECT count(*) FROM software_install_plans WHERE target_id=?)+(SELECT count(*) FROM firewall_plans WHERE target_id=?)+(SELECT count(*) FROM git_repositories WHERE host_id=?)+(SELECT count(*) FROM git_repository_plans WHERE host_id=?)", id, id, id, id, id, id, id, id, id).Scan(&count)
 	if e != nil {

@@ -496,6 +496,9 @@ func (h *HTTP) releaseNodeEnvironment(w http.ResponseWriter, r *http.Request, s 
 		h.nodeError(w, r, errors.New("NODE_CONFIRMATION_REQUIRED"))
 		return
 	}
+	if h.applicationReferenceBlocked(w, r, tx, "node-environment", id) {
+		return
+	}
 	if err = nodeTargetUnlocked(tx, n.HostID); err != nil {
 		h.nodeError(w, r, err)
 		return

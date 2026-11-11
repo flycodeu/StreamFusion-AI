@@ -106,6 +106,9 @@ func (h *HTTP) enqueuePlugin(w http.ResponseWriter, r *http.Request, s *session,
 			h.opsError(w, r, readErr)
 			return
 		}
+		if h.applicationReferenceBlocked(w, r, tx, "software", installationID) {
+			return
+		}
 		n, refErr := pluginRemovalReferences(tx, i)
 		if refErr != nil {
 			h.internal(w, r, refErr)

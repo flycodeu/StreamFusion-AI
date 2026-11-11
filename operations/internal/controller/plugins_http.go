@@ -292,6 +292,9 @@ func (h *HTTP) removePluginInstallation(w http.ResponseWriter, r *http.Request, 
 		h.fail(w, r, 409, "PLUGIN_REFERENCE_EXISTS", "环境仍被引用，不能卸载")
 		return
 	}
+	if h.applicationReferenceBlocked(w, r, h.store.DB, "software", id) {
+		return
+	}
 	if i.Status != "READY" && i.Status != "FAILED" {
 		h.fail(w, r, 409, "PLUGIN_REMOVE_BLOCKED", "环境有未决作业，请先核对")
 		return

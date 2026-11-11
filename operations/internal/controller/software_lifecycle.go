@@ -82,6 +82,9 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 		h.opsError(w, r, e)
 		return
 	}
+	if (action == "SOFTWARE_UNINSTALL" || operation == "unmanage") && h.applicationReferenceBlocked(w, r, h.store.DB, "software", id) {
+		return
+	}
 	if (in.Action == "PAUSE" || in.Action == "UNPAUSE") && prepared.RuntimeKind != "DOCKER" {
 		h.fail(w, r, 409, "SOFTWARE_ACTION_UNSUPPORTED", "暂停和继续仅适用于容器服务")
 		return
@@ -209,6 +212,9 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	}
 	if i.Version != in.ExpectedVersion {
 		h.fail(w, r, 409, "VERSION_CONFLICT", "软件已变化，请刷新")
+		return
+	}
+	if (action == "SOFTWARE_UNINSTALL" || operation == "unmanage") && h.applicationReferenceBlocked(w, r, tx, "software", id) {
 		return
 	}
 	if action == "SOFTWARE_UNINSTALL" && (i.Installation == nil || !installationBound(i) || !in.Confirmed || in.DeleteData && in.ConfirmationName != i.Name) {

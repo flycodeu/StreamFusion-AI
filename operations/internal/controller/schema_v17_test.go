@@ -26,7 +26,7 @@ func schemaSixteenFixture(t *testing.T) schemaTenFixture {
 
 func schemaSeventeenHistoricalRows(t *testing.T, db *sql.DB) map[string]string {
 	t.Helper()
-	names, err := db.Query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('schema_migrations','sessions','node_registries','git_accounts','git_repositories','git_repository_plans','command_templates','software_management_state','software_management_credentials') ORDER BY name")
+	names, err := db.Query("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'application_%' AND name NOT IN ('schema_migrations','sessions','node_registries','git_accounts','git_repositories','git_repository_plans','command_templates','software_management_state','software_management_credentials') ORDER BY name")
 	if err != nil {
 		t.Fatal(err)
 	}

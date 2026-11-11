@@ -30,6 +30,9 @@ func (h *HTTP) configureGitAccount(w http.ResponseWriter, r *http.Request, s *se
 		h.gitError(w, r, errors.New("GIT_PROFILE_CHANGED"))
 		return
 	}
+	if remove && h.applicationReferenceBlocked(w, r, h.store.DB, "git-account", id) {
+		return
+	}
 	t, err := h.store.readTarget(a.HostID)
 	if err != nil || t.Maintenance || t.Version != in.ExpectedHostVersion {
 		h.gitError(w, r, errors.New("HOST_CHANGED"))

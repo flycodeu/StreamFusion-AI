@@ -141,6 +141,9 @@ func (h *HTTP) revokeCredential(w http.ResponseWriter, r *http.Request, s *sessi
  UNION ALL
  SELECT credential_id,credential_revision FROM git_accounts WHERE deleted_at=''
  UNION ALL
+ SELECT json_extract(v.value,'$.credentialId'),CAST(json_extract(v.value,'$.credentialRevision') AS INTEGER)
+ FROM application_deployments d,json_each(d.config_json,'$.variables') v
+ UNION ALL
  SELECT c.credential_id,c.credential_revision FROM software_management_credentials c JOIN software_instances i ON i.id=c.software_id WHERE i.management_mode='MANAGED'
  UNION ALL
  SELECT json_extract(p.value,'$.id'),CAST(json_extract(p.value,'$.revision') AS INTEGER) FROM software_instances i,json_each(i.installation_json,'$.config.parameterCredentials') p WHERE i.management_mode='MANAGED'
@@ -172,7 +175,7 @@ func (h *HTTP) revokeCredential(w http.ResponseWriter, r *http.Request, s *sessi
 		return
 	}
 	if referenced != 0 {
-		h.fail(w, r, 409, "CREDENTIAL_IN_USE", "目标、成功版本或未决作业仍引用此修订，请先调整引用")
+		h.fail(w, r, 409, "CREDENTIAL_IN_USE", "主机、项目、成功版本或未决作业仍引用此修订，请先调整引用")
 		return
 	}
 	result, err := tx.Exec("UPDATE credential_refs SET revoked_at=? WHERE id=? AND revision=? AND revoked_at IS NULL", Now(), id, revision)

@@ -3,6 +3,7 @@ import { computed, KeepAlive, nextTick, onMounted, onUnmounted, ref, watch } fro
 import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, prepare, request, send, setCSRF } from "./api";
 import OpsWorkspace from "./OpsWorkspace.vue";
+import ApplicationProjects from "./ApplicationProjects.vue";
 import SoftwareManagement from "./SoftwareManagement.vue";
 import SoftwareCommandTemplates from "./SoftwareCommandTemplates.vue";
 import SoftwareLogs from "./SoftwareLogs.vue";
@@ -82,6 +83,7 @@ const nav = [
     label: "软件配置",
     icon: "M4 4h16v16H4z M7 8l3 3-3 3 M12 15h5",
   },
+  { id: "application-projects", label: "项目管理", icon: "M3 5h7l2 2h9v13H3z M7 11h10 M7 15h7" },
   { id: "instances", label: "应用实例", icon: "M5 5h14v14H5z M9 9h6v6H9z" },
   { id: "artifacts", label: "版本制品", icon: "M4 7h16v13H4z M8 4h8v3H8z" },
   { id: "jobs", label: "发布作业", icon: "M6 3h12v4H6z M6 11h12 M6 16h8" },
@@ -121,7 +123,7 @@ const navigationOpen = ref(false);
 const navigationGroups = [
   { label: "工作空间", ids: ["overview", "hosts", "ports"] },
   { label: "软件中心", ids: ["software", "software-install", "commands"] },
-  { label: "应用交付", ids: ["instances", "artifacts", "jobs"] },
+  { label: "应用交付", ids: ["application-projects", "instances", "artifacts", "jobs"] },
   { label: "控制器", ids: ["credentials", "audit", "settings"] },
 ].map((group) => ({ ...group, items: nav.filter((item) => group.ids.includes(item.id)) }));
 const logTab = ref<"jobs" | "runtime" | "audit">("jobs");
@@ -297,6 +299,8 @@ const actionLabels: Record<string, string> = {
   NODE_ENVIRONMENT_PLAN_CREATED: "预检 Node 操作",
   NODE_ENVIRONMENT_CHANGE_ACCEPTED: "提交 Node 操作",
   NODE_ENVIRONMENT_CHANGE_RESULT: "Node 操作结果",
+  APPLICATION_PROJECT_SAVED: "保存项目配置",
+  APPLICATION_PROJECT_ARCHIVED: "归档项目",
   GIT_ACCOUNT_SAVED: "保存 Git 账号",
   GIT_ACCOUNT_DELETED: "删除 Git 账号",
   GIT_REPOSITORY_PLAN_CREATED: "预检仓库账号配置",
@@ -936,6 +940,10 @@ onUnmounted(() => {
         <OpsWorkspace
           v-else-if="['instances', 'artifacts', 'jobs'].includes(active)"
           :page="active"
+          @error="report"
+        />
+        <ApplicationProjects
+          v-else-if="active === 'application-projects'"
           @error="report"
         />
         <HostOverview

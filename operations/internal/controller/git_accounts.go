@@ -238,6 +238,9 @@ func (h *HTTP) saveGitAccount(w http.ResponseWriter, r *http.Request, s *session
 		if in.AuthMethod == "HTTPS" {
 			in.AccountUID = previous.AccountUID
 		}
+		if r.Method == "DELETE" && h.applicationReferenceBlocked(w, r, tx, "git-account", id) {
+			return
+		}
 		var count int
 		err = tx.QueryRow("SELECT count(*) FROM git_repositories b LEFT JOIN jobs j ON j.id=b.last_job_id WHERE b.profile_id=? AND (b.status<>'RELEASED' OR j.status IN ('QUEUED','RUNNING','UNKNOWN') OR j.target_ack_pending=1)", id).Scan(&count)
 		if err != nil {

@@ -67,7 +67,7 @@ func TestSchemaTwentyOneAddsOnlyTemplateStorage(t *testing.T) {
 	b.login()
 	dir := s.Dir
 	before := schemaSeventeenHistoricalRows(t, s.DB)
-	if _, err := s.DB.Exec("DROP TABLE software_management_credentials; DROP TABLE software_management_state; DROP TABLE command_templates; DELETE FROM schema_migrations WHERE version>=21; PRAGMA user_version=20"); err != nil {
+	if _, err := s.DB.Exec(dropApplicationFixtureTables + "DROP TABLE software_management_credentials; DROP TABLE software_management_state; DROP TABLE command_templates; DELETE FROM schema_migrations WHERE version>=21; PRAGMA user_version=20"); err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
