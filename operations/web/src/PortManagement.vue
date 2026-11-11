@@ -375,7 +375,7 @@ onUnmounted(() => {
   <section class="content port-page">
     <header class="port-toolbar">
       <label
-        >管理主机<select
+        ><span>管理主机</span><select
           v-model="hostId"
           aria-label="端口管理主机"
           :disabled="busy"
@@ -804,7 +804,7 @@ onUnmounted(() => {
 .port-page {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 24px;
+  gap: var(--ops-page-gap, 16px);
   min-width: 0;
 }
 .port-toolbar,
@@ -818,20 +818,36 @@ onUnmounted(() => {
 }
 .port-toolbar {
   justify-content: space-between;
-  align-items: flex-end;
+}
+.port-toolbar label {
+  display: flex;
+  align-items: center;
+  flex: 0 1 380px;
+  min-width: 0;
+  gap: 12px;
+}
+.port-toolbar label span {
+  flex-shrink: 0;
+}
+.port-toolbar .port-actions {
+  margin-left: auto;
 }
 .port-rule-tools {
   justify-content: space-between;
 }
 .port-toolbar label,
 .port-form label {
-  display: grid;
-  gap: 8px;
   font-size: 13px;
   color: var(--muted);
 }
+.port-form label {
+  display: grid;
+  gap: 8px;
+}
 .port-toolbar select {
-  min-width: 240px;
+  flex: 1;
+  min-width: 0;
+  width: 0;
   margin-top: 0;
   height: 38px;
 }
@@ -1055,10 +1071,8 @@ onUnmounted(() => {
   .port-summary strong {
     font-size: 21px;
   }
-  .port-toolbar label,
-  .port-toolbar select {
-    width: 100%;
-    min-width: 0;
+  .port-toolbar label {
+    flex-basis: 100%;
   }
   .port-filter input {
     max-width: none;

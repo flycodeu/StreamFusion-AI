@@ -912,7 +912,7 @@ onUnmounted(() => {
             </button>
           </div>
         </div>
-        <SoftwareCommandTemplates v-if="commandsVisited" v-show="active === 'commands'" :active="active === 'commands'" />
+        <SoftwareCommandTemplates class="content" v-if="commandsVisited" v-show="active === 'commands'" :active="active === 'commands'" />
         <KeepAlive>
           <SoftwareManagement
             v-if="active === 'software' || active === 'software-install'"
@@ -943,6 +943,7 @@ onUnmounted(() => {
           @error="report"
         />
         <ApplicationProjects
+          class="content"
           v-else-if="active === 'application-projects'"
           @error="report"
         />
