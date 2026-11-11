@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { ElDialog, ElMessageBox } from "element-plus";
 import { ApiError, request } from "./api";
 import { requestAllPages } from "./listPages";
@@ -9,9 +9,9 @@ import type { GitProfile } from "./gitManagement";
 import { softwareInstallationReady, softwareIsDockerEngine, softwareIsTool, softwareVersionText, type SoftwareInstance } from "./software";
 import {
   copyApplicationProject, latestProjectCredentials, newApplicationProject, newProjectDeployment, newProjectEnvironment,
-  newProjectModule, newProjectRepository, projectListPath, projectModuleUsage, projectNameError,
+  newProjectModule, newProjectRepository, projectListPath, projectModuleUsage, projectValidationError,
   projectRepositoryUsage, projectVariableMode,
-  type ApplicationProject, type ApplicationProjectPage, type ProjectCredential, type ProjectDeployment, type ProjectVariable,
+  type ApplicationProject, type ApplicationProjectPage, type ProjectCredential, type ProjectDeployment, type ProjectSection, type ProjectVariable,
 } from "./applicationProjects";
 
 const emit = defineEmits<{ error: [unknown] }>();
@@ -20,13 +20,16 @@ const page = ref(1), pageSize = ref(10), total = ref(0);
 const query = ref(""), archived = ref("false");
 const loading = ref(false), saving = ref(false), opening = ref(false);
 const listError = ref(""), editorError = ref("");
-const editorOpen = ref(false), tab = ref("repositories");
+const editorOpen = ref(false);
+const editorElement = ref<HTMLElement>();
+const expanded = reactive({ basics: true, repositories: false, modules: false, environments: false });
 const draft = ref(newApplicationProject()), baseline = ref("");
 const selectedModuleId = ref(""), selectedEnvironmentId = ref(""), selectedDeploymentId = ref("");
 const archiveTarget = ref("");
 const hosts = ref<Host[]>([]), accounts = ref<GitProfile[]>([]), software = ref<SoftwareInstance[]>([]);
 const credentials = ref<ProjectCredential[]>([]);
 const credentialVariables = reactive(new WeakSet<ProjectVariable>());
+const variableSections = reactive(new Set<string>());
 let listSequence = 0, editorSequence = 0;
 let listController: AbortController | undefined;
 let editorController: AbortController | undefined;
@@ -37,7 +40,6 @@ const environment = computed(() => draft.value.environments.find(item => item.id
 const deployment = computed(() => environment.value?.deployments.find(item => item.id === selectedDeploymentId.value));
 const dirty = computed(() => JSON.stringify(draft.value) !== baseline.value);
 const availableModules = computed(() => draft.value.modules.filter(item => !environment.value?.deployments.some(target => target.moduleId === item.id)));
-const tabs = [{ id: "repositories", label: "代码仓库" }, { id: "modules", label: "应用模块" }, { id: "environments", label: "部署环境" }];
 const buildKinds = { DOCKERFILE: "Dockerfile", COMMAND: "编译与打包", STATIC: "前端静态文件" };
 const runtimeKinds = { DOCKER: "Docker 容器", NATIVE: "原生服务", STATIC: "静态文件" };
 const healthKinds = { NONE: "暂不配置", HTTP: "HTTP 请求", TCP: "TCP 端口", COMMAND: "验证命令" };
@@ -106,7 +108,8 @@ async function editProject(project?: ApplicationProject) {
     selectedEnvironmentId.value = saved.environments[0]?.id || "";
     selectedDeploymentId.value = saved.environments[0]?.deployments[0]?.id || "";
     editorError.value = "";
-    tab.value = "repositories";
+    Object.assign(expanded, { basics: true, repositories: false, modules: false, environments: false });
+    variableSections.clear();
     editorOpen.value = true;
   } catch (error) {
     if (sequence === editorSequence && !controller.signal.aborted) listError.value = errorMessage(error);
@@ -122,11 +125,35 @@ async function closeEditor(done: () => void) {
   done();
 }
 
+async function showSection(section: ProjectSection) {
+  expanded[section] = true;
+  await nextTick();
+  const container = editorElement.value, target = container?.querySelector<HTMLElement>(`[data-project-section="${section}"]`);
+  if (container && target) container.scrollTop += target.getBoundingClientRect().top - container.getBoundingClientRect().top;
+}
+
 async function saveProject() {
-  editorError.value = projectNameError(draft.value);
-  if (!editorError.value && draft.value.environments.some(environment => environment.deployments.some(target => target.variables.some(variable => usesCredential(variable) && !variable.credentialId)))) editorError.value = "请为凭据变量选择连接凭据";
-  if (editorError.value || saving.value) return;
+  if (saving.value) return;
+  const error = projectValidationError(draft.value);
+  editorError.value = error?.message || "";
+  if (error) {
+    if (error.section === "modules" && error.itemId) selectedModuleId.value = error.itemId;
+    if (error.section === "environments" && error.itemId) selectEnvironment(error.itemId);
+    await showSection(error.section);
+    return;
+  }
+  for (const environment of draft.value.environments) {
+    const target = environment.deployments.find(target => target.variables.some(variable => usesCredential(variable) && !variable.credentialId));
+    if (target) {
+      selectedEnvironmentId.value = environment.id; selectedDeploymentId.value = target.id;
+      variableSections.add(target.id);
+      editorError.value = "请为凭据变量选择连接凭据";
+      await showSection("environments");
+      return;
+    }
+  }
   const submitted = copyApplicationProject(draft.value);
+  submitted.code = submitted.code.trim();
   saving.value = true;
   try {
     const saved = await request<ApplicationProject>(submitted.id ? `/application-projects/${submitted.id}` : "/application-projects", submitted.id ? "PATCH" : "POST", submitted);
@@ -134,7 +161,10 @@ async function saveProject() {
     baseline.value = JSON.stringify(draft.value);
     editorOpen.value = false;
     await load();
-  } catch (error) { editorError.value = errorMessage(error); }
+  } catch (error) {
+    editorError.value = errorMessage(error);
+    if (error instanceof ApiError && error.code === "APPLICATION_CODE_DUPLICATED") await showSection("basics");
+  }
   finally { saving.value = false; }
 }
 
@@ -227,7 +257,7 @@ onUnmounted(() => {
   <section class="application-projects" aria-label="项目管理">
     <div class="project-toolbar">
       <div class="project-filters">
-        <input v-model="query" type="search" placeholder="搜索项目" aria-label="搜索项目" />
+        <input v-model="query" type="search" placeholder="搜索名称或代码" aria-label="搜索项目" />
         <select v-model="archived" aria-label="项目状态">
           <option value="false">使用中的项目</option>
           <option value="true">已归档</option>
@@ -246,6 +276,7 @@ onUnmounted(() => {
           <span class="project-symbol" aria-hidden="true">{{ project.name.slice(0, 1) }}</span>
           <div>
             <h2>{{ project.name }}</h2>
+            <span class="project-code">{{ project.code }}</span>
             <p v-if="project.description">{{ project.description }}</p>
           </div>
           <span class="project-state" :class="{ archived: project.archived }">{{ project.archived ? "已归档" : "使用中" }}</span>
@@ -287,312 +318,156 @@ onUnmounted(() => {
       :close-on-click-modal="true"
       :close-on-press-escape="true"
     >
-      <div class="project-editor">
-        <fieldset :disabled="saving">
-          <div class="project-fields project-basics">
-            <label>
-              项目名称
-              <input v-model="draft.name" maxlength="60" placeholder="例如：智能化平台" />
-            </label>
-            <label>
-              项目说明
-              <input v-model="draft.description" maxlength="500" placeholder="选填" />
-            </label>
-          </div>
-          <nav class="project-tabs" aria-label="项目配置">
-            <button
-              v-for="item in tabs"
-              :key="item.id"
-              type="button"
-              :class="{ active: tab === item.id }"
-              :aria-current="tab === item.id ? 'page' : undefined"
-              @click="tab = item.id"
-            >
-              {{ item.label }}
-            </button>
-          </nav>
-          <div v-if="tab === 'repositories'" class="project-tab-content">
-            <div class="project-section-heading">
-              <h3>代码仓库</h3>
-              <button type="button" class="secondary" @click="addRepository">添加仓库</button>
+      <div ref="editorElement" class="project-editor">
+        <fieldset :disabled="saving" @input="editorError = ''">
+          <details
+            class="project-config-section"
+            data-project-section="basics"
+            :open="expanded.basics"
+            @toggle="expanded.basics = ($event.target as HTMLDetailsElement).open"
+          >
+            <summary>
+              <span class="section-number">1</span>
+              <strong>基本信息</strong>
+              <small>{{ draft.code || "填写名称与项目代码" }}</small>
+            </summary>
+            <div class="project-section-body project-fields">
+              <label>
+                项目名称
+                <input v-model="draft.name" maxlength="60" placeholder="例如：智能化平台" />
+              </label>
+              <label>
+                项目代码
+                <input v-model="draft.code" maxlength="60" placeholder="例如：intelligentize" />
+              </label>
+              <label class="project-full">
+                项目描述
+                <textarea v-model="draft.description" maxlength="500" rows="2" placeholder="选填" />
+              </label>
             </div>
-            <div v-if="!draft.repositories.length" class="project-blank">可添加一个或多个仓库，模块分别选择。</div>
-            <section v-for="(repository, index) in draft.repositories" :key="repository.id" class="project-config-block">
+          </details>
+          <details
+            class="project-config-section"
+            data-project-section="repositories"
+            :open="expanded.repositories"
+            @toggle="expanded.repositories = ($event.target as HTMLDetailsElement).open"
+          >
+            <summary>
+              <span class="section-number">2</span>
+              <strong>代码仓库</strong>
+              <small>{{ draft.repositories.length ? `${draft.repositories.length} 个仓库` : "未配置" }}</small>
+            </summary>
+            <div class="project-section-body">
               <div class="project-section-heading">
-                <h4>仓库 {{ index + 1 }}</h4>
-                <button type="button" class="quiet danger" @click="removeRepository(repository.id)">移除</button>
+                <button type="button" class="secondary" @click="addRepository">添加仓库</button>
               </div>
-              <div class="project-fields">
-                <label>
-                  仓库名称
-                  <input v-model="repository.name" maxlength="60" placeholder="例如：业务源码" />
-                </label>
-                <label>
-                  仓库地址
-                  <input v-model="repository.url" placeholder="https://git.example.com/team/project.git" />
-                </label>
-                <label>
-                  Git 账号
-                  <select v-model="repository.gitAccountId">
-                    <option value="">公共仓库，不使用账号</option>
-                    <option v-for="account in accounts" :key="account.id" :value="account.id">{{ accountLabel(account) }}</option>
-                  </select>
-                </label>
-                <label>
-                  默认分支
-                  <input v-model="repository.branch" placeholder="留空采用仓库默认分支" />
-                </label>
-              </div>
-            </section>
-          </div>
-          <div v-else-if="tab === 'modules'" class="project-tab-content">
-            <div class="project-section-heading">
-              <h3>应用模块</h3>
-              <button type="button" class="secondary" @click="addModule">添加模块</button>
-            </div>
-            <div v-if="!draft.modules.length" class="project-blank">前端、后端和算法服务可分别配置。</div>
-            <div v-else class="project-split">
-              <nav class="project-item-nav" aria-label="模块列表">
-                <button
-                  v-for="item in draft.modules"
-                  :key="item.id"
-                  type="button"
-                  :class="{ active: selectedModuleId === item.id }"
-                  @click="selectedModuleId = item.id"
-                >
-                  {{ item.name || '未命名模块' }}
-                </button>
-              </nav>
-              <div v-if="module" class="project-module-form">
+              <section v-for="(repository, index) in draft.repositories" :key="repository.id" class="project-config-block">
+                <div class="project-section-heading">
+                  <h4>仓库 {{ index + 1 }}</h4>
+                  <button type="button" class="quiet danger" @click="removeRepository(repository.id)">移除</button>
+                </div>
                 <div class="project-fields">
                   <label>
-                    模块名称
-                    <input v-model="module.name" maxlength="60" placeholder="例如：后端服务" />
+                    仓库名称
+                    <input v-model="repository.name" maxlength="60" placeholder="例如：业务源码" />
                   </label>
                   <label>
-                    代码仓库
-                    <select v-model="module.repositoryId">
-                      <option value="">稍后选择</option>
-                      <option v-for="repository in draft.repositories" :key="repository.id" :value="repository.id">
-                        {{ repository.name || '未命名仓库' }}
-                      </option>
+                    仓库地址
+                    <input v-model="repository.url" placeholder="https://git.example.com/team/project.git" />
+                  </label>
+                  <label>
+                    Git 账号
+                    <select v-model="repository.gitAccountId">
+                      <option value="">公共仓库，不使用账号</option>
+                      <option v-for="account in accounts" :key="account.id" :value="account.id">{{ accountLabel(account) }}</option>
                     </select>
                   </label>
                   <label>
-                    源码目录
-                    <input v-model="module.directory" placeholder="backend 或 ." />
-                  </label>
-                  <label>
-                    构建方式
-                    <select v-model="module.build.kind">
-                      <option v-for="(label, kind) in buildKinds" :key="kind" :value="kind">{{ label }}</option>
-                    </select>
-                  </label>
-                  <label>
-                    构建主机
-                    <select v-model="module.build.hostId" @change="module.build.softwareId = ''">
-                      <option value="">稍后选择</option>
-                      <option v-for="host in hosts" :key="host.id" :value="host.id">{{ host.name }}</option>
-                    </select>
-                  </label>
-                  <label>
-                    执行账号
-                    <input v-model="module.build.account" placeholder="例如：ubuntu" />
-                  </label>
-                  <label>
-                    构建环境
-                    <select v-model="module.build.softwareId" :disabled="!module.build.hostId">
-                      <option value="">自定义或稍后选择</option>
-                      <option v-for="item in softwareChoices(module.build.hostId)" :key="item.id" :value="item.id">
-                        {{ item.name }}
-                        ·
-                        {{ softwareVersionText(item.softwareVersion) }}
-                      </option>
-                    </select>
-                  </label>
-                  <label>
-                    工具链说明
-                    <input v-model="module.build.toolchain" placeholder="例如：JDK 8 + Maven" />
-                  </label>
-                  <label class="project-full">
-                    产物路径
-                    <input v-model="module.build.outputPath" placeholder="源码目录内的固定路径，例如：target/app.jar 或 dist；Docker 可留空" />
+                    默认分支
+                    <input v-model="repository.branch" placeholder="留空采用仓库默认分支" />
                   </label>
                 </div>
-                <div v-if="module.build.kind === 'DOCKERFILE'" class="project-fields project-form-section">
-                  <label>
-                    构建上下文
-                    <input v-model="module.build.context" placeholder="仓库内目录，例如 ." />
-                  </label>
-                  <label>
-                    Dockerfile 路径
-                    <input v-model="module.build.dockerfile" placeholder="例如：deploy/Dockerfile" />
-                  </label>
-                </div>
-                <div class="project-section-heading project-form-section">
-                  <h4>构建步骤</h4>
+              </section>
+            </div>
+          </details>
+          <details
+            class="project-config-section"
+            data-project-section="modules"
+            :open="expanded.modules"
+            @toggle="expanded.modules = ($event.target as HTMLDetailsElement).open"
+          >
+            <summary>
+              <span class="section-number">3</span>
+              <strong>应用模块</strong>
+              <small>{{ draft.modules.length ? `${draft.modules.length} 个模块` : "未配置" }}</small>
+            </summary>
+            <div class="project-section-body">
+              <div class="project-section-heading">
+                <button type="button" class="secondary" @click="addModule">添加模块</button>
+              </div>
+              <div v-if="draft.modules.length" class="project-split">
+                <nav class="project-item-nav" aria-label="模块列表">
                   <button
+                    v-for="item in draft.modules"
+                    :key="item.id"
                     type="button"
-                    class="quiet"
-                    @click="module.build.steps.push({ name: '', command: '', workdir: '.', timeoutSeconds: 600, privilege: 'ACCOUNT' })"
+                    :class="{ active: selectedModuleId === item.id }"
+                    @click="selectedModuleId = item.id"
                   >
-                    添加步骤
+                    {{ item.name || "未命名模块" }}
                   </button>
-                </div>
-                <section v-for="(step, index) in module.build.steps" :key="index" class="project-step">
-                  <div class="project-step-title">
-                    <span>{{ index + 1 }}</span>
-                    <input v-model="step.name" :aria-label="`步骤${index + 1}名称`" placeholder="例如：编译并检查产物" />
-                    <button
-                      type="button"
-                      class="quiet"
-                      :disabled="index === 0"
-                      aria-label="上移步骤"
-                      @click="module.build.steps.splice(index - 1, 0, module.build.steps.splice(index, 1)[0])"
-                    >
-                      ↑
-                    </button>
-                    <button
-                      type="button"
-                      class="quiet"
-                      :disabled="index === module.build.steps.length - 1"
-                      aria-label="下移步骤"
-                      @click="module.build.steps.splice(index + 1, 0, module.build.steps.splice(index, 1)[0])"
-                    >
-                      ↓
-                    </button>
-                    <button type="button" class="quiet danger" @click="module.build.steps.splice(index, 1)">移除</button>
-                  </div>
-                  <label class="project-command">
-                    执行命令
-                    <textarea v-model="step.command" rows="4" spellcheck="false" placeholder="mvn clean package" />
-                  </label>
-                  <div class="project-fields project-three">
+                </nav>
+                <div v-if="module" class="project-module-form">
+                  <div class="project-fields">
                     <label>
-                      工作目录
-                      <input v-model="step.workdir" placeholder="." />
+                      模块名称
+                      <input v-model="module.name" maxlength="60" placeholder="例如：后端服务" />
                     </label>
                     <label>
-                      超时（秒）
-                      <input v-model.number="step.timeoutSeconds" type="number" min="1" max="7200" />
+                      代码仓库
+                      <select v-model="module.repositoryId">
+                        <option value="">稍后选择</option>
+                        <option v-for="repository in draft.repositories" :key="repository.id" :value="repository.id">
+                          {{ repository.name || "未命名仓库" }}
+                        </option>
+                      </select>
                     </label>
                     <label>
-                      执行权限
-                      <select v-model="step.privilege">
-                        <option value="ACCOUNT">执行账号</option>
-                        <option value="ROOT">管理员</option>
+                      源码目录
+                      <input v-model="module.directory" placeholder="backend 或 ." />
+                    </label>
+                    <label>
+                      构建方式
+                      <select v-model="module.build.kind">
+                        <option v-for="(label, kind) in buildKinds" :key="kind" :value="kind">{{ label }}</option>
+                      </select>
+                    </label>
+                    <label>
+                      运行方式
+                      <select v-model="module.runtime.kind">
+                        <option v-for="(label, kind) in runtimeKinds" :key="kind" :value="kind">{{ label }}</option>
                       </select>
                     </label>
                   </div>
-                </section>
-                <div class="project-section-heading project-form-section">
-                  <h4>运行方式</h4>
-                </div>
-                <div class="project-fields">
-                  <label>
-                    运行方式
-                    <select v-model="module.runtime.kind">
-                      <option v-for="(label, kind) in runtimeKinds" :key="kind" :value="kind">{{ label }}</option>
-                    </select>
-                  </label>
-                  <label class="project-full">
-                    启动命令或参数
-                    <input v-model="module.runtime.command" placeholder="Docker 留空沿用镜像默认；原生服务填写启动命令" />
-                  </label>
-                  <label>
-                    就绪检查
-                    <select v-model="module.runtime.health.kind">
-                      <option v-for="(label, kind) in healthKinds" :key="kind" :value="kind">{{ label }}</option>
-                    </select>
-                  </label>
-                  <label v-if="module.runtime.health.kind !== 'NONE'">
-                    检查超时（秒）
-                    <input v-model.number="module.runtime.health.timeoutSeconds" type="number" min="1" max="600" />
-                  </label>
-                  <label v-if="module.runtime.health.kind === 'HTTP'">
-                    检查路径
-                    <input v-model="module.runtime.health.path" placeholder="/health" />
-                  </label>
-                  <label v-if="['HTTP', 'TCP'].includes(module.runtime.health.kind)">
-                    服务端口
-                    <input v-model.number="module.runtime.health.port" type="number" min="0" max="65535" />
-                  </label>
-                  <label v-if="module.runtime.health.kind === 'COMMAND'" class="project-full">
-                    验证命令
-                    <input v-model="module.runtime.health.command" placeholder="填写验证命令" />
-                  </label>
-                </div>
-                <div class="project-remove">
-                  <button type="button" class="quiet danger" @click="removeModule">移除此模块</button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div v-else class="project-tab-content">
-            <div class="project-section-heading">
-              <h3>部署环境</h3>
-              <button type="button" class="secondary" @click="addEnvironment">添加环境</button>
-            </div>
-            <div v-if="!draft.environments.length" class="project-blank">添加 test、QA 或 prod，分别配置主机和运行参数。</div>
-            <template v-else>
-              <nav class="project-environment-nav" aria-label="环境列表">
-                <button
-                  v-for="item in draft.environments"
-                  :key="item.id"
-                  type="button"
-                  :class="{ active: selectedEnvironmentId === item.id }"
-                  @click="selectEnvironment(item.id)"
-                >
-                  {{ item.name || '未命名环境' }}
-                </button>
-              </nav>
-              <template v-if="environment">
-                <div class="project-section-heading">
-                  <label class="environment-name">
-                    环境名称
-                    <input v-model="environment.name" maxlength="60" placeholder="例如：test" />
-                  </label>
-                  <button type="button" class="quiet danger" @click="removeEnvironment">移除环境</button>
-                </div>
-                <div class="project-section-heading project-form-section">
-                  <h4>模块部署配置</h4>
-                  <select
-                    class="add-deployment"
-                    aria-label="添加模块部署配置"
-                    :value="''"
-                    @change="addDeployment(($event.target as HTMLSelectElement).value); ($event.target as HTMLSelectElement).value = ''"
-                  >
-                    <option value="">添加模块…</option>
-                    <option v-for="item in availableModules" :key="item.id" :value="item.id">{{ item.name || '未命名模块' }}</option>
-                  </select>
-                </div>
-                <div v-if="!environment.deployments.length" class="project-blank">选择要部署到此环境的模块。</div>
-                <div v-else class="project-split">
-                  <nav class="project-item-nav" aria-label="环境模块列表">
-                    <button
-                      v-for="item in environment.deployments"
-                      :key="item.id"
-                      type="button"
-                      :class="{ active: selectedDeploymentId === item.id }"
-                      @click="selectedDeploymentId = item.id"
-                    >
-                      {{ moduleName(item.moduleId) }}
-                    </button>
-                  </nav>
-                  <div v-if="deployment" class="project-module-form">
+                  <details class="project-advanced" :open="module.build.kind !== 'DOCKERFILE'">
+                    <summary>构建配置与命令</summary>
                     <div class="project-fields">
                       <label>
-                        部署主机
-                        <select v-model="deployment.hostId" @change="deployment.runtimeSoftwareId = ''">
+                        构建主机
+                        <select v-model="module.build.hostId" @change="module.build.softwareId = ''">
                           <option value="">稍后选择</option>
                           <option v-for="host in hosts" :key="host.id" :value="host.id">{{ host.name }}</option>
                         </select>
                       </label>
                       <label>
-                        运行环境
-                        <select v-model="deployment.runtimeSoftwareId" :disabled="!deployment.hostId">
+                        执行账号
+                        <input v-model="module.build.account" placeholder="例如：ubuntu" />
+                      </label>
+                      <label>
+                        构建环境
+                        <select v-model="module.build.softwareId" :disabled="!module.build.hostId">
                           <option value="">自定义或稍后选择</option>
-                          <option v-for="item in softwareChoices(deployment.hostId)" :key="item.id" :value="item.id">
+                          <option v-for="item in softwareChoices(module.build.hostId)" :key="item.id" :value="item.id">
                             {{ item.name }}
                             ·
                             {{ softwareVersionText(item.softwareVersion) }}
@@ -600,132 +475,365 @@ onUnmounted(() => {
                         </select>
                       </label>
                       <label>
-                        监听地址
-                        <input v-model="deployment.bindAddress" placeholder="例如：0.0.0.0" />
+                        工具链说明
+                        <input v-model="module.build.toolchain" placeholder="例如：JDK 8 + Maven" />
+                      </label>
+                      <label class="project-full">
+                        产物路径
+                        <input v-model="module.build.outputPath" placeholder="例如：target/app.jar 或 dist" />
+                      </label>
+                    </div>
+                    <div v-if="module.build.kind === 'DOCKERFILE'" class="project-fields project-form-section">
+                      <label>
+                        构建上下文
+                        <input v-model="module.build.context" placeholder="仓库内目录，例如 ." />
                       </label>
                       <label>
-                        内存上限（MiB）
-                        <input v-model.number="deployment.memoryMiB" type="number" min="0" max="1048576" placeholder="0 表示未设置" />
+                        Dockerfile 路径
+                        <input v-model="module.build.dockerfile" placeholder="例如：deploy/Dockerfile" />
                       </label>
                     </div>
                     <div class="project-section-heading project-form-section">
-                      <h4>端口</h4>
-                      <button type="button" class="quiet" @click="deployment.ports.push({ hostPort: 0, containerPort: 0, protocol: 'TCP' })">
-                        添加端口
+                      <h4>构建步骤</h4>
+                      <button
+                        type="button"
+                        class="quiet"
+                        @click="module.build.steps.push({ name: '', command: '', workdir: '.', timeoutSeconds: 600, privilege: 'ACCOUNT' })"
+                      >
+                        添加步骤
                       </button>
                     </div>
-                    <div v-for="(port, index) in deployment.ports" :key="index" class="project-fields project-port">
-                      <label>
-                        主机端口
-                        <input v-model.number="port.hostPort" type="number" min="1" max="65535" />
+                    <section v-for="(step, index) in module.build.steps" :key="index" class="project-step">
+                      <div class="project-step-title">
+                        <span>{{ index + 1 }}</span>
+                        <input v-model="step.name" :aria-label="`步骤${index + 1}名称`" placeholder="例如：编译并检查产物" />
+                        <button
+                          type="button"
+                          class="quiet"
+                          :disabled="index === 0"
+                          aria-label="上移步骤"
+                          @click="module.build.steps.splice(index - 1, 0, module.build.steps.splice(index, 1)[0])"
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          class="quiet"
+                          :disabled="index === module.build.steps.length - 1"
+                          aria-label="下移步骤"
+                          @click="module.build.steps.splice(index + 1, 0, module.build.steps.splice(index, 1)[0])"
+                        >
+                          ↓
+                        </button>
+                        <button type="button" class="quiet danger" @click="module.build.steps.splice(index, 1)">移除</button>
+                      </div>
+                      <label class="project-command">
+                        执行命令
+                        <textarea v-model="step.command" rows="4" spellcheck="false" placeholder="mvn clean package" />
                       </label>
-                      <label>
-                        服务端口
-                        <input v-model.number="port.containerPort" type="number" min="1" max="65535" />
-                      </label>
-                      <label>
-                        协议
-                        <select v-model="port.protocol">
-                          <option>TCP</option>
-                          <option>UDP</option>
-                        </select>
-                      </label>
-                      <button type="button" class="quiet danger row-remove" @click="deployment.ports.splice(index, 1)">移除</button>
-                    </div>
-                    <div class="project-section-heading project-form-section">
-                      <h4>目录挂载</h4>
-                      <button type="button" class="quiet" @click="deployment.mounts.push({ source: '', target: '', readOnly: false })">添加目录</button>
-                    </div>
-                    <div v-for="(mount, index) in deployment.mounts" :key="index" class="project-fields project-mount">
-                      <label>
-                        主机目录
-                        <input v-model="mount.source" placeholder="/srv/project/data" />
-                      </label>
-                      <label>
-                        运行目录
-                        <input v-model="mount.target" placeholder="/app/data" />
-                      </label>
-                      <label>
-                        权限
-                        <select :value="String(mount.readOnly)" @change="mount.readOnly = ($event.target as HTMLSelectElement).value === 'true'">
-                          <option value="false">读写</option>
-                          <option value="true">只读</option>
-                        </select>
-                      </label>
-                      <button type="button" class="quiet danger row-remove" @click="deployment.mounts.splice(index, 1)">移除</button>
-                    </div>
-                    <div class="project-section-heading project-form-section">
-                      <h4>环境变量</h4>
-                      <button type="button" class="quiet" @click="addVariable(deployment)">添加变量</button>
-                    </div>
-                    <div v-for="(variable, index) in deployment.variables" :key="index" class="project-variable">
-                      <input v-model="variable.name" aria-label="变量名称" placeholder="变量名称" />
-                      <select
-                        :value="usesCredential(variable) ? 'CREDENTIAL' : 'VALUE'"
-                        aria-label="变量来源"
-                        @change="changeVariableMode(variable, ($event.target as HTMLSelectElement).value as 'VALUE' | 'CREDENTIAL')"
-                      >
-                        <option value="VALUE">普通配置</option>
-                        <option value="CREDENTIAL">连接凭据</option>
-                      </select>
-                      <select
-                        v-if="usesCredential(variable)"
-                        :value="variable.credentialId"
-                        aria-label="选择凭据"
-                        @change="setVariableCredential(variable, ($event.target as HTMLSelectElement).value)"
-                      >
-                        <option value="">选择凭据</option>
-                        <option v-for="credential in credentials" :key="credential.id" :value="credential.id">{{ credential.name }}</option>
-                      </select>
-                      <input v-else v-model="variable.value" aria-label="变量值" placeholder="普通值；密码和 Token 请使用连接凭据" />
-                      <button type="button" class="quiet danger" @click="deployment.variables.splice(index, 1)">移除</button>
-                    </div>
-                    <details class="project-form-section">
-                      <summary>日志来源与保留配置</summary>
-                      <div class="project-fields">
+                      <div class="project-fields project-three">
                         <label>
-                          日志来源
-                          <select v-model="deployment.logs.kind">
-                            <option v-for="(label, kind) in logKinds" :key="kind" :value="kind">{{ label }}</option>
+                          工作目录
+                          <input v-model="step.workdir" placeholder="." />
+                        </label>
+                        <label>
+                          超时（秒）
+                          <input v-model.number="step.timeoutSeconds" type="number" min="1" max="7200" />
+                        </label>
+                        <label>
+                          执行权限
+                          <select v-model="step.privilege">
+                            <option value="ACCOUNT">执行账号</option>
+                            <option value="ROOT">管理员</option>
                           </select>
                         </label>
-                        <template v-if="deployment.logs.kind === 'FILE'">
-                          <label>
-                            日志目录
-                            <input v-model="deployment.logs.directory" placeholder="/srv/project/logs" />
-                          </label>
-                          <label>
-                            文件规则
-                            <input v-model="deployment.logs.pattern" placeholder="*.log" />
-                          </label>
-                          <label>
-                            保留天数
-                            <input v-model.number="deployment.logs.retentionDays" type="number" min="0" max="3650" placeholder="0 表示未设置" />
-                          </label>
-                          <label>
-                            容量上限（MiB）
-                            <input v-model.number="deployment.logs.maxMiB" type="number" min="0" max="1048576" placeholder="0 表示未设置" />
-                          </label>
-                        </template>
                       </div>
-                      <p class="project-note">此处保存配置，暂不启动日志采集或自动清理。</p>
-                    </details>
-                    <div class="project-remove">
-                      <button type="button" class="quiet danger" @click="removeDeployment">移除此部署配置</button>
+                    </section>
+                  </details>
+                  <details class="project-advanced">
+                    <summary>运行参数与就绪检查</summary>
+                    <div class="project-fields">
+                      <label class="project-full">
+                        启动命令或参数
+                        <input v-model="module.runtime.command" placeholder="Docker 留空沿用镜像默认；原生服务填写启动命令" />
+                      </label>
+                      <label>
+                        就绪检查
+                        <select v-model="module.runtime.health.kind">
+                          <option v-for="(label, kind) in healthKinds" :key="kind" :value="kind">{{ label }}</option>
+                        </select>
+                      </label>
+                      <label v-if="module.runtime.health.kind !== 'NONE'">
+                        检查超时（秒）
+                        <input v-model.number="module.runtime.health.timeoutSeconds" type="number" min="1" max="600" />
+                      </label>
+                      <label v-if="module.runtime.health.kind === 'HTTP'">
+                        检查路径
+                        <input v-model="module.runtime.health.path" placeholder="/health" />
+                      </label>
+                      <label v-if="['HTTP', 'TCP'].includes(module.runtime.health.kind)">
+                        服务端口
+                        <input v-model.number="module.runtime.health.port" type="number" min="0" max="65535" />
+                      </label>
+                      <label v-if="module.runtime.health.kind === 'COMMAND'" class="project-full">
+                        验证命令
+                        <input v-model="module.runtime.health.command" placeholder="填写验证命令" />
+                      </label>
                     </div>
+                  </details>
+                  <div class="project-remove">
+                    <button type="button" class="quiet danger" @click="removeModule">移除此模块</button>
                   </div>
                 </div>
+              </div>
+            </div>
+          </details>
+          <details
+            class="project-config-section"
+            data-project-section="environments"
+            :open="expanded.environments"
+            @toggle="expanded.environments = ($event.target as HTMLDetailsElement).open"
+          >
+            <summary>
+              <span class="section-number">4</span>
+              <strong>部署环境</strong>
+              <small>{{ draft.environments.length ? `${draft.environments.length} 个环境` : "未配置" }}</small>
+            </summary>
+            <div class="project-section-body">
+              <div class="project-section-heading">
+                <button type="button" class="secondary" @click="addEnvironment">添加环境</button>
+              </div>
+              <template v-if="draft.environments.length">
+                <nav class="project-environment-nav" aria-label="环境列表">
+                  <button
+                    v-for="item in draft.environments"
+                    :key="item.id"
+                    type="button"
+                    :class="{ active: selectedEnvironmentId === item.id }"
+                    @click="selectEnvironment(item.id)"
+                  >
+                    {{ item.name || "未命名环境" }}
+                  </button>
+                </nav>
+                <template v-if="environment">
+                  <div class="project-section-heading">
+                    <label class="environment-name">
+                      环境名称
+                      <input v-model="environment.name" maxlength="60" placeholder="例如：test" />
+                    </label>
+                    <button type="button" class="quiet danger" @click="removeEnvironment">移除环境</button>
+                  </div>
+                  <div class="project-section-heading project-form-section">
+                    <h4>模块部署配置</h4>
+                    <select
+                      class="add-deployment"
+                      aria-label="添加模块部署配置"
+                      :value="''"
+                      @change="
+                        addDeployment(($event.target as HTMLSelectElement).value);
+                        ($event.target as HTMLSelectElement).value = '';
+                      "
+                    >
+                      <option value="">添加模块…</option>
+                      <option v-for="item in availableModules" :key="item.id" :value="item.id">{{ item.name || "未命名模块" }}</option>
+                    </select>
+                  </div>
+                  <div v-if="!environment.deployments.length" class="project-blank">选择要部署到此环境的模块。</div>
+                  <div v-else class="project-split">
+                    <nav class="project-item-nav" aria-label="环境模块列表">
+                      <button
+                        v-for="item in environment.deployments"
+                        :key="item.id"
+                        type="button"
+                        :class="{ active: selectedDeploymentId === item.id }"
+                        @click="selectedDeploymentId = item.id"
+                      >
+                        {{ moduleName(item.moduleId) }}
+                      </button>
+                    </nav>
+                    <div v-if="deployment" class="project-module-form">
+                      <div class="project-fields">
+                        <label>
+                          部署主机
+                          <select v-model="deployment.hostId" @change="deployment.runtimeSoftwareId = ''">
+                            <option value="">稍后选择</option>
+                            <option v-for="host in hosts" :key="host.id" :value="host.id">{{ host.name }}</option>
+                          </select>
+                        </label>
+                        <label>
+                          运行环境
+                          <select v-model="deployment.runtimeSoftwareId" :disabled="!deployment.hostId">
+                            <option value="">自定义或稍后选择</option>
+                            <option v-for="item in softwareChoices(deployment.hostId)" :key="item.id" :value="item.id">
+                              {{ item.name }}
+                              ·
+                              {{ softwareVersionText(item.softwareVersion) }}
+                            </option>
+                          </select>
+                        </label>
+                        <label>
+                          监听地址
+                          <input v-model="deployment.bindAddress" placeholder="例如：0.0.0.0" />
+                        </label>
+                        <label>
+                          内存上限（MiB）
+                          <input v-model.number="deployment.memoryMiB" type="number" min="0" max="1048576" placeholder="0 表示未设置" />
+                        </label>
+                      </div>
+                      <div class="project-section-heading project-form-section">
+                        <h4>端口</h4>
+                        <button
+                          type="button"
+                          class="quiet"
+                          @click="deployment.ports.push({ hostPort: 0, containerPort: 0, protocol: 'TCP' })"
+                        >
+                          添加端口
+                        </button>
+                      </div>
+                      <div v-for="(port, index) in deployment.ports" :key="index" class="project-fields project-port">
+                        <label>
+                          主机端口
+                          <input v-model.number="port.hostPort" type="number" min="1" max="65535" />
+                        </label>
+                        <label>
+                          服务端口
+                          <input v-model.number="port.containerPort" type="number" min="1" max="65535" />
+                        </label>
+                        <label>
+                          协议
+                          <select v-model="port.protocol">
+                            <option>TCP</option>
+                            <option>UDP</option>
+                          </select>
+                        </label>
+                        <button type="button" class="quiet danger row-remove" @click="deployment.ports.splice(index, 1)">移除</button>
+                      </div>
+                      <details
+                        class="project-advanced"
+                        :open="variableSections.has(deployment.id)"
+                        @toggle="
+                          ($event.target as HTMLDetailsElement).open
+                            ? variableSections.add(deployment.id)
+                            : variableSections.delete(deployment.id)
+                        "
+                      >
+                        <summary>目录挂载与环境变量</summary>
+                        <div class="project-section-heading">
+                          <h4>目录挂载</h4>
+                          <button type="button" class="quiet" @click="deployment.mounts.push({ source: '', target: '', readOnly: false })">
+                            添加目录
+                          </button>
+                        </div>
+                        <div v-for="(mount, index) in deployment.mounts" :key="index" class="project-fields project-mount">
+                          <label>
+                            主机目录
+                            <input v-model="mount.source" placeholder="/srv/project/data" />
+                          </label>
+                          <label>
+                            运行目录
+                            <input v-model="mount.target" placeholder="/app/data" />
+                          </label>
+                          <label>
+                            权限
+                            <select
+                              :value="String(mount.readOnly)"
+                              @change="mount.readOnly = ($event.target as HTMLSelectElement).value === 'true'"
+                            >
+                              <option value="false">读写</option>
+                              <option value="true">只读</option>
+                            </select>
+                          </label>
+                          <button type="button" class="quiet danger row-remove" @click="deployment.mounts.splice(index, 1)">移除</button>
+                        </div>
+                        <div class="project-section-heading project-form-section">
+                          <h4>环境变量</h4>
+                          <button type="button" class="quiet" @click="addVariable(deployment)">添加变量</button>
+                        </div>
+                        <div v-for="(variable, index) in deployment.variables" :key="index" class="project-variable">
+                          <input v-model="variable.name" aria-label="变量名称" placeholder="变量名称" />
+                          <select
+                            :value="usesCredential(variable) ? 'CREDENTIAL' : 'VALUE'"
+                            aria-label="变量来源"
+                            @change="changeVariableMode(variable, ($event.target as HTMLSelectElement).value as 'VALUE' | 'CREDENTIAL')"
+                          >
+                            <option value="VALUE">普通配置</option>
+                            <option value="CREDENTIAL">连接凭据</option>
+                          </select>
+                          <select
+                            v-if="usesCredential(variable)"
+                            :value="variable.credentialId"
+                            aria-label="选择凭据"
+                            @change="setVariableCredential(variable, ($event.target as HTMLSelectElement).value)"
+                          >
+                            <option value="">选择凭据</option>
+                            <option v-for="credential in credentials" :key="credential.id" :value="credential.id">
+                              {{ credential.name }}
+                            </option>
+                          </select>
+                          <input v-else v-model="variable.value" aria-label="变量值" placeholder="普通值；密码和 Token 请使用连接凭据" />
+                          <button type="button" class="quiet danger" @click="deployment.variables.splice(index, 1)">移除</button>
+                        </div>
+                      </details>
+                      <details class="project-advanced">
+                        <summary>日志来源与保留配置</summary>
+                        <div class="project-fields">
+                          <label>
+                            日志来源
+                            <select v-model="deployment.logs.kind">
+                              <option v-for="(label, kind) in logKinds" :key="kind" :value="kind">{{ label }}</option>
+                            </select>
+                          </label>
+                          <template v-if="deployment.logs.kind === 'FILE'">
+                            <label>
+                              日志目录
+                              <input v-model="deployment.logs.directory" placeholder="/srv/project/logs" />
+                            </label>
+                            <label>
+                              文件规则
+                              <input v-model="deployment.logs.pattern" placeholder="*.log" />
+                            </label>
+                            <label>
+                              保留天数
+                              <input
+                                v-model.number="deployment.logs.retentionDays"
+                                type="number"
+                                min="0"
+                                max="3650"
+                                placeholder="0 表示未设置"
+                              />
+                            </label>
+                            <label>
+                              容量上限（MiB）
+                              <input
+                                v-model.number="deployment.logs.maxMiB"
+                                type="number"
+                                min="0"
+                                max="1048576"
+                                placeholder="0 表示未设置"
+                              />
+                            </label>
+                          </template>
+                        </div>
+                      </details>
+                      <div class="project-remove">
+                        <button type="button" class="quiet danger" @click="removeDeployment">移除此部署配置</button>
+                      </div>
+                    </div>
+                  </div>
+                </template>
               </template>
-            </template>
-          </div>
+            </div>
+          </details>
         </fieldset>
       </div>
       <template #footer>
         <div class="project-dialog-footer">
           <p v-if="editorError" class="project-error" role="alert">{{ editorError }}</p>
           <div class="project-actions">
-            <button class="secondary" @click="closeEditor(() => editorOpen = false)">关闭</button>
-            <button class="primary" :disabled="saving" @click="saveProject">{{ saving ? "保存中…" : "保存配置" }}</button>
+            <button class="secondary" @click="closeEditor(() => (editorOpen = false))">关闭</button>
+            <button class="primary" :disabled="saving" @click="saveProject">
+              {{ saving ? "保存中…" : draft.id ? "保存配置" : "创建项目" }}
+            </button>
           </div>
         </div>
       </template>
@@ -759,7 +867,8 @@ onUnmounted(() => {
 .project-card-title > div { min-width: 0; flex: 1; }
 .project-symbol { display: grid; place-items: center; flex: 0 0 42px; height: 42px; border-radius: 10px; color: var(--accent); background: var(--accent-soft); font-size: 20px; font-weight: 600; }
 .project-card h2 { margin: 1px 0 5px; font-size: 17px; overflow-wrap: anywhere; }
-.project-card p { color: var(--muted); margin: 0; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.project-code { display: block; color: #475569; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.project-card p { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--muted); margin: 6px 0 0; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 .project-state { white-space: nowrap; padding: 3px 7px; color: #15803d; background: #f0fdf4; border-radius: 4px; font-size: 11px; }
 .project-state.archived { color: var(--muted); background: #f1f5f9; }
 .project-card-summary { display: flex; gap: 20px; padding: 6px 22px 20px; font-size: 12px; color: var(--muted); }
@@ -767,19 +876,29 @@ onUnmounted(() => {
 .project-card footer .project-actions { gap: 6px; margin-left: auto; }
 .project-empty { grid-column: 1 / -1; text-align: center; padding: 48px 20px; border: 1px dashed var(--border); background: var(--surface); border-radius: var(--card-radius); color: var(--muted); }
 .project-empty h2 { color: var(--text); font-size: 18px; font-weight: 500; }
-.project-empty p, .project-note { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.project-empty p { font-size: 12px; color: var(--muted); line-height: 1.6; }
 .project-error { margin: 0; padding: 10px 12px; background: #fef2f2; border-radius: 5px; color: #b91c1c; line-height: 1.6; font-size: 13px; overflow-wrap: anywhere; }
 .application-projects > .project-error { margin-bottom: 16px; }
 .project-editor { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 8px; }
 fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .project-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .project-fields label { min-width: 0; }
-.project-basics { padding: 0 2px 16px; }
-.project-tabs, .project-environment-nav { display: flex; gap: 6px; overflow-x: auto; }
-.project-tabs { position: sticky; top: 0; z-index: 1; border-bottom: 1px solid var(--border); margin-bottom: 16px; background: var(--surface); }
-.project-tabs button { padding: 12px 18px; border: 0; border-bottom: 2px solid transparent; background: none; font-size: 13px; color: var(--muted); white-space: nowrap; }
-.project-tabs button.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
-.project-tab-content { padding: 0 2px 8px; }
+.project-config-section { border: 1px solid var(--border); border-radius: 7px; margin-bottom: 12px; }
+.project-config-section > summary { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 14px 16px; margin: 0; list-style: none; border-radius: 7px; }
+.project-config-section > summary::-webkit-details-marker { display: none; }
+.project-config-section > summary::after { content: '›'; color: var(--muted); font-size: 20px; line-height: 1; }
+.project-config-section[open] > summary { background: #f8fafc; border-radius: 7px 7px 0 0; }
+.project-config-section[open] > summary::after { transform: rotate(90deg); }
+.project-config-section > summary strong { flex-shrink: 0; color: var(--text); font-size: 14px; font-weight: 500; }
+.project-config-section > summary small { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font-size: 12px; color: var(--muted); }
+.section-number { display: grid; place-items: center; flex: 0 0 24px; height: 24px; border-radius: 50%; background: #eff6ff; color: var(--accent); font-size: 12px; }
+.project-section-body { padding: 16px; border-top: 1px solid var(--border-subtle); }
+.project-section-body > .project-section-heading:first-child { justify-content: flex-end; margin-bottom: 12px; }
+.project-section-body > .project-config-block:last-child { margin-bottom: 0; }
+.project-advanced { border-top: 1px solid var(--border-subtle); margin-top: 16px; }
+.project-advanced > summary { padding: 12px 0; margin: 0; }
+.project-advanced[open] > summary { margin-bottom: 4px; }
+.project-environment-nav { display: flex; gap: 6px; overflow-x: auto; }
 .project-section-heading { margin-bottom: 16px; }
 .project-section-heading button { flex-shrink: 0; white-space: nowrap; }
 .project-section-heading h3, .project-section-heading h4 { margin: 0; font-size: 14px; }

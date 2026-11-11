@@ -17,6 +17,7 @@ import (
 
 type applicationProject struct {
 	ID           string                   `json:"id"`
+	Code         string                   `json:"code"`
 	Name         string                   `json:"name"`
 	Description  string                   `json:"description"`
 	Version      string                   `json:"version"`
@@ -212,6 +213,10 @@ func normalizeApplicationProject(p *applicationProject) error {
 		p.Environments = []applicationEnvironment{}
 	}
 	p.Name, p.Description = strings.TrimSpace(p.Name), strings.TrimSpace(p.Description)
+	p.Code = strings.TrimSpace(p.Code)
+	if !validName(p.Code) {
+		return errors.New("请填写项目代码，最多60个字符")
+	}
 	if !validName(p.Name) || !applicationText(p.Description, 2000) {
 		return errors.New("请填写项目名称，说明最多2000字节")
 	}

@@ -14,11 +14,11 @@ const model = load(await readFile(new URL("../src/applicationProjects.ts", impor
 const softwareModel = load(await readFile(new URL("../src/software.ts", import.meta.url), "utf8"));
 const component = (await readFile(new URL("../src/ApplicationProjects.vue", import.meta.url), "utf8")).split('<script setup lang="ts">')[1].split("</script>")[0];
 const listPagesSource = await readFile(new URL("../src/listPages.ts", import.meta.url), "utf8");
-class ApiError extends Error { constructor(code) { super(code); this.code = code; } }
+class ApiError extends Error { constructor(code, message = code) { super(message); this.code = code; } }
 const flush = async () => { for (let i = 0; i < 8; i++) { await Promise.resolve(); await vue.nextTick(); } };
 function sampleProject() {
   const project = model.newApplicationProject(), repository = model.newProjectRepository(), module = model.newProjectModule(repository.id), environment = model.newProjectEnvironment();
-  Object.assign(project, { id: "project", name: "智能化平台", version: "1" });
+  Object.assign(project, { id: "project", code: "intelligentize", name: "智能化平台", version: "1" });
   repository.name = "业务源码"; module.name = "后端"; environment.name = "test";
   environment.deployments.push(model.newProjectDeployment(module.id));
   project.repositories.push(repository); project.modules.push(module); project.environments.push(environment);
@@ -37,7 +37,7 @@ function harness(override = () => undefined) {
     throw Error("unexpected request " + path);
   };
   const scope = vue.effectScope();
-  const flow = scope.run(() => load(component + "\nexport const flow = { draft, baseline, records, total, page, pageSize, query, archived, listError, editorError, editorOpen, loading, saving, editProject, saveProject, load, addRepository, removeRepository, addModule, removeModule, addEnvironment, addDeployment, selectedModuleId, selectedEnvironmentId, selectedDeploymentId, changeVariableMode, usesCredential, setVariableCredential, credentials, software, softwareChoices };", {
+  const flow = scope.run(() => load(component + "\nexport const flow = { draft, baseline, records, total, page, pageSize, query, archived, listError, editorError, editorOpen, expanded, variableSections, loading, saving, editProject, saveProject, load, addRepository, removeRepository, addModule, removeModule, addEnvironment, addDeployment, selectedModuleId, selectedEnvironmentId, selectedDeploymentId, changeVariableMode, usesCredential, setVariableCredential, credentials, software, softwareChoices };", {
     vue: { ...vue, onMounted: () => {}, onUnmounted: fn => cleanup.push(fn) },
     "element-plus": { ElMessageBox: { confirm: async () => {} } },
     "./api": { request, ApiError }, "./listPages": load(listPagesSource, { "./api": { request } }),
@@ -65,9 +65,9 @@ test("detached draft and usage checks preserve list data and environment referen
   assert.equal(project.modules[0].name, "后端");
   assert.deepEqual(model.projectRepositoryUsage(project, project.repositories[0].id), ["后端"]);
   assert.deepEqual(model.projectModuleUsage(project, project.modules[0].id), ["test"]);
-  assert.equal(model.projectNameError(project), "");
+  assert.equal(model.projectValidationError(project), undefined);
   copy.modules.push({ ...copy.modules[0], id: "other", name: " 正在编辑 " });
-  assert.match(model.projectNameError(copy), /模块名称重复/);
+  assert.match(model.projectValidationError(copy).message, /模块名称重复/);
 });
 
 test("project search and archive filters are encoded for server pagination", () => {
@@ -76,6 +76,67 @@ test("project search and archive filters are encoded for server pagination", () 
   assert.equal(url.searchParams.get("page"), "2");
   assert.equal(url.searchParams.get("pageSize"), "50");
   assert.equal(url.searchParams.get("archived"), "all");
+});
+
+test("creating a project requires its code and keeps advanced sections optional", async () => {
+  const h = harness((path, method, body) => method === "POST" ? { ...body, id: "created", version: "1" } : undefined);
+  await h.flow.editProject();
+  h.flow.draft.value.name = "新项目";
+  h.flow.expanded.basics = false;
+  await h.flow.saveProject();
+  assert.match(h.flow.editorError.value, /请填写项目代码/);
+  assert.equal(h.flow.expanded.basics, true);
+  assert.equal(h.calls.some(call => call.method === "POST"), false);
+  Object.assign(h.flow.draft.value, { code: " team-app ", description: "项目说明" });
+  await h.flow.saveProject();
+  const saved = h.calls.find(call => call.method === "POST").body;
+  assert.equal(saved.code, "team-app");
+  assert.equal(saved.description, "项目说明");
+  assert.deepEqual([saved.repositories, saved.modules, saved.environments], [[], [], []]);
+  assert.equal(h.flow.editorOpen.value, false);
+  h.close();
+});
+
+test("project codes follow the server's character limit without restricting their language", () => {
+  const project = sampleProject();
+  project.code = "项目".repeat(30);
+  assert.equal(model.projectValidationError(project), undefined);
+  project.code += "一";
+  assert.deepEqual(model.projectValidationError(project), { section: "basics", message: "项目代码最多60个字符" });
+});
+
+test("a duplicate code reopens basic information and preserves the unsaved configuration", async () => {
+  const h = harness((path, method) => { if (method === "PATCH") throw new ApiError("APPLICATION_CODE_DUPLICATED", "项目代码已存在，请使用其他代码"); });
+  await h.flow.editProject({ id: "project" });
+  h.flow.draft.value.code = "duplicate";
+  h.flow.draft.value.modules[0].directory = "backend";
+  h.flow.expanded.basics = false;
+  await h.flow.saveProject();
+  assert.equal(h.flow.editorOpen.value, true);
+  assert.equal(h.flow.expanded.basics, true);
+  assert.equal(h.flow.draft.value.code, "duplicate");
+  assert.equal(h.flow.draft.value.modules[0].directory, "backend");
+  assert.match(h.flow.editorError.value, /项目代码已存在/);
+  h.close();
+});
+
+test("name validation reveals the specific module or environment even when another one is selected", async () => {
+  const h = harness(); await h.flow.editProject({ id: "project" });
+  const module = model.newProjectModule(h.flow.draft.value.repositories[0].id);
+  h.flow.draft.value.modules.push(module);
+  await h.flow.saveProject();
+  assert.equal(h.flow.expanded.modules, true);
+  assert.equal(h.flow.selectedModuleId.value, module.id);
+  assert.match(h.flow.editorError.value, /模块名称/);
+  module.name = "前端";
+  const environment = model.newProjectEnvironment();
+  h.flow.draft.value.environments.push(environment);
+  await h.flow.saveProject();
+  assert.equal(h.flow.expanded.environments, true);
+  assert.equal(h.flow.selectedEnvironmentId.value, environment.id);
+  assert.match(h.flow.editorError.value, /环境名称/);
+  assert.equal(h.calls.some(call => call.method === "PATCH"), false);
+  h.close();
 });
 
 test("project options honor array hosts, accounts and credentials while paging only software", async () => {
@@ -152,7 +213,9 @@ test("removing a referenced repository or module requires adjusting its usage fi
 
 test("credential variable mode remains selectable before an ID is chosen and clears plaintext", async () => {
   const h = harness(); await h.flow.editProject({ id: "project" });
-  const target = h.flow.draft.value.environments[0].deployments[0];
+  const environment = model.newProjectEnvironment(); environment.name = "prod";
+  const target = model.newProjectDeployment(h.flow.draft.value.modules[0].id);
+  environment.deployments.push(target); h.flow.draft.value.environments.push(environment);
   target.variables.push({ name: "API_TOKEN", value: "not-for-credential-body", credentialId: "", credentialRevision: "" });
   const variable = target.variables[0];
   h.flow.changeVariableMode(variable, "CREDENTIAL");
@@ -160,6 +223,10 @@ test("credential variable mode remains selectable before an ID is chosen and cle
   assert.equal(variable.value, "");
   await h.flow.saveProject();
   assert.match(h.flow.editorError.value, /选择连接凭据/);
+  assert.equal(h.flow.expanded.environments, true);
+  assert.equal(h.flow.selectedEnvironmentId.value, environment.id);
+  assert.equal(h.flow.selectedDeploymentId.value, target.id);
+  assert.equal(h.flow.variableSections.has(target.id), true);
   assert.equal(h.calls.some(call => call.method === "PATCH"), false);
   h.flow.credentials.value = [{ id: "token", revision: "4", name: "Git Token", kind: "TOKEN", revokedAt: "" }];
   h.flow.setVariableCredential(variable, "token");

@@ -64,7 +64,7 @@ type applicationReader interface {
 
 func readApplicationProject(q applicationReader, id string) (applicationProject, error) {
 	p := applicationProject{Repositories: []applicationRepository{}, Modules: []applicationModule{}, Environments: []applicationEnvironment{}}
-	err := q.QueryRow("SELECT id,name,description,CAST(version AS TEXT),archived,created_at,updated_at FROM application_projects WHERE id=?", id).Scan(&p.ID, &p.Name, &p.Description, &p.Version, &p.Archived, &p.CreatedAt, &p.UpdatedAt)
+	err := q.QueryRow("SELECT id,code,name,description,CAST(version AS TEXT),archived,created_at,updated_at FROM application_projects WHERE id=?", id).Scan(&p.ID, &p.Code, &p.Name, &p.Description, &p.Version, &p.Archived, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return p, err
 	}
@@ -171,7 +171,7 @@ func (h *HTTP) listApplicationProjects(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, 400, "INVALID_INPUT", "搜索或归档筛选不正确")
 		return
 	}
-	where := " WHERE instr(lower(name||' '||description),lower(?))>0"
+	where := " WHERE instr(lower(code||' '||name||' '||description),lower(?))>0"
 	args := []any{query}
 	if archived != "all" {
 		where += " AND archived=?"
@@ -261,7 +261,7 @@ func (h *HTTP) saveApplicationProject(w http.ResponseWriter, r *http.Request, s 
 		in.ID = id
 		in.Version = "1"
 		in.CreatedAt = now
-		_, err = tx.Exec("INSERT INTO application_projects(id,name,description,archived,created_at,updated_at) VALUES(?,?,?,?,?,?)", id, in.Name, in.Description, in.Archived, now, now)
+		_, err = tx.Exec("INSERT INTO application_projects(id,code,name,description,archived,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", id, in.Code, in.Name, in.Description, in.Archived, now, now)
 	} else {
 		var old applicationProject
 		old, err = readApplicationProject(tx, id)
@@ -287,7 +287,7 @@ func (h *HTTP) saveApplicationProject(w http.ResponseWriter, r *http.Request, s 
 		var revision int
 		revision, _ = strconv.Atoi(old.Version)
 		in.Version = strconv.Itoa(revision + 1)
-		_, err = tx.Exec("UPDATE application_projects SET name=?,description=?,archived=?,version=version+1,updated_at=? WHERE id=?", in.Name, in.Description, in.Archived, now, id)
+		_, err = tx.Exec("UPDATE application_projects SET code=?,name=?,description=?,archived=?,version=version+1,updated_at=? WHERE id=?", in.Code, in.Name, in.Description, in.Archived, now, id)
 	}
 	if err == nil && !archive {
 		err = validateApplicationReferences(tx, in)
@@ -302,7 +302,9 @@ func (h *HTTP) saveApplicationProject(w http.ResponseWriter, r *http.Request, s 
 		err = tx.Commit()
 	}
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed: application_projects.code") {
+			h.fail(w, r, 409, "APPLICATION_CODE_DUPLICATED", "项目代码已存在，请更换后重试")
+		} else if strings.Contains(err.Error(), "UNIQUE") {
 			h.fail(w, r, 409, "APPLICATION_DUPLICATED", "项目名称或配置条目已存在，请调整后重试")
 		} else if applicationConfigError(err) {
 			h.fail(w, r, 400, "APPLICATION_CONFIG_INVALID", err.Error())

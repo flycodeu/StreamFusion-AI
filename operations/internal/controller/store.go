@@ -21,7 +21,7 @@ import (
 )
 
 const Version = "0.2.0"
-const SchemaVersion = 25
+const SchemaVersion = 26
 
 //go:embed schema.sql
 var schema string
@@ -972,6 +972,38 @@ func Open(dir string) (*Store, error) {
 	}
 	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=25").Scan(&checksum); err != nil || checksum != hashToken(schemaV25) {
 		return nil, errors.New("SCHEMA_MISMATCH: 迁移25摘要不匹配")
+	}
+	if version > 0 && version <= 25 {
+		backupPath := filepath.Join(abs, "before-schema-26-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 25 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV26); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(26,?,?,?)", hashToken(schemaV26), Version, Now())
+		}
+		if e == nil {
+			var invalid int
+			e = tx.QueryRow("SELECT count(*) FROM pragma_foreign_key_check").Scan(&invalid)
+			if e == nil && invalid != 0 {
+				e = errors.New("SCHEMA_FOREIGN_KEY_INVALID")
+			}
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=26").Scan(&checksum); err != nil || checksum != hashToken(schemaV26) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移26摘要不匹配")
 	}
 	if err = s.seedBuiltinCommandTemplates(); err != nil {
 		return nil, err

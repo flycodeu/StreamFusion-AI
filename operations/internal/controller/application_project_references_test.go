@@ -12,7 +12,7 @@ import (
 func applicationReferenceDraft(hostID string) applicationProject {
 	moduleID := uuid.NewString()
 	return applicationProject{
-		Name:         "引用保护项目",
+		Code: "reference-project", Name: "引用保护项目",
 		Modules:      []applicationModule{{ID: moduleID, Name: "后端", Directory: ".", Build: applicationBuild{Kind: "COMMAND", HostID: hostID, Account: "ubuntu"}, Runtime: applicationRuntime{Kind: "NATIVE"}}},
 		Environments: []applicationEnvironment{{ID: uuid.NewString(), Name: "test", Deployments: []applicationDeployment{{ID: uuid.NewString(), ModuleID: moduleID, HostID: hostID}}}},
 	}

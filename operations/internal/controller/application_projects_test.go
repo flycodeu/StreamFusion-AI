@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -12,7 +14,7 @@ import (
 func projectDraft28(name string) applicationProject {
 	repositoryID, moduleID := uuid.NewString(), uuid.NewString()
 	return applicationProject{
-		Name: name, Description: "同仓前后端项目",
+		Code: name, Name: name, Description: "同仓前后端项目",
 		Repositories: []applicationRepository{{ID: repositoryID, Name: "主仓库", URL: "https://github.com/example/project.git", Branch: "main"}},
 		Modules:      []applicationModule{{ID: moduleID, Name: "后端", RepositoryID: repositoryID, Directory: "backend", Build: applicationBuild{Kind: "COMMAND", OutputPath: "target/app.jar", Steps: []applicationStep{{Name: "编译", Command: "mvn package"}}}, Runtime: applicationRuntime{Kind: "NATIVE"}}},
 		Environments: []applicationEnvironment{{ID: uuid.NewString(), Name: "QA", Deployments: []applicationDeployment{{ID: uuid.NewString(), ModuleID: moduleID, Logs: applicationLogs{Kind: "FILE", Directory: "/srv/application/logs", Pattern: "*.log", RetentionDays: 30, MaxMiB: 1024}}}}},
@@ -96,7 +98,7 @@ func TestApplicationProjectPaginationAndAuthentication(t *testing.T) {
 	b.call("POST", "/application-projects", map[string]string{"name": "未登录项目"}, 401)
 	b.login()
 	for i := range 13 {
-		b.call("POST", "/application-projects", map[string]string{"name": fmt.Sprintf("分页项目%02d", i)}, 200)
+		b.call("POST", "/application-projects", map[string]string{"name": fmt.Sprintf("分页项目%02d", i), "code": fmt.Sprintf("page-%02d", i)}, 200)
 	}
 	page := dataOf(t, b.call("GET", "/application-projects?page=2&pageSize=10&q=分页", nil, 200))
 	if page["total"] != float64(13) || len(page["items"].([]any)) != 3 || page["page"] != float64(2) {
@@ -108,6 +110,80 @@ func TestApplicationProjectPaginationAndAuthentication(t *testing.T) {
 	}
 	b.call("GET", "/application-projects?page=0", nil, 400)
 	b.call("GET", "/application-projects?archived=unknown", nil, 400)
+}
+
+func TestApplicationProjectCodesAreRequiredUniqueAndSearchable(t *testing.T) {
+	_, b := setup(t)
+	b.login()
+	for _, code := range []string{"", "  ", strings.Repeat("a", 61), "app\ncode"} {
+		b.call("POST", "/application-projects", applicationProject{Name: "无效项目", Code: code}, 400)
+	}
+	p := applicationResponse(t, b.call("POST", "/application-projects", applicationProject{Name: "主要项目", Code: " App-A ", Description: "保留项目说明"}, 200))
+	if p.Code != "App-A" || p.Description != "保留项目说明" {
+		t.Fatal("project code or description was not persisted", p)
+	}
+	response := b.call("POST", "/application-projects", applicationProject{Name: "另一个项目", Code: "app-a"}, 409)
+	if !strings.Contains(response.Body.String(), "APPLICATION_CODE_DUPLICATED") || !strings.Contains(response.Body.String(), "项目代码已存在") {
+		t.Fatal("duplicate code should have an actionable Chinese error", response.Body.String())
+	}
+	p = applicationResponse(t, b.call("POST", "/application-projects/"+p.ID+"/archive", map[string]string{"version": p.Version}, 200))
+	b.call("POST", "/application-projects", applicationProject{Name: "归档代码不可复用", Code: "APP-A"}, 409)
+	other := applicationResponse(t, b.call("POST", "/application-projects", applicationProject{Name: "第二项目", Code: "项目乙"}, 200))
+	p.Code = other.Code
+	b.call("PATCH", "/application-projects/"+p.ID, p, 409)
+	loaded := applicationResponse(t, b.call("GET", "/application-projects/"+p.ID, nil, 200))
+	if loaded.Code != "App-A" || loaded.Version != p.Version || !loaded.Archived {
+		t.Fatal("failed code change modified project history", loaded)
+	}
+	loaded.Code = "New-App"
+	loaded = applicationResponse(t, b.call("PATCH", "/application-projects/"+loaded.ID, loaded, 200))
+	if loaded.Code != "New-App" || loaded.ID != p.ID || loaded.CreatedAt != p.CreatedAt {
+		t.Fatal("code edit changed project identity", loaded)
+	}
+	page := dataOf(t, b.call("GET", "/application-projects?archived=all&q=nEw-aPp", nil, 200))
+	if page["total"] != float64(1) || page["items"].([]any)[0].(map[string]any)["code"] != loaded.Code {
+		t.Fatal("project code search failed", page)
+	}
+}
+
+func TestApplicationProjectConcurrentDuplicateCodeKeepsOneProject(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	results := make(chan *httptest.ResponseRecorder, 2)
+	start := make(chan struct{})
+	for i, code := range []string{"Concurrent-App", "concurrent-app"} {
+		body, err := json.Marshal(applicationProject{Name: fmt.Sprintf("并发项目%d", i), Code: code})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest("POST", "http://127.0.0.1:19090"+api+"/application-projects", bytes.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Origin", "http://127.0.0.1:19090")
+		r.Header.Set("X-CSRF-Token", b.csrf)
+		r.AddCookie(b.cookie)
+		go func() {
+			<-start
+			w := httptest.NewRecorder()
+			b.h.ServeHTTP(w, r)
+			results <- w
+		}()
+	}
+	close(start)
+	codes := map[int]int{}
+	for range 2 {
+		response := <-results
+		codes[response.Code]++
+		if response.Code == 409 && !strings.Contains(response.Body.String(), "APPLICATION_CODE_DUPLICATED") {
+			t.Fatal("unexpected duplicate response", response.Body.String())
+		}
+	}
+	var projects, saves int
+	if err := s.DB.QueryRow("SELECT (SELECT count(*) FROM application_projects),(SELECT count(*) FROM audit WHERE action='APPLICATION_PROJECT_SAVED')").Scan(&projects, &saves); err != nil {
+		t.Fatal(err)
+	}
+	if codes[200] != 1 || codes[409] != 1 || projects != 1 || saves != 1 {
+		t.Fatalf("statuses=%v projects=%d saves=%d", codes, projects, saves)
+	}
 }
 
 func TestApplicationProjectRejectsUnsafeDraftAndSecretValues(t *testing.T) {
