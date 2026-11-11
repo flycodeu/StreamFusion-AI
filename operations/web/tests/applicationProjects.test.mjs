@@ -37,7 +37,7 @@ function harness(override = () => undefined) {
     throw Error("unexpected request " + path);
   };
   const scope = vue.effectScope();
-  const flow = scope.run(() => load(component + "\nexport const flow = { draft, baseline, records, total, page, pageSize, query, archived, listError, editorError, editorOpen, expanded, variableSections, loading, saving, editProject, saveProject, load, addRepository, removeRepository, addModule, removeModule, addEnvironment, addDeployment, selectedModuleId, selectedEnvironmentId, selectedDeploymentId, changeVariableMode, usesCredential, setVariableCredential, credentials, software, softwareChoices };", {
+  const flow = scope.run(() => load(component + "\nexport const flow = { draft, baseline, records, total, page, pageSize, query, archived, listError, editorError, editorOpen, activeStep, selectStep, nextStep, previousStep, variableSections, loading, saving, editProject, saveProject, load, addRepository, removeRepository, addModule, removeModule, addEnvironment, addDeployment, selectedModuleId, selectedEnvironmentId, selectedDeploymentId, changeVariableMode, usesCredential, setVariableCredential, credentials, software, softwareChoices };", {
     vue: { ...vue, onMounted: () => {}, onUnmounted: fn => cleanup.push(fn) },
     "element-plus": { ElMessageBox: { confirm: async () => {} } },
     "./api": { request, ApiError }, "./listPages": load(listPagesSource, { "./api": { request } }),
@@ -78,14 +78,80 @@ test("project search and archive filters are encoded for server pagination", () 
   assert.equal(url.searchParams.get("archived"), "all");
 });
 
+test("wizard navigation preserves the entire draft and never submits while moving between steps", async () => {
+  const h = harness(); await h.flow.editProject({ id: "project" });
+  h.flow.draft.value.description = "尚未保存的配置";
+  const snapshot = JSON.stringify(h.flow.draft.value), calls = h.calls.length;
+  await h.flow.previousStep();
+  assert.equal(h.flow.activeStep.value, "basics");
+  await h.flow.nextStep();
+  assert.equal(h.flow.activeStep.value, "repositories");
+  await h.flow.nextStep();
+  assert.equal(h.flow.activeStep.value, "modules");
+  await h.flow.selectStep("environments");
+  await h.flow.nextStep();
+  assert.equal(h.flow.activeStep.value, "environments");
+  await h.flow.previousStep();
+  assert.equal(h.flow.activeStep.value, "modules");
+  await h.flow.selectStep("basics");
+  assert.equal(h.flow.activeStep.value, "basics");
+  assert.equal(JSON.stringify(h.flow.draft.value), snapshot);
+  assert.equal(h.calls.length, calls);
+  h.close();
+});
+
+test("next validates only the current step while direct step selection remains available", async () => {
+  const h = harness(); await h.flow.editProject();
+  await h.flow.nextStep();
+  assert.equal(h.flow.activeStep.value, "basics");
+  assert.match(h.flow.editorError.value, /项目名称/);
+  await h.flow.selectStep("repositories");
+  assert.equal(h.flow.editorError.value, "");
+  await h.flow.nextStep();
+  assert.equal(h.flow.activeStep.value, "modules");
+  await h.flow.selectStep("basics");
+  Object.assign(h.flow.draft.value, { name: "新项目", code: "team-app" });
+  h.flow.addModule();
+  await h.flow.nextStep();
+  assert.equal(h.flow.activeStep.value, "repositories");
+  await h.flow.nextStep();
+  await h.flow.nextStep();
+  assert.equal(h.flow.activeStep.value, "modules");
+  assert.match(h.flow.editorError.value, /模块名称/);
+  assert.equal(h.flow.selectedModuleId.value, h.flow.draft.value.modules[0].id);
+  h.flow.draft.value.modules[0].name = "后端";
+  h.flow.addEnvironment();
+  await h.flow.nextStep();
+  assert.equal(h.flow.activeStep.value, "environments");
+  assert.equal(h.calls.some(call => call.method !== "GET"), false);
+  h.close();
+});
+
+test("an in-flight save prevents next, previous and top-step navigation", async () => {
+  let resolveSave;
+  const h = harness((path, method) => method === "PATCH" ? new Promise(resolve => { resolveSave = resolve; }) : undefined);
+  await h.flow.editProject({ id: "project" });
+  await h.flow.selectStep("modules");
+  const pending = h.flow.saveProject(); await flush();
+  assert.equal(h.flow.saving.value, true);
+  await h.flow.nextStep();
+  await h.flow.previousStep();
+  await h.flow.selectStep("basics");
+  assert.equal(h.flow.activeStep.value, "modules");
+  assert.equal(h.calls.filter(call => call.method === "PATCH").length, 1);
+  resolveSave(sampleProject()); await pending;
+  assert.equal(h.flow.saving.value, false);
+  h.close();
+});
+
 test("creating a project requires its code and keeps advanced sections optional", async () => {
   const h = harness((path, method, body) => method === "POST" ? { ...body, id: "created", version: "1" } : undefined);
   await h.flow.editProject();
   h.flow.draft.value.name = "新项目";
-  h.flow.expanded.basics = false;
+  h.flow.activeStep.value = "environments";
   await h.flow.saveProject();
   assert.match(h.flow.editorError.value, /请填写项目代码/);
-  assert.equal(h.flow.expanded.basics, true);
+  assert.equal(h.flow.activeStep.value, "basics");
   assert.equal(h.calls.some(call => call.method === "POST"), false);
   Object.assign(h.flow.draft.value, { code: " team-app ", description: "项目说明" });
   await h.flow.saveProject();
@@ -105,15 +171,15 @@ test("project codes follow the server's character limit without restricting thei
   assert.deepEqual(model.projectValidationError(project), { section: "basics", message: "项目代码最多60个字符" });
 });
 
-test("a duplicate code reopens basic information and preserves the unsaved configuration", async () => {
+test("a duplicate code returns to basic information and preserves the unsaved configuration", async () => {
   const h = harness((path, method) => { if (method === "PATCH") throw new ApiError("APPLICATION_CODE_DUPLICATED", "项目代码已存在，请使用其他代码"); });
   await h.flow.editProject({ id: "project" });
   h.flow.draft.value.code = "duplicate";
   h.flow.draft.value.modules[0].directory = "backend";
-  h.flow.expanded.basics = false;
+  h.flow.activeStep.value = "environments";
   await h.flow.saveProject();
   assert.equal(h.flow.editorOpen.value, true);
-  assert.equal(h.flow.expanded.basics, true);
+  assert.equal(h.flow.activeStep.value, "basics");
   assert.equal(h.flow.draft.value.code, "duplicate");
   assert.equal(h.flow.draft.value.modules[0].directory, "backend");
   assert.match(h.flow.editorError.value, /项目代码已存在/);
@@ -125,14 +191,14 @@ test("name validation reveals the specific module or environment even when anoth
   const module = model.newProjectModule(h.flow.draft.value.repositories[0].id);
   h.flow.draft.value.modules.push(module);
   await h.flow.saveProject();
-  assert.equal(h.flow.expanded.modules, true);
+  assert.equal(h.flow.activeStep.value, "modules");
   assert.equal(h.flow.selectedModuleId.value, module.id);
   assert.match(h.flow.editorError.value, /模块名称/);
   module.name = "前端";
   const environment = model.newProjectEnvironment();
   h.flow.draft.value.environments.push(environment);
   await h.flow.saveProject();
-  assert.equal(h.flow.expanded.environments, true);
+  assert.equal(h.flow.activeStep.value, "environments");
   assert.equal(h.flow.selectedEnvironmentId.value, environment.id);
   assert.match(h.flow.editorError.value, /环境名称/);
   assert.equal(h.calls.some(call => call.method === "PATCH"), false);
@@ -223,7 +289,7 @@ test("credential variable mode remains selectable before an ID is chosen and cle
   assert.equal(variable.value, "");
   await h.flow.saveProject();
   assert.match(h.flow.editorError.value, /选择连接凭据/);
-  assert.equal(h.flow.expanded.environments, true);
+  assert.equal(h.flow.activeStep.value, "environments");
   assert.equal(h.flow.selectedEnvironmentId.value, environment.id);
   assert.equal(h.flow.selectedDeploymentId.value, target.id);
   assert.equal(h.flow.variableSections.has(target.id), true);

@@ -155,16 +155,19 @@ export function projectVariableMode(variable: ProjectVariable, mode: "VALUE" | "
 
 export type ProjectSection = "basics" | "repositories" | "modules" | "environments";
 
-export function projectValidationError(project: ApplicationProject): { section: ProjectSection; message: string; itemId?: string } | undefined {
-  if (!project.name.trim()) return { section: "basics", message: "请填写项目名称" };
-  if (!project.code.trim()) return { section: "basics", message: "请填写项目代码" };
-  if (Array.from(project.code.trim()).length > 60) return { section: "basics", message: "项目代码最多60个字符" };
-  for (const [section, label, items] of [["repositories", "仓库", project.repositories], ["modules", "模块", project.modules], ["environments", "环境", project.environments]] as const) {
+export function projectValidationError(project: ApplicationProject, section?: ProjectSection): { section: ProjectSection; message: string; itemId?: string } | undefined {
+  if (!section || section === "basics") {
+    if (!project.name.trim()) return { section: "basics", message: "请填写项目名称" };
+    if (!project.code.trim()) return { section: "basics", message: "请填写项目代码" };
+    if (Array.from(project.code.trim()).length > 60) return { section: "basics", message: "项目代码最多60个字符" };
+  }
+  for (const [itemSection, label, items] of [["repositories", "仓库", project.repositories], ["modules", "模块", project.modules], ["environments", "环境", project.environments]] as const) {
+    if (section && section !== itemSection) continue;
     const names = new Set<string>();
     for (const item of items) {
       const name = item.name.trim().toLocaleLowerCase();
-      if (!name) return { section, message: `请填写${label}名称`, itemId: item.id };
-      if (names.has(name)) return { section, message: `${label}名称重复，请调整后保存`, itemId: item.id };
+      if (!name) return { section: itemSection, message: `请填写${label}名称`, itemId: item.id };
+      if (names.has(name)) return { section: itemSection, message: `${label}名称重复，请调整后保存`, itemId: item.id };
       names.add(name);
     }
   }

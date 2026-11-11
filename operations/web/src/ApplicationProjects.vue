@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
-import { ElDialog, ElMessageBox } from "element-plus";
+import { ElDialog, ElMessageBox, ElStep, ElSteps } from "element-plus";
 import { ApiError, request } from "./api";
 import { requestAllPages } from "./listPages";
 import OpsPagination from "./OpsPagination.vue";
@@ -22,7 +22,12 @@ const loading = ref(false), saving = ref(false), opening = ref(false);
 const listError = ref(""), editorError = ref("");
 const editorOpen = ref(false);
 const editorElement = ref<HTMLElement>();
-const expanded = reactive({ basics: true, repositories: false, modules: false, environments: false });
+const activeStep = ref<ProjectSection>("basics");
+const steps: { id: ProjectSection; label: string }[] = [
+  { id: "basics", label: "基本信息" }, { id: "repositories", label: "代码仓库" },
+  { id: "modules", label: "应用模块" }, { id: "environments", label: "部署环境" },
+];
+const stepIndex = computed(() => steps.findIndex(step => step.id === activeStep.value));
 const draft = ref(newApplicationProject()), baseline = ref("");
 const selectedModuleId = ref(""), selectedEnvironmentId = ref(""), selectedDeploymentId = ref("");
 const archiveTarget = ref("");
@@ -108,7 +113,7 @@ async function editProject(project?: ApplicationProject) {
     selectedEnvironmentId.value = saved.environments[0]?.id || "";
     selectedDeploymentId.value = saved.environments[0]?.deployments[0]?.id || "";
     editorError.value = "";
-    Object.assign(expanded, { basics: true, repositories: false, modules: false, environments: false });
+    activeStep.value = "basics";
     variableSections.clear();
     editorOpen.value = true;
   } catch (error) {
@@ -126,10 +131,33 @@ async function closeEditor(done: () => void) {
 }
 
 async function showSection(section: ProjectSection) {
-  expanded[section] = true;
+  activeStep.value = section;
   await nextTick();
-  const container = editorElement.value, target = container?.querySelector<HTMLElement>(`[data-project-section="${section}"]`);
-  if (container && target) container.scrollTop += target.getBoundingClientRect().top - container.getBoundingClientRect().top;
+  if (editorElement.value) editorElement.value.scrollTop = 0;
+}
+
+async function selectStep(section: ProjectSection) {
+  if (saving.value) return;
+  editorError.value = "";
+  await showSection(section);
+}
+
+async function showValidationError(error: NonNullable<ReturnType<typeof projectValidationError>>) {
+  editorError.value = error.message;
+  if (error.section === "modules" && error.itemId) selectedModuleId.value = error.itemId;
+  if (error.section === "environments" && error.itemId) selectEnvironment(error.itemId);
+  await showSection(error.section);
+}
+
+async function nextStep() {
+  if (saving.value || stepIndex.value === steps.length - 1) return;
+  const error = projectValidationError(draft.value, activeStep.value);
+  if (error) { await showValidationError(error); return; }
+  await selectStep(steps[stepIndex.value + 1]!.id);
+}
+
+async function previousStep() {
+  if (stepIndex.value > 0) await selectStep(steps[stepIndex.value - 1]!.id);
 }
 
 async function saveProject() {
@@ -137,9 +165,7 @@ async function saveProject() {
   const error = projectValidationError(draft.value);
   editorError.value = error?.message || "";
   if (error) {
-    if (error.section === "modules" && error.itemId) selectedModuleId.value = error.itemId;
-    if (error.section === "environments" && error.itemId) selectEnvironment(error.itemId);
-    await showSection(error.section);
+    await showValidationError(error);
     return;
   }
   for (const environment of draft.value.environments) {
@@ -318,19 +344,16 @@ onUnmounted(() => {
       :close-on-click-modal="true"
       :close-on-press-escape="true"
     >
+      <ElSteps class="project-wizard-steps" :active="stepIndex" finish-status="wait" align-center aria-label="项目配置步骤">
+        <ElStep v-for="item in steps" :key="item.id" @click="selectStep(item.id)">
+          <template #title>
+            <button type="button" :aria-current="activeStep === item.id ? 'step' : undefined" :disabled="saving" @click.stop="selectStep(item.id)">{{ item.label }}</button>
+          </template>
+        </ElStep>
+      </ElSteps>
       <div ref="editorElement" class="project-editor">
         <fieldset :disabled="saving" @input="editorError = ''">
-          <details
-            class="project-config-section"
-            data-project-section="basics"
-            :open="expanded.basics"
-            @toggle="expanded.basics = ($event.target as HTMLDetailsElement).open"
-          >
-            <summary>
-              <span class="section-number">1</span>
-              <strong>基本信息</strong>
-              <small>{{ draft.code || "填写名称与项目代码" }}</small>
-            </summary>
+          <section v-show="activeStep === 'basics'" class="project-step-panel" data-project-section="basics" aria-label="基本信息">
             <div class="project-section-body project-fields">
               <label>
                 项目名称
@@ -345,18 +368,8 @@ onUnmounted(() => {
                 <textarea v-model="draft.description" maxlength="500" rows="2" placeholder="选填" />
               </label>
             </div>
-          </details>
-          <details
-            class="project-config-section"
-            data-project-section="repositories"
-            :open="expanded.repositories"
-            @toggle="expanded.repositories = ($event.target as HTMLDetailsElement).open"
-          >
-            <summary>
-              <span class="section-number">2</span>
-              <strong>代码仓库</strong>
-              <small>{{ draft.repositories.length ? `${draft.repositories.length} 个仓库` : "未配置" }}</small>
-            </summary>
+          </section>
+          <section v-show="activeStep === 'repositories'" class="project-step-panel" data-project-section="repositories" aria-label="代码仓库">
             <div class="project-section-body">
               <div class="project-section-heading">
                 <button type="button" class="secondary" @click="addRepository">添加仓库</button>
@@ -389,18 +402,8 @@ onUnmounted(() => {
                 </div>
               </section>
             </div>
-          </details>
-          <details
-            class="project-config-section"
-            data-project-section="modules"
-            :open="expanded.modules"
-            @toggle="expanded.modules = ($event.target as HTMLDetailsElement).open"
-          >
-            <summary>
-              <span class="section-number">3</span>
-              <strong>应用模块</strong>
-              <small>{{ draft.modules.length ? `${draft.modules.length} 个模块` : "未配置" }}</small>
-            </summary>
+          </section>
+          <section v-show="activeStep === 'modules'" class="project-step-panel" data-project-section="modules" aria-label="应用模块">
             <div class="project-section-body">
               <div class="project-section-heading">
                 <button type="button" class="secondary" @click="addModule">添加模块</button>
@@ -587,18 +590,8 @@ onUnmounted(() => {
                 </div>
               </div>
             </div>
-          </details>
-          <details
-            class="project-config-section"
-            data-project-section="environments"
-            :open="expanded.environments"
-            @toggle="expanded.environments = ($event.target as HTMLDetailsElement).open"
-          >
-            <summary>
-              <span class="section-number">4</span>
-              <strong>部署环境</strong>
-              <small>{{ draft.environments.length ? `${draft.environments.length} 个环境` : "未配置" }}</small>
-            </summary>
+          </section>
+          <section v-show="activeStep === 'environments'" class="project-step-panel" data-project-section="environments" aria-label="部署环境">
             <div class="project-section-body">
               <div class="project-section-heading">
                 <button type="button" class="secondary" @click="addEnvironment">添加环境</button>
@@ -823,17 +816,18 @@ onUnmounted(() => {
                 </template>
               </template>
             </div>
-          </details>
+          </section>
         </fieldset>
       </div>
       <template #footer>
         <div class="project-dialog-footer">
           <p v-if="editorError" class="project-error" role="alert">{{ editorError }}</p>
           <div class="project-actions">
-            <button class="secondary" @click="closeEditor(() => (editorOpen = false))">关闭</button>
-            <button class="primary" :disabled="saving" @click="saveProject">
-              {{ saving ? "保存中…" : draft.id ? "保存配置" : "创建项目" }}
-            </button>
+            <button class="quiet" @click="closeEditor(() => (editorOpen = false))">关闭</button>
+            <button v-if="stepIndex > 0" class="secondary" :disabled="saving" @click="previousStep">上一步</button>
+            <button v-if="stepIndex < steps.length - 1" class="secondary" :disabled="saving" @click="saveProject">{{ saving ? "保存中…" : "保存并关闭" }}</button>
+            <button v-if="stepIndex < steps.length - 1" class="primary" :disabled="saving" @click="nextStep">下一步</button>
+            <button v-else class="primary" :disabled="saving" @click="saveProject">{{ saving ? "保存中…" : draft.id ? "保存配置" : "创建项目" }}</button>
           </div>
         </div>
       </template>
@@ -846,13 +840,13 @@ onUnmounted(() => {
 :global(.application-project-dialog.el-dialog) {
   display: flex;
   flex-direction: column;
-  max-height: calc(100dvh - var(--ops-page-gutter, 24px) - var(--ops-page-gutter, 24px));
+  height: min(720px, calc(100dvh - var(--ops-page-gutter, 24px) - var(--ops-page-gutter, 24px)));
   overflow: hidden;
 }
 :global(.application-project-dialog > .el-dialog__header),
 :global(.application-project-dialog > .el-dialog__footer) { flex-shrink: 0; }
 :global(.application-project-dialog > .el-dialog__header) { margin-bottom: 16px; }
-:global(.application-project-dialog > .el-dialog__body) { display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+:global(.application-project-dialog > .el-dialog__body) { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden; }
 :global(.application-project-dialog > .el-dialog__footer) { padding-top: 16px; }
 .project-toolbar, .project-filters, .project-actions, .project-section-heading, .project-card-title, .project-card footer, .project-step-title { display: flex; align-items: center; gap: 12px; }
 .project-toolbar, .project-section-heading, .project-card footer { justify-content: space-between; }
@@ -879,20 +873,17 @@ onUnmounted(() => {
 .project-empty p { font-size: 12px; color: var(--muted); line-height: 1.6; }
 .project-error { margin: 0; padding: 10px 12px; background: #fef2f2; border-radius: 5px; color: #b91c1c; line-height: 1.6; font-size: 13px; overflow-wrap: anywhere; }
 .application-projects > .project-error { margin-bottom: 16px; }
+.project-wizard-steps { flex-shrink: 0; margin-bottom: 24px; padding: 4px 0 20px; border-bottom: 1px solid var(--border); }
+.project-wizard-steps :deep(.el-step) { cursor: pointer; }
+.project-wizard-steps button { padding: 4px; border: 0; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+.project-wizard-steps :deep(.el-step__head.is-process) { color: var(--accent); border-color: var(--accent); }
+.project-wizard-steps button[aria-current] { color: var(--accent); font-weight: 600; }
+.project-dialog-footer .project-actions { flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .project-editor { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 8px; }
 fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .project-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .project-fields label { min-width: 0; }
-.project-config-section { border: 1px solid var(--border); border-radius: 7px; margin-bottom: 12px; }
-.project-config-section > summary { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 14px 16px; margin: 0; list-style: none; border-radius: 7px; }
-.project-config-section > summary::-webkit-details-marker { display: none; }
-.project-config-section > summary::after { content: '›'; color: var(--muted); font-size: 20px; line-height: 1; }
-.project-config-section[open] > summary { background: #f8fafc; border-radius: 7px 7px 0 0; }
-.project-config-section[open] > summary::after { transform: rotate(90deg); }
-.project-config-section > summary strong { flex-shrink: 0; color: var(--text); font-size: 14px; font-weight: 500; }
-.project-config-section > summary small { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font-size: 12px; color: var(--muted); }
-.section-number { display: grid; place-items: center; flex: 0 0 24px; height: 24px; border-radius: 50%; background: #eff6ff; color: var(--accent); font-size: 12px; }
-.project-section-body { padding: 16px; border-top: 1px solid var(--border-subtle); }
+.project-section-body { padding: 0 2px 8px; }
 .project-section-body > .project-section-heading:first-child { justify-content: flex-end; margin-bottom: 12px; }
 .project-section-body > .project-config-block:last-child { margin-bottom: 0; }
 .project-advanced { border-top: 1px solid var(--border-subtle); margin-top: 16px; }
@@ -934,6 +925,8 @@ details summary { cursor: pointer; font-size: 13px; color: #475569; margin-botto
 .project-dialog-footer .project-error { flex: 1; text-align: left; max-height: min(96px, 20dvh); overflow-y: auto; }
 .project-dialog-footer .project-actions { flex-shrink: 0; }
 @media (max-width: 760px) {
+  .project-wizard-steps { margin-bottom: 16px; }
+  .project-wizard-steps :deep(.el-step__title) { font-size: 12px; line-height: 1.5; }
   .project-split { grid-template-columns: minmax(0, 1fr); gap: 18px; }
   .project-item-nav { flex-direction: row; flex-wrap: wrap; }
   .project-fields, .project-three { grid-template-columns: minmax(0, 1fr); gap: 14px; }
@@ -948,6 +941,7 @@ details summary { cursor: pointer; font-size: 13px; color: #475569; margin-botto
   .project-dialog-footer .project-actions { justify-content: flex-end; }
 }
 @media (max-height: 560px) {
+  .project-wizard-steps { margin-bottom: 12px; padding-bottom: 10px; }
   :global(.application-project-dialog.el-dialog) { --el-dialog-padding-primary: 16px; }
   :global(.application-project-dialog > .el-dialog__header) { margin-bottom: 12px; padding-bottom: 10px; }
   :global(.application-project-dialog > .el-dialog__footer) { padding-top: 12px; }
