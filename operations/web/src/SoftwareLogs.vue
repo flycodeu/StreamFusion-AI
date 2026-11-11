@@ -211,7 +211,7 @@ onUnmounted(() => { disposed = true; generation++; listAbort?.abort(); if (searc
 .logs-list-diagnostic { margin-top: 16px; color: var(--muted); font-size: 12px; }.logs-list-diagnostic p { overflow-wrap: anywhere; }
 @media (max-width: 900px) { .logs-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(90px, .32fr) minmax(0, 1fr); gap: 14px; } }
 @media (max-width: 550px) { .logs-toolbar input { width: 100%; }.logs-toolbar select { flex: 1; } }
-@media (max-height: 600px) {
+@media (max-height: 600px), (max-width: 900px) and (max-height: 720px) {
   .software-logs { display: block; }
   .logs-workspace { grid-template-rows: auto; }
   .logs-list { max-height: min(360px, 60vh); }

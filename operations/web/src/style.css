@@ -1202,7 +1202,7 @@ td .quiet {
     padding: 20px 18px;
   }
 }
-@media (max-height: 600px) {
+@media (max-height: 600px), (max-width: 900px) and (max-height: 720px) {
   .main.logs-main { display: block; height: auto; overflow: visible; }
   .logs-panel { display: block; overflow: visible; }
 }
