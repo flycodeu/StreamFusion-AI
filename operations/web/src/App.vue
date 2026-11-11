@@ -636,7 +636,7 @@ onUnmounted(() => {
         >
       </div>
     </aside>
-    <main class="main" :class="{ 'login-main': !loggedIn }">
+    <main class="main" :class="{ 'login-main': !loggedIn, 'logs-main': loggedIn && active === 'audit' }">
       <header v-if="loggedIn">
         <button
           class="navigation-toggle"
@@ -1018,7 +1018,7 @@ onUnmounted(() => {
           <div v-else class="empty">尚未保存凭据</div>
           <OpsPagination v-if="credentials.length" v-model:page="credentialPage" v-model:page-size="credentialPageSize" :total="credentialTotal" label="凭据分页" />
         </section>
-        <section v-else-if="active === 'audit'" class="content panel-card">
+        <section v-else-if="active === 'audit'" class="content panel-card logs-panel">
           <div class="log-record-tabs" role="tablist" aria-label="日志类型">
             <button v-for="entry in logTabs"
               :key="entry.id" role="tab" :aria-selected="logTab === entry.id" :class="{ active: logTab === entry.id }"

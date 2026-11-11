@@ -90,6 +90,7 @@ const selectedGroupKey = computed(() => draft.value ? recipeCatalogKey(draft.val
 const { page, pageSize, total, pageItems: pagedSoftwareGroups } = usePagination(
   () => softwareGroups.value, [search, statusFilter],
 );
+pageSize.value = 50;
 const selectedGroupName = computed(() => softwareNames[selectedGroupKey.value] || draft.value?.name || "新建软件");
 const groupRecords = computed(() => records.value.filter(record => recipeCatalogKey(record.draft) === selectedGroupKey.value));
 const versionChoices = computed(() => Array.from(new Set(groupRecords.value.map(item => item.draft.version))));

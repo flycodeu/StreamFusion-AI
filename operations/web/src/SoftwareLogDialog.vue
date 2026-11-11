@@ -13,6 +13,9 @@ const emit = defineEmits<{ close: [] }>();
 </template>
 
 <style>
-.software-log-dialog { max-height: calc(100dvh - 32px); }
-.software-log-dialog .el-dialog__body { max-height: calc(100dvh - 112px); overflow-y: auto; }
+.software-log-dialog { display: flex; flex-direction: column; height: min(760px, calc(100dvh - 32px)); }
+.software-log-dialog .el-dialog__header { flex-shrink: 0; }
+.software-log-dialog .el-dialog__body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.software-log-dialog .software-log-viewer { flex: 1; }
+.software-log-dialog .execution-output { min-height: 0; max-height: none; }
 </style>

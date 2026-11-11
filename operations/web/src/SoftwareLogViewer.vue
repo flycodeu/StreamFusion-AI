@@ -143,23 +143,25 @@ onUnmounted(() => { disposed = true; generation++; stopTimer(); controller?.abor
 </template>
 
 <style scoped>
-.software-log-viewer { min-width: 0; }
+.software-log-viewer { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .log-context { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 14px; font-size: 12px; color: var(--muted); }
 .log-context strong { color: var(--text); font-size: 14px; overflow-wrap: anywhere; }
 .logs-error { margin: 0 0 16px; color: #b45309; font-size: 13px; }
 .execution-terminal { overflow: hidden; border: 1px solid #26374a; border-radius: 8px; background: #111d2b; color: #d6e3ef; }
+.execution-terminal, .receipt-output { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.log-context, .logs-error, .execution-terminal header, .execution-terminal footer, .receipt-output header { flex-shrink: 0; }
 .execution-terminal header, .execution-terminal footer, .receipt-output header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 11px 16px; }
 .execution-terminal header { border-bottom: 1px solid #2b3d50; background: #19293b; font-size: 12px; }
 .execution-terminal header::before { content: ">_"; color: #72a9cd; font: 13px Consolas, monospace; margin-right: 2px; }
 header span { flex: 1; font-size: 11px; }
 .execution-terminal header span { color: #90a8bf; }
 .execution-terminal .quiet { color: #d1e0ed; border-color: #41566e; background: transparent; font-size: 11px; padding: 5px 8px; }
-.execution-output { min-height: min(360px, 45vh); max-height: min(600px, 60vh); overflow: auto; margin: 0; padding: 18px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.85 Consolas, monospace; tab-size: 2; }
+.execution-output { flex: 1; min-height: min(360px, 45vh); max-height: min(600px, 60vh); overflow: auto; overscroll-behavior: contain; margin: 0; padding: 18px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.85 Consolas, monospace; tab-size: 2; }
 .execution-terminal footer { justify-content: space-between; color: #90a8bf; font-size: 11px; border-top: 1px solid #26384b; }
 .receipt-output { border: 1px solid var(--border); border-radius: 8px; background: #fafcff; }
 .receipt-output header { border-bottom: 1px solid var(--border); font-size: 12px; }
 .receipt-output header strong { margin-right: auto; }
-.receipt-summary { padding: 28px; color: var(--text); }.receipt-summary > strong { font-size: 20px; }.receipt-summary p, .receipt-summary time { color: var(--muted); font-size: 13px; }
-.log-diagnostics { margin-top: 16px; color: var(--muted); font-size: 12px; }.log-diagnostics summary { cursor: pointer; }.log-diagnostics dl { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 10px; margin-top: 16px; }.log-diagnostics dd { margin: 0; overflow-wrap: anywhere; }
+.receipt-summary { flex: 1; min-height: 0; overflow-y: auto; padding: 28px; color: var(--text); }.receipt-summary > strong { font-size: 20px; }.receipt-summary p, .receipt-summary time { color: var(--muted); font-size: 13px; }
+.log-diagnostics { flex-shrink: 0; max-height: min(180px, 30vh); overflow-y: auto; overscroll-behavior: contain; margin-top: 16px; color: var(--muted); font-size: 12px; }.log-diagnostics summary { cursor: pointer; }.log-diagnostics dl { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 10px; margin-top: 16px; }.log-diagnostics dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 550px) { .execution-output { padding: 12px; }.execution-terminal header { padding: 10px; gap: 8px; }.receipt-summary { padding: 20px; } }
 </style>

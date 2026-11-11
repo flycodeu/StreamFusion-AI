@@ -290,6 +290,11 @@ h2 {
   border-radius: var(--card-radius);
   box-shadow: var(--card-shadow);
 }
+.main.logs-main { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+.logs-main > header, .logs-panel > .log-record-tabs, .logs-panel > .section-head, .logs-panel > .ops-pagination { flex-shrink: 0; }
+.logs-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.logs-panel > .table-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.logs-panel > .empty { flex: 1; min-height: 0; }
 .status-line {
   display: flex;
   align-items: center;
@@ -1196,6 +1201,10 @@ td .quiet {
   .el-drawer__body {
     padding: 20px 18px;
   }
+}
+@media (max-height: 600px) {
+  .main.logs-main { display: block; height: auto; overflow: visible; }
+  .logs-panel { display: block; overflow: visible; }
 }
 @media (prefers-reduced-motion: reduce) {
   *,

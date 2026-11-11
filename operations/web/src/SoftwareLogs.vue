@@ -196,17 +196,25 @@ onUnmounted(() => { disposed = true; generation++; listAbort?.abort(); if (searc
 </template>
 
 <style scoped>
-.software-logs { min-width: 0; }
-.logs-toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
+.software-logs { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.logs-toolbar { display: flex; flex-wrap: wrap; flex-shrink: 0; gap: 10px; margin-bottom: 18px; }
 .logs-toolbar input { width: 240px; min-width: 0; margin: 0; }.logs-toolbar select { width: 150px; margin: 0; }.logs-toolbar button { margin-left: auto; }
-.logs-workspace { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 20px; }
-.logs-list { max-height: 620px; overflow-y: auto; border: 1px solid var(--border); border-radius: 7px; }
+.logs-workspace { display: grid; flex: 1; min-height: 0; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 20px; }
+.logs-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--border); border-radius: 7px; }
+.logs-workspace :deep(.execution-output) { min-height: 0; max-height: none; }
+.software-logs > .ops-pagination, .logs-error, .logs-list-diagnostic { flex-shrink: 0; }
 .log-record { display: flex; justify-content: space-between; gap: 12px; width: 100%; padding: 15px 12px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; text-align: left; }
 .log-record:hover, .log-record.selected { background: #eff6ff; }.log-record.selected { box-shadow: inset 3px 0 #2563eb; }
 .log-record > span:first-child { min-width: 0; }.log-record strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
 .log-record small { display: block; margin-top: 7px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }.log-record > span:last-child { white-space: nowrap; font-size: 12px; color: var(--muted); }
 .logs-error { margin: 0 0 16px; color: #b45309; font-size: 13px; }
 .logs-list-diagnostic { margin-top: 16px; color: var(--muted); font-size: 12px; }.logs-list-diagnostic p { overflow-wrap: anywhere; }
-@media (max-width: 900px) { .logs-workspace { grid-template-columns: 1fr; }.logs-list { max-height: 220px; } }
+@media (max-width: 900px) { .logs-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(90px, .32fr) minmax(0, 1fr); gap: 14px; } }
 @media (max-width: 550px) { .logs-toolbar input { width: 100%; }.logs-toolbar select { flex: 1; } }
+@media (max-height: 600px) {
+  .software-logs { display: block; }
+  .logs-workspace { grid-template-rows: auto; }
+  .logs-list { max-height: min(360px, 60vh); }
+  .logs-workspace :deep(.execution-output) { min-height: min(240px, 45vh); max-height: 60vh; }
+}
 </style>
