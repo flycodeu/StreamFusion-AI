@@ -53,7 +53,7 @@ export function runtimePolicySummary(value?: RuntimePolicy, kind: PolicyRuntime 
 export function runtimePolicyError(value: RuntimePolicy, kind: PolicyRuntime) {
   if (kind === "SYSTEMD" && value.restart === "unless-stopped") return "原生服务不支持所选恢复方式";
   if (!Number.isInteger(value.stopTimeoutSeconds) || !value.stopTimeoutSeconds || value.stopTimeoutSeconds < 1 || value.stopTimeoutSeconds > 600) return "停止等待时间须为 1 至 600 秒";
-  if (kind === "SYSTEMD" && value.restartDelaySeconds !== undefined && (!Number.isInteger(value.restartDelaySeconds) || value.restartDelaySeconds < 0 || value.restartDelaySeconds > 300)) return "重启间隔须为 0 至 300 秒";
+  if (kind === "SYSTEMD" && value.restartDelaySeconds !== undefined && (!Number.isFinite(value.restartDelaySeconds) || value.restartDelaySeconds < 0 || value.restartDelaySeconds > 300)) return "重启间隔须为 0 至 300 秒";
   if (kind === "DOCKER" && value.maxRetries !== undefined && (!Number.isInteger(value.maxRetries) || value.maxRetries < 0 || value.maxRetries > 100)) return "重试次数须为 0 至 100 次";
   return "";
 }

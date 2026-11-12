@@ -1,6 +1,9 @@
 package runtimepolicy
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestPolicyRejectsUnsupportedSupervisorCombinations(t *testing.T) {
 	valid := []struct {
@@ -10,6 +13,7 @@ func TestPolicyRejectsUnsupportedSupervisorCombinations(t *testing.T) {
 		{"DOCKER", Policy{Restart: "unless-stopped", AutoStart: true, StopTimeoutSeconds: 10}},
 		{"DOCKER", Policy{Restart: "on-failure", MaxRetries: 3, StopTimeoutSeconds: 10}},
 		{"SYSTEMD", Policy{Restart: "on-failure", AutoStart: true, RestartDelaySeconds: 5, StopTimeoutSeconds: 30}},
+		{"SYSTEMD", Policy{Restart: "no", RestartDelaySeconds: 0.1, StopTimeoutSeconds: 30}},
 	}
 	for _, test := range valid {
 		if err := test.p.Validate(test.kind); err != nil {
@@ -27,6 +31,8 @@ func TestPolicyRejectsUnsupportedSupervisorCombinations(t *testing.T) {
 		{"SYSTEMD", Policy{Restart: "on-failure", MaxRetries: 3, StopTimeoutSeconds: 30}},
 		{"TOOL", Policy{Restart: "no", StopTimeoutSeconds: 10}},
 		{"SYSTEMD", Policy{Restart: "no", StopTimeoutSeconds: 0}},
+		{"SYSTEMD", Policy{Restart: "no", RestartDelaySeconds: math.NaN(), StopTimeoutSeconds: 30}},
+		{"SYSTEMD", Policy{Restart: "no", RestartDelaySeconds: math.Inf(1), StopTimeoutSeconds: 30}},
 	}
 	for _, test := range invalid {
 		if test.p.Validate(test.kind) == nil {

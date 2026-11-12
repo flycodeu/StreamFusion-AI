@@ -38,7 +38,7 @@ function number(event: Event) { return Number((event.target as HTMLInputElement)
       <details class="policy-advanced">
         <summary>高级设置</summary>
         <div class="policy-grid">
-          <label v-if="kind === 'SYSTEMD'">重启间隔（秒）<input :value="policy.restartDelaySeconds" type="number" min="0" max="300" placeholder="沿用当前值" aria-label="重启间隔（秒）" @change="change({ restartDelaySeconds: number($event) || undefined })" /></label>
+          <label v-if="kind === 'SYSTEMD'">重启间隔（秒）<input :value="policy.restartDelaySeconds" type="number" min="0" max="300" step="any" placeholder="沿用当前值" aria-label="重启间隔（秒）" @change="change({ restartDelaySeconds: number($event) || undefined })" /></label>
           <label v-if="kind === 'DOCKER' && policy.restart === 'on-failure'">最多重试次数<input :value="policy.maxRetries || 0" type="number" min="0" max="100" aria-label="最多重试次数" @change="change({ maxRetries: number($event) })" /><small>0 表示不限制</small></label>
           <label>停止等待（秒）<input :value="policy.stopTimeoutSeconds" :disabled="stopTimeoutEditable === false" type="number" min="1" max="600" placeholder="沿用当前值" aria-label="停止等待（秒）" @change="change({ stopTimeoutSeconds: number($event) || undefined })" /></label>
         </div>

@@ -24,13 +24,13 @@ func runtimePolicyEffective(p runtimepolicy.Policy, held bool, kind string) runt
 	return p
 }
 
-func policySeconds(value string) (int, bool) {
+func policySeconds(value string) (float64, bool) {
 	value = strings.ReplaceAll(strings.ReplaceAll(value, "min", "m"), " ", "")
 	d, err := time.ParseDuration(value)
-	if err != nil || d < 0 || d > 24*time.Hour || d%time.Second != 0 {
+	if err != nil || d < 0 || d > 24*time.Hour {
 		return 0, false
 	}
-	return int(d.Round(time.Second) / time.Second), true
+	return d.Seconds(), true
 }
 
 func (x *executor) readRuntimePolicy(ctx context.Context, s SoftwareRequest) (*runtimepolicy.State, error) {
@@ -76,8 +76,8 @@ func (x *executor) readRuntimePolicy(ctx context.Context, s SoftwareRequest) (*r
 	p := runtimepolicy.Policy{Restart: props["Restart"], AutoStart: props["UnitFileState"] == "enabled"}
 	delay, delayOK := policySeconds(props["RestartUSec"])
 	stop, stopOK := policySeconds(props["TimeoutStopUSec"])
-	p.RestartDelaySeconds, p.StopTimeoutSeconds = delay, stop
-	if !delayOK || !stopOK || p.Validate(s.Kind) != nil {
+	p.RestartDelaySeconds, p.StopTimeoutSeconds = delay, int(stop)
+	if !delayOK || !stopOK || stop != float64(p.StopTimeoutSeconds) || p.Validate(s.Kind) != nil {
 		state.Reason = "当前服务策略超出可编辑范围"
 		return state, nil
 	}
@@ -126,7 +126,7 @@ func (x *executor) applyRuntimePolicy(ctx context.Context, s SoftwareRequest, p 
 			return err
 		}
 	}
-	_, err = x.softwareRunner(ctx, "/usr/bin/bash", "-c", deployScript("runtime-policy/systemd-write.sh"), "ops-runtime-policy", s.Locator, s.Locator, p.Restart, strconv.Itoa(p.RestartDelaySeconds), strconv.Itoa(p.StopTimeoutSeconds))
+	_, err = x.softwareRunner(ctx, "/usr/bin/bash", "-c", deployScript("runtime-policy/systemd-write.sh"), "ops-runtime-policy", s.Locator, s.Locator, p.Restart, strconv.FormatFloat(p.RestartDelaySeconds, 'f', -1, 64), strconv.Itoa(p.StopTimeoutSeconds))
 	if err != nil {
 		return err
 	}

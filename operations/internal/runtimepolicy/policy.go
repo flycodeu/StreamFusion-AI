@@ -1,18 +1,21 @@
 package runtimepolicy
 
-import "errors"
-import "strconv"
+import (
+	"errors"
+	"math"
+	"strconv"
+)
 
 const Version = 1
 
 // Policy uses the native supervisor's options. Docker derives boot startup
 // from its restart mode; systemd exposes it as a separate unit setting.
 type Policy struct {
-	Restart             string `json:"restart"`
-	AutoStart           bool   `json:"autoStart"`
-	RestartDelaySeconds int    `json:"restartDelaySeconds,omitempty"`
-	StopTimeoutSeconds  int    `json:"stopTimeoutSeconds,omitempty"`
-	MaxRetries          int    `json:"maxRetries,omitempty"`
+	Restart             string  `json:"restart"`
+	AutoStart           bool    `json:"autoStart"`
+	RestartDelaySeconds float64 `json:"restartDelaySeconds,omitempty"`
+	StopTimeoutSeconds  int     `json:"stopTimeoutSeconds,omitempty"`
+	MaxRetries          int     `json:"maxRetries,omitempty"`
 }
 
 type Change struct {
@@ -37,7 +40,7 @@ func (p Policy) DockerRestart() string {
 }
 
 func (p Policy) Validate(kind string) error {
-	if p.StopTimeoutSeconds < 1 || p.StopTimeoutSeconds > 600 || p.RestartDelaySeconds < 0 || p.RestartDelaySeconds > 300 || p.MaxRetries < 0 || p.MaxRetries > 100 {
+	if p.StopTimeoutSeconds < 1 || p.StopTimeoutSeconds > 600 || p.RestartDelaySeconds < 0 || p.RestartDelaySeconds > 300 || math.IsNaN(p.RestartDelaySeconds) || math.IsInf(p.RestartDelaySeconds, 0) || p.MaxRetries < 0 || p.MaxRetries > 100 {
 		return errors.New("RUNTIME_POLICY_INVALID")
 	}
 	if p.Restart != "no" && p.Restart != "on-failure" && p.Restart != "always" && (kind != "DOCKER" || p.Restart != "unless-stopped") {

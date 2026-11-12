@@ -57,6 +57,19 @@ test("runtime policy uses each supervisor's real options and keeps inherited val
   assert.match(model.runtimePolicyError({ restart: "no", autoStart: false }, "SYSTEMD"), /停止等待/);
 });
 
+test("editing a native service preserves its fractional restart delay", async t => {
+  for (const restartDelaySeconds of [0.1, 0.25]) {
+    const actual = { ...model.defaultRuntimePolicy("SYSTEMD"), restartDelaySeconds };
+    const fixture = harness({ ...software("nginx", { actual }), runtimeKind: "SYSTEMD" });
+    t.after(() => fixture.close());
+    fixture.flow.changed(model.normalizeRuntimePolicy({ ...fixture.flow.policy.value, autoStart: false }, "SYSTEMD"));
+    assert.equal(model.runtimePolicyError(fixture.flow.policy.value, "SYSTEMD"), "");
+    await fixture.flow.save();
+    assert.equal(fixture.calls[0].body.runtimePolicy.restartDelaySeconds, restartDelaySeconds);
+  }
+  assert.match(model.runtimePolicyError({ ...model.defaultRuntimePolicy("SYSTEMD"), restartDelaySeconds: NaN }, "SYSTEMD"), /重启间隔/);
+});
+
 test("a stop intent is confirmed only by stopped state and disabled supervisor startup", () => {
   const configured = model.defaultRuntimePolicy("DOCKER");
   const state = { held: true, configured, actual: configured };

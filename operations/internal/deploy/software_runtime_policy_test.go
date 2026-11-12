@@ -36,6 +36,13 @@ func TestRuntimePolicyReadsOnlySupervisorMetadata(t *testing.T) {
 	if err != nil || state.Editable || state.Actual == nil || state.Actual.StopTimeoutSeconds != 90 || state.Reason == "" {
 		t.Fatal(state, err)
 	}
+	x.softwareRun = func(_ time.Duration, _ string, _ ...string) ([]byte, error) {
+		return []byte("UnitFileState=enabled\nRestart=no\nRestartUSec=100ms\nTimeoutStopUSec=30s\n"), nil
+	}
+	state, err = x.readRuntimePolicy(context.Background(), SoftwareRequest{Kind: "SYSTEMD", Locator: "example.service"})
+	if err != nil || !state.Editable || state.Actual == nil || state.Actual.RestartDelaySeconds != 0.1 {
+		t.Fatal("default systemd restart interval rejected or rounded", state, err)
+	}
 }
 
 func TestRuntimePolicyCorruptStoredIntentDoesNotBecomeEffectiveDefault(t *testing.T) {
@@ -73,7 +80,7 @@ func newRuntimeNativeFixture(t *testing.T) (*runtimeNativeFixture, SoftwareReque
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux target durable directory fsync; supervisor is mocked")
 	}
-	f := &runtimeNativeFixture{state: "active", boot: true, invocation: strings.Repeat("a", 32), policy: runtimepolicy.Policy{Restart: "on-failure", AutoStart: true, RestartDelaySeconds: 5, StopTimeoutSeconds: 30}}
+	f := &runtimeNativeFixture{state: "active", boot: true, invocation: strings.Repeat("a", 32), policy: runtimepolicy.Policy{Restart: "on-failure", AutoStart: true, RestartDelaySeconds: 0.1, StopTimeoutSeconds: 30}}
 	f.x = &executor{root: t.TempDir()}
 	calls := []string{}
 	f.x.softwareRun = func(_ time.Duration, command string, args ...string) ([]byte, error) {
@@ -83,7 +90,7 @@ func newRuntimeNativeFixture(t *testing.T) (*runtimeNativeFixture, SoftwareReque
 				if f.boot {
 					boot = "enabled"
 				}
-				return []byte("UnitFileState=" + boot + "\nRestart=" + f.policy.Restart + "\nRestartUSec=" + strconv.Itoa(f.policy.RestartDelaySeconds) + "s\nTimeoutStopUSec=" + strconv.Itoa(f.policy.StopTimeoutSeconds) + "s\n"), nil
+				return []byte("UnitFileState=" + boot + "\nRestart=" + f.policy.Restart + "\nRestartUSec=" + strconv.FormatFloat(f.policy.RestartDelaySeconds, 'f', -1, 64) + "s\nTimeoutStopUSec=" + strconv.Itoa(f.policy.StopTimeoutSeconds) + "s\n"), nil
 			}
 			if strings.Contains(strings.Join(args, " "), "InvocationID") {
 				return []byte(f.invocation), nil
@@ -113,7 +120,7 @@ func newRuntimeNativeFixture(t *testing.T) (*runtimeNativeFixture, SoftwareReque
 			f.dropin = true
 			f.writes++
 			f.policy.Restart = args[len(args)-3]
-			f.policy.RestartDelaySeconds, _ = strconv.Atoi(args[len(args)-2])
+			f.policy.RestartDelaySeconds, _ = strconv.ParseFloat(args[len(args)-2], 64)
 			f.policy.StopTimeoutSeconds, _ = strconv.Atoi(args[len(args)-1])
 			return nil, nil
 		}
@@ -170,7 +177,7 @@ func TestRuntimePolicyStopSurvivesBootAndStartRestoresEditedPolicy(t *testing.T)
 	f, s := newRuntimeNativeFixture(t)
 	stop, dir := runtimeActionRequest(t, f.x, s, "SOFTWARE_STOP", nil)
 	r, err := f.x.applySoftwareRuntimePolicy(stop, dir)
-	if err != nil || r.Status != "SUCCEEDED" || !r.RuntimePolicy.Held || r.RuntimePolicy.Configured.AutoStart != true || f.boot || f.state != "inactive" || r.RuntimePolicyBinding == nil {
+	if err != nil || r.Status != "SUCCEEDED" || !r.RuntimePolicy.Held || r.RuntimePolicy.Configured.AutoStart != true || r.RuntimePolicy.Configured.RestartDelaySeconds != 0.1 || r.RuntimePolicy.Actual.RestartDelaySeconds != 0.1 || f.boot || f.state != "inactive" || r.RuntimePolicyBinding == nil {
 		t.Fatal(r, err)
 	}
 	if err = f.x.verifyRuntimePolicyReceipt(stop, r); err != nil {
@@ -184,7 +191,7 @@ func TestRuntimePolicyStopSurvivesBootAndStartRestoresEditedPolicy(t *testing.T)
 	if f.state != "inactive" {
 		t.Fatal("persistent stop was not retained")
 	}
-	policy := runtimepolicy.Policy{Restart: "always", AutoStart: true, RestartDelaySeconds: 8, StopTimeoutSeconds: 60}
+	policy := runtimepolicy.Policy{Restart: "always", AutoStart: true, RestartDelaySeconds: 0.25, StopTimeoutSeconds: 60}
 	edit, dir := runtimeActionRequest(t, f.x, s, "SOFTWARE_RUNTIME_POLICY", &policy)
 	r, err = f.x.applySoftwareRuntimePolicy(edit, dir)
 	if err != nil || r.Status != "SUCCEEDED" || f.boot || f.state != "inactive" || !reflect.DeepEqual(*r.RuntimePolicy.Configured, policy) {
