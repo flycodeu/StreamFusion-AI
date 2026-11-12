@@ -122,6 +122,7 @@ const detectionCount = computed(
     ).length,
 );
 const busy = ref(false);
+const observing = ref(false);
 const registration = ref(false);
 const discovery = ref(false);
 const uninstallItem = ref<SoftwareInstance>();
@@ -335,15 +336,18 @@ async function cancelDetection() {
 async function observe(item: SoftwareInstance) {
   if (busy.value || !softwareLifecycleAvailable(item)) return;
   if (detailId.value !== item.id) selectDetail(item.id);
-  await act(async () => {
-    const revision = generation;
-    const updated = await request<SoftwareInstance>(
-      `/software-instances/${item.id}/observe`,
-      "POST",
-      {},
-    );
-    if (!disposed && revision === generation) update(updated);
-  });
+  observing.value = true;
+  try {
+    await act(async () => {
+      const revision = generation;
+      const updated = await request<SoftwareInstance>(
+        `/software-instances/${item.id}/observe`,
+        "POST",
+        {},
+      );
+      if (!disposed && revision === generation) update(updated);
+    });
+  } finally { observing.value = false; }
 }
 async function mutationDone(result: SoftwareMutationResult, revision: number) {
   generation += 1;
@@ -747,6 +751,7 @@ onUnmounted(() => {
     :detail="detail"
     :host="detailHost"
     :busy="busy"
+    :observing="observing"
     :job="job"
     :pending-job="pendingJob"
     :can-adopt="!!detail && canAdopt(detail)"

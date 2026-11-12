@@ -38,6 +38,7 @@ const props = defineProps<{
   detail?: SoftwareInstance;
   host?: Host;
   busy: boolean;
+  observing?: boolean;
   job?: SoftwareJob;
   pendingJob: boolean;
   canAdopt: boolean;
@@ -72,7 +73,7 @@ const accessCloseBlocked = ref(false);
 const gitCloseState = ref({ blocked: false, dirty: false });
 const managementCloseState = ref({ blocked: false, dirty: false });
 const policyCloseState = ref({ blocked: false, dirty: false });
-const editingBlocked = computed(() => props.busy || configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked || managementCloseState.value.blocked || policyCloseState.value.blocked);
+const editingBlocked = computed(() => (props.busy && !props.observing) || configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked || managementCloseState.value.blocked || policyCloseState.value.blocked);
 const hasManagement = computed(() => !!props.detail?.installation?.definition?.commands && props.detail.managementMode === "MANAGED" && (!!props.detail.installation.definition.management || ["NGINX", "MYSQL"].includes(props.detail.softwareType) || !props.detail.installation.definition.commands.builtin));
 watch(() => props.detail?.id, () => { configCloseState.value = { blocked: false, dirty: false }; accessCloseBlocked.value = false; gitCloseState.value = { blocked: false, dirty: false }; managementCloseState.value = { blocked: false, dirty: false }; policyCloseState.value = { blocked: false, dirty: false }; });
 async function close(done: () => void) {

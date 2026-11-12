@@ -12,8 +12,23 @@ function load(source, imports = {}, globals = {}) {
 }
 const model = load(await readFile(new URL("../src/runtimePolicy.ts", import.meta.url), "utf8"));
 const component = (await readFile(new URL("../src/SoftwareRuntimePolicyPanel.vue", import.meta.url), "utf8")).split('<script setup lang="ts">')[1].split("</script>")[0];
+const detailsComponent = (await readFile(new URL("../src/SoftwareDetailsDialog.vue", import.meta.url), "utf8")).split('<script setup lang="ts">')[1].split("</script>")[0];
 class ApiError extends Error { constructor(status, message = "请重新检查") { super(message); this.status = status; } }
 const flush = async () => { for (let i = 0; i < 6; i++) await vue.nextTick(); };
+
+test("software details can close during a read without bypassing change submission protection", async t => {
+  const props = vue.reactive({ busy: true, observing: true }), scope = vue.effectScope();
+  t.after(() => scope.stop());
+  const flow = scope.run(() => load(detailsComponent + "\nexport const flow = { close, editingBlocked, policyCloseState };", { vue }, { defineProps: () => props, defineEmits: () => () => {} }).flow);
+  let closed = false;
+  await flow.close(() => { closed = true; });
+  assert.equal(closed, true);
+  props.observing = false;
+  assert.equal(flow.editingBlocked.value, true);
+  props.observing = true;
+  flow.policyCloseState.value.blocked = true;
+  assert.equal(flow.editingBlocked.value, true);
+});
 function software(id = "redis", state = {}) {
   return { id, version: "1", runtimeKind: "DOCKER", managementMode: "MANAGED", freshness: "FRESH", observation: { runtimePolicy: {
     actual: model.defaultRuntimePolicy("DOCKER"), editable: true, held: false, ...state,
