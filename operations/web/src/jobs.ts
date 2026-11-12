@@ -13,6 +13,8 @@ export interface JobSummary extends SoftwareJob {
 }
 
 export const jobKindLabels: Record<string, string> = {
+  SOFTWARE_RUNTIME_POLICY: "修改运行策略", APP_RUNTIME_POLICY: "应用运行策略",
+  APP_START: "启动应用", APP_STOP: "停止应用", APP_RESTART: "重启应用",
   SOFTWARE_INSTALL: "软件安装", SOFTWARE_CONFIGURE: "软件配置", SOFTWARE_UNINSTALL: "软件卸载",
   SOFTWARE_START: "启动服务", SOFTWARE_STOP: "停止服务", SOFTWARE_RESTART: "重启服务",
   SOFTWARE_RELOAD: "重载配置", SOFTWARE_PAUSE: "暂停服务", SOFTWARE_UNPAUSE: "继续服务",

@@ -53,6 +53,9 @@ func (h *HTTP) processSoftware(ctx context.Context, id, raw string) {
 		}
 	}
 	limit := 3 * time.Minute
+	if req.RuntimePolicy != nil {
+		limit = 12 * time.Minute
+	}
 	if commandRequest(req) {
 		limit = 30 * time.Minute
 	}
@@ -149,8 +152,20 @@ func (h *HTTP) commitSoftwareResult(id string, req deploy.Request, result deploy
 		}
 	}
 	if result.Status == "SUCCEEDED" && req.Action != "SOFTWARE_UNMANAGE" && req.Action != "SOFTWARE_UNINSTALL" {
-		if result.Software == nil || result.Software.Kind != req.Software.Kind || result.Software.Locator != req.Software.Locator || result.Software.IdentityHash != req.Software.IdentityHash {
+		expectedIdentity := req.Software.IdentityHash
+		if err := validateRuntimePolicyBinding(req, result); err != nil {
+			return err
+		}
+		if result.RuntimePolicyBinding != nil {
+			expectedIdentity = result.RuntimePolicyBinding.IdentityHash
+		}
+		if result.Software == nil || result.Software.Kind != req.Software.Kind || result.Software.Locator != req.Software.Locator || result.Software.IdentityHash != expectedIdentity {
 			return errors.New("SOFTWARE_EVIDENCE_MISMATCH")
+		}
+		if req.RuntimePolicy != nil {
+			if err := validateRuntimePolicyResult(req, result, req.Software.Kind); err != nil {
+				return err
+			}
 		}
 		if req.Action == "SOFTWARE_START" && result.Software.State != "RUNNING" {
 			return errors.New("SOFTWARE_START_UNCONFIRMED")
@@ -196,6 +211,9 @@ func (h *HTTP) commitSoftwareResult(id string, req deploy.Request, result deploy
 	}
 	if state == "SUCCEEDED" || state == "FAILED" {
 		return nil
+	}
+	if e = commitRuntimePolicyBinding(tx, req, result); e != nil {
+		return e
 	}
 	actual, observed, raw := "UNKNOWN", Now(), "{}"
 	if result.Software != nil {

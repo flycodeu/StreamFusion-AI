@@ -12,6 +12,7 @@ import ServiceNetworkFields from "./ServiceNetworkFields.vue";
 import InstallationMaterialDetails from "./InstallationMaterialDetails.vue";
 import RecipeSystemStepDetails from "./RecipeSystemStepDetails.vue";
 import SoftwareParameterFields from "./SoftwareParameterFields.vue";
+import RuntimePolicyFields from "./RuntimePolicyFields.vue";
 import { softwareJobPhaseLabel } from "./software";
 import { installationWebAccess, softwareWebAccess } from "./webAccess";
 import {
@@ -615,6 +616,10 @@ async function uploadInstallationPackage() {
           :project-root="host.installRoot"
         />
       </section>
+
+      <RuntimePolicyFields v-if="!isTool(recipe) || isDockerEngine(recipe)"
+        v-model="configuration.runtimePolicy" :kind="configuration.runtimeMode === 'DOCKER' ? 'DOCKER' : 'SYSTEMD'"
+        :disabled="busy" optional inherit-label="沿用安装方案" />
 
       </div>
 

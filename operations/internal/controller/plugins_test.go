@@ -181,7 +181,7 @@ func pluginSSHFixture(t *testing.T, s *Store, b *browser, supportsPlugins bool, 
 						var out any
 						switch req.Action {
 						case "CAPABILITIES":
-							out = map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "dockerAvailable": true, "dockerEngineAvailable": true, "softwareLifecycleVersion": 1, "platform": "linux/amd64"}
+							out = map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "dockerAvailable": true, "dockerEngineAvailable": true, "softwareLifecycleVersion": 1, "runtimePolicyVersion": 1, "platform": "linux/amd64"}
 						case "PROBE", "TOOL_PROBE":
 							catalog := ""
 							if supportsPlugins {

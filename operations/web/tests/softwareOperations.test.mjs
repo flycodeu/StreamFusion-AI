@@ -609,7 +609,7 @@ test("saved UNKNOWN work keeps its original receipt and mismatched hosts cannot 
 test("confirmed failed installation retries with current published commands and preserves settings", async () => {
   const old = { ...recipe, key: "custom-ytlabel", kind: "SERVICE", port: 9090, runtimeModes: ["NATIVE"], sourceModes: ["ONLINE"], commands: { kind: "SYSTEMD", steps: [] } };
   const latest = { ...old, revision: "r2" };
-  const config = { ...installation.initialServiceConfiguration(old, "10.1.2.3", "NATIVE"), name: "标注服务", hostPort: 9191, parameters: { PYTHON_BINARY: "/usr/bin/python3.10" } };
+  const config = { ...installation.initialServiceConfiguration(old, "10.1.2.3", "NATIVE"), name: "标注服务", hostPort: 9191, parameters: { PYTHON_BINARY: "/usr/bin/python3.10" }, runtimePolicy: { restart: "no", autoStart: false, stopTimeoutSeconds: 30 } };
   const h = installDialogHarness({ recipe: old, recipes: [latest], existing: savedInstallation({ installation: { definition: old, config, source: { type: "ONLINE" } } }) }, (path, method, data) => {
     if (path === "/jobs/original-install") return { id: "original-install", status: "FAILED", phase: "SOFTWARE_REJECTED", targetAckPending: false };
     if (path.endsWith("/software-install-plans")) return { id: "new-plan", expiresAt: "2099-01-01T00:00:00Z", source: data.source };
@@ -624,6 +624,7 @@ test("confirmed failed installation retries with current published commands and 
   assert.equal(h.form.configuration.value.name, "标注服务");
   assert.equal(h.form.configuration.value.hostPort, 9191);
   assert.equal(h.form.configuration.value.parameters.PYTHON_BINARY, "/usr/bin/python3.10");
+  assert.deepEqual(h.form.configuration.value.runtimePolicy, config.runtimePolicy);
   assert.ok(h.requests.every(({ method }) => !method || method === "GET"));
   await h.form.next();
   assert.equal(h.requests.at(-1).data.recipeRevision, "r2");
@@ -1087,12 +1088,14 @@ test("official installation preflights directly without credentials or library r
   assert.equal(h.flow.sourceType.value, "OFFICIAL");
   assert.deepEqual(h.flow.credentialRoles.value, []);
   h.flow.configuration.value.name = "  Nginx 官网  ";
+  const runtimePolicy = { restart: "on-failure", autoStart: false, stopTimeoutSeconds: 30 };
+  h.flow.configuration.value.runtimePolicy = runtimePolicy;
   await h.flow.next();
   assert.equal(h.flow.step.value, 3);
   assert.equal(h.calls.length, 1);
   assert.deepEqual(h.calls[0].data, {
     expectedHostVersion: "1", recipeKey: "nginx", recipeVersion: "ubuntu24.04-repository", recipeRevision: "nginx-official-v1",
-    config: { name: "Nginx 官网", runtimeMode: "NATIVE", bindAddress: "0.0.0.0", hostPort: 80, memoryMiB: 512 },
+    config: { name: "Nginx 官网", runtimeMode: "NATIVE", bindAddress: "0.0.0.0", hostPort: 80, memoryMiB: 512, runtimePolicy },
     source: { type: "OFFICIAL" },
   });
   h.dispose();

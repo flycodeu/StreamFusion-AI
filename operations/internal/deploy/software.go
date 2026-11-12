@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/streamfusion-ai/operations/internal/runtimepolicy"
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
@@ -77,6 +78,13 @@ func (x *executor) softwareRunner(ctx context.Context, command string, args ...s
 func validateSoftwareInput(req Request) error {
 	if !ID.MatchString(req.JobID) || !Hex.MatchString(req.InputHash) || !softwareMutation(req.SoftwareOperation) {
 		return errors.New("SOFTWARE_JOB_IDENTITY_INVALID")
+	}
+	if req.RuntimePolicy != nil {
+		if req.RuntimePolicy.Version != 1 || req.Software == nil || !runtimePolicyAction(req) || req.Software.Kind == "TOOL" || req.RuntimePolicy.Policy != nil && req.RuntimePolicy.Policy.Validate(req.Software.Kind) != nil || req.SoftwareOperation == "SOFTWARE_RUNTIME_POLICY" && req.RuntimePolicy.Policy == nil || req.Management != nil || req.Installation != nil || req.Reconfiguration != nil || req.Uninstallation != nil {
+			return errors.New("RUNTIME_POLICY_INPUT_INVALID")
+		}
+	} else if req.SoftwareOperation == "SOFTWARE_RUNTIME_POLICY" {
+		return errors.New("RUNTIME_POLICY_INPUT_REQUIRED")
 	}
 	if req.Management != nil {
 		if err := validateManagementInput(req); err != nil {
@@ -207,6 +215,13 @@ func (x *executor) executeSoftware(req Request, output io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if req.Action == "SOFTWARE_OBSERVE" && actual.Kind != "TOOL" {
+			if policy, policyErr := x.softwareRuntimeState(ctx, *req.Software); policyErr == nil {
+				actual.RuntimePolicy = policy
+			} else {
+				actual.RuntimePolicy = &runtimepolicy.State{ObservedAt: stamp(), Reason: "无法读取运行策略，请检查服务配置与读取权限"}
+			}
+		}
 		actual.Log = x.redactSoftwareSecrets(actual.Log)
 		result := softwareResult(req)
 		result.Status, result.Phase, result.Software = "SUCCEEDED", "SOFTWARE_OBSERVED", actual
@@ -332,7 +347,13 @@ func (x *executor) softwareLocked(req Request, output io.Writer) error {
 		req.Action = req.SoftwareOperation
 		req.DeadlineAt = time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
 	}
-	result, err = x.applySoftware(req, dir)
+	if err = x.preserveRuntimePolicy(req); err == nil {
+		result, err = x.applySoftware(req, dir)
+		if err == nil {
+			result = x.applyInstalledRuntimePolicy(req, dir, result)
+			result = x.cleanupRuntimePolicyAfterUninstall(req, dir, result)
+		}
+	}
 	if err != nil {
 		result = softwareResult(req)
 		result.Status, result.Phase, result.ErrorCode = "FAILED", "SOFTWARE_REJECTED", err.Error()

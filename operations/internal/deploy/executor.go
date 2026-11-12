@@ -186,6 +186,10 @@ func (x *executor) dockerWithin(limit time.Duration, args ...string) ([]byte, er
 	return x.dockerWithinContext(ctx, args...)
 }
 func (x *executor) dockerWithinContext(ctx context.Context, args ...string) ([]byte, error) {
+	if x.softwareRun != nil {
+		deadline, _ := ctx.Deadline()
+		return x.softwareRun(time.Until(deadline), "/usr/bin/docker", args...)
+	}
 	if e := secureAncestors(x.owner.DockerBinary); e != nil {
 		return nil, e
 	}
@@ -296,12 +300,37 @@ func (x *executor) inspected(r Release) (Result, error) {
 	if l["com.streamfusion.ops.controller"] != x.owner.ControllerID || l["com.streamfusion.ops.instance"] != r.InstanceID {
 		return Result{}, errors.New("CONTAINER_NOT_OWNED")
 	}
-	if l["com.streamfusion.ops.release"] != r.ID || l["com.streamfusion.ops.config"] != Digest(r.Config) || v.Image != r.ImageID || !v.State.Running {
+	held, err := x.applicationHeld(r.InstanceID)
+	if err != nil {
+		return Result{}, err
+	}
+	if l["com.streamfusion.ops.release"] != r.ID || l["com.streamfusion.ops.config"] != Digest(r.Config) || v.Image != r.ImageID || v.State.Running == held {
 		return Result{}, errors.New("ACTUAL_RELEASE_MISMATCH")
 	}
-	return Result{ReleaseID: r.ID, ImageID: v.Image, ConfigHash: Digest(r.Config), ContainerID: v.ID, Health: "PROCESS_RUNNING", ObservedAt: stamp()}, nil
+	actual := Result{ReleaseID: r.ID, ImageID: v.Image, ConfigHash: Digest(r.Config), ContainerID: v.ID, Health: "PROCESS_RUNNING", ObservedAt: stamp()}
+	if held {
+		actual.Health = "STOPPED"
+	}
+	if _, err := os.Stat(x.applicationPolicyFile(r.InstanceID)); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		state, err := x.applicationPolicy(ctx, r, applicationContainer{ID: v.ID})
+		if err != nil {
+			return Result{}, err
+		}
+		if state.Actual == nil || state.Configured == nil || Digest(*state.Actual) != Digest(runtimePolicyEffective(*state.Configured, state.Held, "DOCKER")) {
+			return Result{}, errors.New("RUNTIME_POLICY_UNCONFIRMED")
+		}
+		actual.RuntimePolicy = state
+	}
+	return actual, nil
 }
 func (x *executor) healthy(r Release) (Result, error) {
+	if held, err := x.applicationHeld(r.InstanceID); err != nil {
+		return Result{}, err
+	} else if held {
+		return x.inspected(r)
+	}
 	if r.Config.ZLM != nil {
 		return x.zlmObserved(r)
 	}
@@ -335,7 +364,19 @@ func (x *executor) activate(r Release) error {
 	if e != nil {
 		return e
 	}
-	_, e = x.docker("compose", "--project-name", "sfops-"+strings.ReplaceAll(r.InstanceID, "-", ""), "-f", file, "up", "-d", "--pull", "never", "--no-build", "--force-recreate")
+	policyFile, held, e := x.applicationComposePolicy(r)
+	if e != nil {
+		return e
+	}
+	args := []string{"compose", "--project-name", "sfops-" + strings.ReplaceAll(r.InstanceID, "-", ""), "-f", file}
+	if policyFile != "" {
+		args = append(args, "-f", policyFile)
+	}
+	args = append(args, "up", "-d", "--pull", "never", "--no-build", "--force-recreate")
+	if held {
+		args = append(args, "--no-start")
+	}
+	_, e = x.docker(args...)
 	if e != nil {
 		return errors.New("COMPOSE_ACTIVATE_FAILED")
 	}
@@ -433,6 +474,9 @@ func Execute(input io.Reader, output io.Writer) error {
 	}
 	if req.GitRepository != nil || strings.HasPrefix(req.Action, "GIT_REPOSITORY_") || req.NodeEnvironment != nil || strings.HasPrefix(req.Action, "NODE_ENVIRONMENT_") || req.Software != nil || req.Installation != nil || strings.HasPrefix(req.Action, "SOFTWARE_") {
 		return x.executeSoftware(req, output)
+	}
+	if applicationLifecycleAction(req.ApplicationOperation) || applicationLifecycleAction(req.Action) {
+		return x.executeApplicationLifecycle(req, output)
 	}
 	if req.Action == "TOOL_PROBE" {
 		return x.toolProbe(output)
@@ -846,6 +890,9 @@ func Execute(input io.Reader, output io.Writer) error {
 	}
 	if e = x.checkpoint(req, "ACTIVATE"); e != nil {
 		return e
+	}
+	if e = x.prepareApplicationDeploymentPolicy(req); e != nil {
+		return x.recover(req, resultFile, output, e.Error())
 	}
 	if e = x.activate(*req.Candidate); e == nil {
 		if e = x.checkpoint(req, "HEALTH"); e != nil {

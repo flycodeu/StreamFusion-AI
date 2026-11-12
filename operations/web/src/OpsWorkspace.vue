@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed } from "vue";
 import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
-import { request, upload } from "./api";
+import { ApiError, request, upload } from "./api";
 import { jobKindLabels as softwareJobKindLabels, type PageResult } from "./jobs";
 import OpsPagination from "./OpsPagination.vue";
 import { requestAllPages } from "./listPages";
@@ -10,9 +10,12 @@ import { previewDefaults, type PreviewConfig } from "./preview";
 import ZLMConfigForm from "./ZLMConfigForm.vue";
 import { zlmDefaults, type ZLMConfig } from "./zlm";
 import type { Host } from "./hosts";
-import { softwareJobPhaseLabels, softwareJobDiagnostic } from "./software";
+import RuntimePolicyFields from "./RuntimePolicyFields.vue";
+import { runtimePolicyError, runtimePolicySummary, type RuntimePolicy, type RuntimePolicyState } from "./runtimePolicy";
+import { softwareJobErrorMessages, softwareJobPhaseLabels, softwareJobDiagnostic } from "./software";
 const props = defineProps<{ page: string }>();
 const emit = defineEmits<{ error: [unknown] }>();
+const instanceHealthLabel = (health?: string) => ({ APPLICATION_READY: "应用就绪", APPLICATION_STOPPED: "已停止", STOPPED: "已停止", RUNNING: "运行中", UNKNOWN: "状态未确认" }[health || ""] || "状态未确认");
 interface Artifact {
   recipe: string;
   id: string;
@@ -53,6 +56,7 @@ interface Binding {
   credentialRevision: string;
 }
 interface Config {
+  runtimePolicy?: RuntimePolicy;
   preview?: PreviewConfig;
   zlm?: ZLMConfig;
   initialPasswordCredentialId?: string;
@@ -69,6 +73,7 @@ interface Config {
   bindingIds: string[];
 }
 interface Instance {
+  pendingJob?: { id: string; status: string; kind: string; targetAckPending: boolean };
   id: string;
   name: string;
   targetId: string;
@@ -79,6 +84,7 @@ interface Instance {
   currentReleaseId: string;
   previousReleaseId: string;
   observation: {
+    runtimePolicy?: RuntimePolicyState;
     health?: string;
     releaseId?: string;
     preview?: {
@@ -242,6 +248,70 @@ const instanceDraft = ref({
   version: "",
   config: configDefault(),
 });
+const runtimePolicyDraft = ref<RuntimePolicy>(), runtimePolicyBaseline = ref("");
+const runtimePolicyErrorMessage = ref(""), runtimePolicyAttempted = ref(false);
+let runtimePolicyKey = "";
+const runtimePolicyDirty = computed(() => !!runtimePolicyDraft.value && JSON.stringify(runtimePolicyDraft.value) !== runtimePolicyBaseline.value);
+function editRuntimePolicy(value?: RuntimePolicy) {
+  if (runtimePolicyAttempted.value) return;
+  runtimePolicyDraft.value = value;
+  runtimePolicyKey = ""; runtimePolicyErrorMessage.value = "";
+}
+async function openRuntimePolicy(instance: Instance) {
+  selected.value = instance; dialog.value = "runtime-policy";
+  runtimePolicyDraft.value = undefined; runtimePolicyErrorMessage.value = "";
+  runtimePolicyKey = ""; runtimePolicyAttempted.value = false;
+  await act(async () => {
+    if (instance.pendingJob) { await readInstanceJob(instance); return; }
+    await request(`/instances/${instance.id}/observations`, "POST");
+    const current = await request<Instance>(`/instances/${instance.id}`);
+    if (dialog.value !== "runtime-policy" || selected.value?.id !== instance.id) return;
+    if (current.pendingJob) { await readInstanceJob(current); return; }
+    selected.value = current;
+    const policy = current.observation.runtimePolicy?.configured || current.observation.runtimePolicy?.actual;
+    runtimePolicyDraft.value = policy && { ...policy };
+    runtimePolicyBaseline.value = JSON.stringify(runtimePolicyDraft.value);
+  });
+}
+async function readInstanceJob(instance: Instance) {
+  if (!instance.pendingJob) return;
+  detail.value = await request<Job>(`/jobs/${instance.pendingJob.id}`);
+  dialog.value = "job";
+}
+async function showInstanceJob(instance: Instance) { await act(() => readInstanceJob(instance)); }
+const instanceProgressLabel = (instance: Instance) => instance.pendingJob?.status === "UNKNOWN" ? "核对原操作" : instance.pendingJob?.targetAckPending ? "等待收尾" : "查看进度";
+async function applyRuntimePolicy() {
+  if (!selected.value || !runtimePolicyDraft.value || busy.value) return;
+  runtimePolicyErrorMessage.value = runtimePolicyError(runtimePolicyDraft.value, "DOCKER");
+  if (runtimePolicyErrorMessage.value) return;
+  runtimePolicyKey ||= crypto.randomUUID();
+  runtimePolicyAttempted.value = true;
+  await act(async () => {
+    try {
+      await request(`/instances/${selected.value!.id}/runtime-policy`, "POST", { expectedVersion: selected.value!.version, idempotencyKey: runtimePolicyKey, policy: runtimePolicyDraft.value });
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status && cause.status < 500) { runtimePolicyAttempted.value = false; runtimePolicyKey = ""; }
+      throw cause;
+    }
+    dialog.value = ""; await refresh(); ElMessage.success("运行策略作业已受理");
+  });
+}
+let instanceActionIntent: { id: string; action: string; version: string; key: string } | undefined;
+async function instanceAction(instance: Instance, action: "START" | "STOP" | "RESTART") {
+  if (busy.value || !instance.currentReleaseId) return;
+  if (action !== "START") {
+    try { await ElMessageBox.confirm(action === "STOP" ? `停止“${instance.name}”并保持停止？下次启动会恢复原运行策略。` : `重启“${instance.name}”的当前版本？`, action === "STOP" ? "停止应用" : "重启应用", { confirmButtonText: "确认", cancelButtonText: "取消", type: "warning" }); }
+    catch { return; }
+  }
+  if (!instanceActionIntent || instanceActionIntent.id !== instance.id || instanceActionIntent.action !== action || instanceActionIntent.version !== instance.version)
+    instanceActionIntent = { id: instance.id, action, version: instance.version, key: crypto.randomUUID() };
+  const intent = instanceActionIntent;
+  await act(async () => {
+    try { await request(`/instances/${instance.id}/actions`, "POST", { expectedVersion: intent.version, idempotencyKey: intent.key, action }); }
+    catch (cause) { if (cause instanceof ApiError && cause.status && cause.status < 500) instanceActionIntent = undefined; throw cause; }
+    instanceActionIntent = undefined; dialog.value = ""; await refresh(); ElMessage.success("应用操作已受理");
+  });
+}
 const bindingDraft = ref({
   kind: "MYSQL",
   host: "",
@@ -835,7 +905,7 @@ function credentialSelected(
                     fresh(i.observedAt)
                       ? i.observation.health === "APPLICATION_READY"
                         ? "应用就绪"
-                        : i.observation.health || "未知"
+                        : instanceHealthLabel(i.observation.health)
                       : "待观察"
                   }}</span
                 ><small>{{ time(i.observedAt) }}</small>
@@ -851,17 +921,20 @@ function credentialSelected(
                 >
               </td>
               <td class="actions">
+                <template v-if="!i.config.preview && !i.config.zlm">
+                  <button class="quiet" :disabled="busy || !i.currentReleaseId" @click="i.pendingJob ? showInstanceJob(i) : openRuntimePolicy(i)">{{ i.pendingJob ? instanceProgressLabel(i) : '运行管理' }}</button>
+                </template>
                 <button class="quiet" :disabled="busy" @click="openInstance(i)">
                   配置</button
                 ><button
                   class="quiet"
-                  :disabled="busy"
+                  :disabled="busy || !!i.pendingJob"
                   @click="choosePublish(i)"
                 >
                   发布</button
                 ><button
                   class="quiet"
-                  :disabled="busy || !i.previousReleaseId"
+                  :disabled="busy || !!i.pendingJob || !i.previousReleaseId"
                   @click="choosePublish(i, 'ROLLBACK')"
                 >
                   回滚</button
@@ -1179,6 +1252,7 @@ function credentialSelected(
         {
           binding: '绑定已有依赖',
           instance: '实例配置草稿',
+          'runtime-policy': '应用运行管理',
           registration: '预览节点登记与维护',
           import: '导入制品',
           candidate: '选择候选',
@@ -1403,6 +1477,7 @@ function credentialSelected(
           </div>
         </details>
       </template>
+      <RuntimePolicyFields v-if="!instanceDraft.config.preview && !instanceDraft.config.zlm" v-model="instanceDraft.config.runtimePolicy" kind="DOCKER" :disabled="busy" optional inherit-label="沿用当前实例策略" />
       <div class="dialog-footer">
         <button
           type="button"
@@ -1414,6 +1489,16 @@ function credentialSelected(
         </button>
         <button class="primary" :disabled="busy">保存草稿</button>
       </div>
+    </form>
+    <form v-else-if="dialog === 'runtime-policy' && selected" class="dialog-form" @submit.prevent="applyRuntimePolicy">
+      <div class="runtime-actions"><strong>{{ selected.name }}</strong><span class="spacer"></span><button type="button" class="secondary" :disabled="busy || runtimePolicyDirty" @click="instanceAction(selected, 'START')">启动</button><button type="button" class="secondary" :disabled="busy || runtimePolicyDirty" @click="instanceAction(selected, 'STOP')">停止</button><button type="button" class="secondary" :disabled="busy || runtimePolicyDirty" @click="instanceAction(selected, 'RESTART')">重启</button></div>
+      <p v-if="selected.observation.runtimePolicy?.held">已保持停止，修改策略后仍保持停止。</p>
+      <p v-else>{{ runtimePolicySummary(selected.observation.runtimePolicy?.actual, 'DOCKER') }}</p>
+      <RuntimePolicyFields v-if="runtimePolicyDraft" :model-value="runtimePolicyDraft" kind="DOCKER" :stop-timeout-editable="false" :disabled="busy || runtimePolicyAttempted || !selected.observation.runtimePolicy?.editable" @update:model-value="editRuntimePolicy" />
+      <p v-else class="muted">{{ busy ? '正在读取当前策略…' : '尚未确认运行策略，请重新读取' }}</p>
+      <p v-if="selected.observation.runtimePolicy && !selected.observation.runtimePolicy.editable" class="muted">当前运行对象不支持修改策略</p>
+      <p v-if="runtimePolicyErrorMessage" class="error" role="alert">{{ runtimePolicyErrorMessage }}</p>
+      <div class="dialog-footer"><button type="button" class="secondary" :disabled="busy" @click="dialog = ''">关闭</button><button type="button" class="secondary" :disabled="busy || runtimePolicyAttempted" @click="openRuntimePolicy(selected)">重新读取</button><button class="primary" :disabled="busy || !runtimePolicyDirty || !selected.observation.runtimePolicy?.editable">{{ runtimePolicyAttempted ? '重试原请求' : '应用策略' }}</button></div>
     </form>
     <form
       v-else-if="dialog === 'import'"
@@ -1644,6 +1729,7 @@ function credentialSelected(
       <div v-if="detail.status === 'UNKNOWN'" class="error">
         结果尚未确认，相关变更已锁定
       </div>
+      <p v-if="detail.errorCode" class="error">{{ softwareJobErrorMessages[detail.errorCode] || '操作未完成，请核对原操作和执行日志。' }}</p>
       <dl class="plan-detail">
         <dt>状态</dt>
         <dd>
@@ -1653,6 +1739,10 @@ function credentialSelected(
         <dt>时间</dt>
         <dd>{{ time(detail.updatedAt) }}</dd>
       </dl>
+      <div class="runtime-actions">
+        <button v-if="detail.status === 'UNKNOWN' || detail.targetAckPending" class="secondary" :disabled="busy" @click="reconcile(detail)">核对原操作</button>
+        <button v-if="detail.status === 'QUEUED' && detail.phase !== 'UPLOADING' && !detail.targetAckPending" class="quiet" :disabled="busy" @click="cancelJob(detail)">取消排队</button>
+      </div>
       <details><summary>诊断信息</summary><dl class="plan-detail">
         <dt>作业</dt><dd><code>{{ detail.id }}</code></dd>
         <dt>状态 / 阶段</dt><dd><code>{{ softwareJobDiagnostic(detail.status, detail.phase, phaseLabels) }}</code></dd>
@@ -1683,6 +1773,9 @@ function credentialSelected(
 .actions button {
   padding: 5px;
 }
+.runtime-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.runtime-actions strong{overflow-wrap:anywhere;}
+.runtime-actions .spacer{flex:1;}
 .probe-controls {
   display: flex;
   gap: 8px;

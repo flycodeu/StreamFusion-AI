@@ -10,16 +10,17 @@ const script = ts.transpileModule(source.split('<script setup lang="ts">')[1].sp
   compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const makeWorkspace = new Function("ref", "computed", "watch", "onMounted", "onUnmounted", "defineProps", "defineEmits", "request", "requestAllPages", "softwareJobPhaseLabels", "softwareJobKindLabels", "setTimeout", "clearTimeout", "ElMessage",
-  script + "\nreturn { refresh, loadJobs, changeJobPage, changeJobSize, jobs, jobPage, jobPageSize, jobCursors, jobStatusFilter, jobKindFilter, detail, dialog, artifactList, instanceList, bindingList, releaseList, selected, bindingOptions, credentials }; ");
+  script + "\nreturn { refresh, loadJobs, changeJobPage, changeJobSize, jobs, jobPage, jobPageSize, jobCursors, jobStatusFilter, jobKindFilter, detail, dialog, artifactList, instanceList, bindingList, releaseList, selected, bindingOptions, credentials, openRuntimePolicy, instanceProgressLabel, reconcile, instanceDraft, saveInstance }; ");
 const flush = async () => { for (let i = 0; i < 15; i++) await vue.nextTick(); };
 
 function harness(page = "jobs") {
-  const props = vue.reactive({ page }), calls = [], errors = [], unmounts = [];
+  const props = vue.reactive({ page }), calls = [], writes = [], errors = [], unmounts = [];
   const jobs = Array.from({ length: 130 }, (_, i) => ({ id: `job-${i}`, status: i % 2 ? "FAILED" : "SUCCEEDED", kind: i % 3 ? "PUBLISH" : "ROLLBACK", phase: "TEST", createdAt: "2026-11-10", updatedAt: "2026-11-10" }));
   const lists = Object.fromEntries(["artifacts", "instances", "bindings", "releases"].map(path => [path, Array.from({ length: 127 }, (_, i) => ({ id: `${path}-${i}`, name: `${path}-${i}` }))]));
   let mounted, failNext = false, holdNext = false, release;
   const request = async (path, _method, _body, signal) => {
     calls.push(path);
+    if (_method && _method !== "GET") writes.push({ path, method: _method, body: _body && JSON.parse(JSON.stringify(_body)) });
     const url = new URL(path, "http://fixture"), query = url.searchParams;
     if (url.pathname === "/hosts") return [{ id: "host-a", name: "服务器" }];
     if (url.pathname === "/credentials") return [{ id: "credential-a", revision: "1" }, { id: "credential-a", revision: "2" }];
@@ -45,7 +46,7 @@ function harness(page = "jobs") {
   const requestAllPages = async path => (await request(`${path}?page=1&pageSize=100`)).items;
   const scope = vue.effectScope();
   const panel = scope.run(() => makeWorkspace(vue.ref, vue.computed, vue.watch, callback => { mounted = callback; }, callback => unmounts.push(callback), () => props, () => (_event, error) => errors.push(error), request, requestAllPages, {}, {}, () => 1, () => {}, { success() {} }));
-  return { panel, props, calls, errors, lists, start: () => mounted(), fail() { failNext = true; }, hold() { holdNext = true; }, release() { release(); }, close() { unmounts.forEach(callback => callback()); scope.stop(); } };
+  return { panel, props, calls, writes, errors, lists, start: () => mounted(), fail() { failNext = true; }, hold() { holdNext = true; }, release() { release(); }, close() { unmounts.forEach(callback => callback()); scope.stop(); } };
 }
 
 test("workspace jobs use server cursors and filters and keep details while paging", async t => {
@@ -72,6 +73,32 @@ test("workspace jobs use server cursors and filters and keep details while pagin
   assert.equal(panel.jobPage.value, 1);
   assert.equal(panel.jobs.value.length, 10, "filters must run before the server page boundary");
   assert.equal(panel.detail.value.id, "job-0");
+});
+
+test("a pending instance operation opens its original receipt and can reconcile acknowledgement", async t => {
+  const fixture = harness("instances"); t.after(() => fixture.close());
+  await fixture.start();
+  const instance = { id: "instance-a", currentReleaseId: "release-a", pendingJob: { id: "job-0", status: "SUCCEEDED", targetAckPending: true } };
+  assert.equal(fixture.panel.instanceProgressLabel(instance), "等待收尾");
+  const before = fixture.calls.length;
+  await fixture.panel.openRuntimePolicy(instance);
+  assert.deepEqual(fixture.calls.slice(before), ["/jobs/job-0"]);
+  assert.equal(fixture.panel.dialog.value, "job");
+  assert.equal(fixture.panel.detail.value.id, "job-0");
+  await fixture.panel.reconcile(fixture.panel.detail.value);
+  assert.ok(fixture.calls.includes("/jobs/job-0/reconcile"));
+  assert.ok(!fixture.calls.some(path => path.includes("/actions") || path.includes("/observations")));
+  assert.equal(fixture.panel.instanceProgressLabel({ pendingJob: { status: "UNKNOWN" } }), "核对原操作");
+});
+
+test("saving an application draft includes its runtime policy without applying it to the server", async t => {
+  const fixture = harness("instances"); t.after(() => fixture.close());
+  fixture.panel.instanceDraft.value.config.runtimePolicy = { restart: "on-failure", autoStart: false, maxRetries: 3, stopTimeoutSeconds: 10 };
+  await fixture.panel.saveInstance();
+  assert.equal(fixture.writes.length, 1);
+  assert.equal(fixture.writes[0].path, "/instances");
+  assert.equal(fixture.writes[0].body.config.runtimePolicy.maxRetries, 3);
+  assert.ok(!fixture.calls.some(path => path.includes("/runtime-policy") || path.includes("/actions")));
 });
 
 test("failed cursor navigation and size changes preserve the displayed page and history", async t => {

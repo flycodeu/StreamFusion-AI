@@ -307,6 +307,7 @@ export function useServiceInstallation(
           if (previous.name !== previousDefaultName) next.name = previous.name;
           for (const field of ["storageRoot", "account", "memoryMiB"] as const)
             if (previous[field] !== undefined) Object.assign(next, { [field]: previous[field] });
+          if (previous.runtimePolicy) next.runtimePolicy = { ...previous.runtimePolicy };
           if (serviceBindAddressValid(props.recipe, previous.bindAddress)) next.bindAddress = previous.bindAddress;
           if (requiresServicePort(props.recipe) && Number.isInteger(previous.hostPort) && previous.hostPort >= 1 && previous.hostPort <= 65535)
             next.hostPort = previous.hostPort;
@@ -850,6 +851,7 @@ export function useServiceInstallation(
               bindAddress: configuration.value!.bindAddress,
               hostPort: configuration.value!.hostPort,
               memoryMiB: 512,
+              ...(configuration.value!.runtimePolicy ? { runtimePolicy: configuration.value!.runtimePolicy } : {}),
             } : {
               ...configuration.value,
               name: configuration.value!.name.trim(),

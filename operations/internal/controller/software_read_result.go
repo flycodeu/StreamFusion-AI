@@ -33,7 +33,7 @@ func (h *HTTP) readManagedSoftware(ctx context.Context, t target, i softwareInst
 		return nil, errors.New("EXECUTOR_RESPONSE_INVALID")
 	}
 	switch fact.State {
-	case "RUNNING", "STOPPED", "FAILED", "UNKNOWN", "INSTALLED":
+	case "RUNNING", "STOPPED", "FAILED", "UNKNOWN", "INSTALLED", "PAUSED":
 	default:
 		return nil, errors.New("EXECUTOR_RESPONSE_INVALID")
 	}

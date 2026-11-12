@@ -170,7 +170,10 @@ func (h *HTTP) probeSoftware(ctx context.Context, t target, i softwareInstance, 
 	if i.Installation != nil && !installationBound(i) {
 		return failedSoftwareObservation(i, "INSTALLATION_NOT_BOUND")
 	}
-	if i.Installation != nil {
+	if i.Installation != nil || i.ManagementMode == "MANAGED" && i.RuntimeKind != "TOOL" {
+		if softwareRequest(i).Validate(false) != nil {
+			return failedSoftwareObservation(i, "SOFTWARE_IDENTITY_DRIFT")
+		}
 		fact, err := h.readManagedSoftware(ctx, t, i, "SOFTWARE_OBSERVE")
 		if err != nil {
 			return failedSoftwareObservation(i, executorFailureCode(err))

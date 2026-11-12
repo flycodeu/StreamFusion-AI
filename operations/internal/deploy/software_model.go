@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/streamfusion-ai/operations/internal/runtimepolicy"
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
@@ -37,6 +38,7 @@ type SoftwareOwnership struct {
 }
 
 type SoftwareObservation struct {
+	RuntimePolicy *runtimepolicy.State `json:"runtimePolicy,omitempty"`
 	SoftwareMetadata
 	Kind         string `json:"kind"`
 	Locator      string `json:"locator"`
@@ -116,6 +118,9 @@ func (s SoftwareRequest) Validate(observation bool) error {
 }
 
 func softwareMutation(action string) bool {
+	if action == "SOFTWARE_RUNTIME_POLICY" {
+		return true
+	}
 	if action == "SOFTWARE_OPERATION" || action == "SOFTWARE_RESTART" || action == "SOFTWARE_RELOAD" || action == "SOFTWARE_PAUSE" || action == "SOFTWARE_UNPAUSE" {
 		return true
 	}

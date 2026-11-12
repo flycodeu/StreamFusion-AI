@@ -23,17 +23,25 @@ type target struct {
 	Capabilities hostCapabilities `json:"capabilities"`
 }
 type instance struct {
-	ID            string          `json:"id"`
-	Name          string          `json:"name"`
-	TargetID      string          `json:"targetId"`
-	Version       string          `json:"version"`
-	DraftRevision string          `json:"draftRevision"`
-	Generation    string          `json:"appliedGeneration"`
-	Config        deploy.Config   `json:"config"`
-	Current       string          `json:"currentReleaseId"`
-	Previous      string          `json:"previousReleaseId"`
-	Observation   json.RawMessage `json:"observation"`
-	ObservedAt    string          `json:"observedAt"`
+	PendingJob    *instancePendingJob `json:"pendingJob,omitempty"`
+	ID            string              `json:"id"`
+	Name          string              `json:"name"`
+	TargetID      string              `json:"targetId"`
+	Version       string              `json:"version"`
+	DraftRevision string              `json:"draftRevision"`
+	Generation    string              `json:"appliedGeneration"`
+	Config        deploy.Config       `json:"config"`
+	Current       string              `json:"currentReleaseId"`
+	Previous      string              `json:"previousReleaseId"`
+	Observation   json.RawMessage     `json:"observation"`
+	ObservedAt    string              `json:"observedAt"`
+}
+
+type instancePendingJob struct {
+	ID               string `json:"id"`
+	Status           string `json:"status"`
+	Kind             string `json:"kind"`
+	TargetAckPending bool   `json:"targetAckPending"`
 }
 type plan struct {
 	MaintenancePermit  string          `json:"maintenancePermit,omitempty"`
@@ -87,6 +95,15 @@ func (s *Store) readInstance(id string) (instance, error) {
 		e = json.Unmarshal([]byte(conf), &i.Config)
 	}
 	i.Observation = json.RawMessage(raw)
+	if e == nil {
+		pending := &instancePendingJob{}
+		err := s.DB.QueryRow("SELECT j.id,j.status,j.kind,j.target_ack_pending FROM operation_locks l JOIN jobs j ON j.id=l.job_id WHERE l.resource_key=?", "instance:"+id).Scan(&pending.ID, &pending.Status, &pending.Kind, &pending.TargetAckPending)
+		if err == nil {
+			i.PendingJob = pending
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			e = err
+		}
+	}
 	return i, e
 }
 func (s *Store) readRelease(id string) (deploy.Release, error) {
@@ -231,6 +248,12 @@ func (h *HTTP) operationsRoute(w http.ResponseWriter, r *http.Request, s *sessio
 			return true
 		case "POST instances observations":
 			h.observeInstance(w, r, p[1])
+			return true
+		case "POST instances runtime-policy":
+			h.changeApplicationLifecycle(w, r, s, p[1], true)
+			return true
+		case "POST instances actions":
+			h.changeApplicationLifecycle(w, r, s, p[1], false)
 			return true
 		case "POST plans submit":
 			h.submitPlan(w, r, s, p[1])

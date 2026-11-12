@@ -156,6 +156,7 @@ func TestSoftwareJobsFreezeBindingRevisionAndRequireAck(t *testing.T) {
 			state = "STOPPED"
 		}
 		res.Software = &deploy.SoftwareObservation{Kind: req.Software.Kind, Locator: req.Software.Locator, IdentityHash: req.Software.IdentityHash, State: state, ObservedAt: Now()}
+		res.RuntimePolicy = runtimePolicyReceiptFixture(req)
 		if req.Action == "STATUS" || req.Action == "ACK" {
 			res = results[req.JobID]
 			if req.Action == "ACK" && ackAllowed && deploy.Digest(res) == req.ResultHash {
@@ -304,6 +305,14 @@ func TestSoftwareRejectsOldExecutorWithSameVersionBeforeCreatingJob(t *testing.T
 	refused = b.call("POST", "/software-instances/"+id+"/adopt", map[string]any{"expectedVersion": "1", "identityHash": identity, "confirmed": true, "idempotencyKey": "unknown-executor-gate"}, 409)
 	if !strings.Contains(refused.Body.String(), "EXECUTOR_SOFTWARE_UNSUPPORTED") {
 		t.Fatal(refused.Body.String())
+	}
+	lifecycleVersion.Store(deploy.SoftwareLifecycleVersion)
+	if _, err := s.DB.Exec("UPDATE software_instances SET management_mode='MANAGED',binding_revision=1 WHERE id=?", id); err != nil {
+		t.Fatal(err)
+	}
+	refused = b.call("POST", "/software-instances/"+id+"/actions", map[string]any{"expectedVersion": "1", "action": "STOP", "idempotencyKey": "old-runtime-policy-gate"}, 409)
+	if !strings.Contains(refused.Body.String(), "EXECUTOR_UPGRADE_REQUIRED") {
+		t.Fatal("old stop semantics accepted", refused.Body.String())
 	}
 	var jobs, locks int
 	if e := s.DB.QueryRow("SELECT count(*) FROM jobs").Scan(&jobs); e != nil {

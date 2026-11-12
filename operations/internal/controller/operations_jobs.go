@@ -237,13 +237,21 @@ func (h *HTTP) processRelease(ctx context.Context, id, raw string) {
 	if n, _ := claim.RowsAffected(); n != 1 {
 		return
 	}
-	execCtx, cancel := context.WithTimeout(ctx, 6*time.Minute)
+	limit := 6 * time.Minute
+	if applicationLifecycleAction(req.ApplicationOperation) || req.RuntimePolicy != nil {
+		limit = 12 * time.Minute
+	}
+	execCtx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	var result deploy.Result
 	progressCtx, stopProgress := context.WithCancel(execCtx)
 	progressDone := make(chan struct{})
 	go func() { defer close(progressDone); h.pollProgress(progressCtx, t, req) }()
-	e = h.store.callTarget(execCtx, t, req, h.store.artifactPath(req.Candidate.ArtifactID), &result)
+	artifact := ""
+	if !applicationLifecycleAction(req.ApplicationOperation) {
+		artifact = h.store.artifactPath(req.Candidate.ArtifactID)
+	}
+	e = h.store.callTarget(execCtx, t, req, artifact, &result)
 	stopProgress()
 	<-progressDone
 	if e != nil {

@@ -8,6 +8,7 @@ import DockerAccessPanel from "./DockerAccessPanel.vue";
 import GitManagementPanel from "./GitManagementPanel.vue";
 import SoftwareManagementPanel from "./SoftwareManagementPanel.vue";
 import SoftwareWebAccess from "./SoftwareWebAccess.vue";
+import SoftwareRuntimePolicyPanel from "./SoftwareRuntimePolicyPanel.vue";
 import { softwareConfigurationAvailable } from "./softwareManagement";
 import { managedDockerAccess } from "./dockerAccess";
 import type { ServiceInstallReceipt } from "./serviceInstallation";
@@ -70,15 +71,16 @@ const configCloseState = ref({ blocked: false, dirty: false });
 const accessCloseBlocked = ref(false);
 const gitCloseState = ref({ blocked: false, dirty: false });
 const managementCloseState = ref({ blocked: false, dirty: false });
-const editingBlocked = computed(() => props.busy || configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked || managementCloseState.value.blocked);
+const policyCloseState = ref({ blocked: false, dirty: false });
+const editingBlocked = computed(() => props.busy || configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked || managementCloseState.value.blocked || policyCloseState.value.blocked);
 const hasManagement = computed(() => !!props.detail?.installation?.definition?.commands && props.detail.managementMode === "MANAGED" && (!!props.detail.installation.definition.management || ["NGINX", "MYSQL"].includes(props.detail.softwareType) || !props.detail.installation.definition.commands.builtin));
-watch(() => props.detail?.id, () => { configCloseState.value = { blocked: false, dirty: false }; accessCloseBlocked.value = false; gitCloseState.value = { blocked: false, dirty: false }; managementCloseState.value = { blocked: false, dirty: false }; });
+watch(() => props.detail?.id, () => { configCloseState.value = { blocked: false, dirty: false }; accessCloseBlocked.value = false; gitCloseState.value = { blocked: false, dirty: false }; managementCloseState.value = { blocked: false, dirty: false }; policyCloseState.value = { blocked: false, dirty: false }; });
 async function close(done: () => void) {
   if (editingBlocked.value) return;
   if (await confirmDiscard()) done();
 }
 async function confirmDiscard() {
-  if (configCloseState.value.dirty || gitCloseState.value.dirty || managementCloseState.value.dirty) {
+  if (configCloseState.value.dirty || gitCloseState.value.dirty || managementCloseState.value.dirty || policyCloseState.value.dirty) {
     try { await ElMessageBox.confirm("放弃未保存的软件配置？", "关闭详情", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); } catch { return false; }
   }
   return true;
@@ -252,8 +254,9 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
           </dl>
         </ElTabPane>
         <ElTabPane v-if="detail.installation?.definition?.web && detail.installation.config" label="访问界面" name="web-access"><SoftwareWebAccess :item="detail" :host="host" :active="detailTab === 'web-access'" /></ElTabPane>
-        <ElTabPane :label="detail.installation?.official || detail.installation?.definition?.commands ? '安装详情' : '服务配置'" name="configuration"
-          ><ServiceConfigurationPanel @close-state="configCloseState = $event"
+        <ElTabPane :label="service(detail) ? '配置与运行' : '安装详情'" name="configuration"
+          ><SoftwareRuntimePolicyPanel v-if="service(detail)" :key="detail.id" :detail="detail" :active="detailTab === 'configuration'" :disabled="busy || pendingJob || !!host?.maintenance" @observe="emit('observe', detail)" @preparation="operationPreparation" @submitted="receipt => receipt.jobId && emit('configurationSubmitted', { softwareInstanceId: receipt.softwareInstanceId, jobId: receipt.jobId })" @close-state="policyCloseState = $event" />
+          <ServiceConfigurationPanel @close-state="configCloseState = $event"
             :detail="detail"
             :host="host"
             :disabled="busy || pendingJob || !canChange"
@@ -376,7 +379,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
             :disabled="
               editingBlocked ||
               !canChange ||
-              (detail.desiredState === 'STOPPED' &&
+              (detail.observation?.runtimePolicy?.held &&
                 detail.actualState === 'STOPPED')
             "
             @click="emit('changeState', detail, 'STOP')"
@@ -390,7 +393,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
               editingBlocked ||
               !canChange ||
               !softwareInstallationReady(detail) ||
-              (detail.desiredState === 'RUNNING' &&
+              (!detail.observation?.runtimePolicy?.held && detail.desiredState === 'RUNNING' &&
                 detail.actualState === 'RUNNING')
             "
             @click="emit('changeState', detail, 'START')"

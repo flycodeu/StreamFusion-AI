@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/streamfusion-ai/operations/internal/runtimepolicy"
 )
 
 const ArchiveLimit int64 = 2 << 30
@@ -25,6 +27,7 @@ var storagePath = regexp.MustCompile(`^/[a-zA-Z0-9_./-]+$`)
 // Config contains only public options and immutable credential references.
 // Passwords and S3 access keys are resolved into Request.Secrets at transport.
 type Config struct {
+	RuntimePolicy               *runtimepolicy.Policy          `json:"runtimePolicy,omitempty"`
 	Parameters                  map[string]string              `json:"parameters,omitempty"`
 	ParameterCredentials        map[string]CredentialReference `json:"parameterCredentials,omitempty"`
 	Account                     string                         `json:"account,omitempty"`
@@ -182,6 +185,9 @@ func (c ChangeRequest) Validate() error {
 	if err := c.Previous.Validate(); err != nil {
 		return err
 	}
+	if !reflect.DeepEqual(c.Previous.Config.RuntimePolicy, c.Config.RuntimePolicy) {
+		return errors.New("RUNTIME_POLICY_ACTION_REQUIRED")
+	}
 	if c.Previous.Definition.Commands != nil && !IsBuiltinCommand(c.Previous.Definition) || IsOfficial(c.Previous.Definition) || c.ExpectedBindingRevision != c.Previous.BindingRevision || c.Config.StorageRoot != c.Previous.Config.StorageRoot || c.Config.Mode() != c.Previous.Config.Mode() || c.Previous.Definition.Kind == "TOOL" || c.Previous.Definition.Key == "docker" {
 		return errors.New("SERVICE_CONFIGURATION_BOUNDARY_INVALID")
 	}
@@ -197,6 +203,18 @@ func (c ChangeRequest) Validate() error {
 func credential(id, rev string) bool { return uuid.MatchString(id) && revision.MatchString(rev) }
 
 func (c Config) Validate(d Definition) error {
+	if c.RuntimePolicy != nil {
+		kind := "SYSTEMD"
+		if d.Kind == "TOOL" {
+			return errors.New("RUNTIME_POLICY_UNSUPPORTED")
+		}
+		if c.Mode() == "DOCKER" {
+			kind = "DOCKER"
+		}
+		if err := c.RuntimePolicy.Validate(kind); err != nil {
+			return err
+		}
+	}
 	if err := c.validateWebURL(d); err != nil {
 		return err
 	}

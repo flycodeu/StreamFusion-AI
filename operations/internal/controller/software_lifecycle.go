@@ -11,20 +11,22 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/streamfusion-ai/operations/internal/deploy"
+	"github.com/streamfusion-ai/operations/internal/runtimepolicy"
 )
 
 func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session, id, operation string) {
 	var in struct {
-		ExpectedHostVersion string             `json:"expectedHostVersion,omitempty"`
-		DockerAccess        *dockerAccessInput `json:"dockerAccess,omitempty"`
-		ExpectedVersion     string             `json:"expectedVersion"`
-		IdentityHash        string             `json:"identityHash"`
-		Confirmed           bool               `json:"confirmed"`
-		Key                 string             `json:"idempotencyKey"`
-		Action              string             `json:"action"`
-		DeleteData          bool               `json:"deleteData"`
-		ClearNodeDefault    bool               `json:"clearNodeDefault"`
-		ConfirmationName    string             `json:"confirmationName"`
+		RuntimePolicy       *runtimepolicy.Policy `json:"runtimePolicy,omitempty"`
+		ExpectedHostVersion string                `json:"expectedHostVersion,omitempty"`
+		DockerAccess        *dockerAccessInput    `json:"dockerAccess,omitempty"`
+		ExpectedVersion     string                `json:"expectedVersion"`
+		IdentityHash        string                `json:"identityHash"`
+		Confirmed           bool                  `json:"confirmed"`
+		Key                 string                `json:"idempotencyKey"`
+		Action              string                `json:"action"`
+		DeleteData          bool                  `json:"deleteData"`
+		ClearNodeDefault    bool                  `json:"clearNodeDefault"`
+		ConfirmationName    string                `json:"confirmationName"`
 	}
 	if e := decode(w, r, &in); e != nil {
 		h.fail(w, r, 400, "INVALID_INPUT", e.Error())
@@ -54,6 +56,14 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 		}
 		action = "SOFTWARE_" + in.Action
 	}
+	if (action == "SOFTWARE_RUNTIME_POLICY") != (in.RuntimePolicy != nil) {
+		h.fail(w, r, 400, "RUNTIME_POLICY_INVALID", "请填写当前运行方式支持的策略")
+		return
+	}
+	if action == "SOFTWARE_RUNTIME_POLICY" && !in.Confirmed {
+		h.fail(w, r, 400, "RUNTIME_POLICY_CONFIRMATION_REQUIRED", "请确认运行策略变更")
+		return
+	}
 	if action != "SOFTWARE_UNINSTALL" && (in.DeleteData || in.ClearNodeDefault || in.ConfirmationName != "") {
 		h.fail(w, r, 400, "SOFTWARE_DELETE_DATA_ACTION_INVALID", "数据删除选项仅适用于卸载")
 		return
@@ -62,6 +72,12 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 		ID, Version, Action, Identity string
 		Confirmed                     bool
 	}{id, in.ExpectedVersion, action, in.IdentityHash, in.Confirmed})
+	if in.RuntimePolicy != nil {
+		hash = deploy.Digest(struct {
+			Base   string
+			Policy *runtimepolicy.Policy
+		}{hash, in.RuntimePolicy})
+	}
 	if action == "SOFTWARE_UNINSTALL" {
 		hash = deploy.Digest(struct {
 			Base             string
@@ -80,6 +96,10 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	prepared, e := h.store.readSoftware(id)
 	if e != nil {
 		h.opsError(w, r, e)
+		return
+	}
+	if in.RuntimePolicy != nil && in.RuntimePolicy.Validate(prepared.RuntimeKind) != nil {
+		h.fail(w, r, 400, "RUNTIME_POLICY_INVALID", "运行策略与当前运行方式不匹配")
 		return
 	}
 	if (action == "SOFTWARE_UNINSTALL" || operation == "unmanage") && h.applicationReferenceBlocked(w, r, h.store.DB, "software", id) {
@@ -136,6 +156,10 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 		}
 		if capability.SoftwareLifecycleVersion < 1 || capability.SoftwareLifecycleVersion > deploy.SoftwareLifecycleVersion || newSoftwareLifecycleAction(action) && capability.SoftwareLifecycleVersion < deploy.SoftwareLifecycleVersion {
 			h.fail(w, r, 409, "EXECUTOR_SOFTWARE_UNSUPPORTED", "执行器尚未支持软件生命周期管理，请先升级目标执行器")
+			return
+		}
+		if runtimePolicyAction(action) && capability.RuntimePolicyVersion != 1 {
+			h.fail(w, r, 409, "EXECUTOR_UPGRADE_REQUIRED", "运行策略需要更新接入组件")
 			return
 		}
 		executionLogs = capability.SoftwareLifecycleVersion >= deploy.SoftwareLifecycleVersion
@@ -349,6 +373,10 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 	}
 	job, now := uuid.NewString(), Now()
 	req := deploy.Request{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: h.storeIDTx(tx), TargetID: i.HostID, JobID: job, TraceID: r.Context().Value(traceKey{}).(string), Action: action, SoftwareOperation: action, Software: softwareRequest(i), DeadlineAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)}
+	if runtimePolicyAction(action) {
+		req.RuntimePolicy = &runtimepolicy.Change{Version: 1, Policy: in.RuntimePolicy}
+		req.DeadlineAt = time.Now().UTC().Add(12 * time.Minute).Format(time.RFC3339)
+	}
 	if executionLogs && operation == "actions" && action != "SOFTWARE_UNINSTALL" {
 		req.ExecutionLogVersion = 1
 	}
@@ -417,10 +445,14 @@ func (h *HTTP) changeSoftware(w http.ResponseWriter, r *http.Request, s *session
 
 func standardSoftwareAction(action string) bool {
 	switch action {
-	case "START", "STOP", "UNINSTALL", "RESTART", "RELOAD", "PAUSE", "UNPAUSE":
+	case "START", "STOP", "UNINSTALL", "RESTART", "RELOAD", "PAUSE", "UNPAUSE", "RUNTIME_POLICY":
 		return true
 	}
 	return false
+}
+
+func runtimePolicyAction(action string) bool {
+	return action == "SOFTWARE_START" || action == "SOFTWARE_STOP" || action == "SOFTWARE_RESTART" || action == "SOFTWARE_RUNTIME_POLICY"
 }
 
 func newSoftwareLifecycleAction(action string) bool {

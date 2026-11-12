@@ -4,6 +4,8 @@ import { ElDialog, ElMessageBox, ElStep, ElSteps } from "element-plus";
 import { ApiError, request } from "./api";
 import { requestAllPages } from "./listPages";
 import OpsPagination from "./OpsPagination.vue";
+import RuntimePolicyFields from "./RuntimePolicyFields.vue";
+import { normalizeRuntimePolicy } from "./runtimePolicy";
 import { hostTime, type Host } from "./hosts";
 import type { GitProfile } from "./gitManagement";
 import { softwareInstallationReady, softwareIsDockerEngine, softwareIsTool, softwareVersionText, type SoftwareInstance } from "./software";
@@ -43,6 +45,7 @@ let searchTimer: ReturnType<typeof setTimeout> | undefined;
 const module = computed(() => draft.value.modules.find(item => item.id === selectedModuleId.value));
 const environment = computed(() => draft.value.environments.find(item => item.id === selectedEnvironmentId.value));
 const deployment = computed(() => environment.value?.deployments.find(item => item.id === selectedDeploymentId.value));
+const deploymentRuntime = computed(() => draft.value.modules.find(item => item.id === deployment.value?.moduleId)?.runtime.kind);
 const dirty = computed(() => JSON.stringify(draft.value) !== baseline.value);
 const availableModules = computed(() => draft.value.modules.filter(item => !environment.value?.deployments.some(target => target.moduleId === item.id)));
 const buildKinds = { DOCKERFILE: "Dockerfile", COMMAND: "编译与打包", STATIC: "前端静态文件" };
@@ -232,6 +235,15 @@ function removeModule() {
 function addEnvironment() {
   const item = newProjectEnvironment(); draft.value.environments.push(item);
   selectedEnvironmentId.value = item.id; selectedDeploymentId.value = "";
+}
+function runtimeKindChanged() {
+  if (!module.value) return;
+  const { id, runtime } = module.value;
+  for (const environment of draft.value.environments) for (const target of environment.deployments) {
+    if (target.moduleId !== id || !target.runtimePolicy) continue;
+    if (runtime.kind === "STATIC") delete target.runtimePolicy;
+    else target.runtimePolicy = normalizeRuntimePolicy(target.runtimePolicy, runtime.kind === "DOCKER" ? "DOCKER" : "SYSTEMD");
+  }
 }
 function selectEnvironment(id: string) {
   selectedEnvironmentId.value = id;
@@ -447,7 +459,7 @@ onUnmounted(() => {
                     </label>
                     <label>
                       运行方式
-                      <select v-model="module.runtime.kind">
+                      <select v-model="module.runtime.kind" @change="runtimeKindChanged">
                         <option v-for="(label, kind) in runtimeKinds" :key="kind" :value="kind">{{ label }}</option>
                       </select>
                     </label>
@@ -673,6 +685,7 @@ onUnmounted(() => {
                           <input v-model.number="deployment.memoryMiB" type="number" min="0" max="1048576" placeholder="0 表示未设置" />
                         </label>
                       </div>
+                      <RuntimePolicyFields v-if="deploymentRuntime !== 'STATIC'" v-model="deployment.runtimePolicy" :kind="deploymentRuntime === 'DOCKER' ? 'DOCKER' : 'SYSTEMD'" :disabled="saving" optional inherit-label="沿用运行环境默认值" />
                       <div class="project-section-heading project-form-section">
                         <h4>端口</h4>
                         <button

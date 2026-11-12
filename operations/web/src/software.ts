@@ -1,4 +1,5 @@
 import type { ObservationAttempt } from "./observation";
+import type { RuntimePolicyState } from "./runtimePolicy";
 import type {
   InstallationPaths,
   OfficialInstallation,
@@ -52,6 +53,7 @@ export interface SoftwareInstance {
   actualState:
     "UNKNOWN" | "RUNNING" | "STOPPED" | "INSTALLED" | "MISSING" | "FAILED" | "REMOVED" | "PAUSED";
   observation?: SoftwareMetadata & {
+    runtimePolicy?: RuntimePolicyState;
     state: SoftwareInstance["actualState"];
     identityHash: string;
     version: string;
@@ -253,6 +255,18 @@ export const softwareJobLabels: Record<string, string> = {
   CANCELLED: "已取消",
 };
 export const softwareJobErrorMessages: Record<string, string> = {
+  RUNTIME_POLICY_INVALID: "请检查当前运行方式支持的策略和停止等待时间。",
+  RUNTIME_POLICY_UNSUPPORTED: "当前服务不支持所选策略，请重新读取后调整。",
+  RUNTIME_POLICY_READ_FAILED: "运行策略读取失败，请检查服务配置与读取权限后重试。",
+  RUNTIME_POLICY_DOCKER_BOOT_DISABLED: "主机 Docker 尚未设置开机启动，请先核对 Docker Engine 的运行策略。",
+  RUNTIME_POLICY_HELD_CONFIGURATION: "软件已保持停止，请先启动后再修改运行配置。",
+  RUNTIME_POLICY_STOP_TIMEOUT_IMMUTABLE: "现有容器的停止等待时间不能直接修改，请保留当前值。",
+  RUNTIME_POLICY_UNCONFIRMED: "运行策略结果尚未确认，请核对原操作。",
+  RUNTIME_POLICY_STATE_MISMATCH: "实际运行状态与本次操作不一致，请核对原操作。",
+  RUNTIME_POLICY_STOP_UNCONFIRMED: "尚未确认软件已保持停止，请核对原操作。",
+  RUNTIME_POLICY_RECORD_DAMAGED: "保存的运行策略不可读取，请核对服务器上的策略文件。",
+  RUNTIME_POLICY_BINDING_CONFLICT: "服务身份在配置期间发生变化，请核对原操作。",
+  RUNTIME_POLICY_CLEANUP_UNCONFIRMED: "软件已卸载，运行策略清理结果待核对，请打开原操作。",
   NODE_REGISTRY_CHANGED: "镜像列表或账号配置已变化，请重新预检并确认。",
   NODE_REGISTRY_RESULT_MISMATCH: "账号镜像回读与所选地址不一致，请核对原作业。",
   NODE_REGISTRY_NPM_REQUIRED: "请先在此环境安装带有 npm 的 Node 版本。",
@@ -265,6 +279,13 @@ export const softwareJobErrorMessages: Record<string, string> = {
   DOCKER_CONTAINER_DEPENDENCIES_UNCONFIRMED: "Docker Engine 当前不可访问，无法确认容器依赖。请检查 Engine 状态；若已停止，请先明确启动 Docker，再提交卸载。启动可能恢复原有容器，请先确认业务影响。",
 };
 export const softwareJobPhaseLabels: Record<string, string> = {
+  APPLICATION_STATE_VERIFIED: "应用状态已核对",
+  APPLICATION_CONTROL: "调整应用运行状态",
+  APPLICATION_RECONCILE_REQUIRED: "应用操作结果待核对",
+  RUNTIME_POLICY: "更新运行策略",
+  SOFTWARE_RUNTIME_POLICY_UPDATED: "运行策略已更新",
+  RUNTIME_POLICY_UPDATED: "运行策略已更新",
+  RUNTIME_POLICY_CLEANUP: "清理软件运行策略",
   SOFTWARE_RESTARTED: "软件已重启",
   SOFTWARE_RELOADED: "配置已重载",
   SOFTWARE_PAUSED: "服务已暂停",

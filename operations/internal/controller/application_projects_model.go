@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/streamfusion-ai/operations/internal/deploy"
+	"github.com/streamfusion-ai/operations/internal/runtimepolicy"
 )
 
 type applicationProject struct {
@@ -79,6 +80,7 @@ type applicationEnvironment struct {
 	Deployments []applicationDeployment `json:"deployments"`
 }
 type applicationDeployment struct {
+	RuntimePolicy     *runtimepolicy.Policy `json:"runtimePolicy,omitempty"`
 	ID                string                `json:"id"`
 	ModuleID          string                `json:"moduleId"`
 	HostID            string                `json:"hostId"`
@@ -362,6 +364,22 @@ func normalizeApplicationProject(p *applicationProject) error {
 				return errors.New("每环境的模块配置必须属于本项目且不能重复")
 			}
 			seenModules[d.ModuleID] = true
+			if d.RuntimePolicy != nil {
+				kind := "SYSTEMD"
+				for _, module := range p.Modules {
+					if module.ID == d.ModuleID {
+						if module.Runtime.Kind == "STATIC" {
+							return errors.New("静态文件的运行策略由所选Web服务管理")
+						}
+						if module.Runtime.Kind == "DOCKER" {
+							kind = "DOCKER"
+						}
+					}
+				}
+				if err := d.RuntimePolicy.Validate(kind); err != nil {
+					return errors.New("运行策略与模块运行方式不匹配")
+				}
+			}
 			if d.HostID != "" && !deploy.ID.MatchString(d.HostID) || d.BindAddress != "" && net.ParseIP(d.BindAddress) == nil || d.MemoryMiB < 0 || d.MemoryMiB > 1048576 || len(d.Ports) > 30 || len(d.Variables) > 100 || len(d.Mounts) > 30 {
 				return errors.New("部署主机、监听地址、内存或配置数量不正确")
 			}

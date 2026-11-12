@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/streamfusion-ai/operations/internal/deploy"
+	"github.com/streamfusion-ai/operations/internal/runtimepolicy"
 )
 
 func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id string) {
@@ -139,6 +140,16 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 	if p.Candidate.RuntimeEnvironment != nil && targetFact.JavaJarRecipe != "java-jar-v1" {
 		h.fail(w, r, 409, "TARGET_JAR_RECIPE_REQUIRED", "目标执行器不支持冻结运行环境的JAR制品，请先升级执行器")
 		return
+	}
+	if p.Kind == "PUBLISH" && p.Candidate.Config.RuntimePolicy != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+		var capability executorCapabilities
+		err := h.store.callTarget(ctx, t, deploy.Request{Action: "CAPABILITIES"}, "", &capability)
+		cancel()
+		if err != nil || capability.Owner.ControllerID != h.store.controllerID() || capability.Owner.TargetID != t.ID || capability.RuntimePolicyVersion != runtimepolicy.Version {
+			h.fail(w, r, 409, "EXECUTOR_UPGRADE_REQUIRED", "运行策略需要更新接入组件")
+			return
+		}
 	}
 	p.InputHash = deploy.Digest(p)
 	h.store.mu.Lock()
@@ -280,6 +291,9 @@ func (h *HTTP) submitPlan(w http.ResponseWriter, r *http.Request, s *session, id
 		}
 	}
 	req := deploy.Request{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: h.storeIDTx(tx), TargetID: p.TargetID, JobID: jobID, TraceID: r.Context().Value(traceKey{}).(string), Action: "ACTIVATE", Candidate: &p.Candidate, Baseline: p.Baseline, DeadlineAt: time.Now().UTC().Add(10 * time.Minute).Format(time.RFC3339)}
+	if p.Kind == "PUBLISH" && p.Candidate.Config.RuntimePolicy != nil {
+		req.RuntimePolicy = &runtimepolicy.Change{Version: runtimepolicy.Version, Policy: p.Candidate.Config.RuntimePolicy}
+	}
 	req.MaintenancePermit = p.MaintenancePermit
 	req.InputHash = deploy.Digest(req)
 	now := Now()
@@ -307,6 +321,9 @@ func (h *HTTP) storeIDTx(tx *sql.Tx) string {
 }
 
 func (h *HTTP) commitResult(id string, req deploy.Request, result deploy.Result) error {
+	if applicationLifecycleAction(req.ApplicationOperation) {
+		return h.commitApplicationLifecycleResult(id, req, result)
+	}
 	if result.ProtocolVersion != 1 || result.ExecutorVersion != deploy.Version || result.ControllerID != req.ControllerID || result.TargetID != req.TargetID || result.JobID != id || result.InputHash != req.InputHash {
 		return errors.New("RESULT_IDENTITY_MISMATCH")
 	}
@@ -314,10 +331,24 @@ func (h *HTTP) commitResult(id string, req deploy.Request, result deploy.Result)
 		h.jobUnknown(id, "RECOVERY_REQUIRED")
 		return errors.New("RESULT_NOT_FINAL")
 	}
-	if result.Status == "SUCCEEDED" && (result.ReleaseID != req.Candidate.ID || result.ImageID != req.Candidate.ImageID || result.ConfigHash != deploy.Digest(req.Candidate.Config) || result.Health != "APPLICATION_READY") {
+	ready := result.Health == "APPLICATION_READY"
+	if result.Status == "SUCCEEDED" && req.RuntimePolicy != nil && result.RuntimePolicy == nil {
+		return errors.New("RUNTIME_POLICY_UNCONFIRMED")
+	}
+	if result.RuntimePolicy != nil {
+		policyRequest := req
+		if result.Status != "SUCCEEDED" || req.RuntimePolicy == nil {
+			policyRequest.RuntimePolicy = &runtimepolicy.Change{Version: runtimepolicy.Version}
+		}
+		if err := validateRuntimePolicyResult(policyRequest, result, "DOCKER"); err != nil {
+			return err
+		}
+		ready = ready && !result.RuntimePolicy.Held || result.Health == "STOPPED" && result.RuntimePolicy.Held
+	}
+	if result.Status == "SUCCEEDED" && (result.ReleaseID != req.Candidate.ID || result.ImageID != req.Candidate.ImageID || result.ConfigHash != deploy.Digest(req.Candidate.Config) || !ready) {
 		return errors.New("HEALTH_EVIDENCE_MISMATCH")
 	}
-	if result.Status == "FAILED" && req.Baseline != nil && (result.ReleaseID != req.Baseline.ID || result.ImageID != req.Baseline.ImageID || result.ConfigHash != deploy.Digest(req.Baseline.Config) || result.Health != "APPLICATION_READY") {
+	if result.Status == "FAILED" && req.Baseline != nil && (result.ReleaseID != req.Baseline.ID || result.ImageID != req.Baseline.ImageID || result.ConfigHash != deploy.Digest(req.Baseline.Config) || !ready) {
 		return errors.New("RECOVERY_EVIDENCE_MISMATCH")
 	}
 	if result.Status == "FAILED" && req.Baseline == nil && (result.Health != "STOPPED" || result.ReleaseID != "") {
@@ -452,7 +483,7 @@ func (h *HTTP) reconcile(w http.ResponseWriter, r *http.Request, actor *session,
 		return
 	}
 	action := "STATUS"
-	if recover && req.Firewall == nil && req.Plugin == nil && req.Software == nil && req.Installation == nil && req.NodeEnvironment == nil && req.GitRepository == nil {
+	if recover && !applicationLifecycleAction(req.ApplicationOperation) && req.Firewall == nil && req.Plugin == nil && req.Software == nil && req.Installation == nil && req.NodeEnvironment == nil && req.GitRepository == nil {
 		action = "RECOVER"
 	}
 	query := req

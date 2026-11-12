@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"time"
 
 	"github.com/google/uuid"
@@ -83,6 +84,27 @@ func (h *HTTP) saveInstance(w http.ResponseWriter, r *http.Request, s *session, 
 		id = uuid.NewString()
 		_, e = tx.Exec("INSERT INTO instances(id,name,target_id,draft_json,created_at) VALUES(?,?,?,?,?)", id, in.Name, in.TargetID, jsonText(in.Config), Now())
 	} else {
+		var currentConfig string
+		if e = tx.QueryRow("SELECT draft_json FROM instances WHERE id=?", id).Scan(&currentConfig); e != nil {
+			h.opsError(w, r, e)
+			return
+		}
+		var current deploy.Config
+		if e = json.Unmarshal([]byte(currentConfig), &current); e != nil {
+			h.internal(w, r, e)
+			return
+		}
+		if !reflect.DeepEqual(current.RuntimePolicy, in.Config.RuntimePolicy) {
+			var busy int
+			if e = tx.QueryRow("SELECT count(*) FROM operation_locks WHERE resource_key=?", "instance:"+id).Scan(&busy); e != nil {
+				h.internal(w, r, e)
+				return
+			}
+			if busy > 0 {
+				h.fail(w, r, 409, "OPERATION_LOCKED", "运行策略正在处理，请先核对原操作")
+				return
+			}
+		}
 		var result sql.Result
 		result, e = tx.Exec("UPDATE instances SET name=?,draft_json=?,version=version+1,draft_revision=draft_revision+1 WHERE id=? AND CAST(version AS TEXT)=? AND target_id=?", in.Name, jsonText(in.Config), id, in.Version, in.TargetID)
 		if e == nil {

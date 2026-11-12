@@ -1,5 +1,6 @@
 import type { SoftwareJob } from "./software";
 import type { Host } from "./hosts";
+import type { RuntimePolicy } from "./runtimePolicy";
 import type { CredentialReference, ManagementDefinition, ParameterDefinition } from "./softwareManagement";
 
 export interface ServiceRecipe {
@@ -214,6 +215,7 @@ export interface ServicePort {
 }
 
 export interface ServiceConfiguration {
+  runtimePolicy?: RuntimePolicy;
   parameters?: Record<string, string>;
   parameterCredentials?: Record<string, CredentialReference>;
   name: string;

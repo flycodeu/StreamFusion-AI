@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/streamfusion-ai/operations/internal/deploy"
@@ -33,7 +34,7 @@ func readyManagementFixture(t *testing.T) (*Store, *browser, string, commandTemp
 	extension := func(req deploy.Request) ([]byte, bool) {
 		encode := func(v any) ([]byte, bool) { b, _ := json.Marshal(v); return b, true }
 		if req.Action == "CAPABILITIES" {
-			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerEngineAvailable": true, "softwareLifecycleVersion": deploy.SoftwareLifecycleVersion, "softwareManagementVersion": deploy.SoftwareManagementVersion, "serviceInstallVersion": serviceinstall.CapabilityVersion, "nativeInstallVersion": 1, "serviceCatalogHash": serviceinstall.CatalogHash(), "commandRecipeVersion": deploy.CommandRecipeVersion, "commandTrustFingerprint": deploy.CommandPublicKeyFingerprint(store.commandPublicKey())})
+			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerEngineAvailable": true, "softwareLifecycleVersion": deploy.SoftwareLifecycleVersion, "runtimePolicyVersion": 1, "softwareManagementVersion": deploy.SoftwareManagementVersion, "serviceInstallVersion": serviceinstall.CapabilityVersion, "nativeInstallVersion": 1, "serviceCatalogHash": serviceinstall.CatalogHash(), "commandRecipeVersion": deploy.CommandRecipeVersion, "commandTrustFingerprint": deploy.CommandPublicKeyFingerprint(store.commandPublicKey())})
 		}
 		if req.Action == "SOFTWARE_INSTALL_LOGS" {
 			return encode(map[string]any{"text": "$ fixture command\nverified\n", "source": "COMMAND_LOG"})
@@ -46,7 +47,9 @@ func readyManagementFixture(t *testing.T) (*Store, *browser, string, commandTemp
 				if req.Action == "SOFTWARE_PAUSE" {
 					state = "PAUSED"
 				}
-				result := deploy.Result{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID, JobID: req.JobID, InputHash: req.InputHash, Status: "SUCCEEDED", Phase: "SOFTWARE_VERIFIED", ObservedAt: Now(), Software: &deploy.SoftwareObservation{Kind: req.Software.Kind, Locator: req.Software.Locator, IdentityHash: req.Software.IdentityHash, State: state, ObservedAt: Now()}, Lifecycle: &deploy.SoftwareLifecycleEvidence{Action: req.Action, Before: "old-invocation", After: "new-invocation", ObservedAt: Now()}}
+				result := deploy.Result{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID, JobID: req.JobID, InputHash: req.InputHash, Status: "SUCCEEDED", Phase: "SOFTWARE_VERIFIED", ObservedAt: Now(), Software: &deploy.SoftwareObservation{Kind: req.Software.Kind, Locator: req.Software.Locator, IdentityHash: req.Software.IdentityHash, State: state, ObservedAt: Now()}, Lifecycle: &deploy.SoftwareLifecycleEvidence{Action: req.Action, Before: time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano), After: Now(), ObservedAt: Now()}}
+				result.RuntimePolicy = runtimePolicyReceiptFixture(req)
+				result.Software.RuntimePolicy = result.RuntimePolicy
 				f.results[req.JobID] = result
 				return encode(result)
 			}
@@ -303,6 +306,12 @@ func TestSoftwareLifecycleControlsRequireEvidenceAndKeepRealLogs(t *testing.T) {
 			t.Fatal("lifecycle success accepted without action evidence")
 		}
 		if action == "RESTART" {
+			bad = result
+			bad.RuntimePolicy = nil
+			if b.h.commitSoftwareResult(job, request, bad) == nil {
+				t.Fatal("restart accepted without restored runtime policy")
+			}
+			bad = result
 			copyEvidence := *result.Lifecycle
 			copyEvidence.After = copyEvidence.Before
 			bad.Lifecycle = &copyEvidence

@@ -27,6 +27,9 @@ func (x *executor) boundSoftware(s SoftwareRequest) error {
 }
 
 func (x *executor) applySoftware(req Request, dir string) (Result, error) {
+	if runtimePolicyAction(req) {
+		return x.applySoftwareRuntimePolicy(req, dir)
+	}
 	if req.Management != nil {
 		return x.applyManagement(req, dir)
 	}
@@ -172,6 +175,12 @@ func (x *executor) adoptSoftware(req Request) error {
 }
 
 func (x *executor) verifySoftwareResult(req Request, result Result) error {
+	if err := x.verifyRuntimePolicyCleanup(req, result); err != nil {
+		return err
+	}
+	if runtimePolicyAction(req) {
+		return x.verifyRuntimePolicyReceipt(req, result)
+	}
 	if req.Management != nil {
 		return x.verifyManagementEvidence(req, result)
 	}
@@ -256,10 +265,18 @@ func (x *executor) verifySoftwareResult(req Request, result Result) error {
 }
 
 func (x *executor) reconcileSoftware(req Request, dir string) Result {
-	if req.Management != nil {
-		return x.reconcileManagement(req, dir)
+	if result, found := x.reconcileRuntimePolicyCleanup(req, dir); found {
+		return result
+	}
+	if result, found := x.reconcileInstalledRuntimePolicy(req, dir); found {
+		return result
 	}
 	result := x.reconcileSoftwareObjects(req, dir)
+	result = x.verifyRecoveredRuntimeCleanup(req, dir, result)
+	result = x.verifyRecoveredInstallationPolicy(req, dir, result)
+	if req.Management != nil {
+		return result
+	}
 	if !x.confirmBuiltinObservation(req, result) || !x.builtinResultConfirmed(req, result) {
 		result.Status, result.ErrorCode = "UNKNOWN", "COMMAND_STEP_RECONCILE_REQUIRED"
 	}
@@ -267,6 +284,9 @@ func (x *executor) reconcileSoftware(req Request, dir string) Result {
 }
 
 func (x *executor) reconcileSoftwareObjects(req Request, dir string) Result {
+	if runtimePolicyAction(req) {
+		return x.reconcileSoftwareRuntimePolicy(req, dir)
+	}
 	if req.Management != nil {
 		return x.reconcileManagement(req, dir)
 	}

@@ -1,4 +1,6 @@
 {
+  "runtime-docker-stop": ["/usr/bin/docker", "container", "stop", "--time", "$2", "--", "$1"],
+  "runtime-docker-restart": ["/usr/bin/docker", "container", "restart", "--time", "$2", "--", "$1"],
   "management-container-ports": ["/usr/bin/docker", "container", "port", "--", "$1"],
   "management-unit-load": ["/usr/bin/systemctl", "show", "--property=LoadState", "--value", "--", "$1"],
   "management-container-list": ["/usr/bin/docker", "container", "ls", "-a", "--no-trunc", "--format", "{{.ID}} {{.Names}}"],

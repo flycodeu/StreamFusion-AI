@@ -11,6 +11,7 @@ function load(source, imports = {}, globals = {}) {
   return exports;
 }
 const model = load(await readFile(new URL("../src/applicationProjects.ts", import.meta.url), "utf8"));
+const runtimePolicy = load(await readFile(new URL("../src/runtimePolicy.ts", import.meta.url), "utf8"));
 const softwareModel = load(await readFile(new URL("../src/software.ts", import.meta.url), "utf8"));
 const component = (await readFile(new URL("../src/ApplicationProjects.vue", import.meta.url), "utf8")).split('<script setup lang="ts">')[1].split("</script>")[0];
 const listPagesSource = await readFile(new URL("../src/listPages.ts", import.meta.url), "utf8");
@@ -37,12 +38,13 @@ function harness(override = () => undefined) {
     throw Error("unexpected request " + path);
   };
   const scope = vue.effectScope();
-  const flow = scope.run(() => load(component + "\nexport const flow = { draft, baseline, records, total, page, pageSize, query, archived, listError, editorError, editorOpen, activeStep, selectStep, nextStep, previousStep, variableSections, loading, saving, editProject, saveProject, load, addRepository, removeRepository, addModule, removeModule, addEnvironment, addDeployment, selectedModuleId, selectedEnvironmentId, selectedDeploymentId, changeVariableMode, usesCredential, setVariableCredential, credentials, software, softwareChoices };", {
+  const flow = scope.run(() => load(component + "\nexport const flow = { draft, baseline, records, total, page, pageSize, query, archived, listError, editorError, editorOpen, activeStep, selectStep, nextStep, previousStep, variableSections, loading, saving, editProject, saveProject, load, addRepository, removeRepository, addModule, removeModule, addEnvironment, addDeployment, selectedModuleId, selectedEnvironmentId, selectedDeploymentId, changeVariableMode, usesCredential, setVariableCredential, credentials, software, softwareChoices, runtimeKindChanged };", {
     vue: { ...vue, onMounted: () => {}, onUnmounted: fn => cleanup.push(fn) },
     "element-plus": { ElMessageBox: { confirm: async () => {} } },
     "./api": { request, ApiError }, "./listPages": load(listPagesSource, { "./api": { request } }),
     "./applicationProjects": model,
     "./software": softwareModel,
+    "./runtimePolicy": runtimePolicy,
   }, { defineEmits: () => (...args) => events.push(args) }).flow);
   return { flow, calls, events, close() { cleanup.forEach(fn => fn()); scope.stop(); } };
 }
@@ -57,6 +59,19 @@ test("new project configuration has stable module references and no active reten
   assert.equal(target.runtimeSoftwareId, "");
   assert.equal("softwareId" in project.modules[0].runtime, false);
   assert.equal(project.modules[0].build.outputPath, "");
+});
+
+test("changing a module runtime removes unsupported policy fields across its environments", t => {
+  const fixture = harness(); t.after(() => fixture.close());
+  const project = sampleProject(), module = project.modules[0], target = project.environments[0].deployments[0];
+  target.runtimePolicy = { ...runtimePolicy.defaultRuntimePolicy("DOCKER"), maxRetries: 2 };
+  fixture.flow.draft.value = project; fixture.flow.selectedModuleId.value = module.id;
+  module.runtime.kind = "NATIVE"; fixture.flow.runtimeKindChanged();
+  assert.equal(target.runtimePolicy.restart, "on-failure");
+  assert.equal(target.runtimePolicy.maxRetries, undefined);
+  module.runtime.kind = "STATIC"; fixture.flow.runtimeKindChanged();
+  assert.equal(target.runtimePolicy, undefined);
+  assert.equal(target.logs.retentionDays, 0);
 });
 
 test("detached draft and usage checks preserve list data and environment references", () => {

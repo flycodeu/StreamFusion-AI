@@ -1,3 +1,5 @@
+import type { RuntimePolicy } from "./runtimePolicy";
+
 export interface ProjectRepository {
   id: string;
   name: string;
@@ -45,6 +47,7 @@ export interface ProjectVariable {
 }
 
 export interface ProjectDeployment {
+  runtimePolicy?: RuntimePolicy;
   id: string;
   moduleId: string;
   hostId: string;

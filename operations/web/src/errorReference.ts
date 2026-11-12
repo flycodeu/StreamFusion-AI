@@ -9,6 +9,14 @@ export interface ErrorReferenceEntry {
 }
 
 export const errorReference: ErrorReferenceEntry[] = [
+  {code:"RUNTIME_POLICY_READ_FAILED",name:"运行策略读取失败",category:"软件运行",meaning:"暂时无法确认目标服务的实际运行策略。",steps:["在软件详情的“配置与运行”中重新读取，检查服务单元或容器是否存在及读取权限。"]},
+  {code:"RUNTIME_POLICY_DOCKER_BOOT_DISABLED",name:"Docker 未开启开机启动",category:"软件运行",meaning:"容器选择了开机恢复，但主机 Docker Engine 尚未开启开机启动。",steps:["先读取 Docker Engine 的运行策略，按主机需要设置开机启动，再处理原操作。"]},
+  {code:"RUNTIME_POLICY_HELD_CONFIGURATION",name:"软件已保持停止",category:"软件运行",meaning:"当前软件处于持久停止状态，普通配置变更会重启服务，因此本次变更已停止。",steps:["先启动软件，再修改端口或目录等运行配置。运行策略本身可在停止状态下修改，下次启动时恢复。"]},
+  {code:"RUNTIME_POLICY_STOP_TIMEOUT_IMMUTABLE",name:"容器停止等待时间不能直接修改",category:"软件运行",meaning:"已有容器的停止等待时间不支持通过策略更新直接改变。",steps:["重新读取运行策略并保留当前停止等待时间，调整退出恢复方式后再提交。"]},
+  {code:"RUNTIME_POLICY_UNCONFIRMED",name:"运行策略结果待核对",category:"软件运行",meaning:"策略操作可能已执行，控制器尚未取得完整的确认结果。",steps:["从执行记录打开原操作，核对结果后继续；保留原任务，不重复提交新的策略操作。"]},
+  {code:"RUNTIME_POLICY_RECORD_DAMAGED",name:"运行策略文件不可读",category:"软件运行",meaning:"服务器上的受管策略文件缺失、损坏或身份不符。",steps:["保留现有服务和文件，查看原操作日志，由管理员核对策略文件的归属与内容。"]},
+  {code:"RUNTIME_POLICY_BINDING_CONFLICT",name:"服务身份在配置期间发生变化",category:"软件运行",meaning:"更新策略时读取到的服务身份与原作业不一致。",steps:["核对原操作日志与目标服务，确认是否有其他工具修改或替换了服务配置。"]},
+  {code:"RUNTIME_POLICY_CLEANUP_UNCONFIRMED",name:"运行策略清理待核对",category:"软件运行",meaning:"软件卸载后，其受管运行策略文件尚未确认清理完成。",steps:["从执行记录核对原卸载操作，检查目标服务的受管策略文件；保留原任务及其他配置。"]},
   {code:"COMMAND_PYTHON_NOT_FOUND",name:"Python 解释器不存在",category:"软件安装",meaning:"所选 Python 路径不存在，安装尚未开始。",steps:["选择当前主机已有的兼容 Python 路径，或先安装对应版本。ytlabel 的 Python 3.12 方案可使用兼容的 /usr/bin/python3。"]},
   {code:"COMMAND_PYTHON_NOT_EXECUTABLE",name:"Python 无法执行",category:"软件安装",meaning:"所选 Python 文件不具备执行条件。",steps:["核对解释器路径与执行权限，再检查安装条件。"]},
   {code:"COMMAND_PYTHON_PATH_INVALID",name:"Python 路径不完整",category:"软件安装",meaning:"Python 参数需要完整的可执行文件路径。",steps:["填写完整路径，例如 /usr/bin/python3，而非版本号或目录。"]},

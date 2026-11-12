@@ -46,7 +46,7 @@ func installSSHFixture(t *testing.T, s *Store, b *browser, extensions ...func(de
 			if fixture.OldExecutor.Load() {
 				version = 0
 			}
-			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerAvailable": false, "dockerEngineAvailable": !fixture.NoDocker.Load(), "softwareLifecycleVersion": 1, "serviceInstallVersion": version, "nativeInstallVersion": 1, "serviceCatalogHash": serviceinstall.CatalogHash(), "commandRecipeVersion": deploy.CommandRecipeVersion, "commandTrustFingerprint": deploy.CommandPublicKeyFingerprint(s.commandPublicKey())})
+			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerAvailable": false, "dockerEngineAvailable": !fixture.NoDocker.Load(), "softwareLifecycleVersion": 1, "runtimePolicyVersion": 1, "serviceInstallVersion": version, "nativeInstallVersion": 1, "serviceCatalogHash": serviceinstall.CatalogHash(), "commandRecipeVersion": deploy.CommandRecipeVersion, "commandTrustFingerprint": deploy.CommandPublicKeyFingerprint(s.commandPublicKey())})
 		}
 		if req.Reconfiguration != nil {
 			fixture.mu.Lock()
@@ -100,6 +100,7 @@ func installSSHFixture(t *testing.T, s *Store, b *browser, extensions ...func(de
 				state = "RUNNING"
 			}
 			result := deploy.Result{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID, JobID: req.JobID, InputHash: req.InputHash, Status: "SUCCEEDED", Phase: "SOFTWARE_VERIFIED", ObservedAt: Now(), Software: &deploy.SoftwareObservation{Kind: req.Software.Kind, Locator: req.Software.Locator, IdentityHash: req.Software.IdentityHash, State: state, ObservedAt: Now()}}
+			result.RuntimePolicy = runtimePolicyReceiptFixture(req)
 			if req.Action == "SOFTWARE_STOP" && req.Software.SoftwareKey == "DOCKER" {
 				result.DockerSocketInactive = true
 			}

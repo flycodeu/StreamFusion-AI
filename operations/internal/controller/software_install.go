@@ -192,6 +192,9 @@ func (h *HTTP) installTargetReady(ctx context.Context, t target, config servicei
 	if capability.InstallVersion != serviceinstall.CapabilityVersion {
 		return &installCompatibilityError{message: fmt.Sprintf("目标执行器软件安装能力版本不匹配（需要%d，实际%d），请在主机安装准备中升级该受管目录的执行器，再重新预检", serviceinstall.CapabilityVersion, capability.InstallVersion)}
 	}
+	if config.RuntimePolicy != nil && capability.RuntimePolicyVersion != 1 {
+		return &installCompatibilityError{message: "运行策略需要更新接入组件，请更新后重新检查"}
+	}
 	if capability.Platform != "linux/amd64" {
 		return errors.New("INSTALL_PLATFORM_UNSUPPORTED")
 	}

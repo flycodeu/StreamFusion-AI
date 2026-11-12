@@ -37,6 +37,7 @@ type executorCapabilities struct {
 	DockerEngine              bool         `json:"dockerEngineAvailable"`
 	DockerCompose             bool         `json:"dockerComposeAvailable"`
 	SoftwareLifecycleVersion  int          `json:"softwareLifecycleVersion"`
+	RuntimePolicyVersion      int          `json:"runtimePolicyVersion"`
 	SoftwareManagementVersion int          `json:"softwareManagementVersion"`
 	InstallVersion            int          `json:"serviceInstallVersion"`
 	CatalogHash               string       `json:"serviceCatalogHash"`

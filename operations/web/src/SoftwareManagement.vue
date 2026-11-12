@@ -405,7 +405,7 @@ async function changeState(item: SoftwareInstance, action: SoftwareAction) {
       await ElMessageBox.confirm(
         softwareIsDockerEngine(item)
           ? `${verb}主机 Docker Engine“${item.name}”？此主机已登记 ${dependentContainers(item).length} 个容器${dependentContainers(item).length ? `（${dependentContainers(item).join("、")}）` : ""}。容器服务可能中断，未登记容器也可能受影响。`
-          : `${verb}“${item.name}”？使用该服务的业务可能受到影响。`,
+          : action === "STOP" ? `停止“${item.name}”并保持停止？再次启动会恢复原运行策略。` : `${verb}“${item.name}”？使用该服务的业务可能受到影响。`,
         `${verb}服务`,
         {
           confirmButtonText: `${verb}服务`,

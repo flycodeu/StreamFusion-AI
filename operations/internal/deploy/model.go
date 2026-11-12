@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/streamfusion-ai/operations/internal/runtimepolicy"
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
@@ -25,23 +26,32 @@ func ValidRoot(root string) bool {
 }
 
 type Config struct {
-	Preview                     *PreviewConfig `json:"preview,omitempty"`
-	ZLM                         *ZLMConfig     `json:"zlm,omitempty"`
-	InitialPasswordCredentialID string         `json:"initialPasswordCredentialId"`
-	InitialPasswordRevision     string         `json:"initialPasswordRevision"`
-	BindingIDs                  []string       `json:"bindingIds"`
-	Environment                 string         `json:"environment"`
-	Profile                     string         `json:"profile"`
-	BindAddress                 string         `json:"bindAddress"`
-	HostPort                    int            `json:"hostPort"`
-	ContainerPort               int            `json:"containerPort"`
-	MemoryMiB                   int            `json:"memoryMiB"`
-	HealthPath                  string         `json:"healthPath"`
-	HealthSeconds               int            `json:"healthSeconds"`
-	DataCompatibility           string         `json:"dataCompatibility"`
+	RuntimePolicy               *runtimepolicy.Policy `json:"runtimePolicy,omitempty"`
+	Preview                     *PreviewConfig        `json:"preview,omitempty"`
+	ZLM                         *ZLMConfig            `json:"zlm,omitempty"`
+	InitialPasswordCredentialID string                `json:"initialPasswordCredentialId"`
+	InitialPasswordRevision     string                `json:"initialPasswordRevision"`
+	BindingIDs                  []string              `json:"bindingIds"`
+	Environment                 string                `json:"environment"`
+	Profile                     string                `json:"profile"`
+	BindAddress                 string                `json:"bindAddress"`
+	HostPort                    int                   `json:"hostPort"`
+	ContainerPort               int                   `json:"containerPort"`
+	MemoryMiB                   int                   `json:"memoryMiB"`
+	HealthPath                  string                `json:"healthPath"`
+	HealthSeconds               int                   `json:"healthSeconds"`
+	DataCompatibility           string                `json:"dataCompatibility"`
 }
 
 func (c Config) Validate() error {
+	if c.RuntimePolicy != nil {
+		if c.Preview != nil || c.ZLM != nil {
+			return errors.New("NODE_MAINTENANCE_REQUIRED")
+		}
+		if err := c.RuntimePolicy.Validate("DOCKER"); err != nil {
+			return err
+		}
+	}
 	if c.ZLM != nil {
 		return c.validateZLM()
 	}
@@ -110,6 +120,8 @@ func (b Binding) Validate() error {
 }
 
 type Request struct {
+	ApplicationOperation string                            `json:"applicationOperation,omitempty"`
+	RuntimePolicy        *runtimepolicy.Change             `json:"runtimePolicy,omitempty"`
 	ExecutionLogVersion  int                               `json:"executionLogVersion,omitempty"`
 	Management           *serviceinstall.ManagementRequest `json:"management,omitempty"`
 	CommandSignature     string                            `json:"commandSignature,omitempty"`
@@ -164,6 +176,8 @@ type Owner struct {
 	DockerBinary    string `json:"dockerBinary"`
 }
 type Result struct {
+	RuntimePolicy        *runtimepolicy.State               `json:"runtimePolicy,omitempty"`
+	RuntimePolicyBinding *SoftwareRequest                   `json:"runtimePolicyBinding,omitempty"`
 	Management           *serviceinstall.ManagementEvidence `json:"management,omitempty"`
 	Lifecycle            *SoftwareLifecycleEvidence         `json:"lifecycle,omitempty"`
 	GitRepository        *GitRepositoryObservation          `json:"gitRepository,omitempty"`
