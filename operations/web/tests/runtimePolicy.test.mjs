@@ -19,15 +19,17 @@ const flush = async () => { for (let i = 0; i < 6; i++) await vue.nextTick(); };
 test("software details can close during a read without bypassing change submission protection", async t => {
   const props = vue.reactive({ busy: true, observing: true }), scope = vue.effectScope();
   t.after(() => scope.stop());
-  const flow = scope.run(() => load(detailsComponent + "\nexport const flow = { close, editingBlocked, policyCloseState };", { vue }, { defineProps: () => props, defineEmits: () => () => {} }).flow);
+  const flow = scope.run(() => load(detailsComponent + "\nexport const flow = { close, closeBlocked, editingBlocked, policyCloseState };", { vue }, { defineProps: () => props, defineEmits: () => () => {} }).flow);
+  assert.equal(flow.editingBlocked.value, true);
+  assert.equal(flow.closeBlocked.value, false);
   let closed = false;
   await flow.close(() => { closed = true; });
   assert.equal(closed, true);
   props.observing = false;
-  assert.equal(flow.editingBlocked.value, true);
+  assert.equal(flow.closeBlocked.value, true);
   props.observing = true;
   flow.policyCloseState.value.blocked = true;
-  assert.equal(flow.editingBlocked.value, true);
+  assert.equal(flow.closeBlocked.value, true);
 });
 function software(id = "redis", state = {}) {
   return { id, version: "1", runtimeKind: "DOCKER", managementMode: "MANAGED", freshness: "FRESH", observation: { runtimePolicy: {

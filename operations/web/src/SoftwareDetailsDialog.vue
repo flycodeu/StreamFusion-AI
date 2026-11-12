@@ -73,11 +73,13 @@ const accessCloseBlocked = ref(false);
 const gitCloseState = ref({ blocked: false, dirty: false });
 const managementCloseState = ref({ blocked: false, dirty: false });
 const policyCloseState = ref({ blocked: false, dirty: false });
-const editingBlocked = computed(() => (props.busy && !props.observing) || configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked || managementCloseState.value.blocked || policyCloseState.value.blocked);
+const configurationBlocked = computed(() => configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked || managementCloseState.value.blocked || policyCloseState.value.blocked);
+const editingBlocked = computed(() => props.busy || configurationBlocked.value);
+const closeBlocked = computed(() => (props.busy && !props.observing) || configurationBlocked.value);
 const hasManagement = computed(() => !!props.detail?.installation?.definition?.commands && props.detail.managementMode === "MANAGED" && (!!props.detail.installation.definition.management || ["NGINX", "MYSQL"].includes(props.detail.softwareType) || !props.detail.installation.definition.commands.builtin));
 watch(() => props.detail?.id, () => { configCloseState.value = { blocked: false, dirty: false }; accessCloseBlocked.value = false; gitCloseState.value = { blocked: false, dirty: false }; managementCloseState.value = { blocked: false, dirty: false }; policyCloseState.value = { blocked: false, dirty: false }; });
 async function close(done: () => void) {
-  if (editingBlocked.value) return;
+  if (closeBlocked.value) return;
   if (await confirmDiscard()) done();
 }
 async function confirmDiscard() {
@@ -111,7 +113,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
     :title="detail?.name || '软件详情'"
     size="min(820px,100vw)"
     destroy-on-close
-    :close-on-click-modal="!editingBlocked" :close-on-press-escape="!editingBlocked" :show-close="!editingBlocked" :before-close="close"
+    :close-on-click-modal="!closeBlocked" :close-on-press-escape="!closeBlocked" :show-close="!closeBlocked" :before-close="close"
     @close="emit('close')"
     @closed="emit('closed')"
   >
