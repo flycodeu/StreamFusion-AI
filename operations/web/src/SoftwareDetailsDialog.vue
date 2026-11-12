@@ -9,6 +9,7 @@ import GitManagementPanel from "./GitManagementPanel.vue";
 import SoftwareManagementPanel from "./SoftwareManagementPanel.vue";
 import SoftwareWebAccess from "./SoftwareWebAccess.vue";
 import SoftwareRuntimePolicyPanel from "./SoftwareRuntimePolicyPanel.vue";
+import { runtimePolicyStopConfirmed } from "./runtimePolicy";
 import { softwareConfigurationAvailable } from "./softwareManagement";
 import { managedDockerAccess } from "./dockerAccess";
 import type { ServiceInstallReceipt } from "./serviceInstallation";
@@ -76,6 +77,7 @@ const policyCloseState = ref({ blocked: false, dirty: false });
 const configurationBlocked = computed(() => configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked || managementCloseState.value.blocked || policyCloseState.value.blocked);
 const editingBlocked = computed(() => props.busy || configurationBlocked.value);
 const closeBlocked = computed(() => (props.busy && !props.observing) || configurationBlocked.value);
+const heldConfirmed = computed(() => !!props.detail && props.detail.freshness === "FRESH" && runtimePolicyStopConfirmed(props.detail.observation?.runtimePolicy, props.detail.actualState === "STOPPED", props.detail.runtimeKind === "DOCKER" ? "DOCKER" : "SYSTEMD"));
 const hasManagement = computed(() => !!props.detail?.installation?.definition?.commands && props.detail.managementMode === "MANAGED" && (!!props.detail.installation.definition.management || ["NGINX", "MYSQL"].includes(props.detail.softwareType) || !props.detail.installation.definition.commands.builtin));
 watch(() => props.detail?.id, () => { configCloseState.value = { blocked: false, dirty: false }; accessCloseBlocked.value = false; gitCloseState.value = { blocked: false, dirty: false }; managementCloseState.value = { blocked: false, dirty: false }; policyCloseState.value = { blocked: false, dirty: false }; });
 async function close(done: () => void) {
@@ -382,8 +384,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
             :disabled="
               editingBlocked ||
               !canChange ||
-              (detail.observation?.runtimePolicy?.held &&
-                detail.actualState === 'STOPPED')
+              heldConfirmed
             "
             @click="emit('changeState', detail, 'STOP')"
           >

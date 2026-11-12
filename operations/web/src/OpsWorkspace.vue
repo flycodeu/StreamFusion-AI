@@ -11,7 +11,7 @@ import ZLMConfigForm from "./ZLMConfigForm.vue";
 import { zlmDefaults, type ZLMConfig } from "./zlm";
 import type { Host } from "./hosts";
 import RuntimePolicyFields from "./RuntimePolicyFields.vue";
-import { runtimePolicyError, runtimePolicySummary, type RuntimePolicy, type RuntimePolicyState } from "./runtimePolicy";
+import { runtimePolicyError, runtimePolicySummary, runtimePolicyStopConfirmed, type RuntimePolicy, type RuntimePolicyState } from "./runtimePolicy";
 import { softwareJobErrorMessages, softwareJobPhaseLabels, softwareJobDiagnostic } from "./software";
 const props = defineProps<{ page: string }>();
 const emit = defineEmits<{ error: [unknown] }>();
@@ -1492,7 +1492,7 @@ function credentialSelected(
     </form>
     <form v-else-if="dialog === 'runtime-policy' && selected" class="dialog-form" @submit.prevent="applyRuntimePolicy">
       <div class="runtime-actions"><strong>{{ selected.name }}</strong><span class="spacer"></span><button type="button" class="secondary" :disabled="busy || runtimePolicyDirty" @click="instanceAction(selected, 'START')">启动</button><button type="button" class="secondary" :disabled="busy || runtimePolicyDirty" @click="instanceAction(selected, 'STOP')">停止</button><button type="button" class="secondary" :disabled="busy || runtimePolicyDirty" @click="instanceAction(selected, 'RESTART')">重启</button></div>
-      <p v-if="selected.observation.runtimePolicy?.held">已保持停止，修改策略后仍保持停止。</p>
+      <p v-if="selected.observation.runtimePolicy?.held">{{ runtimePolicyDraft && runtimePolicyStopConfirmed(selected.observation.runtimePolicy, selected.observation.health === 'STOPPED', 'DOCKER') ? '已保持停止，修改策略后仍保持停止。' : '停止结果待核对' }}</p>
       <p v-else>{{ runtimePolicySummary(selected.observation.runtimePolicy?.actual, 'DOCKER') }}</p>
       <RuntimePolicyFields v-if="runtimePolicyDraft" :model-value="runtimePolicyDraft" kind="DOCKER" :stop-timeout-editable="false" :disabled="busy || runtimePolicyAttempted || !selected.observation.runtimePolicy?.editable" @update:model-value="editRuntimePolicy" />
       <p v-else class="muted">{{ busy ? '正在读取当前策略…' : '尚未确认运行策略，请重新读取' }}</p>

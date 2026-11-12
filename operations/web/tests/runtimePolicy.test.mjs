@@ -57,6 +57,19 @@ test("runtime policy uses each supervisor's real options and keeps inherited val
   assert.match(model.runtimePolicyError({ restart: "no", autoStart: false }, "SYSTEMD"), /停止等待/);
 });
 
+test("a stop intent is confirmed only by stopped state and disabled supervisor startup", () => {
+  const configured = model.defaultRuntimePolicy("DOCKER");
+  const state = { held: true, configured, actual: configured };
+  assert.equal(model.runtimePolicyStopConfirmed(state, false, "DOCKER"), false);
+  assert.equal(model.runtimePolicyStopConfirmed(state, true, "DOCKER"), false);
+  state.actual = { ...configured, autoStart: false, restart: "on-failure" };
+  assert.equal(model.runtimePolicyStopConfirmed(state, true, "DOCKER"), false);
+  state.actual.restart = "no";
+  assert.equal(model.runtimePolicyStopConfirmed(state, true, "DOCKER"), true);
+  state.actual.restart = "on-failure";
+  assert.equal(model.runtimePolicyStopConfirmed(state, true, "SYSTEMD"), true);
+});
+
 test("editing a held service updates its saved strategy without sending a start operation", async t => {
   const configured = model.defaultRuntimePolicy("DOCKER");
   const fixture = harness(software("redis", { held: true, actual: { ...configured, restart: "no", autoStart: false }, configured }));

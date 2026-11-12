@@ -3,7 +3,7 @@ import { computed, ref, watch } from "vue";
 import { ApiError, request } from "./api";
 import { hostTime } from "./hosts";
 import RuntimePolicyFields from "./RuntimePolicyFields.vue";
-import { runtimePolicyError, runtimePolicySummary, type RuntimePolicy } from "./runtimePolicy";
+import { runtimePolicyError, runtimePolicySummary, runtimePolicyStopConfirmed, type RuntimePolicy } from "./runtimePolicy";
 import type { SoftwareInstance, SoftwareMutationResult } from "./software";
 
 const props = defineProps<{ detail: SoftwareInstance; active: boolean; disabled?: boolean }>();
@@ -15,6 +15,7 @@ let subjectId = "";
 let intent: { action: string; runtimePolicy: RuntimePolicy; expectedVersion: string; idempotencyKey: string; confirmed: true } | undefined;
 const state = computed(() => props.detail.observation?.runtimePolicy);
 const kind = computed(() => props.detail.runtimeKind === "DOCKER" ? "DOCKER" : "SYSTEMD");
+const heldConfirmed = computed(() => props.detail.freshness === "FRESH" && runtimePolicyStopConfirmed(state.value, props.detail.actualState === "STOPPED", kind.value));
 const dirty = computed(() => !!policy.value && JSON.stringify(policy.value) !== baseline.value);
 const observationConfirmed = computed(() => !props.detail.errorCode && (!props.detail.latestAttempt?.code || props.detail.latestAttempt.code === "READY"));
 const requiresUpdate = computed(() => props.detail.managementMode === "MANAGED" && (!state.value && observationConfirmed.value && props.detail.freshness === "FRESH" && !!props.detail.observation?.observedAt || ["EXECUTOR_UPGRADE_REQUIRED", "EXECUTOR_SOFTWARE_UNSUPPORTED"].includes(props.detail.errorCode || "")));
@@ -64,7 +65,7 @@ async function save() {
   <section class="software-runtime-policy">
     <header><strong>运行策略</strong><button class="quiet" :disabled="disabled || busy" @click="emit('observe')">读取当前策略</button></header>
     <template v-if="state?.actual">
-      <p class="policy-state">{{ state.held ? '已保持停止，下次启动恢复配置策略' : runtimePolicySummary(state.actual, kind) }}</p>
+      <p class="policy-state">{{ state.held ? heldConfirmed ? '已保持停止，下次启动恢复配置策略' : '停止结果待核对' : runtimePolicySummary(state.actual, kind) }}</p>
       <small v-if="state.observedAt" class="muted">核对于 {{ hostTime(state.observedAt) }}</small>
     </template>
     <p v-else class="muted">{{ requiresUpdate ? '当前接入组件尚未提供运行策略，请更新后重新读取' : '尚未读取运行策略' }}</p>

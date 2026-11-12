@@ -17,6 +17,11 @@ export interface RuntimePolicyState {
 
 export type PolicyRuntime = "SYSTEMD" | "DOCKER";
 
+export function runtimePolicyStopConfirmed(state: RuntimePolicyState | undefined, stopped: boolean, kind: PolicyRuntime) {
+  return !!(state?.held && stopped && state.actual && !state.actual.autoStart &&
+    (kind !== "DOCKER" || state.actual.restart === "no"));
+}
+
 export function defaultRuntimePolicy(kind: PolicyRuntime): RuntimePolicy {
   return kind === "DOCKER"
     ? { restart: "unless-stopped", autoStart: true, stopTimeoutSeconds: 10 }
