@@ -51,11 +51,15 @@ func serviceFile(filename string, content []byte, gid int, secret bool) error {
 	return os.Chmod(filename, mode)
 }
 
-func (x *executor) prepareService(req Request, root string) ([]string, error) {
-	return x.prepareServiceAt(req, root, filepath.Join(root, "config"), true)
+func (x *executor) prepareService(req Request, root, imageID string) ([]string, error) {
+	return x.prepareServiceAt(req, root, filepath.Join(root, "config"), true, imageID)
 }
-func (x *executor) prepareServiceAt(req Request, root, outputConfig string, initialize bool) ([]string, error) {
+func (x *executor) prepareServiceAt(req Request, root, outputConfig string, initialize bool, imageID string) ([]string, error) {
 	i, c := req.Installation, req.Installation.Config
+	if imageID != "" && !i.DockerImageIDMatches(imageID) {
+		return nil, errors.New("SERVICE_IMAGE_IDENTITY_MISMATCH")
+	}
+	imageID = x.installOwnership(req, imageID).ImageID
 	secret, userSecret, accessKey, err := x.serviceSecrets(*i)
 	if err != nil {
 		return nil, err
@@ -105,7 +109,7 @@ func (x *executor) prepareServiceAt(req Request, root, outputConfig string, init
 	gid := 0
 	if i.Definition.Key == "mysql" || i.Definition.Key == "redis" || i.Definition.Key == "seaweedfs" {
 		user := map[string]string{"mysql": "mysql", "redis": "redis", "seaweedfs": "seaweed"}[i.Definition.Key]
-		out, runErr := x.serviceDockerSource(req, "SERVICE_CONFIGURE", 15*time.Second, "docker-user-group", i.Definition.ImageID, user)
+		out, runErr := x.serviceDockerSource(req, "SERVICE_CONFIGURE", 15*time.Second, "docker-user-group", imageID, user)
 		gid, err = strconv.Atoi(strings.TrimSpace(string(out)))
 		if runErr != nil || err != nil || gid < 1 || gid > 65535 {
 			return nil, errors.New("SERVICE_IMAGE_USER_UNAVAILABLE")
@@ -206,5 +210,5 @@ func (x *executor) prepareServiceAt(req Request, root, outputConfig string, init
 	default:
 		return nil, errors.New("SERVICE_RECIPE_UNSUPPORTED")
 	}
-	return append(append(args, i.Definition.ImageID), command...), nil
+	return append(append(args, imageID), command...), nil
 }

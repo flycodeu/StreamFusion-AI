@@ -7,6 +7,29 @@ import (
 
 const testCredential = "11111111-1111-1111-1111-111111111111"
 
+func TestDockerServiceImageIdentityKeepsRegistryPinsAndArchiveBoundaries(t *testing.T) {
+	d, _ := Find("mysql", "8.4.11")
+	r := Request{Definition: d, Config: Config{RuntimeMode: "DOCKER"}, Source: Source{Type: "REGISTRY"}}
+	for _, test := range []struct {
+		source, mode, kind, image string
+		want                      bool
+	}{
+		{"REGISTRY", "DOCKER", "SERVICE", d.ImageID, true},
+		{"REGISTRY", "DOCKER", "SERVICE", d.Digest, true},
+		{"REGISTRY", "DOCKER", "SERVICE", "sha256:" + strings.Repeat("0", 64), false},
+		{"ARCHIVE", "DOCKER", "SERVICE", d.ImageID, true},
+		{"ARCHIVE", "DOCKER", "SERVICE", d.Digest, false},
+		{"REGISTRY", "NATIVE", "SERVICE", d.Digest, false},
+		{"REGISTRY", "DOCKER", "TOOL", d.Digest, false},
+		{"REGISTRY", "DOCKER", "SERVICE", "", false},
+	} {
+		r.Source.Type, r.Config.RuntimeMode, r.Definition.Kind = test.source, test.mode, test.kind
+		if got := r.DockerImageIDMatches(test.image); got != test.want {
+			t.Fatalf("%+v: got %v", test, got)
+		}
+	}
+}
+
 func TestServiceCatalogAndRequestValidation(t *testing.T) {
 	for _, d := range Catalog() {
 		r := Request{SoftwareID: testCredential, BindingRevision: 1, Definition: d, Config: Config{Name: d.Name, BindAddress: "127.0.0.1", HostPort: d.Port, MemoryMiB: 1024}, Source: Source{Type: "REGISTRY"}}

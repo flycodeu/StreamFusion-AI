@@ -428,6 +428,17 @@ func ValidateSecrets(d Definition, c Config, values map[string]string) error {
 	return nil
 }
 
+// DockerImageIDMatches keeps both Docker stores bound to the same fixed image.
+// Classic stores expose the config digest; containerd exposes the manifest digest.
+func (r Request) DockerImageIDMatches(id string) bool {
+	if !strings.HasPrefix(id, "sha256:") || !sha.MatchString(strings.TrimPrefix(id, "sha256:")) {
+		return false
+	}
+	return id == r.Definition.ImageID ||
+		r.Config.Mode() == "DOCKER" && r.Definition.Kind == "SERVICE" && r.Source.Type == "REGISTRY" &&
+			(r.Definition.Commands == nil || IsBuiltinCommand(r.Definition)) && id == r.Definition.Digest
+}
+
 // ValidateFor checks mode-specific receipt shape before controller commit.
 func (e Evidence) ValidateFor(r Request) error {
 	if e.SoftwareID != r.SoftwareID || e.BindingRevision != r.BindingRevision || e.RecipeKey != r.Definition.Key || e.RecipeRevision != r.Definition.Revision || e.ConfigHash != Digest(r.Config) || !sha.MatchString(e.IdentityHash) {
@@ -485,7 +496,7 @@ func (e Evidence) ValidateFor(r Request) error {
 		if kind != "TOOL" || locator != "image:"+r.Definition.ImageID || e.ImageID != r.Definition.ImageID || e.ContainerID != "" {
 			return errors.New("TOOL_RECEIPT_INVALID")
 		}
-	} else if kind != "DOCKER" || !sha.MatchString(locator) || e.ContainerID != locator || e.ImageID != r.Definition.ImageID {
+	} else if kind != "DOCKER" || !sha.MatchString(locator) || e.ContainerID != locator || !r.DockerImageIDMatches(e.ImageID) {
 		return errors.New("SERVICE_INSTALL_RECEIPT_MISMATCH")
 	}
 	return nil

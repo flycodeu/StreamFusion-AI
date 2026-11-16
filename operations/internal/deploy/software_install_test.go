@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -208,34 +209,87 @@ func TestInstallationLogTailFitsTransportWithUTF8AndEscapes(t *testing.T) {
 }
 
 func TestInstallationBindingRevisionSurvivesReceiptRoundTrip(t *testing.T) {
-	x, req := serviceRequestFixture(t)
-	id := strings.Repeat("a", 64)
-	s := SoftwareRequest{ID: req.Installation.SoftwareID, Version: 1, Kind: "DOCKER", Locator: id, IdentityHash: Digest([]string{"DOCKER", id, req.Installation.Definition.ImageID}), SoftwareKey: "NGINX", Ownership: x.installOwnership(req)}
-	x.softwareRun = func(time.Duration, string, ...string) ([]byte, error) {
-		return json.Marshal(map[string]any{"id": id, "name": "/" + serviceName(s.ID), "imageId": req.Installation.Definition.ImageID, "image": req.Installation.Definition.ImageID, "labels": serviceLabels(s.Ownership), "state": "running"})
+	for _, manifest := range []bool{false, true} {
+		x, req := serviceRequestFixture(t)
+		imageID := req.Installation.Definition.ImageID
+		if manifest {
+			imageID = req.Installation.Definition.Digest
+		}
+		id := strings.Repeat("a", 64)
+		s := SoftwareRequest{ID: req.Installation.SoftwareID, Version: 1, Kind: "DOCKER", Locator: id, IdentityHash: Digest([]string{"DOCKER", id, imageID}), SoftwareKey: "NGINX", Ownership: x.installOwnership(req, imageID)}
+		x.softwareRun = func(time.Duration, string, ...string) ([]byte, error) {
+			return json.Marshal(map[string]any{"id": id, "name": "/" + serviceName(s.ID), "imageId": imageID, "image": imageID, "labels": serviceLabels(s.Ownership), "state": "running"})
+		}
+		if err := os.MkdirAll(filepath.Dir(x.softwareFile(s.ID)), 0700); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := json.Marshal(softwareBinding{Software: s, JobID: req.JobID})
+		if err := os.WriteFile(x.softwareFile(s.ID), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		result := x.serviceInstallResult(req, s, "nginx/1.30.6", "READY", "SUCCEEDED")
+		if err := x.verifyServiceInstallation(req, result); err != nil {
+			t.Fatal(err)
+		}
+		if result.ImageID != imageID || result.Installation.ValidateFor(*req.Installation) != nil {
+			t.Fatal("actual Docker store identity was not retained in valid evidence")
+		}
+		if result.Software.VersionSource != "INSTALL_PROBE" || result.Software.Version != "nginx/1.30.6" {
+			t.Fatal("actual installed program version lost")
+		}
+		// JSON restores a different ownership pointer; semantic comparison is
+		// required for the first start/stop after installation.
+		if err := x.boundSoftware(s); err != nil {
+			t.Fatal(err)
+		}
+		s.Version = 2
+		if x.boundSoftware(s) == nil {
+			t.Fatal("configuration version substituted for binding revision")
+		}
 	}
-	if err := os.MkdirAll(filepath.Dir(x.softwareFile(s.ID)), 0700); err != nil {
-		t.Fatal(err)
+}
+
+func TestServiceImageIdentityInspectsOnlyFixedReference(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("target durable directory fsync requires Linux")
 	}
-	data, _ := json.Marshal(softwareBinding{Software: s, JobID: req.JobID})
-	if err := os.WriteFile(x.softwareFile(s.ID), data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	result := x.serviceInstallResult(req, s, "nginx/1.30.6", "READY", "SUCCEEDED")
-	if err := x.verifyServiceInstallation(req, result); err != nil {
-		t.Fatal(err)
-	}
-	if result.Software.VersionSource != "INSTALL_PROBE" || result.Software.Version != "nginx/1.30.6" {
-		t.Fatal("actual installed program version lost")
-	}
-	// JSON restores a different ownership pointer; semantic comparison is
-	// required for the first start/stop after installation.
-	if err := x.boundSoftware(s); err != nil {
-		t.Fatal(err)
-	}
-	s.Version = 2
-	if x.boundSoftware(s) == nil {
-		t.Fatal("configuration version substituted for binding revision")
+	for _, mode := range []string{"classic", "containerd", "other", "platform", "unreadable"} {
+		t.Run(mode, func(t *testing.T) {
+			x, req := serviceRequestFixture(t)
+			if err := os.MkdirAll(filepath.Join(x.root, "jobs", req.JobID), 0700); err != nil {
+				t.Fatal(err)
+			}
+			d := req.Installation.Definition
+			want, code := d.ImageID, ""
+			if mode == "containerd" {
+				want = d.Digest
+			}
+			if mode == "other" {
+				want, code = "sha256:"+strings.Repeat("0", 64), "SERVICE_IMAGE_IDENTITY_MISMATCH"
+			}
+			arch := "amd64"
+			if mode == "platform" {
+				arch, code = "arm64", "SERVICE_IMAGE_PLATFORM_MISMATCH"
+			}
+			if mode == "unreadable" {
+				code = "SERVICE_IMAGE_INSPECT_FAILED"
+			}
+			calls := 0
+			x.softwareRun = func(_ time.Duration, command string, args ...string) ([]byte, error) {
+				calls++
+				if command != "/usr/bin/docker" || args[len(args)-1] != d.Image+"@"+d.Digest {
+					t.Fatal("inspection lost fixed image reference", args)
+				}
+				if mode == "unreadable" {
+					return []byte("not-json"), nil
+				}
+				return json.Marshal(map[string]string{"id": want, "os": "linux", "arch": arch})
+			}
+			got, err := x.serviceImageIdentity(req)
+			if calls != 1 || code == "" && (err != nil || got != want) || code != "" && (err == nil || err.Error() != code) {
+				t.Fatalf("got %q %v calls=%d", got, err, calls)
+			}
+		})
 	}
 }
 

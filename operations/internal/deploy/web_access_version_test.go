@@ -20,7 +20,7 @@ func TestWebMetadataRequiresNewExecutorWithoutUpgradingUnchangedRecipes(t *testi
 		t.Fatal("new definition fields can reach an executor that rejects them")
 	}
 	d.Parameters = []serviceinstall.ParameterDefinition{{Key: "PYTHON_BINARY", Type: "PATH"}}
-	if RequiredCommandRecipeVersion(d) != 6 || CommandRecipeVersion != 9 {
+	if RequiredCommandRecipeVersion(d) != 6 || CommandRecipeVersion != 10 {
 		t.Fatal("Python dependency checks can reach an executor that cannot perform them")
 	}
 	d.DefaultBindAddress = "0.0.0.0"

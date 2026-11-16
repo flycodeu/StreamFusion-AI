@@ -121,7 +121,12 @@ export function useServiceInstallation(
   watch(
     () => configuration.value?.username,
     (username) => {
-      if (!username) credentialChoices.value.user = "";
+      if (username) return;
+      credentialChoices.value.user = "";
+      if (credentialRole.value === "user") {
+        credentialRole.value = undefined;
+        credentialSecret.value = "";
+      }
     },
   );
   const planExpired = computed(
@@ -155,6 +160,14 @@ export function useServiceInstallation(
     return credentials.value.filter(
       (item) => item.kind === credentialKind(role) && !item.revokedAt,
     );
+  }
+  function restoreCredentialChoices(config?: ServiceConfiguration) {
+    const choice = (id?: string, revision?: string) => id && revision ? `${id}:${revision}` : "";
+    credentialChoices.value = {
+      primary: choice(config?.credentialId, config?.credentialRevision),
+      access: choice(config?.accessKeyCredentialId, config?.accessKeyCredentialRevision),
+      user: choice(config?.userCredentialId, config?.userCredentialRevision),
+    };
   }
   function clearError() {
     fieldError.value = "";
@@ -341,7 +354,7 @@ export function useServiceInstallation(
       materialProgress.value = "";
       materialNeedsImport.value = false;
       sourceType.value = official.value ? "OFFICIAL" : props.sourceMode || (props.runtimeMode === "DOCKER" ? "REGISTRY" : "ARCHIVE");
-      credentialChoices.value = { primary: "", access: "", user: "" };
+      restoreCredentialChoices();
       clearError();
       if (props.existing) {
         const item = props.existing;
@@ -351,6 +364,7 @@ export function useServiceInstallation(
           return;
         }
         configuration.value = { ...item.installation.config, ports: { ...item.installation.config.ports } };
+        restoreCredentialChoices(configuration.value);
         receipt.value = { jobId: item.installationJobId, softwareInstanceId: item.id };
         step.value = 4;
         await refreshExecution();
@@ -399,6 +413,7 @@ export function useServiceInstallation(
     () => [configuration.value, sourceType.value, materialId.value],
     () => {
       if (submitted.value) return;
+      if (!props.existing && props.recipe?.key === "mysql") fieldError.value = "";
       plan.value = undefined;
       submitKey.value = "";
       if (step.value === 3) step.value = official.value ? 0 : 2;
@@ -744,6 +759,19 @@ export function useServiceInstallation(
         new TextEncoder().encode(config.name).length > 120
       )
         return "实例名称须为1–120字节";
+      if (props.recipe.key === "mysql") {
+        const identifier = /^[a-zA-Z][a-zA-Z0-9_]{0,31}$/;
+        if (config.username.toLowerCase() === "root")
+          return "业务账号不能使用 root，请填写其他账号或留空";
+        if (config.username && !config.database)
+          return "请填写业务账号对应的初始业务数据库";
+        if (config.database && !identifier.test(config.database))
+          return "数据库名须以字母开头，仅含字母、数字、下划线，最多32位";
+        if (["mysql", "sys", "information_schema", "performance_schema"].includes(config.database.toLowerCase()))
+          return "不能使用 MySQL 系统数据库名称，请更换数据库名";
+        if (config.username && !identifier.test(config.username))
+          return "业务账号须以字母开头，仅含字母、数字、下划线，最多32位";
+      }
       for (const role of credentialRoles.value)
         if (!credentialChoices.value[role])
           return `请选择或新建${credentialLabel(role)}`;
@@ -751,19 +779,6 @@ export function useServiceInstallation(
         const message = parameterError(props.recipe.parameters, config.parameters, config.parameterCredentials);
         if (message) return message;
       }
-      if (
-        props.recipe.key === "mysql" &&
-        (!!config.database !== !!config.username ||
-          config.username.toLowerCase() === "root")
-      )
-        return "业务数据库和账号需同时填写，业务账号不能为root";
-      if (
-        props.recipe.key === "mysql" &&
-        config.username &&
-        (!/^[a-zA-Z][a-zA-Z0-9_]{0,31}$/.test(config.username) ||
-          !/^[a-zA-Z][a-zA-Z0-9_]{0,31}$/.test(config.database))
-      )
-        return "业务库和账号以字母开头，仅含字母、数字、下划线，最多32位";
       if (
         props.recipe.key === "mediamtx" &&
         !/^[a-zA-Z][a-zA-Z0-9_]{0,31}$/.test(config.username)
@@ -920,7 +935,7 @@ export function useServiceInstallation(
         if (error instanceof ApiError && error.status === 409 && [
           "INSTALL_PLAN_STALE", "INSTALL_MATERIAL_NOT_READY", "INSTALL_MATERIAL_CHANGED",
           "OFFICIAL_PLAN_CHANGED", "INSTALL_PREFLIGHT_MISMATCH", "QUEUE_FULL",
-          "TOOL_ALREADY_INSTALLED", "OPERATION_LOCKED",
+          "TOOL_ALREADY_INSTALLED", "OPERATION_LOCKED", "MANAGEMENT_RESOURCE_CONFLICT",
         ].includes(error.code)) {
           submissionAttempted.value = false;
           submitKey.value = "";
@@ -1007,6 +1022,7 @@ export function useServiceInstallation(
     materials,
     materialId,
     credentialChoices,
+    restoreCredentialChoices,
     credentialRole,
     credentialName,
     credentialSecret,

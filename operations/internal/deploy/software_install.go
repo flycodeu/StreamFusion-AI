@@ -23,6 +23,7 @@ type serviceCreation struct {
 	JobID       string `json:"jobId"`
 	ConfigHash  string `json:"configHash"`
 	ContainerID string `json:"containerId"`
+	ImageID     string `json:"imageId,omitempty"`
 }
 
 func serviceName(id string) string { return "sfops-service-" + id }
@@ -54,9 +55,13 @@ func serviceOwnershipMatches(s SoftwareRequest, name, image string, labels map[s
 	return true
 }
 
-func (x *executor) installOwnership(req Request) *SoftwareOwnership {
+func (x *executor) installOwnership(req Request, imageIDs ...string) *SoftwareOwnership {
 	i := req.Installation
-	return &SoftwareOwnership{ControllerID: req.ControllerID, TargetID: req.TargetID, SoftwareID: i.SoftwareID, JobID: req.JobID, ConfigHash: Digest(i.Config), ImageID: i.Definition.ImageID}
+	imageID := i.Definition.ImageID
+	if len(imageIDs) == 1 && i.DockerImageIDMatches(imageIDs[0]) {
+		imageID = imageIDs[0]
+	}
+	return &SoftwareOwnership{ControllerID: req.ControllerID, TargetID: req.TargetID, SoftwareID: i.SoftwareID, JobID: req.JobID, ConfigHash: Digest(i.Config), ImageID: imageID}
 }
 
 func (x *executor) serviceInstallPreflight(i serviceinstall.Request) serviceinstall.Preflight {
@@ -262,51 +267,82 @@ func (x *executor) readServiceInstallation(req Request, output io.Writer) error 
 	return json.NewEncoder(output).Encode(map[string]any{"text": x.redactSoftwareSecrets(string(data)), "limited": true, "source": "TARGET_EXECUTION"})
 }
 
-func (x *executor) serviceImage(req Request) error {
+func (x *executor) serviceImage(req Request) (string, error) {
 	i := req.Installation
 	if i.Source.Type == "REGISTRY" {
 		if out, err := x.serviceDockerSource(req, "SERVICE_IMAGE_PULL", 8*time.Minute, "docker-pull", i.Definition.Image+"@"+i.Definition.Digest); err != nil {
 			if temporaryInstallNetwork(out) {
-				return errors.New("SERVICE_IMAGE_PULL_INTERRUPTED")
+				return "", errors.New("SERVICE_IMAGE_PULL_INTERRUPTED")
 			}
-			return errors.New("SERVICE_IMAGE_PULL_FAILED")
+			return "", errors.New("SERVICE_IMAGE_PULL_FAILED")
 		}
 	} else {
 		if x.installationInput == nil {
-			return errors.New("SERVICE_ARCHIVE_REQUIRED")
+			return "", errors.New("SERVICE_ARCHIVE_REQUIRED")
 		}
 		packages := filepath.Join(x.root, "packages")
 		if err := os.MkdirAll(packages, 0700); err != nil {
-			return err
+			return "", err
 		}
 		if err := secureAncestors(packages); err != nil {
-			return err
+			return "", err
 		}
 		partial := filepath.Join(x.root, "jobs", req.JobID, "service-image.partial")
 		pkg := filepath.Join(packages, "service-"+i.Source.SHA256+".tar")
 		if _, err := os.Lstat(partial); req.ResumeOffset != i.Source.ByteSize || !os.IsNotExist(err) {
 			if err = receiveInstallArchive(partial, x.installationInput, i.Source.ByteSize, req.ResumeOffset); err != nil {
-				return errors.New("SERVICE_ARCHIVE_TRANSFER_FAILED")
+				return "", errors.New("SERVICE_ARCHIVE_TRANSFER_FAILED")
 			}
 			if _, err = serviceinstall.ValidateArchive(partial, i.Source.SHA256, i.Source.ByteSize, i.Definition); err != nil {
-				return err
+				return "", err
 			}
 			if err = os.Rename(partial, pkg); err != nil {
-				return err
+				return "", err
 			}
 		} else if _, err = serviceinstall.ValidateArchive(pkg, i.Source.SHA256, i.Source.ByteSize, i.Definition); err != nil {
-			return err
+			return "", err
 		}
 		if _, err := x.serviceDockerSource(req, "SERVICE_IMAGE_LOAD", 5*time.Minute, "docker-load", pkg); err != nil {
-			return errors.New("SERVICE_IMAGE_LOAD_FAILED")
+			return "", errors.New("SERVICE_IMAGE_LOAD_FAILED")
 		}
 	}
-	out, err := x.serviceDockerSource(req, "SERVICE_IMAGE_VERIFY", 10*time.Second, "docker-image-verify", i.Definition.ImageID)
-	var actual struct{ ID, OS, Arch string }
-	if err != nil || json.Unmarshal(out, &actual) != nil || actual.ID != i.Definition.ImageID || actual.OS != "linux" || actual.Arch != "amd64" {
-		return errors.New("SERVICE_IMAGE_IDENTITY_MISMATCH")
+	return x.serviceImageIdentity(req)
+}
+
+func (x *executor) serviceImageIdentity(req Request) (string, error) {
+	i := req.Installation
+	reference := i.Definition.ImageID
+	acceptManifest := i.DockerImageIDMatches(i.Definition.Digest)
+	if acceptManifest {
+		reference = i.Definition.Image + "@" + i.Definition.Digest
 	}
-	return nil
+	out, err := x.serviceDockerSource(req, "SERVICE_IMAGE_VERIFY", 10*time.Second, "docker-image-verify", reference)
+	var actual struct{ ID, OS, Arch string }
+	if err != nil {
+		x.appendServiceLog(req, "SERVICE_IMAGE_VERIFY", "无法读取固定镜像 "+reference+"，请检查 Docker 服务和已下载镜像")
+		return "", errors.New("SERVICE_IMAGE_INSPECT_FAILED")
+	}
+	if json.Unmarshal(out, &actual) != nil {
+		x.appendServiceLog(req, "SERVICE_IMAGE_VERIFY", "固定镜像信息格式不完整，请检查 Docker 服务")
+		return "", errors.New("SERVICE_IMAGE_INSPECT_FAILED")
+	}
+	if actual.OS != "linux" || actual.Arch != "amd64" {
+		x.appendServiceLog(req, "SERVICE_IMAGE_VERIFY", "镜像平台不符：需要 "+i.Definition.Platform+"，请核对服务器架构")
+		return "", errors.New("SERVICE_IMAGE_PLATFORM_MISMATCH")
+	}
+	if !i.DockerImageIDMatches(actual.ID) {
+		expected := i.Definition.ImageID
+		if acceptManifest {
+			expected += " 或 " + i.Definition.Digest
+		}
+		message := "镜像摘要不符：需要 " + expected
+		if Hex.MatchString(strings.TrimPrefix(actual.ID, "sha256:")) {
+			message += "，实际 " + actual.ID
+		}
+		x.appendServiceLog(req, "SERVICE_IMAGE_VERIFY", message)
+		return "", errors.New("SERVICE_IMAGE_IDENTITY_MISMATCH")
+	}
+	return actual.ID, nil
 }
 
 func (x *executor) installService(req Request, dir string) (Result, error) {
@@ -366,14 +402,15 @@ func (x *executor) installServiceProgram(req Request, dir string) (Result, error
 			return result, errors.New(check.Code)
 		}
 	}
-	if err := x.serviceImage(req); err != nil {
-		return result, err
-	}
-	args, err := x.prepareService(req, preflight.Root)
+	imageID, err := x.serviceImage(req)
 	if err != nil {
 		return result, err
 	}
-	creation := serviceCreation{SoftwareID: i.SoftwareID, JobID: req.JobID, ConfigHash: Digest(i.Config)}
+	args, err := x.prepareService(req, preflight.Root, imageID)
+	if err != nil {
+		return result, err
+	}
+	creation := serviceCreation{SoftwareID: i.SoftwareID, JobID: req.JobID, ConfigHash: Digest(i.Config), ImageID: imageID}
 	if err = atomicJSON(filepath.Join(dir, "service-create.json"), creation); err != nil {
 		return result, err
 	}
@@ -388,7 +425,7 @@ func (x *executor) installServiceProgram(req Request, dir string) (Result, error
 	if err = atomicJSON(filepath.Join(dir, "service-create.json"), creation); err != nil {
 		return result, nil
 	}
-	s, actual, err := x.createdService(req, id)
+	s, actual, err := x.createdService(req, id, imageID)
 	if err != nil {
 		return result, nil
 	}
@@ -418,9 +455,12 @@ func (x *executor) installServiceProgram(req Request, dir string) (Result, error
 	return result, nil
 }
 
-func (x *executor) createdService(req Request, locator string) (SoftwareRequest, *SoftwareObservation, error) {
+func (x *executor) createdService(req Request, locator, imageID string) (SoftwareRequest, *SoftwareObservation, error) {
 	i := req.Installation
-	s := SoftwareRequest{ID: i.SoftwareID, Version: i.BindingRevision, Kind: "DOCKER", Locator: locator, SoftwareKey: strings.ToUpper(i.Definition.Key), Ownership: x.installOwnership(req)}
+	if imageID != "" && !i.DockerImageIDMatches(imageID) {
+		return SoftwareRequest{}, nil, errors.New("SERVICE_IMAGE_IDENTITY_MISMATCH")
+	}
+	s := SoftwareRequest{ID: i.SoftwareID, Version: i.BindingRevision, Kind: "DOCKER", Locator: locator, SoftwareKey: strings.ToUpper(i.Definition.Key), Ownership: x.installOwnership(req, imageID)}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	actual, err := ObserveSoftware(ctx, s, x.softwareRunner)
@@ -440,11 +480,14 @@ func (x *executor) serviceInstallResult(req Request, s SoftwareRequest, version,
 	if err != nil || actual.State == "UNKNOWN" {
 		return result
 	}
+	if s.Ownership == nil || !i.DockerImageIDMatches(s.Ownership.ImageID) {
+		return result
+	}
 	result.Status, result.Phase, result.Software = status, "SERVICE_INSTALLED", actual
 	if version != "" && health == "READY" {
 		actual.Version, actual.VersionSource, actual.VersionStatus = version, "INSTALL_PROBE", "VERIFIED_AT_INSTALL"
 	}
-	result.ImageID, result.ContainerID, result.ConfigHash = i.Definition.ImageID, actual.Locator, Digest(i.Config)
+	result.ImageID, result.ContainerID, result.ConfigHash = s.Ownership.ImageID, actual.Locator, Digest(i.Config)
 	result.Health, result.ObservedVersion = health, version
 	result.Installation = &serviceinstall.Evidence{SoftwareID: i.SoftwareID, BindingRevision: i.BindingRevision, RecipeKey: i.Definition.Key, RecipeRevision: i.Definition.Revision, ConfigHash: result.ConfigHash, ImageID: result.ImageID, ContainerID: actual.Locator, IdentityHash: actual.IdentityHash, ObservedVersion: version, Health: health, ObservedAt: stamp(), Kind: "DOCKER", Locator: actual.Locator}
 	if health != "READY" {
@@ -489,7 +532,10 @@ func (x *executor) reconcileServiceInstallation(req Request, dir string) Result 
 	if locator == "" {
 		locator = serviceName(creation.SoftwareID)
 	}
-	s, _, err := x.createdService(req, locator)
+	if creation.ImageID != "" && !req.Installation.DockerImageIDMatches(creation.ImageID) {
+		return unknown
+	}
+	s, _, err := x.createdService(req, locator, creation.ImageID)
 	if err != nil {
 		return unknown
 	}
@@ -527,10 +573,10 @@ func (x *executor) verifyServiceInstallation(req Request, result Result) error {
 		return errors.New("SERVICE_INSTALL_RECEIPT_MISSING")
 	}
 	i, evidence := req.Installation, result.Installation
-	if evidence.SoftwareID != i.SoftwareID || evidence.BindingRevision != i.BindingRevision || evidence.RecipeKey != i.Definition.Key || evidence.RecipeRevision != i.Definition.Revision || evidence.ConfigHash != Digest(i.Config) || evidence.ImageID != i.Definition.ImageID || evidence.ContainerID != result.Software.Locator || evidence.IdentityHash != result.Software.IdentityHash {
+	if evidence.SoftwareID != i.SoftwareID || evidence.BindingRevision != i.BindingRevision || evidence.RecipeKey != i.Definition.Key || evidence.RecipeRevision != i.Definition.Revision || evidence.ConfigHash != Digest(i.Config) || !i.DockerImageIDMatches(evidence.ImageID) || evidence.ContainerID != result.Software.Locator || evidence.IdentityHash != result.Software.IdentityHash {
 		return errors.New("SERVICE_INSTALL_RECEIPT_MISMATCH")
 	}
-	s := SoftwareRequest{ID: i.SoftwareID, Version: i.BindingRevision, Kind: "DOCKER", Locator: evidence.ContainerID, IdentityHash: evidence.IdentityHash, SoftwareKey: strings.ToUpper(i.Definition.Key), Ownership: x.installOwnership(req)}
+	s := SoftwareRequest{ID: i.SoftwareID, Version: i.BindingRevision, Kind: "DOCKER", Locator: evidence.ContainerID, IdentityHash: evidence.IdentityHash, SoftwareKey: strings.ToUpper(i.Definition.Key), Ownership: x.installOwnership(req, evidence.ImageID)}
 	return x.boundSoftware(s)
 }
 

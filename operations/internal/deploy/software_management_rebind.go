@@ -87,7 +87,7 @@ func managementInstallationOwnership(req Request) bool {
 		return false
 	}
 	if i.Config.Mode() == "DOCKER" {
-		return s.Kind == "DOCKER" && (o.RuntimeMode == "" || o.RuntimeMode == "DOCKER") && o.ImageID == i.Definition.ImageID && o.BinaryPath == "" && o.BinaryHash == ""
+		return s.Kind == "DOCKER" && (o.RuntimeMode == "" || o.RuntimeMode == "DOCKER") && i.DockerImageIDMatches(o.ImageID) && o.BinaryPath == "" && o.BinaryHash == ""
 	}
 	unit, binary := nativeUnit(s.ID), path.Join(req.Management.Root, serviceinstall.NativeBinaryRelative(i.Definition))
 	if serviceinstall.IsOfficial(i.Definition) {

@@ -255,6 +255,9 @@ export const softwareJobLabels: Record<string, string> = {
   CANCELLED: "已取消",
 };
 export const softwareJobErrorMessages: Record<string, string> = {
+  SERVICE_IMAGE_INSPECT_FAILED: "无法读取目标主机上的固定镜像，请检查 Docker 状态和镜像是否已拉取或导入。",
+  SERVICE_IMAGE_PLATFORM_MISMATCH: "镜像平台与安装方案不符，请选择匹配目标主机架构的安装材料。",
+  SERVICE_IMAGE_IDENTITY_MISMATCH: "镜像摘要未通过核对，请检查安装方案的固定镜像和目标主机上的实际镜像。",
   RUNTIME_POLICY_INVALID: "请检查当前运行方式支持的策略和停止等待时间。",
   RUNTIME_POLICY_UNSUPPORTED: "当前服务不支持所选策略，请重新读取后调整。",
   RUNTIME_POLICY_READ_FAILED: "运行策略读取失败，请检查服务配置与读取权限后重试。",
@@ -317,6 +320,7 @@ export const softwareJobPhaseLabels: Record<string, string> = {
   INSTALL_TRANSFER_INTERRUPTED: "网络或材料传输中断",
   OFFICIAL_PACKAGES_APPLY: "安装官方软件包",
   SOFTWARE_PREFLIGHT: "检查软件安装条件",
+  SOFTWARE_REJECTED: "安装已停止",
   SERVICE_CONFIGURE: "写入服务配置",
   SERVICE_HEALTH: "检查服务健康",
   CONFIGURATION_STOP: "停止服务以应用配置",

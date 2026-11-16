@@ -332,11 +332,18 @@ func (x *executor) builtinCommand(ctx context.Context, req Request, id string, a
 		}
 	case "SERVICE_CREATE":
 		i := commandInstallation(req)
+		imageID := i.Definition.ImageID
+		var creation serviceCreation
+		if readJSON(filepath.Join(x.root, "jobs", req.JobID, "service-create.json"), &creation) == nil &&
+			creation.SoftwareID == i.SoftwareID && creation.JobID == req.JobID && creation.ConfigHash == Digest(i.Config) && i.DockerImageIDMatches(creation.ImageID) {
+			imageID = creation.ImageID
+		}
 		var err error
-		lists, err = builtinDockerLists(args, i.Definition.ImageID)
+		lists, err = builtinDockerLists(args, imageID)
 		if err != nil {
 			return nil, true, err
 		}
+		v["OPS_IMAGE_ID"] = imageID
 	}
 	return x.runBuiltinStep(ctx, req, id, v, lists, "")
 }

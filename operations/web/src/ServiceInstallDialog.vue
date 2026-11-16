@@ -13,7 +13,7 @@ import InstallationMaterialDetails from "./InstallationMaterialDetails.vue";
 import RecipeSystemStepDetails from "./RecipeSystemStepDetails.vue";
 import SoftwareParameterFields from "./SoftwareParameterFields.vue";
 import RuntimePolicyFields from "./RuntimePolicyFields.vue";
-import { softwareJobPhaseLabel } from "./software";
+import { softwareJobErrorMessages, softwareJobPhaseLabel } from "./software";
 import { installationWebAccess, softwareWebAccess } from "./webAccess";
 import {
   defaultInstallationRuntime,
@@ -194,6 +194,7 @@ const {
   materials,
   materialId,
   credentialChoices,
+  restoreCredentialChoices,
   credentialRole,
   credentialName,
   credentialSecret,
@@ -254,12 +255,7 @@ async function retryFailedInstallation() {
     await nextTick();
     if (context !== checkGeneration || !props.open || !retrying.value) return;
     if (configuration.value) Object.assign(configuration.value, saved);
-    const choice = (id?: string, revision?: string) => id && revision ? `${id}:${revision}` : "";
-    credentialChoices.value = {
-      primary: choice(saved.credentialId, saved.credentialRevision),
-      access: choice(saved.accessKeyCredentialId, saved.accessKeyCredentialRevision),
-      user: choice(saved.userCredentialId, saved.userCredentialRevision),
-    };
+    restoreCredentialChoices(saved);
   }
   touched.value = true;
 }
@@ -501,21 +497,22 @@ async function uploadInstallationPackage() {
         <p v-if="recipeCatalogKey(recipe) === 'ytlabel'" class="install-note">ytlabel 无登录认证，请在受限网络使用。</p>
         <div v-if="recipe.key === 'mysql'" class="form-row">
           <label
-            >初始业务数据库 <small>可选</small
+            >初始业务数据库 <small>{{ configuration.username ? "必填" : "可选" }}</small
             ><input
-              v-model="configuration.database"
+              v-model.trim="configuration.database"
               aria-label="初始业务数据库"
+              :aria-required="!!configuration.username"
               :disabled="busy"
-              placeholder="例如 streamfusion"
-              maxlength="64" /></label
+              placeholder="例如 app_db"
+              maxlength="32" /></label
           ><label
             >业务账号 <small>可选</small
             ><input
-              v-model="configuration.username"
+              v-model.trim="configuration.username"
               aria-label="业务账号"
               :disabled="busy"
-              placeholder="填写后需配置业务密码"
-              maxlength="64"
+              placeholder="留空则暂不创建业务账号"
+              maxlength="32"
           /></label>
         </div>
         <label v-if="recipe.key === 'mediamtx'"
@@ -727,6 +724,10 @@ async function uploadInstallationPackage() {
             softwareJobPhaseLabel(job?.phase)
           }}</span>
         </div>
+        <p v-if="job?.status === 'FAILED' && softwareJobErrorMessages[job.errorCode]" class="install-note">
+          {{ softwareJobErrorMessages[job.errorCode] }}
+          <ErrorHelpLink :code="job.errorCode" />
+        </p>
         <p
           v-if="job?.status === 'UNKNOWN' || job?.targetAckPending"
           class="install-note"

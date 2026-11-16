@@ -199,7 +199,11 @@ func (h *HTTP) installTargetReady(ctx context.Context, t target, config servicei
 		return errors.New("INSTALL_PLATFORM_UNSUPPORTED")
 	}
 	if len(selected) > 0 && selected[0].Commands != nil {
-		if capability.CommandRecipeVersion < deploy.RequiredCommandRecipeVersion(selected[0]) {
+		required := deploy.RequiredCommandRecipeVersion(selected[0])
+		if serviceinstall.IsBuiltinCommand(selected[0]) && selected[0].Kind == "SERVICE" && config.Mode() == "DOCKER" && source.Type == "REGISTRY" {
+			required = max(required, deploy.DockerRegistryServiceImageVersion)
+		}
+		if capability.CommandRecipeVersion < required {
 			return &installCompatibilityError{message: "命令安装需要更新接入组件，请先完成主机安装准备"}
 		}
 		if capability.CommandTrustFingerprint != deploy.CommandPublicKeyFingerprint(h.store.commandPublicKey()) {

@@ -78,18 +78,20 @@ function manageDefinition(definition: ServiceRecipe) {
 }
 function openDefinition(definition: ServiceRecipe) {
   const pending = recipeRecord(definition, true);
-  if (pending) {
-    serviceRecord.value = pending;
-    serviceRecipe.value = pending.installation!.definition;
-  }
+  if (pending) openInstallationRecord(pending.id);
   else if (definition.key === "git" && installedGit.value) emit("openInstance", installedGit.value.id);
   else { serviceRecord.value = undefined; serviceRecipe.value = definition; }
 }
-function openPendingRecord(id: string) {
+function openInstallationRecord(id: string) {
   const item = softwareInstances.value.find(record => record.id === id);
   if (!item?.installation?.definition) return;
   serviceRecord.value = item;
   serviceRecipe.value = item.installation.definition;
+}
+function openInstallationHistory(item?: SoftwareInstance) {
+  if (!item?.installationJobId) return;
+  if (item.installationStatus === "FAILED") openInstallationRecord(item.id);
+  else showJobLogs(item.installationJobId);
 }
 const pendingRecords = (key: string) => catalogPendingRecords(softwareInstances.value, targetId.value, key);
 function showJobLogs(jobId: string) {
@@ -536,12 +538,12 @@ onUnmounted(() => {
 </span
           >
           <div class="recipe-actions">
-            <ElDropdown v-if="pendingRecords(key).length && (!recipeRecord(definition, true) || pendingRecords(key).length > 1)" trigger="click" @command="openPendingRecord">
+            <ElDropdown v-if="pendingRecords(key).length && (!recipeRecord(definition, true) || pendingRecords(key).length > 1)" trigger="click" @command="openInstallationRecord">
               <button class="quiet">查看进度<span v-if="pendingRecords(key).length > 1">（{{ pendingRecords(key).length }}）</span></button>
               <template #dropdown><ElDropdownMenu><ElDropdownItem v-for="record in pendingRecords(key)" :key="record.id" :command="record.id">{{ record.installation!.definition!.version }} · {{ record.runtimeKind === 'DOCKER' ? 'Docker' : '原生' }} · {{ record.installationStatus === 'UNKNOWN' ? '结果待确认' : '安装中' }}</ElDropdownItem></ElDropdownMenu></template>
             </ElDropdown>
             <button v-if="installState(definition).instances.length && definition.key !== 'git'" class="quiet" @click="manageDefinition(definition)">管理</button>
-            <button v-if="recipeRecord(definition)" class="quiet" @click="showJobLogs(recipeRecord(definition)!.installationJobId!)">安装日志</button>
+            <button v-if="recipeRecord(definition)" class="quiet" @click="openInstallationHistory(recipeRecord(definition))">{{ recipeRecord(definition)?.installationStatus === 'FAILED' ? '处理失败安装' : '安装日志' }}</button>
             <button v-if="definition.key === 'git'" class="secondary" :disabled="!currentTarget" @click="emit('git', targetId)">账号配置</button>
             <a
               v-if="definition.officialUrl"

@@ -322,7 +322,7 @@ test("an accepted submit still refreshes saved records after closing without res
 });
 
 test("explicit pre-queue installation rejection returns to editable settings without automatic resubmission", async () => {
-  for (const code of ["INSTALL_PLAN_STALE", "INSTALL_MATERIAL_NOT_READY", "INSTALL_MATERIAL_CHANGED", "OFFICIAL_PLAN_CHANGED", "INSTALL_PREFLIGHT_MISMATCH", "QUEUE_FULL", "TOOL_ALREADY_INSTALLED", "OPERATION_LOCKED"]) {
+  for (const code of ["INSTALL_PLAN_STALE", "INSTALL_MATERIAL_NOT_READY", "INSTALL_MATERIAL_CHANGED", "OFFICIAL_PLAN_CHANGED", "INSTALL_PREFLIGHT_MISMATCH", "QUEUE_FULL", "TOOL_ALREADY_INSTALLED", "OPERATION_LOCKED", "MANAGEMENT_RESOURCE_CONFLICT"]) {
     let plans = 0;
     const h = installationHarness([], { sourceMode: "ONLINE", runtimeMode: "NATIVE", request: async (path, method, data) => {
       if (path === "/credentials") return [];
@@ -594,16 +594,21 @@ test("reopening a saved installation follows its original job without preflight,
   h.dispose();
 });
 test("saved UNKNOWN work keeps its original receipt and mismatched hosts cannot read it", async () => {
-  const h = installationHarness([], { existing: savedInstallation(), request: async (path) =>
-    path.endsWith("/logs") ? { text: "waiting for acknowledgement" } : { id: "original-install", status: "UNKNOWN", targetAckPending: true } });
-  await flush();
-  assert.equal(h.flow.job.value.status, "UNKNOWN");
-  assert.equal(h.flow.receipt.value.jobId, "original-install");
-  h.props.host.id = "host-b"; await flush();
-  assert.equal(h.flow.receipt.value, undefined);
-  assert.match(h.flow.fieldError.value, /不匹配/);
-  assert.ok(h.calls.every(({ method }) => !method || method === "GET"));
-  h.dispose();
+  for (const definition of [recipe, { ...recipe, key: "mysql", name: "MySQL", kind: "SERVICE", port: 3306 }]) {
+    const existing = savedInstallation({ installation: { definition, config: installation.initialServiceConfiguration(definition, "10.1.2.3", "NATIVE") } });
+    const h = installationHarness([], { recipe: definition, existing, request: async (path) =>
+      path.endsWith("/logs") ? { text: "waiting for acknowledgement" } : { id: "original-install", status: "UNKNOWN", targetAckPending: true } });
+    await flush();
+    assert.equal(h.flow.job.value.status, "UNKNOWN");
+    assert.equal(h.flow.receipt.value.jobId, "original-install");
+    const count = h.calls.length;
+    h.props.host.id = "host-b"; await flush();
+    assert.equal(h.flow.receipt.value, undefined);
+    assert.match(h.flow.fieldError.value, /不匹配/);
+    assert.equal(h.calls.length, count);
+    assert.ok(h.calls.every(({ method }) => !method || method === "GET"));
+    h.dispose();
+  }
 });
 
 test("confirmed failed installation retries with current published commands and preserves settings", async () => {
@@ -691,6 +696,49 @@ test("retry cannot discard UNKNOWN, active work, successful work or unacknowledg
   }
 });
 
+test("MySQL preflight accepts root only, a database alone, or a database with its account", async () => {
+  const mysql = { ...recipe, key: "mysql", name: "MySQL", kind: "SERVICE", port: 3306 };
+  for (const [runtimeMode, sourceMode] of [["DOCKER", "REGISTRY"], ["NATIVE", "ONLINE"]]) {
+    const h = installationHarness([], { recipe: mysql, runtimeMode, sourceMode });
+    const { configuration, credentialChoices, fieldError, next } = h.flow;
+    await flush();
+    credentialChoices.value.primary = "root-password:2";
+    for (const [database, username, error] of [
+      ["", "flycode", /初始业务数据库/], ["app_db", "RoOt", /不能使用 root/],
+      ["1app", "", /数据库名须以字母开头/], ["MySQL", "", /系统数据库名称/],
+      ["app_db", "invalid-user", /业务账号须以字母开头/],
+      ["app_db", "flycode"], ["app_db", ""], ["", ""],
+    ]) {
+      Object.assign(configuration.value, { database, username });
+      if (username) credentialChoices.value.user = "app-password:3";
+      await flush();
+      assert.equal(fieldError.value, "");
+      const count = h.calls.length;
+      await next();
+      if (error) {
+        assert.match(fieldError.value, error);
+        assert.equal(h.calls.length, count);
+      } else {
+        assert.equal(fieldError.value, "");
+        assert.equal(h.calls.length, count + 1);
+        const { config, source } = h.calls.at(-1).data;
+        assert.deepEqual(source, { type: sourceMode });
+        assert.deepEqual([config.runtimeMode, config.database, config.username], [runtimeMode, database, username]);
+        assert.deepEqual([config.credentialId, config.credentialRevision], ["root-password", "2"]);
+        assert.deepEqual([config.userCredentialId, config.userCredentialRevision], username ? ["app-password", "3"] : ["", ""]);
+        if (username) {
+          h.flow.editCredential("user");
+          h.flow.credentialSecret.value = "unsaved-test-password";
+        } else {
+          assert.equal(h.flow.credentialRole.value, undefined);
+          assert.equal(h.flow.credentialSecret.value, "");
+        }
+      }
+    }
+    h.dispose();
+  }
+});
+
 test("saved database retry restores saved credential choices without creating new secrets", async () => {
   const database = { ...recipe, key: "mysql", kind: "SERVICE", port: 3306, runtimeModes: ["NATIVE"], sourceModes: ["ONLINE"] };
   const config = { ...installation.initialServiceConfiguration(database, "10.1.2.3", "NATIVE"), username: "app", credentialId: "root-password", credentialRevision: "2", userCredentialId: "app-password", userCredentialRevision: "3" };
@@ -700,6 +748,13 @@ test("saved database retry restores saved credential choices without creating ne
     return [];
   });
   await flush();
+  h.props.open = false;
+  await flush();
+  h.props.open = true;
+  await flush();
+  assert.equal(h.form.configuration.value.credentialId, "root-password");
+  assert.equal(h.form.configuration.value.userCredentialId, "app-password");
+  assert.deepEqual({ ...h.form.credentialChoices.value }, { primary: "root-password:2", access: "", user: "app-password:3" });
   await h.form.retryFailedInstallation();
   await flush();
   assert.deepEqual({ ...h.form.credentialChoices.value }, { primary: "root-password:2", access: "", user: "app-password:3" });
@@ -848,6 +903,33 @@ test("catalog keeps selected versions and classifies custom software without a b
   assert.equal(module.exports.recipeSubtitle(custom), "程序工具");
   module.exports.category.value = "CUSTOM";
   assert.deepEqual(module.exports.catalogEntries.value.map(item => item.key), ["custom-demo", "java"]);
+  scope.stop();
+});
+
+test("catalog reopens a failed installation receipt without replacing the new installation entry", () => {
+  const module = { exports: {} }, scope = vue.effectScope(), events = [];
+  scope.run(() => new Function("require", "module", "exports", "defineProps", "defineEmits", compile(
+    catalogScript + "\nexport { targetId, softwareInstances, serviceRecipe, serviceRecord, recipeRecord, openInstallationHistory, openDefinition };",
+  ))(name => name === "vue" ? { ...vue, onMounted() {}, onUnmounted() {} } :
+    name === "./pagination" ? pagination : name === "./serviceInstallation" ? installation :
+    name === "./softwareCatalog" ? softwareCatalog : name === "./software" ? software : {}, module, module.exports,
+    () => ({ hostId: "host-a" }), () => (...event) => events.push(event)));
+  const flow = module.exports, mysql = { ...recipe, key: "mysql", name: "MySQL", kind: "SERVICE", version: "8.4.11" };
+  flow.targetId.value = "host-a";
+  flow.softwareInstances.value = [{ id: "original", hostId: "host-a", createdAt: "2026-11-16", managementMode: "OBSERVE",
+    installationStatus: "FAILED", installationJobId: "original-job", installation: { definition: mysql, config: { runtimeMode: "DOCKER" } } }];
+  flow.openInstallationHistory(flow.recipeRecord(mysql));
+  assert.equal(flow.serviceRecord.value.id, "original");
+  assert.equal(flow.serviceRecord.value.installationJobId, "original-job");
+  assert.equal(flow.serviceRecipe.value.version, "8.4.11");
+  assert.deepEqual(events, []);
+  flow.openDefinition(mysql);
+  assert.equal(flow.serviceRecord.value, undefined);
+  assert.equal(flow.serviceRecipe.value.key, "mysql");
+  flow.softwareInstances.value[0].installationStatus = "READY";
+  flow.openInstallationHistory(flow.recipeRecord(mysql));
+  assert.deepEqual(events, [["logs", "original-job"]]);
+  assert.equal(flow.serviceRecipe.value, undefined);
   scope.stop();
 });
 
@@ -1392,6 +1474,7 @@ test("closing the install drawer clears automatic update intent before any reope
 });
 
 test("job summaries use Chinese labels without repeating protocol codes", () => {
+  assert.equal(software.softwareJobPhaseLabel("SOFTWARE_REJECTED"), "安装已停止");
   assert.equal(
     software.softwareJobDiagnostic("SUCCEEDED", "NODE_ENVIRONMENT_UPDATED"),
     "已完成 · Node 环境已更新",

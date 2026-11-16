@@ -37,7 +37,7 @@ func (x *executor) installDockerTool(req Request, dir string) (Result, error) {
 			return result, errors.New(check.Code)
 		}
 	}
-	if err := x.serviceImage(req); err != nil {
+	if _, err := x.serviceImage(req); err != nil {
 		return result, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

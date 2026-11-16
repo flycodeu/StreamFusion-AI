@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/streamfusion-ai/operations/internal/deploy"
@@ -17,14 +18,22 @@ type installRetryConflictError struct{ message string }
 
 func (e *installRetryConflictError) Error() string { return "MANAGEMENT_RESOURCE_CONFLICT" }
 
-func unboundFailedCommandInstall(item softwareInstance) bool {
+func failedCustomInstall(i serviceinstall.Request) bool {
+	return i.Definition.Commands != nil && !serviceinstall.IsBuiltinCommand(i.Definition)
+}
+
+func failedDockerServiceInstall(i serviceinstall.Request) bool {
+	return !failedCustomInstall(i) && i.Config.Mode() == "DOCKER" && i.Definition.Kind == "SERVICE" && !serviceinstall.IsOfficial(i.Definition)
+}
+
+func retryableUnboundFailedInstall(item softwareInstance) bool {
 	i := item.Installation
-	return i != nil && i.Definition.Commands != nil && !serviceinstall.IsBuiltinCommand(i.Definition) &&
+	return i != nil && i.SoftwareID == item.ID && (failedCustomInstall(*i) || failedDockerServiceInstall(*i)) &&
 		item.InstallationStatus == "FAILED" && item.ManagementMode == "OBSERVE" && item.InstallationEvidence == nil &&
 		item.IdentityHash == "" && item.Locator == "pending:"+item.ID
 }
 
-func (s *Store) failedCommandInstallations(hostID string) ([]softwareInstance, error) {
+func (s *Store) failedInstallations(hostID string) ([]softwareInstance, error) {
 	rows, err := s.DB.Query(`SELECT `+softwareColumns+` FROM software_instances s JOIN targets t ON t.id=s.host_id
 		WHERE s.host_id=? AND s.installation_status='FAILED' AND s.management_mode='OBSERVE' AND s.identity_hash=''
 		AND EXISTS(SELECT 1 FROM jobs j WHERE j.id=s.last_job_id AND j.software_plan_id=s.install_plan_id
@@ -39,18 +48,18 @@ func (s *Store) failedCommandInstallations(hostID string) ([]softwareInstance, e
 		if scanErr != nil {
 			return nil, scanErr
 		}
-		if unboundFailedCommandInstall(item) {
+		if retryableUnboundFailedInstall(item) {
 			items = append(items, item)
 		}
 	}
 	return items, rows.Err()
 }
 
-// A failed command may have changed the server. Recheck its declared object and
-// ports without running any template step; never reuse its job or directory.
+// Recheck the previous object's identity and ports without running installation
+// steps. The previous job and directory are never reused.
 func (h *HTTP) confirmedFailedInstallResources(ctx context.Context, host target, wanted []serviceinstall.ResolvedResource) (map[string]string, error) {
 	confirmed := map[string]string{}
-	items, err := h.store.failedCommandInstallations(host.ID)
+	items, err := h.store.failedInstallations(host.ID)
 	if err != nil {
 		return confirmed, err
 	}
@@ -71,7 +80,7 @@ func (h *HTTP) confirmedFailedInstallResources(ctx context.Context, host target,
 		}
 		if failedInstallObjectsAbsent(host.InstallRoot, *i, checked) {
 			confirmed[item.ID] = item.Version
-		} else if legacyFailedInstallCheck(host.InstallRoot, *i, checked) {
+		} else if failedCustomInstall(*i) && legacyFailedInstallCheck(host.InstallRoot, *i, checked) {
 			return confirmed, &installCompatibilityError{message: "需要更新接入组件后核对上次安装，请更新后重试"}
 		} else {
 			remaining := checked
@@ -86,6 +95,9 @@ func (h *HTTP) confirmedFailedInstallResources(ctx context.Context, host target,
 					_, message := h.installPreflightRejection(remaining, i.Config)
 					return confirmed, &installRetryConflictError{message: message}
 				}
+			}
+			if failedDockerServiceInstall(*i) {
+				return confirmed, &installRetryConflictError{message: "无法确认上次安装的容器和端口已空闲，请查看原安装日志并核对目标主机"}
 			}
 			return confirmed, errors.New("MANAGEMENT_RESOURCE_CONFLICT")
 		}
@@ -117,9 +129,18 @@ func failedInstallObjectsAbsent(base string, i serviceinstall.Request, checked s
 	if checked.Root != serviceinstall.InstallRoot(base, i.SoftwareID, i.Config) {
 		return false
 	}
-	objectAbsent, ports := false, map[string]int{}
+	docker := failedDockerServiceInstall(i)
+	mappings := serviceinstall.PortMappings(i.Definition, i.Config)
+	if docker && !slices.Equal(checked.PortMappings, mappings) {
+		return false
+	}
+	objectKey, objectCode, portCode := "EXISTING", "COMMAND_OBJECT_ABSENT", "SERVICE_PORT_AVAILABLE"
+	if docker {
+		objectKey, objectCode, portCode = "CONTAINER", "", ""
+	}
+	objectAbsent, dockerReady, ports := false, !docker, map[string]int{}
 	for _, check := range checked.Checks {
-		if failedInstallPythonDependency(check) {
+		if !docker && failedInstallPythonDependency(check) {
 			continue
 		}
 		if check.Status != "PASS" {
@@ -128,21 +149,28 @@ func failedInstallObjectsAbsent(base string, i serviceinstall.Request, checked s
 			}
 			continue
 		}
-		if check.Key == "EXISTING" && check.Code == "COMMAND_OBJECT_ABSENT" {
-			objectAbsent = true
+		// Built-in preflight reports published-port failures separately and
+		// emits no published-port entry when that check succeeded.
+		if docker && check.Code != "" {
+			return false
 		}
-		if strings.HasPrefix(check.Key, "PORT_") && check.Code == "SERVICE_PORT_AVAILABLE" {
+		switch {
+		case check.Key == objectKey && check.Code == objectCode:
+			objectAbsent = true
+		case check.Key == "DOCKER":
+			dockerReady = true
+		case strings.HasPrefix(check.Key, "PORT_") && check.Code == portCode:
 			ports[check.Key]++
 		}
 	}
-	for _, mapping := range serviceinstall.PortMappings(i.Definition, i.Config) {
+	for _, mapping := range mappings {
 		key := "PORT_" + mapping.Key
 		if ports[key] == 0 {
 			return false
 		}
 		ports[key]--
 	}
-	return objectAbsent
+	return objectAbsent && dockerReady
 }
 
 // Recovery checks the previous attempt's objects, not whether its original

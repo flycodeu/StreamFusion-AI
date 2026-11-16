@@ -18,6 +18,66 @@ func installCompatibilityCapabilities(req deploy.Request, s *Store) executorCapa
 	return executorCapabilities{Owner: deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, Platform: "linux/amd64", DockerEngine: true, InstallVersion: serviceinstall.CapabilityVersion, NativeInstallVersion: 1, CatalogHash: "a-historical-catalog-hash", CommandRecipeVersion: deploy.CommandRecipeVersion, CommandTrustFingerprint: deploy.CommandPublicKeyFingerprint(s.commandPublicKey())}
 }
 
+func TestDockerRegistryServiceReadinessUpdatesOnlyImageAwareExecution(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	version := 9
+	host, _ := installSSHFixture(t, s, b, func(req deploy.Request) ([]byte, bool) {
+		if req.Action != "CAPABILITIES" {
+			return nil, false
+		}
+		capability := installCompatibilityCapabilities(req, s)
+		capability.CommandRecipeVersion = version
+		raw, _ := json.Marshal(capability)
+		return raw, true
+	})
+	target, err := s.readTarget(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitions := map[string]serviceinstall.Definition{}
+	for _, d := range serviceinstall.BuiltinCommandCatalog() {
+		if d.Key == "nginx" && d.Version == "1.30.6" || d.Key == "java" && d.Version == "21" {
+			definitions[d.Key] = d
+		}
+	}
+	for _, test := range []struct {
+		key, mode, source string
+		version           int
+		upgrade           bool
+	}{
+		{"nginx", "DOCKER", "REGISTRY", 9, true},
+		{"nginx", "DOCKER", "REGISTRY", 10, false},
+		{"nginx", "NATIVE", "ARCHIVE", 9, false},
+		{"nginx", "DOCKER", "ARCHIVE", 9, false},
+		{"java", "DOCKER", "REGISTRY", 9, false},
+	} {
+		version = test.version
+		d, ok := definitions[test.key]
+		if !ok {
+			t.Fatal("missing builtin", test.key)
+		}
+		err = b.h.installTargetReady(context.Background(), target, serviceinstall.Config{RuntimeMode: test.mode}, serviceinstall.Source{Type: test.source}, d)
+		if test.upgrade && (err == nil || err.Error() != "EXECUTOR_UPGRADE_REQUIRED") || !test.upgrade && err != nil {
+			t.Fatalf("%+v: %v", test, err)
+		}
+	}
+}
+
+func TestDockerServiceOwnershipUsesOnlyValidatedActualImageEvidence(t *testing.T) {
+	d, _ := serviceinstall.Find("nginx", "1.30.6")
+	i := serviceinstall.Request{SoftwareID: uuid.NewString(), BindingRevision: 1, Definition: d, Config: serviceinstall.Config{RuntimeMode: "DOCKER"}, Source: serviceinstall.Source{Type: "REGISTRY"}}
+	e := serviceinstall.Evidence{SoftwareID: i.SoftwareID, BindingRevision: 1, RecipeKey: d.Key, RecipeRevision: d.Revision, ConfigHash: serviceinstall.Digest(i.Config), Kind: "DOCKER", Locator: strings.Repeat("a", 64), ContainerID: strings.Repeat("a", 64), IdentityHash: strings.Repeat("b", 64), ImageID: d.Digest}
+	s := softwareInstance{Installation: &i, InstallationEvidence: &e, ID: i.SoftwareID, RuntimeKind: "DOCKER", Locator: e.Locator, IdentityHash: e.IdentityHash, ManagementMode: "MANAGED"}
+	if got := softwareRequest(s).Ownership.ImageID; got != d.Digest {
+		t.Fatal("actual pinned image identity lost", got)
+	}
+	e.ConfigHash = "changed"
+	if got := softwareRequest(s).Ownership.ImageID; got != d.ImageID {
+		t.Fatal("invalid installation evidence affected ownership", got)
+	}
+}
+
 func TestNativeOnlinePlanDownloadsOnTargetWithoutControllerMaterial(t *testing.T) {
 	for _, supported := range []bool{false, true} {
 		t.Run(map[bool]string{false: "old-executor", true: "target-download"}[supported], func(t *testing.T) {

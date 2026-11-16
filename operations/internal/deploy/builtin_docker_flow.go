@@ -1,7 +1,6 @@
 package deploy
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -64,20 +63,21 @@ func (x *executor) installDockerFlow(req Request, dir string) (Result, error) {
 			vars["OPS_ARTIFACT_PATH"], err = x.receiveDockerFlowMaterial(req)
 			return err
 		case "DOCKER_PREPARE":
-			out, e := x.softwareRunner(ctx, "/usr/bin/docker", "image", "inspect", "--format", `{"id":{{json .Id}},"os":{{json .Os}},"arch":{{json .Architecture}}}`, i.Definition.ImageID)
-			var image struct{ ID, OS, Arch string }
-			if e != nil || json.Unmarshal(out, &image) != nil || image.ID != i.Definition.ImageID || image.OS != "linux" || image.Arch != "amd64" {
-				return errors.New("SERVICE_IMAGE_IDENTITY_MISMATCH")
+			imageID, e := x.serviceImageIdentity(req)
+			if e != nil {
+				return e
 			}
 			if i.Definition.Kind != "TOOL" {
-				args, err = x.prepareService(req, p.Root)
+				args, err = x.prepareService(req, p.Root, imageID)
 				if err != nil {
 					return err
 				}
-				lists, err = builtinDockerLists(args, i.Definition.ImageID)
+				lists, err = builtinDockerLists(args, imageID)
 				if err != nil {
 					return err
 				}
+				creation.ImageID = imageID
+				vars["OPS_IMAGE_ID"] = imageID
 				return atomicJSON(filepath.Join(dir, "service-create.json"), creation)
 			}
 			return err
@@ -87,7 +87,7 @@ func (x *executor) installDockerFlow(req Request, dir string) (Result, error) {
 				result, e = x.finishDockerToolFlow(req)
 				return e
 			}
-			software, _, err = x.createdService(req, vars["OPS_CONTAINER_ID"])
+			software, _, err = x.createdService(req, vars["OPS_CONTAINER_ID"], creation.ImageID)
 			if err != nil {
 				return err
 			}
@@ -114,11 +114,11 @@ func (x *executor) installDockerFlow(req Request, dir string) (Result, error) {
 			if err := atomicJSON(filepath.Join(dir, "service-create.json"), creation); err != nil {
 				return nil, err
 			}
-			out, _, err := x.builtinCommand(ctx, req, step.ID, args)
+			out, _, err := x.runBuiltinStep(ctx, req, step.ID, vars, lists, "")
 			if err != nil {
 				return out, err
 			}
-			software, _, err = x.createdService(req, serviceName(i.SoftwareID))
+			software, _, err = x.createdService(req, serviceName(i.SoftwareID), creation.ImageID)
 			if err != nil {
 				return out, err
 			}

@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-const CommandRecipeVersion = 9
+const DockerRegistryServiceImageVersion = 10
+const CommandRecipeVersion = DockerRegistryServiceImageVersion
 
 func RequiredCommandRecipeVersion(d serviceinstall.Definition) int {
 	if d.Management != nil {

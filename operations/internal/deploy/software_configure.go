@@ -149,7 +149,7 @@ func (x *executor) configureSoftware(req Request, dir string) (Result, error) {
 		if err = serviceFile(filepath.Join(dir, "unit.previous"), unit, 0, true); err != nil {
 			return result, err
 		}
-	} else if createArgs, err = x.prepareServiceAt(target, root, stage, false); err != nil {
+	} else if createArgs, err = x.prepareServiceAt(target, root, stage, false, req.Software.Ownership.ImageID); err != nil {
 		return result, err
 	}
 	if err = atomicJSON(filepath.Join(dir, "configuration.json"), marker); err != nil {
@@ -191,13 +191,13 @@ func (x *executor) configureSoftware(req Request, dir string) (Result, error) {
 		output, createErr := x.serviceDocker(target, "CONFIGURATION_CREATE", 45*time.Second, createArgs...)
 		id := strings.TrimSpace(string(output))
 		if createErr != nil || !Hex.MatchString(id) {
-			recovered, _, observeErr := x.createdService(target, serviceName(i.SoftwareID))
+			recovered, _, observeErr := x.createdService(target, serviceName(i.SoftwareID), req.Software.Ownership.ImageID)
 			if observeErr != nil {
 				return x.rollbackConfiguration(req, dir, marker), nil
 			}
 			current = recovered
 		} else {
-			current, _, err = x.createdService(target, id)
+			current, _, err = x.createdService(target, id, req.Software.Ownership.ImageID)
 			if err != nil {
 				return result, nil
 			}
@@ -293,7 +293,7 @@ func (x *executor) rollbackConfiguration(req Request, dir string, marker configu
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	if i.Config.Mode() == "DOCKER" {
-		current, _, err := x.createdService(target, serviceName(i.SoftwareID))
+		current, _, err := x.createdService(target, serviceName(i.SoftwareID), req.Software.Ownership.ImageID)
 		if err == nil && current.Locator != req.Software.Locator {
 			if x.changeOwnedState(ctx, current, "STOPPED") != nil {
 				return result
@@ -402,7 +402,7 @@ func (x *executor) reconcileConfiguration(req Request, dir string) Result {
 		current = x.nativeSoftware(target, n, marker.NewIdentity)
 	} else {
 		var err error
-		current, _, err = x.createdService(target, marker.NewContainer)
+		current, _, err = x.createdService(target, marker.NewContainer, req.Software.Ownership.ImageID)
 		if err != nil || current.IdentityHash != marker.NewIdentity {
 			return unknown
 		}

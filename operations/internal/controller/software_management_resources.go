@@ -119,11 +119,14 @@ func (s *Store) confirmedFailedManagementPorts(host target, checked serviceinsta
 	if !checked.Ready || len(ports) == 0 {
 		return confirmed, nil
 	}
-	items, err := s.failedCommandInstallations(host.ID)
+	items, err := s.failedInstallations(host.ID)
 	if err != nil {
 		return nil, err
 	}
 	for _, item := range items {
+		if !failedCustomInstall(*item.Installation) {
+			continue
+		}
 		claims := installationResources(host.InstallRoot, item.ID, item.Installation.Definition, item.Installation.Config)
 		if resourcesConflict(ports, claims) {
 			if confirmed == nil {
@@ -188,7 +191,7 @@ func reserveManagementResources(tx *sql.Tx, targetID, softwareID, excludePlan st
 		absentVersion, absent := proof.AbsentInstallations[item.ID]
 		portVersion, portConfirmed := proof.VerifiedPorts[item.ID]
 		if absent || portConfirmed {
-			if !unboundFailedCommandInstall(item) || absent && absentVersion != item.Version || portConfirmed && portVersion != item.Version {
+			if !retryableUnboundFailedInstall(item) || absent && absentVersion != item.Version || portConfirmed && (portVersion != item.Version || !failedCustomInstall(*item.Installation)) {
 				return errors.New("MANAGEMENT_RESOURCE_CONFLICT")
 			}
 			var final int
