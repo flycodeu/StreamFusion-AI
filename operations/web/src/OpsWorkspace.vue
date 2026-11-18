@@ -1,18 +1,19 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed } from "vue";
-import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, request, upload } from "./api";
 import { jobKindLabels as softwareJobKindLabels, type PageResult } from "./jobs";
 import OpsPagination from "./OpsPagination.vue";
 import { requestAllPages } from "./listPages";
-import PreviewConfigForm from "./PreviewConfigForm.vue";
 import { previewDefaults, type PreviewConfig } from "./preview";
-import ZLMConfigForm from "./ZLMConfigForm.vue";
 import { zlmDefaults, type ZLMConfig } from "./zlm";
 import type { Host } from "./hosts";
-import RuntimePolicyFields from "./RuntimePolicyFields.vue";
-import { runtimePolicyError, runtimePolicySummary, runtimePolicyStopConfirmed, type RuntimePolicy, type RuntimePolicyState } from "./runtimePolicy";
-import { softwareJobErrorMessages, softwareJobPhaseLabels, softwareJobDiagnostic } from "./software";
+import { runtimePolicyError, type RuntimePolicy, type RuntimePolicyState } from "./runtimePolicy";
+import { softwareJobPhaseLabels } from "./software";
+import OpsExternalBindingsSection from "./OpsExternalBindingsSection.vue";
+import OpsJobsSection from "./OpsJobsSection.vue";
+import OpsWorkspaceDialogs from "./OpsWorkspaceDialogs.vue";
+import "./ops-workspace.css";
 const props = defineProps<{ page: string }>();
 const emit = defineEmits<{ error: [unknown] }>();
 const instanceHealthLabel = (health?: string) => ({ APPLICATION_READY: "应用就绪", APPLICATION_STOPPED: "已停止", STOPPED: "已停止", RUNNING: "运行中", UNKNOWN: "状态未确认" }[health || ""] || "状态未确认");
@@ -704,12 +705,6 @@ async function importArtifact() {
     uploadPhase.value = "";
   });
 }
-function initialPasswordSelected(e: Event) {
-  const value = (e.target as HTMLSelectElement).value;
-  const [id, revision] = value ? value.split(":") : ["", ""];
-  instanceDraft.value.config.initialPasswordCredentialId = id;
-  instanceDraft.value.config.initialPasswordRevision = revision;
-}
 function choosePublish(i: Instance, kind = "PUBLISH") {
   planInstance.value = i;
   planKind.value = kind;
@@ -782,13 +777,6 @@ async function reconcile(j: Job, recover = false) {
     await request(`/jobs/${j.id}/${recover ? "recover" : "reconcile"}`, "POST");
     await refresh();
   });
-}
-function credentialSelected(
-  d: { credentialId: string; credentialRevision: string },
-  e: Event,
-) {
-  const key = (e.target as HTMLSelectElement).value;
-  [d.credentialId, d.credentialRevision] = key ? key.split(":") : ["", ""];
 }
 </script>
 
@@ -967,936 +955,118 @@ function credentialSelected(
         </table>
       </div>
       <OpsPagination :page="instancePage" :page-size="instancePageSize" :total="instanceTotal" :disabled="instancesLoading" label="实例分页" @update:page="instanceList.changePage" @update:page-size="instanceList.changeSize" />
-      <details class="dependency-section" @toggle="toggleBindings">
-        <summary>外部依赖连接</summary>
-        <div class="section-head">
-          <h2>外部依赖</h2>
-          <button
-            class="secondary"
-            :disabled="busy"
-            @click="dialog = 'binding'"
-          >
-            绑定已有服务
-          </button>
-        </div>
-        <div v-if="!bindings.length" class="empty">尚未登记外部依赖</div>
-        <div v-else class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>类型</th>
-                <th>地址</th>
-                <th>数据库</th>
-                <th>检查来源</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="b in bindings" :key="b.id">
-                <td>{{ b.kind }}</td>
-                <td>{{ b.host }}:{{ b.port }}</td>
-                <td>{{ b.database || "—" }}</td>
-                <td>
-                  <div class="probe-controls">
-                    <select
-                      v-model="bindingProbeTargets[b.id]"
-                      :aria-label="`检查来源：${b.host}`"
-                      @change="
-                        bindingProbeInstances[b.id] = '';
-                        delete bindingProbeResults[b.id];
-                      "
-                    >
-                      <option value="">选择主机</option>
-                      <option v-for="t in targets" :key="t.id" :value="t.id">
-                        {{ t.name }} · {{ t.address }}
-                      </option>
-                    </select>
-                    <select
-                      v-model="bindingProbeInstances[b.id]"
-                      :aria-label="`实例网络：${b.host}`"
-                      @change="delete bindingProbeResults[b.id]"
-                    >
-                      <option value="">仅检查主机 TCP</option>
-                      <option
-                        v-for="i in instanceOptions.filter(
-                          (item) =>
-                            item.targetId === bindingProbeTargets[b.id] &&
-                            item.currentReleaseId &&
-                            !item.config.preview &&
-                            !item.config.zlm,
-                        )"
-                        :key="i.id"
-                        :value="i.id"
-                      >
-                        {{ i.name }} · 当前已发布版本
-                      </option>
-                    </select>
-                  </div>
-                </td>
-                <td>
-                  <button
-                    class="quiet"
-                    :disabled="busy || !bindingProbeTargets[b.id]"
-                    @click="bindingProbe(b)"
-                  >
-                    {{
-                      bindingProbeInstances[b.id] ? "检查实例连接" : "TCP 检查"
-                    }}
-                  </button>
-                  <details
-                    v-if="bindingProbeResults[b.id]"
-                    class="probe-result"
-                  >
-                    <summary>
-                      {{
-                        bindingProbeResults[b.id].authentication?.authenticated
-                          ? "认证通过"
-                          : bindingProbeResults[b.id].authentication
-                              ?.errorCode ||
-                            bindingProbeResults[b.id].errorCode ||
-                            "查看检查结果"
-                      }}
-                    </summary>
-                    <dl>
-                      <dt>控制器 TCP</dt>
-                      <dd>
-                        {{
-                          bindingProbeResults[b.id].controller.reachable
-                            ? "可达"
-                            : "不可达"
-                        }}
-                      </dd>
-                      <dt>目标主机 TCP</dt>
-                      <dd>
-                        {{
-                          !bindingProbeResults[b.id].targetHost.executed
-                            ? "未执行"
-                            : bindingProbeResults[b.id].targetHost.reachable
-                              ? "可达"
-                              : "不可达"
-                        }}
-                      </dd>
-                      <dt>实例网络</dt>
-                      <dd>
-                        {{
-                          !bindingProbeResults[b.id].applicationNetwork
-                            ? "未验证"
-                            : bindingProbeResults[b.id].applicationNetwork
-                                  ?.reachable
-                              ? "可达"
-                              : "不可达"
-                        }}
-                      </dd>
-                      <dt>最小认证</dt>
-                      <dd>
-                        {{
-                          !bindingProbeResults[b.id].authentication?.executed
-                            ? "未验证"
-                            : bindingProbeResults[b.id].authentication
-                                  ?.authenticated
-                              ? "通过"
-                              : bindingProbeResults[b.id].authentication
-                                  ?.errorCode || "未通过"
-                        }}
-                      </dd>
-                      <template v-if="bindingProbeResults[b.id].releaseId"
-                        ><dt>冻结版本</dt>
-                        <dd>
-                          <code>{{ bindingProbeResults[b.id].releaseId }}</code>
-                        </dd></template
-                      >
-                      <dt>检查时间</dt>
-                      <dd>{{ time(bindingProbeResults[b.id].observedAt) }}</dd>
-                    </dl>
-                    <small
-                      v-if="
-                        bindingProbeResults[b.id].authentication?.errorCode ===
-                        'AUTH_TLS_REQUIRED'
-                      "
-                      >该 MySQL 账号需要 TLS
-                      full-auth，当前探针未支持；没有发送明文密码，结果不代表密码错误或数据库不可用。</small
-                    >
-                    <small
-                      v-else-if="
-                        bindingProbeResults[b.id].errorCode ||
-                        bindingProbeResults[b.id].authentication?.errorCode
-                      "
-                      >核对目标执行器能力、实例当前版本与原作业/ACK；认证错误请检查所选凭据修订，不要以
-                      TCP 可达判断密码正确。</small
-                    >
-                  </details>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <OpsPagination :page="bindingPage" :page-size="bindingPageSize" :total="bindingTotal" :disabled="bindingsLoading" label="外部依赖分页" @update:page="bindingList.changePage" @update:page-size="bindingList.changeSize" />
-      </details>
+      <OpsExternalBindingsSection
+        :busy="busy"
+        :bindings="bindings"
+        :targets="targets"
+        :instance-options="instanceOptions"
+        :binding-probe-targets="bindingProbeTargets"
+        :binding-probe-instances="bindingProbeInstances"
+        :binding-probe-results="bindingProbeResults"
+        :binding-page="bindingPage"
+        :binding-page-size="bindingPageSize"
+        :binding-total="bindingTotal"
+        :bindings-loading="bindingsLoading"
+        :time="time"
+        @toggle="toggleBindings"
+        @open-create-binding="dialog = 'binding'"
+        @probe="bindingProbe"
+        @change-page="bindingList.changePage"
+        @change-size="bindingList.changeSize"
+      />
     </template>
-    <template v-else>
-      <div class="section-head">
-        <h2>作业记录</h2>
-        <div class="job-filters">
-          <select v-model="jobStatusFilter" aria-label="筛选作业状态">
-            <option value="">全部状态</option>
-            <option
-              v-for="(label, code) in statusLabels"
-              :key="code"
-              :value="code"
-            >
-              {{ label }}
-            </option>
-          </select>
-          <select v-model="jobKindFilter" aria-label="筛选作业类型">
-            <option value="">全部类型</option>
-            <option
-              v-for="(label, code) in jobKindLabels"
-              :key="code"
-              :value="code"
-            >
-              {{ label }}
-            </option>
-          </select>
-          <button class="secondary" :disabled="busy" @click="act(refresh)">
-            刷新
-          </button>
-        </div>
-      </div>
-      <div v-if="!jobs.length" class="empty">暂无作业</div>
-      <div v-else class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>时间 / 作业</th>
-              <th>类型</th>
-              <th>阶段</th>
-              <th>状态</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="j in jobs" :key="j.id">
-              <td>
-                {{ time(j.createdAt) }}<small>{{ short(j.id) }}</small>
-              </td>
-              <td>
-                {{ jobKindLabels[j.kind] || '其他操作' }}
-              </td>
-              <td>
-                {{ phaseLabels[j.phase] || '阶段待确认'
-                }}<small v-if="j.targetAckPending">目标确认收尾中</small>
-              </td>
-              <td>
-                <span
-                  class="state-tag"
-                  :class="
-                    j.status === 'SUCCEEDED'
-                      ? 'state-success'
-                      : jobStatus(j) === 'FAILED'
-                        ? 'state-error'
-                        : 'state-muted'
-                  "
-                  >{{ statusLabels[jobStatus(j)] || '状态待确认' }}</span
-                >
-              </td>
-              <td>
-                <button
-                  class="quiet"
-                  @click="
-                    detail = j;
-                    dialog = 'job';
-                  "
-                >
-                  详情</button
-                ><button
-                  v-if="
-                    j.status === 'QUEUED' &&
-                    j.phase !== 'UPLOADING' &&
-                    !j.targetAckPending
-                  "
-                  class="quiet"
-                  :disabled="busy"
-                  @click="cancelJob(j)"
-                >
-                  取消排队</button
-                ><button
-                  v-if="j.status === 'UNKNOWN' || j.targetAckPending"
-                  class="quiet"
-                  :disabled="busy"
-                  @click="reconcile(j)"
-                >
-                  核对</button
-                ><button
-                  v-if="
-                    j.status === 'UNKNOWN' &&
-                    ['PUBLISH', 'ROLLBACK'].includes(j.kind)
-                  "
-                  class="quiet danger"
-                  :disabled="busy"
-                  @click="reconcile(j, true)"
-                >
-                  恢复
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <OpsPagination :page="jobPage" :page-size="jobPageSize" :has-next="!!jobNextCursor" :disabled="jobsLoading" label="作业分页" @update:page="changeJobPage" @update:page-size="changeJobSize" />
-    </template>
+    <OpsJobsSection
+      v-else
+      v-model:job-status-filter="jobStatusFilter"
+      v-model:job-kind-filter="jobKindFilter"
+      :busy="busy"
+      :jobs="jobs"
+      :status-labels="statusLabels"
+      :job-kind-labels="jobKindLabels"
+      :phase-labels="phaseLabels"
+      :job-page="jobPage"
+      :job-page-size="jobPageSize"
+      :job-next-cursor="jobNextCursor"
+      :jobs-loading="jobsLoading"
+      :job-status="jobStatus"
+      :time="time"
+      :short="short"
+      @refresh="act(refresh)"
+      @open-detail="
+        detail = $event;
+        dialog = 'job';
+      "
+      @cancel-job="cancelJob"
+      @reconcile="(job, recover) => reconcile(job, recover)"
+      @change-page="changeJobPage"
+      @change-size="changeJobSize"
+    />
   </section>
-  <ElDialog
-    :model-value="!!dialog"
-    :title="
-      (
-        {
-          binding: '绑定已有依赖',
-          instance: '实例配置草稿',
-          'runtime-policy': '应用运行管理',
-          registration: '预览节点登记与维护',
-          import: '导入制品',
-          candidate: '选择候选',
-          plan: '发布计划',
-          history: '版本记录',
-          logs: '实例日志',
-          job: '作业详情',
-        } as Record<string, string>
-      )[dialog]
-    "
-    width="min(640px,94vw)"
-    align-center
+  <OpsWorkspaceDialogs
+    :dialog="dialog"
+    :busy="busy"
+    :options-loading="optionsLoading"
+    :binding-draft="bindingDraft"
+    :credential-options="credentialOptions"
+    :recipe="recipe"
+    :selected="selected"
+    :instance-draft="instanceDraft"
+    :targets="targets"
+    :binding-options="bindingOptions"
+    :runtime-policy-draft="runtimePolicyDraft"
+    :runtime-policy-dirty="runtimePolicyDirty"
+    :runtime-policy-attempted="runtimePolicyAttempted"
+    :runtime-policy-error-message="runtimePolicyErrorMessage"
+    :import-source="importSource"
+    :import-recipe="importRecipe"
+    :import-runtime="importRuntime"
+    :import-name="importName"
+    :import-s-h-a="importSHA"
+    :upload-phase="uploadPhase"
+    :runtime-installations="runtimeInstallations"
+    :plan-kind="planKind"
+    :artifact-choice="artifactChoice"
+    :eligible-artifacts="eligibleArtifacts"
+    :plan-instance="planInstance"
+    :maintenance-permit="maintenancePermit"
+    :plan="plan"
+    :artifact-options="artifactOptions"
+    :releases="releases"
+    :release-page="releasePage"
+    :release-page-size="releasePageSize"
+    :release-total="releaseTotal"
+    :releases-loading="releasesLoading"
+    :registration="registration"
+    :logs="logs"
+    :detail="detail"
+    :status-labels="statusLabels"
+    :phase-labels="phaseLabels"
     @close="dialog = ''"
-  >
-    <form
-      v-if="dialog === 'binding'"
-      class="dialog-form"
-      @submit.prevent="saveBinding"
-    >
-      <div class="form-grid">
-        <label
-          >类型<select
-            v-model="bindingDraft.kind"
-            aria-label="类型"
-            @change="
-              bindingDraft.port = bindingDraft.kind === 'MYSQL' ? 3306 : 6379
-            "
-          >
-            <option>MYSQL</option>
-            <option>REDIS</option>
-          </select></label
-        ><label
-          >端口<input v-model.number="bindingDraft.port" type="number" required
-        /></label>
-      </div>
-      <label>地址<input v-model="bindingDraft.host" required /></label>
-      <div class="form-grid">
-        <label>数据库<input v-model="bindingDraft.database" /></label
-        ><label>用户<input v-model="bindingDraft.username" /></label>
-      </div>
-      <label
-        >密码修订<select @change="credentialSelected(bindingDraft, $event)">
-          <option value="">无密码</option>
-          <option
-            v-for="c in credentialOptions.filter((c) => c.kind === 'PASSWORD')"
-            :key="c.id + c.revision"
-            :value="c.id + ':' + c.revision"
-          >
-            {{ c.name }} r{{ c.revision }}
-          </option>
-        </select></label
-      >
-      <div class="dialog-footer">
-        <button
-          type="button"
-          class="secondary"
-          :disabled="busy"
-          @click="dialog = ''"
-        >
-          取消
-        </button>
-        <button class="primary" :disabled="busy">登记绑定</button>
-      </div>
-    </form>
-    <form
-      v-else-if="dialog === 'instance'"
-      class="dialog-form"
-      @submit.prevent="saveInstance"
-    >
-      <label
-        >部署配方<select
-          v-model="recipe"
-          :disabled="!!selected"
-          @change="recipeChanged"
-        >
-          <option value="java-compose-v1">Java 服务</option>
-          <option value="preview-node-v1">预览节点 · ZLM / FFmpeg</option>
-          <option value="zlm-direct-v1">独立 ZLM</option>
-        </select></label
-      >
-      <label>实例名称<input v-model="instanceDraft.name" required /></label
-      ><label
-        >目标<select
-          v-model="instanceDraft.targetId"
-          :disabled="!!selected"
-          required
-        >
-          <option v-for="t in targets" :key="t.id" :value="t.id">
-            {{ t.name }}
-          </option>
-        </select></label
-      >
-      <template v-if="instanceDraft.config.zlm">
-        <div class="form-grid">
-          <label
-            >目标绑定 IPv4<input
-              v-model="instanceDraft.config.bindAddress"
-              :disabled="!!selected?.currentReleaseId"
-              required
-          /></label>
-          <label
-            >内存 MiB<input
-              v-model.number="instanceDraft.config.memoryMiB"
-              type="number"
-              min="512"
-              max="65536"
-              required
-          /></label>
-        </div>
-        <ZLMConfigForm
-          v-model="instanceDraft.config.zlm"
-          :credentials="credentialOptions"
-          :deployed="!!selected?.currentReleaseId"
-        />
-      </template>
-      <template v-else-if="instanceDraft.config.preview">
-        <div class="form-grid">
-          <label
-            >目标绑定 IPv4<input
-              v-model="instanceDraft.config.bindAddress"
-              :disabled="!!selected?.currentReleaseId"
-              required /></label
-          ><label
-            >内存 MiB<input
-              v-model.number="instanceDraft.config.memoryMiB"
-              type="number"
-              min="512"
-              max="65536"
-              required
-          /></label>
-        </div>
-        <PreviewConfigForm
-          v-model="instanceDraft.config.preview"
-          :deployed="!!selected?.currentReleaseId"
-        />
-      </template>
-      <template v-else>
-        <div class="form-grid">
-          <label
-            >环境标签<input
-              v-model="instanceDraft.config.environment"
-              required /></label
-          ><label
-            >Spring profile<input
-              v-model="instanceDraft.config.profile" /></label
-          ><label
-            >绑定地址<input
-              v-model="instanceDraft.config.bindAddress"
-              required /></label
-          ><label
-            >宿主端口<input
-              v-model.number="instanceDraft.config.hostPort"
-              type="number"
-              min="1024"
-              max="65535"
-              required /></label
-          ><label
-            >容器端口<input
-              v-model.number="instanceDraft.config.containerPort"
-              type="number"
-              min="1024"
-              max="65535"
-              required /></label
-          ><label
-            >内存 MiB<input
-              v-model.number="instanceDraft.config.memoryMiB"
-              type="number"
-              min="256"
-              max="8192"
-              required
-          /></label>
-        </div>
-        <label
-          >外部依赖<select v-model="instanceDraft.config.bindingIds" multiple>
-            <option v-for="b in bindingOptions" :key="b.id" :value="b.id">
-              {{ b.kind }} · {{ b.host }}:{{ b.port }}
-            </option>
-          </select></label
-        >
-        <details>
-          <summary>健康与恢复</summary>
-          <div class="form-grid">
-            <label
-              >应用初始密码修订<select
-                :value="
-                  instanceDraft.config.initialPasswordCredentialId
-                    ? instanceDraft.config.initialPasswordCredentialId +
-                      ':' +
-                      instanceDraft.config.initialPasswordRevision
-                    : ''
-                "
-                @change="initialPasswordSelected"
-              >
-                <option value="">不注入</option>
-                <option
-                  v-for="c in credentialOptions.filter(
-                    (c) => c.kind === 'PASSWORD',
-                  )"
-                  :key="c.id + c.revision"
-                  :value="c.id + ':' + c.revision"
-                >
-                  {{ c.name }} r{{ c.revision }}
-                </option>
-              </select></label
-            >
-            <label
-              >健康路径<input
-                v-model="instanceDraft.config.healthPath"
-                required /></label
-            ><label
-              >健康超时 秒<input
-                v-model.number="instanceDraft.config.healthSeconds"
-                type="number"
-                min="5"
-                max="120"
-                required /></label
-            ><label
-              >数据兼容标识<input
-                v-model="instanceDraft.config.dataCompatibility"
-                required
-            /></label>
-          </div>
-        </details>
-      </template>
-      <RuntimePolicyFields v-if="!instanceDraft.config.preview && !instanceDraft.config.zlm" v-model="instanceDraft.config.runtimePolicy" kind="DOCKER" :disabled="busy" optional inherit-label="沿用当前实例策略" />
-      <div class="dialog-footer">
-        <button
-          type="button"
-          class="secondary"
-          :disabled="busy"
-          @click="dialog = ''"
-        >
-          取消
-        </button>
-        <button class="primary" :disabled="busy">保存草稿</button>
-      </div>
-    </form>
-    <form v-else-if="dialog === 'runtime-policy' && selected" class="dialog-form" @submit.prevent="applyRuntimePolicy">
-      <div class="runtime-actions"><strong>{{ selected.name }}</strong><span class="spacer"></span><button type="button" class="secondary" :disabled="busy || runtimePolicyDirty" @click="instanceAction(selected, 'START')">启动</button><button type="button" class="secondary" :disabled="busy || runtimePolicyDirty" @click="instanceAction(selected, 'STOP')">停止</button><button type="button" class="secondary" :disabled="busy || runtimePolicyDirty" @click="instanceAction(selected, 'RESTART')">重启</button></div>
-      <p v-if="selected.observation.runtimePolicy?.held">{{ runtimePolicyDraft && runtimePolicyStopConfirmed(selected.observation.runtimePolicy, selected.observation.health === 'STOPPED', 'DOCKER') ? '已保持停止，修改策略后仍保持停止。' : '停止结果待核对' }}</p>
-      <p v-else>{{ runtimePolicySummary(selected.observation.runtimePolicy?.actual, 'DOCKER') }}</p>
-      <RuntimePolicyFields v-if="runtimePolicyDraft" :model-value="runtimePolicyDraft" kind="DOCKER" :stop-timeout-editable="false" :disabled="busy || runtimePolicyAttempted || !selected.observation.runtimePolicy?.editable" @update:model-value="editRuntimePolicy" />
-      <p v-else class="muted">{{ busy ? '正在读取当前策略…' : '尚未确认运行策略，请重新读取' }}</p>
-      <p v-if="selected.observation.runtimePolicy && !selected.observation.runtimePolicy.editable" class="muted">当前运行对象不支持修改策略</p>
-      <p v-if="runtimePolicyErrorMessage" class="error" role="alert">{{ runtimePolicyErrorMessage }}</p>
-      <div class="dialog-footer"><button type="button" class="secondary" :disabled="busy" @click="dialog = ''">关闭</button><button type="button" class="secondary" :disabled="busy || runtimePolicyAttempted" @click="openRuntimePolicy(selected)">重新读取</button><button class="primary" :disabled="busy || !runtimePolicyDirty || !selected.observation.runtimePolicy?.editable">{{ runtimePolicyAttempted ? '重试原请求' : '应用策略' }}</button></div>
-    </form>
-    <form
-      v-else-if="dialog === 'import'"
-      class="dialog-form"
-      @submit.prevent="importArtifact"
-    >
-      <label
-        >来源<select
-          v-model="importSource"
-          aria-label="来源"
-          @change="
-            importRecipe =
-              importSource === 'JAR' ? 'java-compose-v1' : importRecipe;
-            file = undefined;
-            importSHA = '';
-          "
-        >
-          <option value="DOCKER_ARCHIVE">完整 Docker 镜像</option>
-          <option value="JAR">可执行 JAR + 已安装 Java21</option>
-        </select></label
-      >
-      <label
-        >配方<select
-          v-model="importRecipe"
-          aria-label="配方"
-          :disabled="importSource === 'JAR'"
-        >
-          <option value="java-compose-v1">Java 服务</option>
-          <option value="preview-node-v1">预览节点</option>
-          <option value="zlm-direct-v1">独立 ZLM</option>
-        </select></label
-      >
-      <label v-if="importSource === 'JAR'"
-        >Java21 运行环境<select
-          v-model="importRuntime"
-          aria-label="Java21 运行环境"
-          required
-        >
-          <option value="">选择已校验就绪环境</option>
-          <option
-            v-for="runtime in runtimeInstallations.filter(
-              (item) =>
-                item.pluginKey === 'java-runtime' &&
-                item.pluginVersion === '21-jre' &&
-                item.status === 'READY',
-            )"
-            :key="runtime.id"
-            :value="runtime.id"
-          >
-            {{
-              targets.find((target) => target.id === runtime.targetId)?.name ||
-              runtime.targetId
-            }}
-            · Java21
-          </option>
-        </select></label
-      >
-      <label>名称<input v-model="importName" required /></label
-      ><label
-        >{{ importSource === "JAR" ? "可执行 JAR" : "Docker save 归档"
-        }}<input
-          type="file"
-          :accept="importSource === 'JAR' ? '.jar' : '.tar'"
-          required
-          @change="pickFile" /></label
-      ><label
-        >预期 SHA-256<input
-          v-model="importSHA"
-          required
-          pattern="[a-fA-F0-9]{64}"
-          spellcheck="false" /></label
-      ><small>{{
-        importSource === "JAR"
-          ? "最大128MiB；验证SHA-256、Main-Class和Java21字节码边界。只添加固定JAR层，不执行上传代码；封装结果冻结运行环境，完整镜像不能替换JRE。"
-          : importRecipe === "zlm-direct-v1"
-            ? "选择独立 ZLM 镜像归档，使用可信 SHA-256；单镜像 linux/amd64，最大 2GiB。"
-            : importRecipe === "preview-node-v1"
-              ? "选择 S4 节点包内 preview-node-image.tar，使用该文件的可信 SHA-256；最大 2GiB，须支持维护封闭。"
-              : "单镜像 linux/amd64，标签以 sfops/ 开头，最大512MiB。"
-      }}</small>
-      <div class="dialog-footer">
-        <button
-          type="button"
-          class="secondary"
-          :disabled="busy"
-          @click="dialog = ''"
-        >
-          取消
-        </button>
-        <button class="primary" :disabled="busy">
-          {{ uploadPhase || "上传并校验" }}
-        </button>
-      </div>
-    </form>
-    <form
-      v-else-if="dialog === 'candidate'"
-      class="dialog-form"
-      @submit.prevent="preview()"
-    >
-      <p v-if="planKind === 'ROLLBACK'">回退到上一成功版本，恢复其冻结配置。</p>
-      <label v-if="planKind === 'PUBLISH'"
-        >候选制品<select v-model="artifactChoice" required>
-          <option v-for="a in eligibleArtifacts" :key="a.id" :value="a.id">
-            {{ a.name }}
-          </option>
-        </select></label
-      >
-      <template
-        v-if="planInstance?.config.preview && planInstance.currentReleaseId"
-      >
-        <p>
-          在平台“服务信息 →
-          预览执行节点”停止接新预览；资源归零后获取维护许可。作业完成后，节点仍保持排空。
-        </p>
-        <label
-          >维护许可编号<input
-            v-model="maintenancePermit"
-            required
-            pattern="[a-f0-9-]{36}"
-            autocomplete="off"
-        /></label>
-      </template>
-      <div class="dialog-footer">
-        <button
-          type="button"
-          class="secondary"
-          :disabled="busy"
-          @click="dialog = ''"
-        >
-          取消
-        </button>
-        <button class="primary" :disabled="busy || optionsLoading">生成预检计划</button>
-      </div>
-    </form>
-    <div v-else-if="dialog === 'plan' && plan" class="dialog-form">
-      <dl class="plan-detail">
-        <dt>操作</dt>
-        <dd>
-          {{ plan.kind === "ROLLBACK" ? "回滚" : "发布" }} ·
-          {{ planInstance?.name }}
-        </dd>
-        <dt>版本来源</dt>
-        <dd>{{ artifactOptions.find((item) => item.id === plan?.candidate.artifactId)?.name || '所选制品' }}</dd>
-        <dt>失败处理</dt><dd>{{ plan.baseline ? '恢复上一成功版本' : '停止未成功的候选' }}</dd>
-        <template v-if="plan.candidate.runtimeEnvironment">
-          <dt>冻结运行环境</dt>
-          <dd>
-            Java {{ plan.candidate.runtimeEnvironment.pluginVersion }}
-          </dd>
-        </template>
-        <dt>端口</dt>
-        <dd>
-          {{ plan.candidate.config.bindAddress }}:{{
-            plan.candidate.config.hostPort
-          }}
-          → {{ plan.candidate.config.containerPort }}
-        </dd>
-        <dt>健康检查</dt>
-        <dd>
-          {{ plan.candidate.config.healthPath }} ·
-          {{ plan.candidate.config.healthSeconds }}秒
-        </dd>
-        <dt>影响</dt>
-        <dd>
-          {{
-            plan.candidate.config.preview
-              ? "只替换此预览节点；已有资源必须清零。失败恢复上一成功版本，作业完成后需到平台检查并明确启用。"
-              : "替换该实例，发布期间会短暂中断；数据库不随应用回滚。"
-          }}
-        </dd>
-        <template v-if="plan.maintenancePermit"
-          ><dt>维护许可</dt>
-          <dd>
-            <code>{{ plan.maintenancePermit }}</code>
-          </dd></template
-        >
-        <dt>有效期</dt>
-        <dd>{{ time(plan.expiresAt) }}</dd>
-      </dl>
-      <details><summary>版本技术详情</summary><dl class="plan-detail"><dt>候选</dt><dd><code>{{ plan.candidate.id }}</code></dd><dt>镜像</dt><dd><code>{{ plan.candidate.imageId }}</code></dd><dt>恢复基线</dt><dd><code>{{ plan.baseline?.id || "停止未成功的候选" }}</code></dd><template v-if="plan.candidate.runtimeEnvironment"><dt>运行环境摘要</dt><dd><code>{{ plan.candidate.runtimeEnvironment.imageDigest }}</code></dd></template></dl></details>
-      <div class="dialog-footer">
-        <button
-          type="button"
-          class="secondary"
-          :disabled="busy"
-          @click="dialog = ''"
-        >
-          取消
-        </button>
-        <button class="primary" :disabled="busy" @click="submit">
-          确认执行
-        </button>
-      </div>
-    </div>
-    <div v-else-if="dialog === 'history'" class="version-list">
-      <article v-for="r in releases" :key="r.id">
-        <strong>{{
-          r.id === selected?.currentReleaseId
-            ? "当前成功"
-            : r.id === selected?.previousReleaseId
-              ? "上一成功"
-              : "历史候选"
-        }}</strong
-        ><span v-if="r.runtimeEnvironment">Java {{ r.runtimeEnvironment.pluginVersion }}</span>
-        <details><summary>版本详情</summary><code>{{ r.id }}</code><small>{{ r.imageId }}</small><code v-if="r.runtimeEnvironment">{{ r.runtimeEnvironment.imageDigest }}</code></details>
-        <details v-if="r.config.preview">
-          <summary>冻结的节点配置</summary>
-          <pre class="log-output">{{ JSON.stringify(r.config, null, 2) }}</pre>
-        </details>
-      </article>
-      <div v-if="!releases.length" class="empty">暂无版本</div>
-      <OpsPagination :page="releasePage" :page-size="releasePageSize" :total="releaseTotal" :disabled="releasesLoading" label="发布版本分页" @update:page="releaseList.changePage" @update:page-size="releaseList.changeSize" />
-    </div>
-    <div v-else-if="dialog === 'registration'" class="dialog-form">
-      <p>
-        部署就绪后，将目标机上的登记文件和机器凭据安全转交平台管理员，导入节点；浏览器预览验证与明确启用在平台进行。
-      </p>
-      <pre class="log-output">{{ JSON.stringify(registration, null, 2) }}</pre>
-      <p>
-        升级或回退：平台排空 → 获取维护许可 → Ops 预检执行 → 核对作业及版本 →
-        平台检查 / 重新登记 → 解除维护 → 参与调度。
-      </p>
-    </div>
-    <pre v-else-if="dialog === 'logs'" class="log-output">{{
-      logs || "暂无日志"
-    }}</pre>
-    <div v-else-if="dialog === 'job' && detail" class="dialog-form">
-      <div v-if="detail.status === 'UNKNOWN'" class="error">
-        结果尚未确认，相关变更已锁定
-      </div>
-      <p v-if="detail.errorCode" class="error">{{ softwareJobErrorMessages[detail.errorCode] || '操作未完成，请核对原操作和执行日志。' }}</p>
-      <dl class="plan-detail">
-        <dt>状态</dt>
-        <dd>
-          {{ statusLabels[jobStatus(detail)] }} ·
-          {{ phaseLabels[detail.phase] || '阶段待确认' }}
-        </dd>
-        <dt>时间</dt>
-        <dd>{{ time(detail.updatedAt) }}</dd>
-      </dl>
-      <div class="runtime-actions">
-        <button v-if="detail.status === 'UNKNOWN' || detail.targetAckPending" class="secondary" :disabled="busy" @click="reconcile(detail)">核对原操作</button>
-        <button v-if="detail.status === 'QUEUED' && detail.phase !== 'UPLOADING' && !detail.targetAckPending" class="quiet" :disabled="busy" @click="cancelJob(detail)">取消排队</button>
-      </div>
-      <details><summary>诊断信息</summary><dl class="plan-detail">
-        <dt>作业</dt><dd><code>{{ detail.id }}</code></dd>
-        <dt>状态 / 阶段</dt><dd><code>{{ softwareJobDiagnostic(detail.status, detail.phase, phaseLabels) }}</code></dd>
-        <dt>错误码</dt><dd>{{ detail.errorCode || "—" }}</dd>
-        <dt>追踪</dt>
-        <dd>
-          <code>{{ detail.traceId }}</code>
-        </dd>
-        <dt>结果</dt>
-        <dd>
-          <pre>{{ JSON.stringify(detail.result, null, 2) }}</pre>
-        </dd>
-      </dl></details>
-    </div>
-  </ElDialog>
+    @save-binding="saveBinding"
+    @save-instance="saveInstance"
+    @recipe-changed="recipeChanged"
+    @update:recipe="recipe = $event"
+    @update:import-source="
+      importSource = $event;
+      file = undefined;
+    "
+    @update:import-recipe="importRecipe = $event"
+    @update:import-runtime="importRuntime = $event"
+    @update:import-name="importName = $event"
+    @update:import-s-h-a="importSHA = $event"
+    @update:artifact-choice="artifactChoice = $event"
+    @update:maintenance-permit="maintenancePermit = $event"
+    @pick-file="pickFile"
+    @import-artifact="importArtifact"
+    @apply-runtime-policy="applyRuntimePolicy"
+    @edit-runtime-policy="editRuntimePolicy"
+    @open-runtime-policy="openRuntimePolicy"
+    @instance-action="instanceAction"
+    @preview="preview()"
+    @submit="submit"
+    @change-release-page="releaseList.changePage"
+    @change-release-size="releaseList.changeSize"
+    @reconcile="reconcile($event)"
+    @cancel-job="cancelJob"
+  />
 </template>
-
-<style scoped>
-.ops-content small {
-  display: block;
-  color: #70839a;
-  font-size: 12px;
-  margin-top: 6px;
-}
-.actions {
-  min-width: 180px;
-}
-.actions button {
-  padding: 5px;
-}
-.runtime-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
-.runtime-actions strong{overflow-wrap:anywhere;}
-.runtime-actions .spacer{flex:1;}
-.probe-controls {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.probe-controls select {
-  margin: 0;
-  width: auto;
-  min-width: 140px;
-  height: 34px;
-  padding: 4px 10px;
-  font-size: 12px;
-}
-.job-filters {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.job-filters select {
-  margin: 0;
-  width: 132px;
-  height: 36px;
-  font-size: 13px;
-}
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-}
-.plan-detail {
-  display: grid;
-  grid-template-columns: 90px minmax(0, 1fr);
-  gap: 14px;
-  margin: 0;
-}
-.plan-detail dt {
-  color: #6b8095;
-}
-.plan-detail dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.plan-detail code {
-  overflow-wrap: anywhere;
-}
-.plan-detail pre {
-  white-space: pre-wrap;
-  max-height: 280px;
-  overflow: auto;
-  font-size: 12px;
-}
-.log-output {
-  background: #edf3f8;
-  color: #28445e;
-  padding: 16px;
-  border-radius: 6px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 60vh;
-  overflow: auto;
-  font:
-    12px/1.6 Consolas,
-    monospace;
-}
-.probe-result {
-  max-width: 320px;
-}
-.dependency-section {
-  margin-top: 28px;
-  padding-top: 20px;
-  border-top: 1px solid var(--border);
-}
-.dependency-section > summary {
-  font-weight: 500;
-  color: var(--text);
-}
-.probe-result dl {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 8px;
-  font-size: 12px;
-}
-.probe-result dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.version-list article {
-  padding: 16px 0;
-  border-bottom: 1px solid #dce5ef;
-  display: grid;
-  gap: 7px;
-  overflow-wrap: anywhere;
-}
-details {
-  margin-top: 8px;
-}
-details > .form-grid {
-  margin-top: 12px;
-}
-summary {
-  cursor: pointer;
-  color: #507596;
-  font-size: 13px;
-}
-select[multiple] {
-  min-height: 65px;
-}
-@media (max-width: 600px) {
-  .form-grid {
-    grid-template-columns: 1fr;
-  }
-  .plan-detail {
-    grid-template-columns: 75px minmax(0, 1fr);
-  }
-  .job-filters {
-    width: 100%;
-  }
-  .job-filters select {
-    flex: 1;
-    min-width: 0;
-  }
-}
-</style>

@@ -5,6 +5,7 @@ import type { TargetSelection } from './planTargets'
 
 export interface StatusPlan {
   planId: string
+  name?: string | null
   state: 'ACTIVE' | 'STOPPED' | 'EXPIRED'
   intervalMinutes: number
   targetCount: number
@@ -30,6 +31,7 @@ export interface PlanProgress {
 }
 export interface StatusPlanInput {
   clientRequestId: string
+  name?: string
   groupKeys: string[]
   intervalMinutes: number
   durationHours: number
@@ -45,6 +47,8 @@ export function parseStatusPlan(value: unknown): StatusPlan {
   const row = object(value),
     state = string(row.state)
   if (!['ACTIVE', 'STOPPED', 'EXPIRED'].includes(state)) throw new Error('plan state')
+  const name = row.name == null ? null : string(row.name).trim()
+  if (name !== null && (!name || [...name].length > 80)) throw new Error('plan name')
   const intervalMinutes = integer(row.intervalMinutes),
     targetCount = integer(row.targetCount)
   const startAt = string(row.startAt),
@@ -95,6 +99,7 @@ export function parseStatusPlan(value: unknown): StatusPlan {
     throw new Error('plan bounds')
   return {
     planId: id(row.planId),
+    ...(row.name === undefined ? {} : { name }),
     state: state as StatusPlan['state'],
     intervalMinutes,
     targetCount,

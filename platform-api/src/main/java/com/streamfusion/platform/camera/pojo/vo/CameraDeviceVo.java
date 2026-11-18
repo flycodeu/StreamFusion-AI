@@ -14,6 +14,7 @@ public record CameraDeviceVo(
         @Schema(description = "当前显示名称") String name,
         @Schema(description = "本地显示名称覆盖", nullable = true) String localName,
         @Schema(description = "本地设备备注", nullable = true) String remark,
+        @Schema(description = "接入来源配置的品牌提示", nullable = true) String vendorHint,
         @Schema(description = "可靠观测制造商", nullable = true) String manufacturer,
         @Schema(description = "可靠观测型号", nullable = true) String model,
         @Schema(description = "设备报告的序列号，不作跨来源唯一键", nullable = true) String serialNumber,

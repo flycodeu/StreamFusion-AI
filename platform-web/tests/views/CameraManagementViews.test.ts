@@ -6,6 +6,7 @@ import { node, nodes, renderer, text } from '../support/renderer'
 import type { Host } from '../support/renderer'
 import { clearIdentity } from '../../src/session/state'
 import CameraManage from '../../src/views/camera/Manage.vue'
+import CameraGroupManage from '../../src/views/camera-group/Manage.vue'
 import ScopeManage from '../../src/views/camera-scope/Manage.vue'
 import CreateDialog from '../../src/features/camera/CreateDialog.vue'
 import DetailDialog from '../../src/features/camera/DetailDialog.vue'
@@ -2551,9 +2552,10 @@ describe('camera management interaction boundaries', () => {
     expect(text(root)).not.toContain('旧设备')
     expect(text(root)).toContain('1 台可检测')
   })
-  it('shows the session task name after creation without adding fields to the public request', async () => {
+  it('submits the trimmed task name and renders the persisted plan name', async () => {
     const plan = {
       planId: '18',
+      name: '夜间厂区巡检',
       state: 'ACTIVE',
       targetCount: 1,
       intervalMinutes: 60,
@@ -2575,8 +2577,7 @@ describe('camera management interaction boundaries', () => {
     await choosePatrolPage(root)
     await click(root, '提交任务')
     expect(text(root)).toContain('夜间厂区巡检')
-    expect(api.createStatusPlan.mock.calls[0]![0]).not.toHaveProperty('name')
-    expect(api.createStatusPlan.mock.calls[0]![0]).not.toHaveProperty('taskName')
+    expect(api.createStatusPlan.mock.calls[0]![0]).toMatchObject({ name: '夜间厂区巡检' })
   })
   it('shows address and online status in the tree and allows deselecting or clearing cameras', async () => {
     api.getStatusPlans.mockResolvedValue([])
@@ -3670,5 +3671,11 @@ describe('camera management interaction boundaries', () => {
     expect(api.deleteCamera).toHaveBeenCalledWith({ cameraId: '10', version: '3' })
     expect(api.deleteCameraDevice).toHaveBeenCalledWith('100', '4')
     expect(api.deleteSource).toHaveBeenCalledWith('1', '4')
+  })
+  it('distinguishes group-focused entry from standard camera management workspace', async () => {
+    const root = await mount(CameraGroupManage)
+    expect(text(root)).toContain('分组视图')
+    expect(text(root)).toContain('1 组')
+    expect(button(root, '新建分组')).toBeDefined()
   })
 })

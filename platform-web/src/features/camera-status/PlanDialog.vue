@@ -9,15 +9,11 @@ import {
   ElSelect,
   ElMessageBox,
   ElInput,
-  ElEmpty,
-  ElDropdown,
-  ElDropdownMenu,
-  ElDropdownItem,
   ElTabs,
   ElTabPane,
   ElSwitch,
 } from 'element-plus'
-import { Check, Refresh, Search } from '@element-plus/icons-vue'
+import { Check } from '@element-plus/icons-vue'
 import {
   createStatusPlan,
   getStatusPlans,
@@ -31,14 +27,14 @@ import type { GroupNode } from '../camera-groups/tree'
 import type { StatusPlan, StatusPlanInput } from '../../api/camera-status/plans'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
-import { formatDateTime } from '../../utils/dateTime'
 import { ApiRequestError } from '../../lib/http/error'
 import { reasonLabel } from './model'
-import { progressItems, planStateLabels, planStateLabel } from './presentation'
 import { inspectPlanTargets } from '../../api/camera-status/planTargets'
 import type { PlanTarget, TargetSelection, TargetScope } from '../../api/camera-status/planTargets'
 import PlanCameraPicker from './PlanCameraPicker.vue'
 import PlanTargetSettings from './PlanTargetSettings.vue'
+import PlanTaskList from './PlanTaskList.vue'
+import './patrol-dialog.css'
 
 const props = withDefaults(defineProps<{ groupKeys?: string[] }>(), { groupKeys: () => [] })
 const scope = ref<'PAGE' | 'ALL' | 'PLAN' | 'GROUPS'>(props.groupKeys.length ? 'PAGE' : 'GROUPS')
@@ -46,9 +42,7 @@ const selectedKeys = ref([...new Set(props.groupKeys)])
 const targetSelections = ref<TargetSelection[]>([])
 const tab = ref('create')
 const step = ref(0)
-// 新增前端字段：现有 API 没有名称字段；备注只保留在当前弹窗会话，不写入请求。
 const taskName = ref(defaultTaskName())
-const taskNames = ref<Record<string, string>>({})
 const nameTouched = ref(false)
 const taskState = ref('ALL')
 const taskSearch = ref('')
@@ -86,9 +80,7 @@ let failures = 0
 let readRevision = 0
 let pageActive = true
 let timer: ReturnType<typeof globalThis.setInterval> | undefined
-function planActive(plan: StatusPlan) {
-  return plan.state === 'ACTIVE' && Date.parse(plan.endAt) > now.value
-}
+
 function defaultTaskName() {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Shanghai',
@@ -98,44 +90,11 @@ function defaultTaskName() {
   }).formatToParts(new Date())
   return `巡检任务_${['year', 'month', 'day'].map((key) => parts.find((part) => part.type === key)?.value).join('')}`
 }
+
 function planTitle(plan: StatusPlan) {
-  return taskNames.value[plan.planId] || `巡检任务 #${plan.planId.slice(-4)}`
+  return plan.name?.trim() || `巡检任务 #${plan.planId.slice(-4)}`
 }
-function planState(plan: StatusPlan) {
-  return planActive(plan)
-    ? 'ACTIVE'
-    : Date.parse(plan.endAt) <= now.value || plan.state === 'EXPIRED'
-      ? 'EXPIRED'
-      : 'STOPPED'
-}
-function checkLabel(plan: StatusPlan) {
-  return plan.layer === 'MEDIA' ? '视频收帧' : plan.checkVideo ? '在线状态 / 视频' : '在线状态'
-}
-const expiryFormatter = new Intl.DateTimeFormat('zh-CN', {
-  timeZone: 'Asia/Shanghai',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  hourCycle: 'h23',
-})
-function planSummary(plan: StatusPlan) {
-  const endAt = new Date(plan.endAt)
-  const expiry = Number.isFinite(endAt.getTime()) ? expiryFormatter.format(endAt) : '—'
-  return `${plan.targetCount} 台设备 · ${checkLabel(plan)} · 每 ${plan.intervalMinutes} 分钟 · 有效期至 ${expiry}`
-}
-function receiptItems(plan: StatusPlan) {
-  return progressItems.filter(
-    (item) => !['pending', 'skipped'].includes(item.key) || plan.progress?.[item.key] !== 0,
-  )
-}
-const filteredPlans = computed(() =>
-  plans.value.filter(
-    (plan) =>
-      (taskState.value === 'ALL' || planState(plan) === taskState.value) &&
-      planTitle(plan).toLocaleLowerCase().includes(taskSearch.value.trim().toLocaleLowerCase()),
-  ),
-)
+
 const nameError = computed(() =>
   !taskName.value.trim()
     ? '请输入任务名称'
@@ -152,7 +111,6 @@ const selectedCount = computed(() =>
         ? null
         : targets.value.length,
 )
-const reportPlan = computed(() => plans.value.find((plan) => plan.planId === reportPlanId.value))
 const targets = ref<PlanTarget[]>([]),
   inspecting = ref(false),
   inspectionError = ref<unknown>(null)
@@ -170,6 +128,7 @@ const canCreate = computed(
     eligibleKeys.value.length > 0 &&
     hours.value * 60 >= interval.value,
 )
+
 async function inspectTargets() {
   const active = capture()
   const requestId = ++inspectionId
@@ -204,6 +163,7 @@ async function inspectTargets() {
     if (active() && requestId === inspectionId) inspecting.value = false
   }
 }
+
 async function reuse(plan: StatusPlan) {
   if (busy.value || pending.value || pickerBusy.value) return
   targetSelections.value = []
@@ -226,6 +186,7 @@ async function reuse(plan: StatusPlan) {
   await inspectTargets()
   createPanel.value?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
 }
+
 async function nextStep() {
   if (busy.value || pending.value || navigationBusy.value || pickerBusy.value) return
   const requiresInspection = step.value === 0
@@ -251,6 +212,7 @@ async function nextStep() {
     if (requiresInspection) navigationBusy.value = false
   }
 }
+
 function changeScope() {
   targetSelections.value = []
   ++inspectionId
@@ -263,12 +225,13 @@ function changeScope() {
   )
     targets.value = []
 }
+
 async function selectedChanged() {
   changeScope()
-  // Group selection emits its final keys before releasing the picker lock.
   await nextTick()
   if (scope.value === 'PAGE' && selectedKeys.value.length) await inspectTargets()
 }
+
 async function setTargetSelection(selection: TargetSelection) {
   if (busy.value || pending.value || inspecting.value) return
   targetSelections.value = [
@@ -277,6 +240,7 @@ async function setTargetSelection(selection: TargetSelection) {
   ]
   await inspectTargets()
 }
+
 async function selectGroups(keys: string[]) {
   if (busy.value || pending.value) return
   selectedGroups.value = keys
@@ -285,6 +249,7 @@ async function selectGroups(keys: string[]) {
   changeScope()
   if (keys.length) await inspectTargets()
 }
+
 async function selectAll() {
   if (busy.value || pending.value) return
   selectedKeys.value = []
@@ -293,6 +258,7 @@ async function selectAll() {
   changeScope()
   await inspectTargets()
 }
+
 const planErrorAdvice = computed(() => {
   if (!(error.value instanceof ApiRequestError)) return undefined
   if (error.value.status === 429 && ['create', 'resume'].includes(errorOperation.value))
@@ -304,6 +270,7 @@ const planErrorAdvice = computed(() => {
   if (errorOperation.value !== 'create') return undefined
   return '检测配置或授权已变化，请重新核对目标后启动。'
 })
+
 async function load(silent = false) {
   if (loading.value) return
   const active = capture(),
@@ -339,15 +306,18 @@ async function load(silent = false) {
     }
   }
 }
+
 function invalidateRead() {
   ++readRevision
   loading.value = false
 }
+
 async function create() {
   if (step.value !== 3 || busy.value || !canCreate.value) return
   const active = capture()
   pending.value ??= {
     clientRequestId: `${Date.now()}-${crypto.randomUUID()}`,
+    name: taskName.value.trim(),
     groupKeys: [...eligibleKeys.value],
     intervalMinutes: interval.value,
     durationHours: hours.value,
@@ -373,9 +343,8 @@ async function create() {
   error.value = null
   errorOperation.value = 'create'
   try {
-    const created = await createStatusPlan(pending.value)
+    await createStatusPlan(pending.value)
     if (!active()) return
-    taskNames.value[created.planId] = taskName.value.trim()
     pending.value = null
     taskState.value = 'ALL'
     taskSearch.value = ''
@@ -400,6 +369,7 @@ async function create() {
     if (active()) busy.value = false
   }
 }
+
 async function stop(plan: StatusPlan) {
   if (busy.value) return
   const active = capture()
@@ -422,6 +392,7 @@ async function stop(plan: StatusPlan) {
     if (active()) busy.value = false
   }
 }
+
 async function resume(plan: StatusPlan) {
   if (busy.value) return
   const active = capture()
@@ -441,6 +412,7 @@ async function resume(plan: StatusPlan) {
     if (active()) busy.value = false
   }
 }
+
 async function remove(plan: StatusPlan) {
   if (busy.value || pending.value) return
   const active = capture()
@@ -461,7 +433,6 @@ async function remove(plan: StatusPlan) {
   try {
     await deleteStatusPlan(plan)
     if (!active()) return
-    delete taskNames.value[plan.planId]
     if (reportPlanId.value === plan.planId) reportPlanId.value = null
     emit('changed')
     await load()
@@ -475,6 +446,7 @@ async function remove(plan: StatusPlan) {
     if (active()) busy.value = false
   }
 }
+
 async function close() {
   if (busy.value) return
   if (pending.value) {
@@ -489,6 +461,7 @@ async function close() {
   }
   emit('close')
 }
+
 async function loadGroups() {
   const active = capture()
   groupError.value = null
@@ -499,6 +472,7 @@ async function loadGroups() {
     if (active()) groupError.value = cause
   }
 }
+
 onMounted(() => {
   void load()
   const active = capture()
@@ -768,142 +742,24 @@ onDeactivated(() => {
           </p>
         </div>
       </section>
-      <section v-else class="patrol-tasks" aria-label="我的巡检任务" :aria-busy="loading">
-        <header class="patrol-toolbar">
-          <div class="task-filters">
-            <ElSelect v-model="taskState" aria-label="任务状态"
-              ><ElOption value="ALL" label="全部状态" /><ElOption
-                v-for="(label, value) in planStateLabels"
-                :key="value"
-                :value="value"
-                :label="label" /></ElSelect
-            ><ElInput
-              v-model="taskSearch"
-              :prefix-icon="Search"
-              clearable
-              placeholder="搜索任务名称"
-              aria-label="搜索任务名称"
-            />
-          </div>
-          <ElButton :icon="Refresh" :disabled="busy" :loading="loading" @click="load()"
-            >刷新列表</ElButton
-          >
-        </header>
-        <p v-if="pollPaused" class="patrol-warning" role="status">
-          读取连续失败，已暂停自动刷新，请点击“刷新列表”。
-        </p>
-        <div class="task-list">
-          <ElEmpty
-            v-if="!filteredPlans.length && !loading && !error"
-            :image-size="64"
-            :description="plans.length ? '没有符合条件的任务' : '暂无任务，请先新建巡检'"
-          />
-          <p v-if="loading && !plans.length" class="patrol-note" role="status">正在读取巡检任务…</p>
-          <article v-for="plan in filteredPlans" :key="plan.planId" class="patrol-card">
-            <div class="task-content">
-              <div class="task-main">
-                <div class="patrol-row-title">
-                  <h3 :title="planTitle(plan)">{{ planTitle(plan) }}</h3>
-                  <span class="task-state">{{ planStateLabel(planState(plan)) }}</span>
-                </div>
-                <span
-                  class="task-summary"
-                  :title="`${planSummary(plan)}；有效期 ${formatDateTime(plan.startAt)} — ${formatDateTime(plan.endAt)}`"
-                  >{{ planSummary(plan) }}</span
-                >
-              </div>
-              <div
-                class="receipt-bar"
-                :aria-label="plan.progress ? '最近回执' : '暂无最近回执'"
-                :title="plan.progress ? undefined : '暂无最近回执'"
-              >
-                <span class="receipt-label">最近巡检：</span>
-                <span v-for="item in receiptItems(plan)" :key="item.key" class="receipt-item">
-                  <span>{{ item.label }}</span>
-                  <strong
-                    :class="{
-                      'has-anomaly': item.key === 'failed' && (plan.progress?.failed ?? 0) > 0,
-                    }"
-                    >{{ plan.progress?.[item.key] ?? '—' }}</strong
-                  >
-                </span>
-              </div>
-            </div>
-            <div class="task-actions">
-              <ElButton
-                v-if="planActive(plan)"
-                class="task-action-link"
-                link
-                size="small"
-                :disabled="busy || !!pending"
-                @click="stop(plan)"
-                >暂停</ElButton
-              >
-              <ElButton
-                v-else-if="plan.state === 'STOPPED' && Date.parse(plan.endAt) > now"
-                class="task-action-link"
-                link
-                size="small"
-                :disabled="busy || !!pending"
-                @click="resume(plan)"
-                >恢复执行</ElButton
-              >
-              <ElButton
-                v-else
-                class="task-action-link"
-                link
-                size="small"
-                :disabled="busy || !!pending"
-                @click="reuse(plan)"
-                >复用范围</ElButton
-              >
-              <ElButton
-                class="task-report-button"
-                size="small"
-                :aria-expanded="reportPlanId === plan.planId"
-                @click="reportPlanId = reportPlanId === plan.planId ? null : plan.planId"
-                >巡检报告</ElButton
-              >
-              <ElDropdown placement="bottom-end" trigger="click">
-                <ElButton class="task-more-button" text size="small" aria-label="更多操作">
-                  <span aria-hidden="true">···</span>
-                </ElButton>
-                <template #dropdown>
-                  <ElDropdownMenu>
-                    <ElDropdownItem disabled title="当前服务尚未提供按任务立即巡检接口"
-                      >立即巡检</ElDropdownItem
-                    >
-                    <ElDropdownItem :disabled="busy || !!pending" @click="remove(plan)"
-                      >删除</ElDropdownItem
-                    >
-                  </ElDropdownMenu>
-                </template>
-              </ElDropdown>
-            </div>
-            <p v-if="plan.blockedCount || plan.lastReasonCode" class="patrol-warning">
-              {{ plan.blockedCount ? `${plan.blockedCount} 个目标无法继续检测` : ''
-              }}{{ plan.blockedCount && plan.lastReasonCode ? ' · ' : ''
-              }}{{ plan.lastReasonCode ? reasonLabel(plan.lastReasonCode) : '' }}
-            </p>
-            <section
-              v-if="reportPlan?.planId === plan.planId"
-              class="plan-report"
-              aria-label="巡检报告"
-            >
-              <strong>最近回执汇总</strong>
-              <p v-if="!plan.progress">暂无巡检回执</p>
-              <p>
-                {{ checkLabel(plan) }} ·
-                {{ plan.dispatchMode === 'POLLING' ? '逐个轮询' : '有界并行' }}
-              </p>
-              <p>有效期 {{ formatDateTime(plan.startAt) }} — {{ formatDateTime(plan.endAt) }}</p>
-              <p v-if="planActive(plan) && plan.nextAt">
-                下次检测 {{ formatDateTime(plan.nextAt) }}
-              </p>
-            </section>
-          </article>
-        </div>
-      </section>
+      <PlanTaskList
+        v-else
+        v-model:task-state="taskState"
+        v-model:task-search="taskSearch"
+        v-model:report-plan-id="reportPlanId"
+        :plans="plans"
+        :loading="loading"
+        :busy="busy"
+        :has-pending="!!pending"
+        :error="error"
+        :poll-paused="pollPaused"
+        :now="now"
+        @refresh="load()"
+        @stop="stop"
+        @resume="resume"
+        @reuse="reuse"
+        @remove="remove"
+      />
     </div>
     <template #footer>
       <div class="patrol-footer">
@@ -957,591 +813,3 @@ onDeactivated(() => {
     </template>
   </ElDialog>
 </template>
-
-<style scoped>
-:global(.el-dialog.patrol-dialog) {
-  --el-dialog-margin-top: 3vh;
-  max-height: 94dvh;
-}
-:global(.el-dialog.patrol-dialog > .el-dialog__body) {
-  display: flex;
-  flex-direction: column;
-  padding: 12px 24px;
-  overflow: hidden;
-}
-.patrol-request-error {
-  flex-shrink: 0;
-  max-height: 160px;
-  overflow: auto;
-}
-.patrol-tabs {
-  flex-shrink: 0;
-}
-.patrol-tabs :deep(.el-tabs__header) {
-  margin-bottom: 12px;
-}
-.patrol-tabs :deep(.el-tabs__item) {
-  font-weight: 600;
-}
-.patrol-content {
-  flex: 0 1 700px;
-  height: min(700px, calc(94dvh - 220px));
-  min-height: 0;
-  overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--el-border-color-darker) transparent;
-}
-.patrol-content.is-picking {
-  overflow: hidden;
-}
-.is-picking .patrol-create {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-.is-picking .patrol-create > .el-form {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-.is-picking .wizard-stage {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-.is-picking .patrol-feedback {
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: 35%;
-  overflow: auto;
-}
-.steps-banner {
-  flex-shrink: 0;
-  padding: 12px 32px;
-  margin: 14px 0 18px;
-  border: 1px solid #f1f5f9;
-  border-radius: 8px;
-  background: #f8fafc;
-}
-.patrol-steps {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  padding: 0;
-  margin: 0;
-  list-style: none;
-}
-.patrol-steps li {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  white-space: nowrap;
-}
-.patrol-steps li:not(:last-child)::after {
-  content: '';
-  position: absolute;
-  left: calc(50% + 58px);
-  right: calc(-50% + 58px);
-  height: 1px;
-  background: var(--el-border-color);
-}
-.step-number {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  flex-shrink: 0;
-  border: 1px solid var(--el-border-color);
-  border-radius: 50%;
-  font-size: 12px;
-  font-weight: 600;
-}
-.step-number svg {
-  width: 14px;
-}
-.patrol-steps .is-current {
-  color: var(--el-color-primary);
-  font-weight: 600;
-}
-.is-current .step-number {
-  border-color: #bfdbfe;
-  color: #2563eb;
-  background: #eff6ff;
-}
-.is-complete .step-number {
-  color: var(--el-color-success);
-  background: var(--el-color-success-light-9);
-  border-color: var(--el-color-success-light-5);
-}
-.patrol-steps .is-complete::after {
-  background: var(--el-color-success-light-5);
-}
-.task-name-field {
-  display: flex;
-  flex-direction: row;
-  align-items: flex-start;
-  flex: 0 0 auto;
-  width: 438px;
-  max-width: 100%;
-  min-width: 0;
-  margin: 0 0 18px;
-}
-.task-name-field :deep(.el-form-item__label) {
-  box-sizing: border-box;
-  flex: 0 0 78px;
-  height: 32px;
-  padding: 0 12px 0 0;
-  margin: 0;
-  line-height: 32px;
-}
-.task-name-field :deep(.el-form-item__content) {
-  flex: 1;
-  min-width: 0;
-}
-.task-name-field :deep(.el-input) {
-  width: 360px;
-  max-width: 100%;
-}
-.patrol-note {
-  font-size: 13px;
-  line-height: 1.7;
-  color: var(--el-text-color-secondary);
-}
-.settings-stage {
-  padding: 8px 0;
-}
-.stage-heading {
-  margin-bottom: 24px;
-}
-.stage-heading h3 {
-  font-size: 19px;
-  color: var(--el-text-color-primary);
-  margin: 8px 0;
-}
-.setting-list {
-  max-width: 760px;
-  overflow: hidden;
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 8px;
-  background: var(--el-bg-color);
-}
-.setting-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 220px;
-  align-items: center;
-  gap: 24px;
-  min-height: 68px;
-  padding: 12px 16px;
-  margin: 0;
-  border-bottom: 1px solid var(--el-border-color-lighter);
-}
-.setting-row:last-child {
-  border-bottom: 0;
-}
-.setting-row :deep(.el-form-item__label) {
-  display: none;
-}
-.setting-row :deep(.el-form-item__content) {
-  display: contents;
-  margin: 0;
-}
-.setting-row :deep(.el-select) {
-  width: 220px;
-  justify-self: end;
-}
-.setting-row-copy {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 3px;
-}
-.setting-row-copy strong {
-  color: var(--el-text-color-primary);
-  font-size: 14px;
-  font-weight: 600;
-}
-.setting-row-copy span {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-  line-height: 1.5;
-}
-.video-check-toggle :deep(.el-form-item__label) {
-  display: none;
-}
-.video-check-toggle :deep(.el-form-item__content) {
-  margin-left: 0 !important;
-}
-.video-setting {
-  display: flex;
-  gap: 24px;
-  justify-content: space-between;
-  align-items: center;
-  padding: 20px;
-  border: 1px solid var(--el-border-color-light);
-  background: var(--el-fill-color-extra-light);
-  border-radius: 8px;
-}
-
-.video-setting :deep(.el-form-item) {
-  margin: 0;
-  flex-shrink: 0;
-}
-.video-setting :deep(.el-form-item__label) {
-  display: none;
-}
-.patrol-target-summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: 14px;
-  padding: 8px 12px;
-  border-radius: 6px;
-  background: var(--el-color-primary-light-9);
-  font-size: 12px;
-}
-.patrol-target-summary strong {
-  font-size: 16px;
-  color: var(--el-color-primary);
-}
-.patrol-blocked {
-  margin-top: 10px;
-  font-size: 12px;
-  max-height: 130px;
-  overflow: auto;
-}
-.patrol-blocked summary {
-  cursor: pointer;
-  color: var(--el-text-color-secondary);
-}
-.patrol-blocked ul {
-  padding-left: 20px;
-  line-height: 1.8;
-  overflow-wrap: anywhere;
-}
-.patrol-toolbar,
-.task-filters,
-.task-main,
-.patrol-row-title,
-.task-actions,
-.configuration-summary,
-.patrol-footer,
-.footer-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.patrol-toolbar {
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-.task-filters {
-  min-width: 0;
-}
-.task-filters :deep(.el-select) {
-  width: 120px;
-  flex-shrink: 0;
-}
-.task-filters :deep(.el-input) {
-  width: 200px;
-}
-.task-list {
-  padding: 2px 2px 6px;
-}
-.patrol-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px 24px;
-  padding: 16px 20px;
-  margin-bottom: 10px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: var(--el-bg-color);
-  transition:
-    border-color 180ms ease,
-    box-shadow 180ms ease;
-}
-.patrol-card:last-child {
-  margin-bottom: 0;
-}
-.patrol-card:hover {
-  border-color: #cbd5e1;
-  box-shadow: 0 2px 10px rgb(18 35 64 / 4%);
-}
-.task-content {
-  min-width: 0;
-}
-.task-main {
-  min-width: 0;
-  gap: 12px;
-}
-.patrol-row-title {
-  min-width: 0;
-  flex-shrink: 0;
-  max-width: 260px;
-}
-.patrol-row-title h3 {
-  margin: 0;
-  min-width: 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--el-text-color-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.task-summary {
-  flex: 1;
-  min-width: 0;
-  color: #64748b;
-  font-size: 12px;
-  line-height: 20px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.task-state {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  padding: 2px 8px;
-  border: 1px solid #e5e7eb;
-  border-radius: 4px;
-  background: #f8fafc;
-  color: #4b5563;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 18px;
-  white-space: nowrap;
-}
-.task-actions {
-  flex-shrink: 0;
-  gap: 12px;
-}
-.task-action-link:not(:disabled) {
-  color: #2563eb;
-}
-.task-action-link:not(:disabled):hover {
-  color: #1d4ed8;
-}
-.task-report-button {
-  border-color: #e2e8f0;
-  background: #fff;
-  color: #475569;
-}
-.task-report-button:hover,
-.task-report-button:focus-visible {
-  border-color: #cbd5e1;
-  background: #f8fafc;
-  color: #1e293b;
-}
-.task-more-button {
-  width: 24px;
-  padding: 0;
-  color: #64748b;
-  font-size: 20px;
-  letter-spacing: 1px;
-}
-.task-more-button:hover {
-  background: #f1f5f9;
-  color: #1e293b;
-}
-.task-actions :deep(.el-button + .el-button),
-.footer-actions :deep(.el-button + .el-button) {
-  margin-left: 0;
-}
-.configuration-summary {
-  flex-wrap: wrap;
-}
-.config-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  padding: 3px 10px;
-  border-radius: 4px;
-  background: #f1f5f9;
-  color: #334155;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 18px;
-  overflow-wrap: anywhere;
-}
-.receipt-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 0;
-  margin-top: 8px;
-  color: #64748b;
-  font-size: 13px;
-  line-height: 20px;
-}
-.receipt-label {
-  flex-shrink: 0;
-}
-.receipt-item {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.receipt-item + .receipt-item::before {
-  content: '|';
-  margin: 0 10px;
-  color: #cbd5e1;
-}
-.receipt-item strong {
-  color: #1e293b;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 20px;
-  font-variant-numeric: tabular-nums;
-}
-.receipt-item strong.has-anomaly {
-  color: #dc2626;
-  font-weight: 700;
-}
-.patrol-warning {
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--el-color-warning-dark-2);
-  margin: 10px 0 0;
-  overflow-wrap: anywhere;
-}
-.plan-report {
-  grid-column: 1 / -1;
-  margin-top: 4px;
-  padding: 8px 0 0;
-  color: #475569;
-  font-size: 12px;
-}
-.patrol-card > .patrol-warning {
-  grid-column: 1 / -1;
-  color: #64748b;
-}
-.plan-report p {
-  margin: 6px 0 0;
-  line-height: 1.7;
-  color: var(--el-text-color-secondary);
-}
-.patrol-footer {
-  justify-content: space-between;
-  gap: 12px;
-}
-.footer-actions {
-  margin-left: auto;
-  flex-shrink: 0;
-}
-.patrol-next-button {
-  min-width: 88px;
-}
-.selection-count {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-  margin: 0;
-  text-align: left;
-}
-.selection-count strong {
-  color: var(--el-color-primary);
-  font-size: 16px;
-  font-variant-numeric: tabular-nums;
-}
-.patrol-content,
-.patrol-blocked {
-  scrollbar-width: thin;
-  scrollbar-color: var(--el-border-color-darker) transparent;
-}
-.patrol-content::-webkit-scrollbar,
-.patrol-blocked::-webkit-scrollbar {
-  width: 5px;
-}
-.patrol-content::-webkit-scrollbar-thumb,
-.patrol-blocked::-webkit-scrollbar-thumb {
-  background: var(--el-border-color);
-  border-radius: 8px;
-}
-@media (prefers-reduced-motion: reduce) {
-  .patrol-card {
-    transition: none;
-  }
-}
-@media (max-width: 680px) {
-  :global(.el-dialog.patrol-dialog > .el-dialog__body) {
-    padding: 12px 16px;
-  }
-  .task-name-field {
-    width: 100%;
-  }
-  .task-name-field :deep(.el-input) {
-    width: 100%;
-  }
-  .steps-banner {
-    padding: 12px;
-  }
-  .patrol-steps li {
-    gap: 4px;
-    font-size: 12px;
-  }
-  .patrol-steps li::after {
-    display: none;
-  }
-  .task-filters {
-    flex: 1;
-  }
-  .task-filters :deep(.el-input) {
-    width: 100%;
-  }
-  .patrol-toolbar {
-    flex-wrap: wrap;
-  }
-  .setting-row {
-    grid-template-columns: minmax(0, 1fr) 160px;
-    gap: 12px;
-  }
-  .setting-row :deep(.el-select) {
-    width: 160px;
-  }
-  .video-setting {
-    padding: 16px;
-    gap: 12px;
-  }
-  .task-main {
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-  .patrol-card {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
-  }
-  .task-summary {
-    flex-basis: 100%;
-    white-space: normal;
-  }
-  .task-actions {
-    flex-wrap: wrap;
-    margin-left: auto;
-  }
-  .receipt-bar {
-    gap: 4px 0;
-  }
-  .patrol-footer {
-    flex-wrap: wrap;
-  }
-  .selection-count {
-    width: 100%;
-    font-size: 12px;
-  }
-}
-</style>

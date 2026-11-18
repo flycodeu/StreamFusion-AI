@@ -85,6 +85,10 @@ CREATE INDEX ix_camera_status_source ON camera_status_check(source_id,layer,exec
 
 不要重放初始化脚本，也不要在已有等价索引时重复添加。回退应用无需删除这两个索引；如需撤销，应另行评估后使用准确索引名称删除。索引存在不保证优化器一定选用，仍需对实际数据执行 `EXPLAIN`。名称包含匹配继续保留原语义，不声称 `%关键词%` 已变成索引检索。
 
+### 巡检任务名称增量（2026-11-18）
+
+`camera_status_plan` 新增可空 `name`（1～80字符）及检查约束 `ck_camera_plan_name`，用于持久化保存巡检任务名称；旧记录保持 `NULL`，前端自动回退为按任务编号展示。已有库先备份、停写，在隔离副本核对 `SHOW CREATE TABLE camera_status_plan` 尚无 `name` 列后，执行 [巡检任务名称增量](升级/20261118-camera-status-plan-name.sql)。禁止重放完整初始化脚本。
+
 ## 验证
 
 ### 权限查询菜单增量（2026-10-18）

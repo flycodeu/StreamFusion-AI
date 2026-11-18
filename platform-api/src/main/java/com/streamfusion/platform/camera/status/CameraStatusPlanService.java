@@ -85,6 +85,14 @@ public class CameraStatusPlanService {
             throw error(ErrorCode.VALIDATION_ERROR);
         if (command.planId() != null && command.groupIds() != null)
             throw error(ErrorCode.VALIDATION_ERROR);
+        String name = null;
+        if (command.name() != null) {
+            name = command.name().strip();
+            if (name.isEmpty()
+                    || name.codePointCount(0, name.length()) > 80
+                    || name.codePoints().anyMatch(Character::isISOControl))
+                throw error(ErrorCode.VALIDATION_ERROR);
+        }
         var reusedPlanId =
                 command.planId() == null ? 0L : DecimalInput.id(command.planId(), "planId");
         var groupIds =
@@ -134,6 +142,10 @@ public class CameraStatusPlanService {
         if (!selections.isEmpty()) {
             input = new LinkedHashMap<>(input);
             input.put("targetSelections", selections);
+        }
+        if (name != null) {
+            input = new LinkedHashMap<>(input);
+            input.put("name", name);
         }
         var prior = plans.byRequest(actor.userId(), command.clientRequestId());
         if (prior != null) {
@@ -243,6 +255,7 @@ public class CameraStatusPlanService {
         var plan = new CameraStatusPlanEntity();
         plan.setId(DefaultIdentifierGenerator.getInstance().nextId(plan).longValue());
         plan.setActorUserId(actor.userId());
+        plan.setName(name);
         plan.setClientRequestId(command.clientRequestId());
         plan.setRequestKeyId(keyId);
         plan.setRequestFingerprint(crypto.digest(keyId, "camera-status-plan-request", input));
@@ -287,7 +300,7 @@ public class CameraStatusPlanService {
                 context,
                 Map.of(
                         "name",
-                        "巡检任务 " + plan.getId(),
+                        planAuditName(plan),
                         "targetCount",
                         Integer.toString(plan.getTargetCount()),
                         "intervalMinutes",
@@ -328,7 +341,7 @@ public class CameraStatusPlanService {
                     context,
                     Map.of(
                             "name",
-                            "巡检任务 " + plan.getId(),
+                            planAuditName(plan),
                             "beforeState",
                             "ACTIVE",
                             "afterState",
@@ -359,7 +372,7 @@ public class CameraStatusPlanService {
                 context,
                 Map.of(
                         "name",
-                        "巡检任务 " + plan.getId(),
+                        planAuditName(plan),
                         "beforeState",
                         plan.getState(),
                         "targetCount",
@@ -511,9 +524,16 @@ public class CameraStatusPlanService {
         return LocalDateTime.ofInstant(clock.instant(), ZONE).truncatedTo(ChronoUnit.MILLIS);
     }
 
+    private static String planAuditName(CameraStatusPlanEntity plan) {
+        return plan.getName() != null && !plan.getName().isBlank()
+                ? plan.getName()
+                : "巡检任务 " + plan.getId();
+    }
+
     private CameraStatusPlanVo view(CameraStatusPlanEntity plan) {
         return new CameraStatusPlanVo(
                 plan.getId().toString(),
+                plan.getName(),
                 plan.getState(),
                 plan.getIntervalMinutes(),
                 plan.getTargetCount(),

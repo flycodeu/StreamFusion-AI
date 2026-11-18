@@ -6,6 +6,7 @@ import { ApiRequestError } from '../../lib/http/error'
 import { getHealth } from '../../api/health/api'
 import { getPreviewCapacity, getPreviewCatalog } from '../../api/preview/api'
 import type { PreviewCapacity, PreviewChannel } from '../../api/preview/types'
+import type { MenuRoute } from '../../api/auth/types'
 import { formatDateTime } from '../../utils/dateTime'
 import { sessionState } from '../../session/state'
 
@@ -48,6 +49,32 @@ const extraRows = ref(0)
 let resizeObserver: { disconnect: () => void } | null = null
 
 const hasCameraModule = computed(() => sessionState.me?.modules?.includes('camera') ?? false)
+
+function findComponentRoutePath(
+  routes: MenuRoute[] | undefined,
+  componentKey: string,
+  fallback: string,
+): string {
+  if (!routes?.length) return fallback
+  for (const route of routes) {
+    if (route.type === 'PAGE' && route.componentKey === componentKey && route.path) {
+      return route.path
+    }
+    const nested = findComponentRoutePath(route.children, componentKey, '')
+    if (nested) return nested
+  }
+  return fallback
+}
+
+const cameraManagePath = computed(() =>
+  findComponentRoutePath(sessionState.me?.routes, '/camera/Manage', '/camera/manage'),
+)
+const previewCenterPath = computed(() =>
+  findComponentRoutePath(sessionState.me?.routes, '/preview/Center', '/preview/center'),
+)
+const storageManagePath = computed(() =>
+  findComponentRoutePath(sessionState.me?.routes, '/storage/Manage', '/storage/manage'),
+)
 
 const weekdayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 
@@ -241,7 +268,7 @@ onBeforeUnmount(() => {
       <ElCard shadow="never" class="kpi-card">
         <div class="kpi-head">
           <span class="kpi-title">接入视频源</span>
-          <ElButton link type="primary" @click="navigateTo('/cameras/manage')">点位管理</ElButton>
+          <ElButton link type="primary" @click="navigateTo(cameraManagePath)">点位管理</ElButton>
         </div>
         <div class="kpi-body">
           <template v-if="totalChannels !== null">
@@ -257,7 +284,7 @@ onBeforeUnmount(() => {
       <ElCard shadow="never" class="kpi-card">
         <div class="kpi-head">
           <span class="kpi-title">实时推理流</span>
-          <ElButton link type="primary" @click="navigateTo('/preview/center')">实时预览</ElButton>
+          <ElButton link type="primary" @click="navigateTo(previewCenterPath)">实时预览</ElButton>
         </div>
         <div class="kpi-body">
           <template v-if="capacity">
@@ -400,7 +427,7 @@ onBeforeUnmount(() => {
             <ElTag size="small" type="info" effect="plain">待接入</ElTag>
           </div>
           <div class="card-header-right">
-            <ElButton link type="primary" @click="navigateTo('/storage/manage')">
+            <ElButton link type="primary" @click="navigateTo(storageManagePath)">
               存储管理
             </ElButton>
           </div>

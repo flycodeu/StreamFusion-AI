@@ -1,0 +1,300 @@
+.node-environments {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+}
+.node-environments .node-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.node-environments .eyebrow {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+}
+.node-environments h2 {
+  font-size: 24px;
+  margin: 7px 0 8px;
+  font-weight: 600;
+}
+.node-environments .node-header p,
+.node-environments .hint,
+.node-dialog-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.8;
+  margin: 0;
+}
+.node-environments .actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.node-environments .environment-picker {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+}
+.node-environments .environment-picker label,
+.discovery-form label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.node-environments .environment-picker label {
+  flex: 1;
+}
+.node-environments select,
+.node-environments input,
+.discovery-form input {
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel, #fff);
+  color: var(--text);
+  box-sizing: border-box;
+}
+.node-environments .terminal-access {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0;
+  font-size: 13px;
+}
+.node-environments .environment-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel, #fff);
+}
+.node-environments .environment-summary div {
+  display: grid;
+  gap: 8px;
+}
+.node-environments .environment-summary span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.node-environments .environment-summary strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.node-environments .node-tabs {
+  display: flex;
+  gap: 22px;
+  border-bottom: 1px solid var(--border);
+}
+.node-environments .node-tabs button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  padding: 11px 0;
+  color: var(--muted);
+  cursor: pointer;
+}
+.node-environments .node-tabs button.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.node-environments .version-list {
+  display: grid;
+  gap: 14px;
+}
+.node-environments .list-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.node-environments .list-actions p {
+  font-size: 12px;
+  color: var(--muted);
+}
+.node-environments .node-version {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 20px;
+  display: grid;
+  gap: 15px;
+  background: var(--panel, #fff);
+}
+.node-environments .version-title {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.node-environments .version-title strong {
+  font: 600 18px var(--mono);
+}
+.node-environments .default-badge {
+  font-size: 11px;
+  background: #eef5ed;
+  color: #447048;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+.node-environments .package-versions {
+  display: flex;
+  gap: 30px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.node-environments .package-versions b {
+  color: var(--text);
+  font-weight: 500;
+  margin-left: 6px;
+}
+.node-environments code,
+.node-environments pre,
+.discovery-form code,
+.node-terminal-dialog pre {
+  font: 11px/1.8 var(--mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.node-environments pre,
+.node-terminal-dialog pre {
+  padding: 14px;
+  background: #f5f7fa;
+  border-radius: 5px;
+}
+.node-environments .node-version > code {
+  color: var(--muted);
+}
+.node-environments .node-version details {
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.node-environments summary,
+.node-terminal-dialog summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.node-environments .empty,
+.discovery-form .empty {
+  padding: 30px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  line-height: 1.8;
+}
+.node-environments .environment-details {
+  display: grid;
+  gap: 20px;
+}
+.node-environments .source-file {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.node-environments .source-file a {
+  color: var(--accent);
+}
+.node-environments dl {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 16px;
+  font-size: 12px;
+}
+.node-environments dt {
+  color: var(--muted);
+}
+.node-environments dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.node-environments .job-result {
+  padding: 18px;
+  background: #f6f8fb;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+}
+.node-environments .job-result details {
+  width: 100%;
+}
+.node-environments .error,
+.node-environments .danger,
+.discovery-form .error {
+  color: var(--danger, #a74430);
+}
+.node-environments .error,
+.discovery-form .error {
+  font-size: 13px;
+  line-height: 1.8;
+}
+.discovery-form {
+  display: grid;
+  gap: 16px;
+}
+.discovery-form .candidate {
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  display: grid;
+  gap: 10px;
+}
+.discovery-form .candidate p {
+  margin: 0;
+  font-size: 12px;
+}
+.node-environments .history-row {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.node-environments .history-row time {
+  color: var(--muted);
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .node-environments .node-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .node-environments .environment-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+    padding: 16px;
+  }
+  .node-environments .list-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .node-environments .node-version {
+    padding: 16px;
+  }
+  .node-environments .actions {
+    gap: 8px;
+  }
+  .node-environments .node-tabs {
+    gap: 20px;
+  }
+  .node-environments .history-row {
+    flex-wrap: wrap;
+  }
+}

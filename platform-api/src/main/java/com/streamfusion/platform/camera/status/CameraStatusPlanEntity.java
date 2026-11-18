@@ -13,6 +13,7 @@ import lombok.Setter;
 public class CameraStatusPlanEntity {
     @TableId private Long id;
     private Long actorUserId;
+    private String name;
     private String clientRequestId;
     private String requestKeyId;
     private byte[] requestFingerprint;

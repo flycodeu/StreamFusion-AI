@@ -52,22 +52,25 @@ const observedCount = computed(
   () => hosts.value.filter((host) => live(metrics.value[host.id])).length,
 );
 let disposed = false,
-  timer: ReturnType<typeof setTimeout> | undefined;
+  timer: ReturnType<typeof setTimeout> | undefined,
+  refreshController: AbortController | undefined;
 async function refresh() {
-  if (loading.value) return;
+  if (loading.value || disposed) return;
+  refreshController?.abort();
+  const controller = new AbortController();
+  refreshController = controller;
   loading.value = true;
   try {
-    const [hs, ss] = await Promise.all([
-      request<Host[]>("/hosts"),
-      requestAllPages<SoftwareInstance>("/software-instances"),
+    const [hs, ss, snapshots] = await Promise.all([
+      request<Host[]>("/hosts", "GET", undefined, controller.signal),
+      requestAllPages<SoftwareInstance>("/software-instances", controller.signal),
+      request<HostObservation[]>("/host-observations", "GET", undefined, controller.signal),
     ]);
-    if (disposed) return;
+    if (disposed || controller.signal.aborted) return;
     hosts.value = hs;
     software.value = ss;
     if (!hs.some((h) => h.id === selectedId.value))
       selectedId.value = hs[0]?.id || "";
-    const snapshots = await request<HostObservation[]>("/host-observations");
-    if (disposed) return;
     metrics.value = Object.fromEntries(
       snapshots.map((observation) => [
         observation.hostId,
@@ -75,9 +78,12 @@ async function refresh() {
       ]),
     );
   } catch (error) {
-    if (!disposed) emit("error", error);
+    if (!disposed && !controller.signal.aborted) emit("error", error);
   } finally {
-    loading.value = false;
+    if (refreshController === controller) {
+      refreshController = undefined;
+      loading.value = false;
+    }
   }
 }
 const detecting = ref(false),
@@ -125,6 +131,7 @@ onMounted(async () => {
 });
 onUnmounted(() => {
   disposed = true;
+  refreshController?.abort();
   if (timer) clearTimeout(timer);
 });
 </script>

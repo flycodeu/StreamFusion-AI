@@ -265,6 +265,7 @@ public class CameraAssetQueries {
                 name,
                 value.getLocalName(),
                 value.getRemark(),
+                source.getVendorHint(),
                 value.getManufacturer(),
                 value.getModel(),
                 value.getSerialNumber(),

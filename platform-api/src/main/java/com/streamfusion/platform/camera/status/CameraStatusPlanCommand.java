@@ -15,8 +15,36 @@ public record CameraStatusPlanCommand(
         @Schema(description = "复用本人已有任务的固定通道范围；不能与groupIds同时提供") String planId,
         @Schema(description = "连接通过后检查直连视频；默认关闭，平台目标仅查询在线状态") Boolean checkVideo,
         @Schema(description = "每台设备可选的检测通道与码流覆盖，省略时使用自动代表；最多2000项")
-                List<Selection> targetSelections) {
+                List<Selection> targetSelections,
+        @Schema(description = "巡检任务名称，可选，1至80个字符") String name) {
     public record Selection(String groupKey, String cameraId, String streamProfileId) {}
+
+    public CameraStatusPlanCommand(
+            String clientRequestId,
+            List<String> groupKeys,
+            Integer intervalMinutes,
+            Integer durationHours,
+            CameraStatusLayer layer,
+            String dispatchMode,
+            Integer parallelism,
+            List<String> groupIds,
+            String planId,
+            Boolean checkVideo,
+            List<Selection> targetSelections) {
+        this(
+                clientRequestId,
+                groupKeys,
+                intervalMinutes,
+                durationHours,
+                layer,
+                dispatchMode,
+                parallelism,
+                groupIds,
+                planId,
+                checkVideo,
+                targetSelections,
+                null);
+    }
 
     public CameraStatusPlanCommand(
             String clientRequestId,
@@ -40,6 +68,7 @@ public record CameraStatusPlanCommand(
                 groupIds,
                 planId,
                 checkVideo,
+                null,
                 null);
     }
 

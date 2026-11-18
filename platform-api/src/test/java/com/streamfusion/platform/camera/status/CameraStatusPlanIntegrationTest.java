@@ -2036,6 +2036,30 @@ class CameraStatusPlanIntegrationTest extends CameraTestSupport {
         verifyNoInteractions(worker);
     }
 
+    @Test
+    void planNameIsPersistedTrimmedAndValidated() throws Exception {
+        var auth = admin();
+        var camera = enabled(auth);
+        var keys = List.of("c" + camera.path("cameraId").asText());
+        var body = new HashMap<>(input(keys, 60, 24));
+        body.put("name", "  夜间厂区巡检  ");
+        var created = write(post("/camera-status/plans"), auth, body, 201);
+        assertThat(created.path("name").asText()).isEqualTo("夜间厂区巡检");
+        assertThat(write(post("/camera-status/plans"), auth, body, 201).path("planId"))
+                .isEqualTo(created.path("planId"));
+        var changedName = new HashMap<>(body);
+        changedName.put("name", "其他任务名称");
+        write(post("/camera-status/plans"), auth, changedName, 409);
+        var listed = read("/camera-status/plans", auth);
+        assertThat(listed.get(0).path("name").asText()).isEqualTo("夜间厂区巡检");
+        var blankName = new HashMap<>(input(keys, 60, 24));
+        blankName.put("name", "   ");
+        write(post("/camera-status/plans"), auth, blankName, 400);
+        var longName = new HashMap<>(input(keys, 60, 24));
+        longName.put("name", "名".repeat(81));
+        write(post("/camera-status/plans"), auth, longName, 400);
+    }
+
     private Map<String, Object> input(List<String> keys, int interval, int hours) {
         return Map.of(
                 "clientRequestId",

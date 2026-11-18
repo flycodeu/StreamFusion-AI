@@ -3,22 +3,15 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ElButton,
-  ElCheckbox,
   ElDropdown,
   ElDropdownMenu,
   ElDropdownItem,
-  ElTooltip,
   type DropdownInstance,
   ElDialog,
   ElEmpty,
-  ElIcon,
   ElMessageBox,
   ElInput,
   ElMessage,
-  ElSelect,
-  ElOption,
-  ElTable,
-  ElTableColumn,
   vLoading,
 } from 'element-plus'
 import {
@@ -28,7 +21,6 @@ import {
   Grid,
   List,
   Refresh,
-  MoreFilled,
   Delete,
   Download,
   Document,
@@ -50,9 +42,10 @@ import StorageFileDelete from './StorageFileDelete.vue'
 import StorageFileDetails from './StorageFileDetails.vue'
 import { previewLocation } from './preview-link'
 import StorageFolderTree from './StorageFolderTree.vue'
-import StorageThumbnail from './StorageThumbnail.vue'
+import StorageEntryBrowser from './StorageEntryBrowser.vue'
+import type { StorageBrowserEntry, StorageMenuEvent } from './StorageEntryBrowser.vue'
 import { createThumbnailQueue, folderName, libraryFiles } from './file-browser'
-import { bytes, time } from './display'
+import './storage-library.css'
 
 const route = useRoute(),
   router = useRouter()
@@ -151,21 +144,14 @@ const entries = computed(() => [
     file,
   })),
 ])
-type Entry = (typeof entries.value)[number]
+type Entry = StorageBrowserEntry
 const pageFiles = computed(() => libraryFiles(result.value?.items ?? []))
 const selectedFiles = computed(() =>
   pageFiles.value.filter((file) => selectedKeys.value.includes(file.objectKey)),
 )
-const selectionAll = computed(
-  () => pageFiles.value.length > 0 && selectedFiles.value.length === pageFiles.value.length,
-)
-const selectionSome = computed(() => selectedFiles.value.length > 0 && !selectionAll.value)
 function toggleFile(key: string, checked: unknown) {
   if (checked) selectedKeys.value = [...new Set([...selectedKeys.value, key])]
   else selectedKeys.value = selectedKeys.value.filter((value) => value !== key)
-}
-function selectAll(checked: unknown) {
-  selectedKeys.value = checked ? pageFiles.value.map((file) => file.objectKey) : []
 }
 const entryMenu = ref<DropdownInstance>(),
   menuEntry = ref<Entry | null>(null)
@@ -176,8 +162,7 @@ function closeMenu() {
   entryMenu.value?.handleClose()
   menuEntry.value = null
 }
-type MenuEvent =
-  InstanceType<typeof globalThis.MouseEvent> | InstanceType<typeof globalThis.KeyboardEvent>
+type MenuEvent = StorageMenuEvent
 async function showMenu(event: MenuEvent, entry: Entry) {
   if (busy.value || mutating.value) return
   entryMenu.value?.handleClose()
@@ -191,14 +176,6 @@ async function showMenu(event: MenuEvent, entry: Entry) {
   menuEntry.value = entry
   await nextTick()
   if (current === menuGeneration) entryMenu.value?.handleOpen()
-}
-function rowMenu(
-  row: unknown,
-  _column: unknown,
-  event: InstanceType<typeof globalThis.MouseEvent>,
-) {
-  event.preventDefault()
-  void showMenu(event, row as Entry)
 }
 function treeMenu(event: MenuEvent, id: string, directory: string) {
   closeMenu()
@@ -457,7 +434,6 @@ function removeSelection() {
   if (!busy.value && !mutating.value && selectedFiles.value.length)
     fileDeletion.value = selectedFiles.value.map((file) => ({ ...file }))
 }
-const firstSelected = computed(() => selectedFiles.value[0])
 </script>
 
 <template>
@@ -551,176 +527,31 @@ const firstSelected = computed(() => selectedFiles.value[0])
         @retry="refreshFiles"
         @settings="emit('settings')"
       />
-      <template v-else>
-        <div v-if="pageFiles.length" class="selection-toolbar" aria-label="文件选择操作">
-          <ElCheckbox
-            :model-value="selectionAll"
-            :indeterminate="selectionSome"
-            :disabled="busy || mutating"
-            aria-label="全选本页文件"
-            @change="selectAll"
-            >全选本页</ElCheckbox
-          >
-          <span v-if="selectedFiles.length" class="selection-count"
-            >已选 {{ selectedFiles.length }} 个文件</span
-          >
-          <ElButton v-if="selectedFiles.length" text @click="selectedKeys = []">取消选择</ElButton>
-          <div class="spacer" />
-          <template v-if="selectedFiles.length === 1 && firstSelected">
-            <ElTooltip content="文件详情"
-              ><ElButton
-                :icon="Document"
-                aria-label="查看选中文件详情"
-                text
-                @click="open(firstSelected)"
-            /></ElTooltip>
-            <ElTooltip content="复制预览链接"
-              ><ElButton
-                :icon="Link"
-                aria-label="复制选中文件链接"
-                text
-                @click="copyLink(firstSelected)"
-            /></ElTooltip>
-            <ElTooltip content="下载"
-              ><ElButton
-                :icon="Download"
-                aria-label="下载选中文件"
-                text
-                :disabled="!!downloading"
-                @click="download(firstSelected)"
-            /></ElTooltip>
-          </template>
-          <ElButton
-            v-if="selectedFiles.length"
-            :icon="Delete"
-            type="danger"
-            plain
-            :disabled="busy || mutating"
-            @click="removeSelection"
-            >删除选中</ElButton
-          >
-        </div>
-        <div v-if="layout === 'grid'" class="file-grid">
-          <article
-            v-for="entry in entries"
-            :key="entry.key"
-            class="file-card"
-            :class="{ 'folder-card': entry.folder, selected: selectedKeys.includes(entry.key) }"
-            @contextmenu.prevent.stop="showMenu($event, entry)"
-            @keydown.shift.f10.prevent="showMenu($event, entry)"
-          >
-            <div class="card-controls">
-              <ElCheckbox
-                v-if="entry.file"
-                class="card-select"
-                :model-value="selectedKeys.includes(entry.key)"
-                :aria-label="`选择 ${entry.name}`"
-                :disabled="busy || mutating"
-                @change="toggleFile(entry.key, $event)"
-                @click.stop
-              />
-              <ElButton
-                class="entry-more"
-                text
-                :icon="MoreFilled"
-                :aria-label="`${entry.name} 更多操作`"
-                :disabled="busy || mutating"
-                @click.stop="showMenu($event, entry)"
-              />
-            </div>
-            <button
-              type="button"
-              class="file-card-main"
-              :title="entry.name"
-              :disabled="busy || mutating"
-              @click="entryClick($event, entry)"
-            >
-              <span v-if="entry.folder" class="folder-cover"
-                ><ElIcon :size="48"><Folder /></ElIcon></span
-              ><StorageThumbnail
-                v-else
-                :file="entry.file!"
-                :scope-id="scopeId"
-                :queue="thumbnails"
-              />
-              <span class="file-name">{{ entry.name }}</span
-              ><span class="file-meta">{{
-                entry.folder ? '文件夹' : bytes(entry.file!.sizeBytes)
-              }}</span>
-            </button>
-          </article>
-        </div>
-        <ElTable
-          v-else
-          :data="entries"
-          row-key="key"
-          empty-text="文件夹为空"
-          @row-contextmenu="rowMenu"
-          ><ElTableColumn width="48"
-            ><template #default="{ row }"
-              ><ElCheckbox
-                v-if="row.file"
-                :model-value="selectedKeys.includes(row.key)"
-                :aria-label="`选择 ${row.name}`"
-                :disabled="busy || mutating"
-                @change="toggleFile(row.key, $event)" /></template></ElTableColumn
-          ><ElTableColumn label="名称" min-width="190"
-            ><template #default="{ row }"
-              ><button
-                class="list-name"
-                :disabled="busy || mutating"
-                @click="row.folder ? enter(row.full) : open(row.file)"
-              >
-                <ElIcon v-if="row.folder"><Folder /></ElIcon>{{ row.name }}
-              </button></template
-            ></ElTableColumn
-          ><ElTableColumn label="大小" width="115"
-            ><template #default="{ row }">{{
-              row.folder ? '—' : bytes(row.file.sizeBytes)
-            }}</template></ElTableColumn
-          ><ElTableColumn label="修改时间" min-width="180"
-            ><template #default="{ row }">{{
-              row.folder ? '—' : time(row.file.lastModified)
-            }}</template></ElTableColumn
-          ><ElTableColumn label="" width="56" align="center"
-            ><template #default="{ row }"
-              ><ElButton
-                text
-                :icon="MoreFilled"
-                :aria-label="`${row.name} 更多操作`"
-                :disabled="busy || mutating"
-                @click="showMenu($event, row as Entry)" /></template
-          ></ElTableColumn>
-          ></ElTable
-        >
-        <ElEmpty
-          v-if="layout === 'grid' && !entries.length && !busy && !error"
-          description="文件夹为空"
-        />
-        <div class="file-footer">
-          <span
-            >本页 {{ result?.commonPrefixes.length ?? 0 }} 个文件夹 ·
-            {{ libraryFiles(result?.items ?? []).length }} 个文件</span
-          >
-          <div class="file-pagination">
-            <ElSelect
-              v-model="pageSize"
-              aria-label="每页条数"
-              :disabled="busy || mutating"
-              @change="resizePage"
-              ><ElOption
-                v-for="size in [20, 50, 100]"
-                :key="size"
-                :value="size"
-                :label="`${size} 条/页`" /></ElSelect
-            ><span>第 {{ page + 1 }} 页</span>
-            <ElButton :disabled="!page || busy || mutating" @click="previous">上一页</ElButton
-            ><ElButton :disabled="!result?.hasMore || busy || mutating" @click="next"
-              >下一页</ElButton
-            >
-          </div>
-        </div>
-      </template>
+      <StorageEntryBrowser
+        v-else
+        v-model:selected-keys="selectedKeys"
+        v-model:page-size="pageSize"
+        :layout="layout"
+        :scope-id="scopeId"
+        :entries="entries"
+        :result="result"
+        :busy="busy"
+        :mutating="mutating"
+        :error="error"
+        :downloading="downloading"
+        :page="page"
+        :thumbnails="thumbnails"
+        @resize-page="resizePage"
+        @previous="previous"
+        @next="next"
+        @open="open"
+        @enter="enter"
+        @copy-link="copyLink"
+        @download="download"
+        @remove-selection="removeSelection"
+        @entry-click="entryClick"
+        @show-menu="showMenu"
+      />
     </section>
     <ElDropdown
       ref="entryMenu"
@@ -810,271 +641,3 @@ const firstSelected = computed(() => selectedFiles.value[0])
     ><ElButton type="primary" @click="emit('settings')">前往设置</ElButton></ElEmpty
   >
 </template>
-
-<style scoped>
-.library-layout {
-  display: grid;
-  grid-template-columns: minmax(180px, min(var(--directory-width), 45%)) 8px minmax(0, 1fr);
-  min-height: 520px;
-}
-.directory-resizer {
-  cursor: col-resize;
-  touch-action: none;
-  background: #f8fafc;
-  border-inline: 2px solid #ffffff;
-  transition: background-color 120ms ease;
-}
-.directory-resizer:hover,
-.directory-resizer:focus-visible {
-  background: #93c5fd;
-  outline: none;
-}
-.file-pagination {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  margin-left: auto;
-}
-.file-pagination .el-select {
-  width: 110px;
-}
-.file-browser {
-  min-width: 0;
-  padding: 18px 22px;
-}
-.file-toolbar,
-.breadcrumbs,
-.file-footer {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-.file-toolbar {
-  margin-bottom: 14px;
-}
-.spacer {
-  flex: 1;
-}
-.view-toggle {
-  display: flex;
-  gap: 0;
-}
-.view-toggle :deep(.el-button + .el-button) {
-  margin-left: 4px;
-}
-.breadcrumbs {
-  margin-bottom: 14px;
-  padding: 6px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #94a3b8;
-  font-size: 13px;
-}
-.breadcrumbs button {
-  background: none;
-  border: 0;
-  padding: 2px 4px;
-  border-radius: 4px;
-  color: #475569;
-  font: inherit;
-  font-weight: 500;
-  cursor: pointer;
-  overflow-wrap: anywhere;
-  text-align: left;
-}
-.breadcrumbs button:hover:not(:disabled) {
-  background: #e2e8f0;
-  color: #0f172a;
-}
-.breadcrumbs button:last-child {
-  color: #0f172a;
-  font-weight: 600;
-}
-.file-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
-  gap: 14px;
-  align-items: start;
-}
-.file-card {
-  position: relative;
-  min-width: 0;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  overflow: hidden;
-  background: #ffffff;
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
-}
-.file-card:hover {
-  border-color: #93c5fd;
-  box-shadow: 0 6px 16px -6px rgba(15, 23, 42, 0.08);
-}
-.file-card-main {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.file-card-main:disabled {
-  cursor: default;
-}
-.folder-cover {
-  height: 136px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #f59e0b;
-  background: #f8fafc;
-}
-.file-name {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-  margin: 10px 12px 4px;
-  font-size: 13px;
-  font-weight: 500;
-  color: #0f172a;
-  min-height: 20px;
-}
-.file-meta {
-  margin: 0 12px 10px;
-  color: #64748b;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-.file-card.selected {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.16);
-}
-.card-controls {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 36px;
-  padding: 4px 8px;
-  border-bottom: 1px solid #f1f5f9;
-  background: #ffffff;
-}
-.card-select {
-  background: #ffffff;
-  padding: 0 6px;
-  border-radius: 4px;
-  height: 26px;
-}
-.card-controls .entry-more {
-  margin-left: auto;
-  width: 26px;
-  height: 26px;
-  padding: 4px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-}
-.selection-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  min-height: 36px;
-  padding: 4px 12px;
-  margin: 0 0 14px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-}
-.selection-count {
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: #eff6ff;
-  font-size: 12px;
-  font-weight: 600;
-  color: #1d4ed8;
-}
-.selection-toolbar :deep(.el-button + .el-button) {
-  margin-left: 0;
-}
-:global(.file-context-menu) {
-  min-width: 168px;
-}
-:global(.file-context-menu .delete-menu-item) {
-  color: var(--el-color-danger);
-}
-.list-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: none;
-  border: 0;
-  font: inherit;
-  font-weight: 500;
-  color: #0f172a;
-  cursor: pointer;
-  text-align: left;
-  overflow-wrap: anywhere;
-}
-.list-name:hover:not(:disabled) {
-  color: #2563eb;
-}
-.list-name .el-icon {
-  color: #f59e0b;
-  flex-shrink: 0;
-}
-.file-footer {
-  margin-top: 20px;
-  padding-top: 12px;
-  border-top: 1px solid #f1f5f9;
-  justify-content: flex-end;
-  font-size: 12px;
-  color: #64748b;
-  font-variant-numeric: tabular-nums;
-}
-.link-dialog-note {
-  margin: 10px 0 0;
-  color: #64748b;
-  font-size: 12.5px;
-}
-@media (max-width: 1000px) {
-  .file-browser {
-    padding: 16px;
-  }
-  .file-grid {
-    gap: 12px;
-  }
-}
-@media (max-width: 700px) {
-  .directory-resizer {
-    display: none;
-  }
-  .library-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .file-browser {
-    padding: 14px;
-  }
-  .file-toolbar {
-    gap: 8px;
-  }
-  .file-toolbar :deep(.el-button + .el-button) {
-    margin-left: 0;
-  }
-  .file-grid {
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  }
-}
-</style>

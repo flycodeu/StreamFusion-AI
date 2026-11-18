@@ -5,6 +5,7 @@ import java.time.Instant;
 
 public record CameraStatusPlanVo(
         @Schema(description = "巡检计划ID") String planId,
+        @Schema(description = "巡检任务名称，可空") String name,
         @Schema(description = "计划期望状态：ACTIVE/STOPPED/EXPIRED") String state,
         @Schema(description = "各目标检测间隔，分钟") int intervalMinutes,
         @Schema(description = "创建时固定的检测目标数量；新计划每台设备选择一路代表流") int targetCount,

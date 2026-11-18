@@ -1,0 +1,152 @@
+.ops-content small {
+  display: block;
+  color: #70839a;
+  font-size: 12px;
+  margin-top: 6px;
+}
+.ops-content .actions {
+  min-width: 180px;
+}
+.ops-content .actions button {
+  padding: 5px;
+}
+.ops-workspace-dialog .runtime-actions,
+.ops-content .runtime-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ops-workspace-dialog .runtime-actions strong,
+.ops-content .runtime-actions strong {
+  overflow-wrap: anywhere;
+}
+.ops-workspace-dialog .runtime-actions .spacer,
+.ops-content .runtime-actions .spacer {
+  flex: 1;
+}
+.ops-content .probe-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ops-content .probe-controls select {
+  margin: 0;
+  width: auto;
+  min-width: 140px;
+  height: 34px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.ops-content .job-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ops-content .job-filters select {
+  margin: 0;
+  width: 132px;
+  height: 36px;
+  font-size: 13px;
+}
+.ops-workspace-dialog .form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.ops-workspace-dialog .plan-detail {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 14px;
+  margin: 0;
+}
+.ops-workspace-dialog .plan-detail dt {
+  color: #6b8095;
+}
+.ops-workspace-dialog .plan-detail dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ops-workspace-dialog .plan-detail code {
+  overflow-wrap: anywhere;
+}
+.ops-workspace-dialog .plan-detail pre {
+  white-space: pre-wrap;
+  max-height: 280px;
+  overflow: auto;
+  font-size: 12px;
+}
+.ops-workspace-dialog .log-output {
+  background: #edf3f8;
+  color: #28445e;
+  padding: 16px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 60vh;
+  overflow: auto;
+  font:
+    12px/1.6 Consolas,
+    monospace;
+}
+.ops-content .probe-result {
+  max-width: 320px;
+}
+.ops-content .dependency-section {
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.ops-content .dependency-section > summary {
+  font-weight: 500;
+  color: var(--text);
+}
+.ops-content .probe-result dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  font-size: 12px;
+}
+.ops-content .probe-result dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.ops-workspace-dialog .version-list article {
+  padding: 16px 0;
+  border-bottom: 1px solid #dce5ef;
+  display: grid;
+  gap: 7px;
+  overflow-wrap: anywhere;
+}
+.ops-content details,
+.ops-workspace-dialog details {
+  margin-top: 8px;
+}
+.ops-workspace-dialog details > .form-grid {
+  margin-top: 12px;
+}
+.ops-content summary,
+.ops-workspace-dialog summary {
+  cursor: pointer;
+  color: #507596;
+  font-size: 13px;
+}
+.ops-workspace-dialog select[multiple] {
+  min-height: 65px;
+}
+@media (max-width: 600px) {
+  .ops-workspace-dialog .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .ops-workspace-dialog .plan-detail {
+    grid-template-columns: 75px minmax(0, 1fr);
+  }
+  .ops-content .job-filters {
+    width: 100%;
+  }
+  .ops-content .job-filters select {
+    flex: 1;
+    min-width: 0;
+  }
+}

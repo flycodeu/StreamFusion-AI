@@ -50,8 +50,10 @@ import DeviceMoveDialog from '../../features/camera/DeviceMoveDialog.vue'
 import DeviceEditor from '../../features/camera/DeviceEditor.vue'
 import { getGroupTree, deleteGroup } from '../../api/camera-groups/api'
 import type { CameraGroup } from '../../api/camera-groups/types'
+import './camera-manage.css'
 
 defineOptions({ name: 'CameraManage' })
+const props = withDefaults(defineProps<{ focusGroups?: boolean }>(), { focusGroups: false })
 const router = useRouter()
 const previewPath = computed(() => findPreviewPath(sessionState.me?.routes || []))
 const captureScope = usePageScope(),
@@ -93,54 +95,20 @@ const creating = ref<'manual' | 'scan' | 'platform' | 'rtsp' | null>(null),
 const selectedDevice = ref<CameraDeviceGroup | null>(null)
 const plansOpen = ref(false)
 const editingDevice = ref<CameraDeviceGroup | null>(null)
-function loadVendorHints(): Record<string, string | null> {
-  if (import.meta.env.MODE === 'test') return {}
-  try {
-    const raw = globalThis.localStorage?.getItem('camera-device-vendor-hints-v1')
-    return raw ? (JSON.parse(raw) as Record<string, string | null>) : {}
-  } catch {
-    return {}
-  }
-}
-const vendorHints = ref<Record<string, string | null>>(loadVendorHints())
 function updateDeviceVendor(groupKey: string | undefined, vendorHint: string | null) {
   if (!groupKey) return
-  vendorHints.value = { ...vendorHints.value, [groupKey]: vendorHint }
-  if (import.meta.env.MODE !== 'test') {
-    try {
-      globalThis.localStorage?.setItem(
-        'camera-device-vendor-hints-v1',
-        JSON.stringify(vendorHints.value),
-      )
-    } catch {
-      // Ignore storage errors
-    }
+  rows.value = rows.value.map((item) =>
+    item.groupKey === groupKey ? { ...item, vendorHint } : item,
+  )
+  if (selectedDevice.value?.groupKey === groupKey) {
+    selectedDevice.value = { ...selectedDevice.value, vendorHint }
   }
-}
-function withVendorHint(row: CameraDeviceGroup): CameraDeviceGroup {
-  const hint = row.groupKey in vendorHints.value ? vendorHints.value[row.groupKey] : row.vendorHint
-  return hint !== undefined ? { ...row, vendorHint: hint } : row
+  if (editingDevice.value?.groupKey === groupKey) {
+    editingDevice.value = { ...editingDevice.value, vendorHint }
+  }
 }
 function deviceBrand(row: CameraDeviceGroup): string {
-  return sourceBrandLabel(withVendorHint(row))
-}
-async function hydrateMissingVendors(items: CameraDeviceGroup[], active: () => boolean) {
-  if (import.meta.env.MODE === 'test') return
-  const missing = items.filter(
-    (item) =>
-      item.vendorHint === undefined &&
-      !(item.groupKey in vendorHints.value) &&
-      sourceBrandLabel(item) === '未识别品牌',
-  )
-  for (const item of missing) {
-    try {
-      const res = await api.getDeviceChannels(item.groupKey, { page: 1, size: 1 })
-      if (!active()) return
-      updateDeviceVendor(item.groupKey, res.items[0]?.vendorHint ?? null)
-    } catch {
-      // Ignore background hydration errors
-    }
-  }
+  return sourceBrandLabel(row)
 }
 async function deviceSaved(name: string) {
   if (selectedDevice.value?.groupKey === editingDevice.value?.groupKey && selectedDevice.value)
@@ -186,7 +154,6 @@ async function load() {
     }
     rows.value = result.items
     clearSelection()
-    void hydrateMissingVendors(result.items, active)
     if (selectedDevice.value) {
       selectedDevice.value =
         result.items.find((item) => item.groupKey === selectedDevice.value?.groupKey) ??
@@ -376,16 +343,31 @@ async function removeDevices(targets: CameraDeviceGroup[]) {
     if (active()) deviceDeleting.value = false
   }
 }
-onMounted(refresh)
+onMounted(() => {
+  if (
+    props.focusGroups &&
+    typeof globalThis.innerWidth === 'number' &&
+    globalThis.innerWidth <= 1100
+  ) {
+    treeOpen.value = true
+  }
+  void refresh()
+})
 </script>
 <template>
   <div class="content-page camera-workspace">
     <ElButton class="mobile-group-toggle" :aria-expanded="treeOpen" @click="treeOpen = !treeOpen"
       >分组：{{ groupPath }}</ElButton
     >
-    <aside v-loading="treeLoading" class="camera-group-pane" aria-label="视频分组">
+    <aside
+      v-loading="treeLoading"
+      class="camera-group-pane"
+      :class="{ 'is-group-focused': focusGroups }"
+      aria-label="视频分组"
+    >
       <header class="group-pane-header">
         <h2>视频分组</h2>
+        <span v-if="focusGroups" class="group-count-badge">{{ groups.length }} 组</span>
         <ElButton
           v-if="canManage"
           link
@@ -448,7 +430,7 @@ onMounted(refresh)
     <section class="camera-list-pane" aria-label="相机管理">
       <div class="workspace-filter-bar">
         <div class="scope-indicator">
-          <span class="scope-label">当前视图</span>
+          <span class="scope-label">{{ focusGroups ? '分组视图' : '当前视图' }}</span>
           <span class="scope-name" :title="groupPath">{{ groupPath }}</span>
           <span class="scope-count">共 {{ total }} 台</span>
         </div>
@@ -488,6 +470,12 @@ onMounted(refresh)
       <TablePanel class="camera-table-panel" :initial-loading="loading && !rows.length">
         <template #actions
           ><template v-if="canManage"
+            ><ElButton
+              v-if="focusGroups"
+              type="primary"
+              plain
+              @click="groupEditor = { group: null, parentId: groupId }"
+              >新建分组</ElButton
             ><ElDropdown split-button type="primary" trigger="click" @click="creating = 'manual'">
               添加相机
               <template #dropdown
@@ -731,7 +719,7 @@ onMounted(refresh)
     />
     <DeviceEditor
       v-if="editingDevice"
-      :device="withVendorHint(editingDevice)"
+      :device="editingDevice"
       @close="editingDevice = null"
       @saved="deviceSaved"
       @vendor-changed="(hint) => updateDeviceVendor(editingDevice?.groupKey, hint)"
@@ -745,7 +733,7 @@ onMounted(refresh)
     <DeviceDetailPanel
       v-if="selectedDevice"
       :key="selectedDevice.groupKey"
-      :device="withVendorHint(selectedDevice)"
+      :device="selectedDevice"
       :can-manage="canManage"
       @close="selectedDevice = null"
       @changed="refresh"
@@ -774,252 +762,3 @@ onMounted(refresh)
     />
   </div>
 </template>
-<style scoped>
-.camera-workspace {
-  --pane-border: #e5e8ef;
-  --text-main: #1d2129;
-  --text-sub: #4e5969;
-  --text-muted: #86909c;
-
-  min-height: calc(100dvh - var(--header-height, 56px));
-  display: grid;
-  grid-template-columns: clamp(248px, 17vw, 310px) minmax(0, 1fr);
-  gap: clamp(14px, 1.2vw, 20px);
-  align-items: stretch;
-  padding-top: clamp(12px, 1.4dvh, 20px);
-  padding-bottom: clamp(12px, 1.4dvh, 20px);
-  box-sizing: border-box;
-}
-
-.camera-group-pane {
-  min-width: 0;
-  padding: 16px 14px;
-  border: 1px solid var(--pane-border);
-  border-radius: 6px;
-  background: var(--el-bg-color);
-  display: flex;
-  flex-direction: column;
-}
-
-.group-pane-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 12px;
-  margin-bottom: 12px;
-  border-bottom: 1px solid #f0f2f5;
-  flex-shrink: 0;
-}
-
-.group-pane-header h2 {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-main);
-  margin: 0;
-}
-
-.camera-list-pane {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.workspace-filter-bar {
-  background: #ffffff;
-  border: 1px solid var(--pane-border);
-  border-radius: 6px;
-  padding: 12px 18px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 14px;
-}
-
-.scope-indicator {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.scope-label {
-  font-size: 12px;
-  color: var(--text-muted);
-  background: #f7f8fa;
-  border: 1px solid var(--pane-border);
-  padding: 2px 8px;
-  border-radius: 4px;
-  flex-shrink: 0;
-}
-
-.scope-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-main);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 260px;
-}
-
-.scope-count {
-  font-size: 12px;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  padding-left: 4px;
-  flex-shrink: 0;
-}
-
-.camera-search-form {
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 14px;
-}
-
-.camera-search-form :deep(.el-form-item) {
-  margin: 0;
-}
-
-.camera-search-form :deep(.search-field) {
-  width: clamp(190px, 14vw, 240px);
-}
-
-.camera-table-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--pane-border);
-  border-radius: 6px;
-  padding: 16px 18px;
-}
-
-.camera-table-panel :deep(.el-table) {
-  flex: 1;
-}
-
-.camera-table-panel :deep(.table-panel__footer) {
-  margin-top: auto;
-  padding-top: 16px;
-}
-
-.mobile-group-toggle {
-  display: none;
-}
-
-.mobile-device-list {
-  display: none;
-}
-
-@media (max-width: 1100px) {
-  .camera-workspace {
-    min-height: auto;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
-  }
-  .mobile-group-toggle {
-    display: flex;
-    justify-content: flex-start;
-    min-height: 40px;
-    height: auto;
-    white-space: normal;
-    text-align: left;
-  }
-  .mobile-group-toggle :deep(span) {
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-  .camera-group-pane {
-    display: none;
-  }
-}
-
-.device-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-  color: var(--text-main);
-}
-
-.device-statuses {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.device-table .table-secondary {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.address-host {
-  display: block;
-  overflow-wrap: anywhere;
-  font-variant-numeric: tabular-nums;
-}
-
-@media (max-width: 680px) {
-  .device-table,
-  .desktop-column-picker {
-    display: none;
-  }
-  .mobile-device-list {
-    display: block;
-  }
-  .mobile-device {
-    padding: 16px 0;
-    border-top: 1px solid var(--border-subtle);
-  }
-  .mobile-device:first-child {
-    border-top: 0;
-  }
-  .mobile-device h3 {
-    font-size: 15px;
-    margin: 0;
-    overflow-wrap: anywhere;
-  }
-  .mobile-device p,
-  .mobile-device dl {
-    font-size: 13px;
-    color: var(--text-secondary);
-    margin: 8px 0 12px;
-  }
-  .mobile-device dl > div {
-    display: flex;
-    gap: 12px;
-    margin: 6px 0;
-  }
-  .mobile-device dt {
-    flex-shrink: 0;
-  }
-  .mobile-device dd {
-    margin: 0;
-    overflow-wrap: anywhere;
-  }
-  .mobile-empty {
-    text-align: center;
-    color: var(--text-secondary);
-  }
-  .workspace-filter-bar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .camera-search-form {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .camera-search-form :deep(.search-field) {
-    width: 100%;
-  }
-}
-</style>

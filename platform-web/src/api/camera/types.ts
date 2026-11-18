@@ -114,6 +114,7 @@ export interface CameraDeviceInfo {
   localName: string | null
   sourceName: string | null
   remark: string | null
+  vendorHint?: string | null
   version: string
 }
 export function parseDeviceInfo(value: unknown): CameraDeviceInfo {
@@ -125,6 +126,7 @@ export function parseDeviceInfo(value: unknown): CameraDeviceInfo {
     localName: optionalString(row.localName),
     sourceName: optionalString(row.sourceName),
     remark: optionalString(row.remark),
+    ...('vendorHint' in row ? { vendorHint: optionalString(row.vendorHint) } : {}),
     version: id(row.version),
   }
 }

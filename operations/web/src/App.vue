@@ -16,6 +16,9 @@ import HostOverview from "./HostOverview.vue";
 import ErrorReference from "./ErrorReference.vue";
 import SystemMonitor from "./SystemMonitor.vue";
 import OpsPagination from "./OpsPagination.vue";
+import OpsDiagnosticBanner from "./OpsDiagnosticBanner.vue";
+import OpsLoginView from "./OpsLoginView.vue";
+import OpsControllerDialogs from "./OpsControllerDialogs.vue";
 import { usePagination } from "./pagination";
 import { errorHelp, showErrorHelp } from "./errorHelp";
 
@@ -113,10 +116,33 @@ const nav = [
 const title = computed(
   () => nav.find((item) => item.id === active.value)?.label,
 );
-const active = ref("overview");
-const commandsVisited = ref(false);
+const validNavIds = new Set(nav.map((item) => item.id));
+function readHashPage(): string | undefined {
+  if (typeof globalThis.location?.hash !== "string") return undefined;
+  const id = globalThis.location.hash.replace(/^#\/?/, "");
+  return validNavIds.has(id) ? id : undefined;
+}
+const active = ref(readHashPage() || "overview");
+const commandsVisited = ref(active.value === "commands");
+function onHashChange() {
+  const id = readHashPage();
+  if (id && active.value !== id) active.value = id;
+}
 watch(active, (page) => {
   if (page === "commands") commandsVisited.value = true;
+  if (
+    typeof globalThis.history?.replaceState === "function" &&
+    typeof globalThis.location?.hash === "string"
+  ) {
+    const nextHash = page === "overview" && !globalThis.location.hash ? "" : `#${page}`;
+    if (globalThis.location.hash !== nextHash) {
+      globalThis.history.replaceState(
+        null,
+        "",
+        nextHash || `${globalThis.location.pathname}${globalThis.location.search}`,
+      );
+    }
+  }
 });
 const preparationHostId = ref("");
 const dockerHostId = ref("");
@@ -186,11 +212,6 @@ const confirmPassword = ref("");
 const auditDetail = ref<Audit | null>(null);
 const showLoginPassword = ref(false);
 const loginCapsLock = ref(false);
-const opsHighlights = [
-  "主机与环境纳管",
-  "软件与服务编排",
-  "端口与安全基线",
-] as const;
 
 function focusLoginInput() {
   void nextTick(() => {
@@ -201,16 +222,6 @@ function focusLoginInput() {
     const el = document.getElementById(id) as HTMLInputElement | null;
     if (el && !el.disabled) el.focus();
   });
-}
-
-function checkLoginCapsLock(event: Event) {
-  if (
-    typeof KeyboardEvent !== "undefined" &&
-    event instanceof KeyboardEvent &&
-    typeof event.getModifierState === "function"
-  ) {
-    loginCapsLock.value = event.getModifierState("CapsLock");
-  }
 }
 let timer: ReturnType<typeof setTimeout> | undefined;
 const displayTime = (value?: string) =>
@@ -574,6 +585,11 @@ watch([active, logTab], ([page]) => {
   }
 });
 onMounted(async () => {
+  const hashPage = readHashPage();
+  if (hashPage) active.value = hashPage;
+  if (typeof globalThis.addEventListener === "function") {
+    globalThis.addEventListener("hashchange", onHashChange);
+  }
   busy.value = true;
   try {
     await prepare();
@@ -591,6 +607,9 @@ onMounted(async () => {
 });
 onUnmounted(() => {
   auditRequest += 1;
+  if (typeof globalThis.removeEventListener === "function") {
+    globalThis.removeEventListener("hashchange", onHashChange);
+  }
   if (timer) clearTimeout(timer);
 });
 </script>
@@ -671,255 +690,22 @@ onUnmounted(() => {
           <button class="quiet" :disabled="busy" @click="logout">退出</button>
         </div>
       </header>
-      <div v-if="!loggedIn" class="ops-login-layout">
-        <section class="ops-login-visual" aria-label="运维控制台概览">
-          <div class="ops-visual-brand">
-            <img
-              class="brand-logo"
-              src="/streamfusion.svg"
-              alt=""
-              width="38"
-              height="38"
-            />
-            <span>StreamFusion Ops</span>
-          </div>
-          <div class="ops-visual-body">
-            <div class="ops-illustration" aria-hidden="true">
-              <svg viewBox="0 0 560 330" fill="none">
-                <path
-                  d="M142 92H232Q260 92 260 124V162M418 92H328Q300 92 300 124V162M142 248H232Q260 248 260 216V182M418 248H328Q300 248 300 216V182"
-                  stroke="#93C5FD"
-                  stroke-width="3"
-                  stroke-dasharray="6 5"
-                />
-                <rect
-                  x="32"
-                  y="36"
-                  width="150"
-                  height="102"
-                  rx="12"
-                  fill="#FFFFFF"
-                  stroke="#BFDBFE"
-                  stroke-width="2"
-                />
-                <rect
-                  x="48"
-                  y="52"
-                  width="118"
-                  height="26"
-                  rx="6"
-                  fill="#EFF6FF"
-                />
-                <circle cx="62" cy="65" r="5" fill="#2563EB" />
-                <path
-                  d="M76 65h66M50 96h88M50 114h62"
-                  stroke="#93C5FD"
-                  stroke-width="4"
-                  stroke-linecap="round"
-                />
-                <rect
-                  x="378"
-                  y="36"
-                  width="150"
-                  height="102"
-                  rx="12"
-                  fill="#FFFFFF"
-                  stroke="#BFDBFE"
-                  stroke-width="2"
-                />
-                <rect
-                  x="396"
-                  y="54"
-                  width="32"
-                  height="32"
-                  rx="7"
-                  fill="#DBEAFE"
-                />
-                <rect
-                  x="438"
-                  y="54"
-                  width="32"
-                  height="32"
-                  rx="7"
-                  fill="#DBEAFE"
-                />
-                <rect
-                  x="480"
-                  y="54"
-                  width="32"
-                  height="32"
-                  rx="7"
-                  fill="#EFF6FF"
-                />
-                <path
-                  d="M398 108h104"
-                  stroke="#93C5FD"
-                  stroke-width="4"
-                  stroke-linecap="round"
-                />
-                <rect
-                  x="46"
-                  y="206"
-                  width="150"
-                  height="92"
-                  rx="12"
-                  fill="#FFFFFF"
-                  stroke="#BFDBFE"
-                  stroke-width="2"
-                />
-                <path
-                  d="M72 272v-24m28 24v-40m28 40v-18m28 18v-32"
-                  stroke="#3B82F6"
-                  stroke-width="11"
-                  stroke-linecap="round"
-                />
-                <rect
-                  x="364"
-                  y="206"
-                  width="150"
-                  height="92"
-                  rx="12"
-                  fill="#FFFFFF"
-                  stroke="#BFDBFE"
-                  stroke-width="2"
-                />
-                <path
-                  d="M388 232h20m12 0h68M388 252h20m12 0h52M388 272h20m12 0h68"
-                  stroke="#93C5FD"
-                  stroke-width="5"
-                  stroke-linecap="round"
-                />
-                <rect
-                  x="225"
-                  y="117"
-                  width="110"
-                  height="110"
-                  rx="26"
-                  fill="#FFFFFF"
-                  stroke="#93C5FD"
-                  stroke-width="2.5"
-                />
-                <image
-                  href="/streamfusion.svg"
-                  x="246"
-                  y="138"
-                  width="68"
-                  height="68"
-                />
-              </svg>
-            </div>
-            <h2>连接基础设施与服务编排</h2>
-            <p class="ops-visual-subtitle">
-              StreamFusion Ops · 运维与部署控制台
-            </p>
-            <div class="ops-visual-pills">
-              <span v-for="item in opsHighlights" :key="item" class="ops-pill">{{
-                item
-              }}</span>
-            </div>
-          </div>
-        </section>
-        <section class="ops-login-region">
-          <div class="login-card">
-            <div class="login-intro">
-              <div class="brand mobile-login-brand">
-                <img
-                  class="brand-logo"
-                  src="/streamfusion.svg"
-                  alt=""
-                  width="34"
-                  height="34"
-                /><span>StreamFusion Ops</span>
-              </div>
-              <h1>控制器登录</h1>
-            </div>
-            <form @submit.prevent="login">
-              <div class="login-field">
-                <label for="ops-login-username">账号</label>
-                <input
-                  id="ops-login-username"
-                  v-model="username"
-                  autocomplete="username"
-                  placeholder="请输入账号"
-                  required
-                  maxlength="32"
-                  :disabled="busy"
-                  @input="loginError = ''"
-                />
-              </div>
-              <div class="login-field">
-                <label for="ops-login-password">密码</label>
-                <div class="password-input-wrap">
-                  <input
-                    id="ops-login-password"
-                    v-model="password"
-                    :type="showLoginPassword ? 'text' : 'password'"
-                    autocomplete="current-password"
-                    placeholder="请输入密码"
-                    required
-                    maxlength="64"
-                    :disabled="busy"
-                    @input="loginError = ''"
-                    @keydown="checkLoginCapsLock"
-                    @keyup="checkLoginCapsLock"
-                    @blur="loginCapsLock = false"
-                  />
-                  <button
-                    type="button"
-                    class="password-eye-btn"
-                    :aria-label="showLoginPassword ? '隐藏密码' : '显示密码'"
-                    :aria-pressed="showLoginPassword"
-                    @click="showLoginPassword = !showLoginPassword"
-                  >
-                    <svg
-                      v-if="showLoginPassword"
-                      viewBox="0 0 24 24"
-                      aria-hidden="true"
-                    >
-                      <path
-                        d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A10.4 10.4 0 0 1 12 5c5 0 9.3 3.1 11 7-0.7 1.6-1.8 3.1-3.2 4.2M6.2 6.2C4.3 7.5 2.8 9.5 2 12c1.7 3.9 6 7 10 7 1.6 0 3.1-.4 4.5-1"
-                      />
-                    </svg>
-                    <svg v-else viewBox="0 0 24 24" aria-hidden="true">
-                      <path
-                        d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"
-                      />
-                      <circle cx="12" cy="12" r="3" />
-                    </svg>
-                  </button>
-                </div>
-                <div
-                  v-if="loginCapsLock"
-                  class="caps-lock-notice"
-                  role="status"
-                >
-                  已开启大写锁定 (Caps Lock)
-                </div>
-              </div>
-              <p v-if="loginError" class="error login-alert" role="alert">
-                {{ loginError }}
-              </p>
-              <button class="primary login-submit-btn" :disabled="busy">
-                {{ busy ? "请稍候" : "登录" }}
-              </button>
-            </form>
-          </div>
-        </section>
-      </div>
+      <OpsLoginView
+        v-if="!loggedIn"
+        v-model:username="username"
+        v-model:password="password"
+        v-model:show-login-password="showLoginPassword"
+        v-model:login-caps-lock="loginCapsLock"
+        :busy="busy"
+        :login-error="loginError"
+        @clear-error="loginError = ''"
+        @submit="login"
+      />
       <template v-else>
-        <div v-if="diagnostic" class="error diagnostic" role="alert">
-          <div class="diagnostic-heading">
-            <span>{{ diagnostic.message }}</span>
-            <button
-              type="button"
-              class="diagnostic-close"
-              aria-label="关闭错误提示"
-              @click.stop="diagnostic = null"
-            >
-              ×
-            </button>
-          </div>
-        </div>
+        <OpsDiagnosticBanner
+          :diagnostic="diagnostic"
+          @close="diagnostic = null"
+        />
         <SoftwareCommandTemplates class="content" v-if="commandsVisited" v-show="active === 'commands'" :active="active === 'commands'" />
         <SoftwareDirectory v-if="active === 'software-directory'" @detail="(id) => { selectedSoftwareId = id; active = 'software'; }" />
         <KeepAlive>
@@ -1143,109 +929,22 @@ onUnmounted(() => {
     <ElDialog v-model="errorHelp.open" title="错误说明" width="min(1180px, 96vw)" align-center destroy-on-close append-to-body>
       <ErrorReference :initial-code="errorHelp.code" />
     </ElDialog>
-    <ElDialog
-      v-model="credentialDialog"
-      :title="selected ? '创建新修订' : '新增凭据'"
-      width="min(480px, 94vw)"
-      align-center
-      @closed="secret = ''"
-    >
-      <form class="dialog-form" @submit.prevent="saveCredential">
-        <label
-          >名称<input v-model="credentialName" required maxlength="60" /></label
-        ><label
-          >类型<select v-model="credentialKind" :disabled="!!selected">
-            <option value="TOKEN">Token</option>
-            <option value="PASSWORD">密码</option>
-            <option value="SSH_KEY">SSH 私钥</option>
-          </select></label
-        ><label
-          >凭据内容<textarea
-            v-model="secret"
-            required
-            maxlength="32768"
-            spellcheck="false"
-            autocomplete="off"
-          ></textarea></label
-        >
-        <div class="dialog-footer">
-          <button
-            type="button"
-            class="secondary"
-            :disabled="busy"
-            @click="credentialDialog = false"
-          >
-            取消
-          </button>
-          <button class="primary" :disabled="busy">保存</button>
-        </div>
-      </form>
-    </ElDialog>
-    <ElDialog
-      v-model="passwordDialog"
-      title="修改密码"
-      width="min(440px, 94vw)"
-      align-center
-      @closed="
-        oldPassword = '';
-        newPassword = '';
-        confirmPassword = '';
-      "
-    >
-      <form class="dialog-form" @submit.prevent="changePassword">
-        <label
-          >当前密码<input
-            v-model="oldPassword"
-            type="password"
-            autocomplete="current-password"
-            required /></label
-        ><label
-          >新密码<input
-            v-model="newPassword"
-            type="password"
-            autocomplete="new-password"
-            required /></label
-        ><small>6–64字节，包含英文字母和数字</small
-        ><label
-          >确认新密码<input
-            v-model="confirmPassword"
-            type="password"
-            autocomplete="new-password"
-            required
-        /></label>
-        <div class="dialog-footer">
-          <button
-            type="button"
-            class="secondary"
-            :disabled="busy"
-            @click="passwordDialog = false"
-          >
-            取消
-          </button>
-          <button class="primary" :disabled="busy">修改并重新登录</button>
-        </div>
-      </form>
-    </ElDialog>
-    <ElDialog
-      :model-value="!!auditDetail"
-      title="记录详情"
-      width="min(540px, 94vw)"
-      align-center
-      @close="auditDetail = null"
-      ><dl v-if="auditDetail" class="audit-detail">
-        <dt>时间</dt>
-        <dd>{{ displayTime(auditDetail.createdAt) }}</dd>
-        <dt>动作</dt>
-        <dd>{{ actionLabels[auditDetail.action] || "其他操作" }}</dd>
-        <dt>结果</dt>
-        <dd>{{ auditResult(auditDetail.action, auditDetail.result).label }}</dd>
-        <dt>对象</dt>
-        <dd>{{ auditDetail.objectId || "—" }}</dd>
-        <dt>请求标识</dt>
-        <dd>{{ auditDetail.traceId || "本机操作" }}</dd>
-        <dt>诊断信息</dt>
-        <dd><details><summary>原始标识</summary><code>{{ auditDetail.action }}</code><br /><code>{{ auditDetail.result || "—" }}</code></details></dd>
-      </dl></ElDialog
-    >
+    <OpsControllerDialogs
+      v-model:credential-dialog="credentialDialog"
+      v-model:credential-name="credentialName"
+      v-model:credential-kind="credentialKind"
+      v-model:secret="secret"
+      v-model:password-dialog="passwordDialog"
+      v-model:old-password="oldPassword"
+      v-model:new-password="newPassword"
+      v-model:confirm-password="confirmPassword"
+      v-model:audit-detail="auditDetail"
+      :selected="selected"
+      :busy="busy"
+      :action-labels="actionLabels"
+      :audit-result="auditResult"
+      @save-credential="saveCredential"
+      @change-password="changePassword"
+    />
   </div>
 </template>

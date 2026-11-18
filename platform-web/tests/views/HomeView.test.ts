@@ -264,9 +264,19 @@ describe('HomeView Enterprise Dashboard', () => {
 
   it('navigates when clicking quick action link', async () => {
     const root = await mount()
+    const cameraBtn = findButton(root, '点位管理')
+    expect(cameraBtn).toBeDefined()
+    ;(cameraBtn!.props.onClick as () => void)()
+    expect(api.push).toHaveBeenCalledWith('/camera/manage')
+
     const previewBtn = findButton(root, '实时预览')
     expect(previewBtn).toBeDefined()
     ;(previewBtn!.props.onClick as () => void)()
     expect(api.push).toHaveBeenCalledWith('/preview/center')
+
+    const storageBtn = findButton(root, '存储管理')
+    expect(storageBtn).toBeDefined()
+    ;(storageBtn!.props.onClick as () => void)()
+    expect(api.push).toHaveBeenCalledWith('/storage/manage')
   })
 })

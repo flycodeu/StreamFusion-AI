@@ -1,0 +1,267 @@
+.camera-picker {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: #fff;
+}
+.camera-picker .picker-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #f8fafc;
+  flex-shrink: 0;
+}
+.camera-picker .camera-search {
+  flex: 0 1 280px;
+  width: 280px;
+  min-width: 0;
+}
+.camera-picker .selection-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  flex-shrink: 0;
+  color: #64748b;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.camera-picker .selection-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  background: #fff;
+  font-size: 12px;
+  line-height: 20px;
+}
+.camera-picker .selection-summary strong {
+  color: #1e293b;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.camera-picker .selection-summary .el-button {
+  color: #64748b;
+  font-size: 12px;
+}
+.camera-picker .tree-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.camera-picker .tree-grid {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+.camera-picker .tree-scroll {
+  box-sizing: border-box;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* 表头预留与列表一致的滚动条宽度，保持右侧列对齐。 */
+.camera-picker .tree-header,
+.camera-picker .tree-scroll {
+  min-width: 680px;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+.camera-picker .tree-grid::-webkit-scrollbar,
+.camera-picker .tree-header::-webkit-scrollbar,
+.camera-picker .tree-scroll::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.camera-picker .tree-grid::-webkit-scrollbar-thumb,
+.camera-picker .tree-scroll::-webkit-scrollbar-thumb {
+  border-radius: 8px;
+  background: #cbd5e1;
+}
+.camera-picker .tree-header {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 6px 16px;
+  overflow: hidden;
+  border-bottom: 1px solid #f1f5f9;
+  background: #fcfcfd;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 20px;
+}
+.camera-picker .tree-heading {
+  flex: 1;
+  min-width: 0;
+}
+.camera-picker .tree-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 320px;
+  width: 320px;
+  margin-left: auto;
+}
+.camera-picker .address-heading,
+.camera-picker .camera-address {
+  flex: 0 0 220px;
+  width: 220px;
+  text-align: left;
+}
+.camera-picker .status-heading,
+.camera-picker .camera-status {
+  flex: 0 0 100px;
+  width: 100px;
+  text-align: right;
+}
+.camera-picker .tree-feedback {
+  padding: 0 16px 8px;
+}
+.camera-picker .picker-tree {
+  --el-tree-node-content-height: 40px;
+  --el-tree-node-hover-bg-color: #f8fafc;
+  --el-tree-text-color: #334155;
+  background: transparent;
+}
+.camera-picker .picker-tree .el-tree-node__content {
+  box-sizing: border-box;
+  padding-right: 0;
+  border-bottom: 1px solid #f1f5f9;
+  transition: background 150ms ease;
+}
+.camera-picker .picker-tree .el-tree-node__expand-icon {
+  color: #94a3b8;
+}
+.camera-picker .picker-tree .el-tree-node__expand-icon.is-leaf {
+  color: transparent;
+}
+.camera-picker .tree-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 1;
+  box-sizing: border-box;
+  min-width: 0;
+  height: 100%;
+  padding: 8px 16px;
+  gap: 16px;
+  font-size: 13px;
+}
+.camera-picker .tree-main {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  gap: 10px;
+}
+.camera-picker .tree-row.is-selected {
+  background: #f8fafc;
+}
+.camera-picker .tree-row .el-checkbox {
+  height: 100%;
+  margin: 0;
+  flex-shrink: 0;
+}
+.camera-picker .tree-icon {
+  width: 15px;
+  height: 15px;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+.camera-picker .tree-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1e293b;
+}
+.camera-picker .group-label {
+  font-weight: 600;
+}
+.camera-picker .camera-address {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font:
+    12px ui-monospace,
+    Consolas,
+    monospace;
+  color: #64748b;
+}
+.camera-picker .camera-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+.camera-picker .status-dot {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.camera-picker .camera-status-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.camera-picker .camera-status.is-online {
+  color: #10b981;
+}
+.camera-picker .tree-action .el-button {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 400;
+}
+.camera-picker .selection-notice {
+  margin: 0 0 8px;
+  color: #b45309;
+  font-size: 12px;
+}
+@media (max-width: 600px) {
+  .camera-picker .picker-toolbar {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .camera-picker .camera-search {
+    flex-grow: 1;
+  }
+  .camera-picker .selection-summary {
+    gap: 8px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .camera-picker .picker-tree .el-tree-node__content {
+    transition: none;
+  }
+}

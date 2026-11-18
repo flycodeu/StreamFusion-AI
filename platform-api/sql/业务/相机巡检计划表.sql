@@ -6,6 +6,7 @@ DROP TABLE IF EXISTS `camera_status_plan`;
 CREATE TABLE camera_status_plan (
     id BIGINT NOT NULL,
     actor_user_id BIGINT NOT NULL COMMENT '创建人历史ID，执行时复核账号和权限，不绑定Session',
+    name VARCHAR(80) NULL COMMENT '巡检任务名称，缺省时按任务编号展示',
     client_request_id VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     request_key_id VARCHAR(64) NOT NULL,
     request_fingerprint BINARY(32) NOT NULL,
@@ -25,6 +26,7 @@ CREATE TABLE camera_status_plan (
     PRIMARY KEY (id),
     UNIQUE KEY uk_camera_plan_request (actor_user_id,client_request_id),
     KEY ix_camera_plan_expiry (state,end_at,id),
+    CONSTRAINT ck_camera_plan_name CHECK (name IS NULL OR (CHAR_LENGTH(TRIM(name)) BETWEEN 1 AND 80)),
     CONSTRAINT ck_camera_plan_state CHECK (state IN ('ACTIVE','STOPPED','EXPIRED')),
     CONSTRAINT ck_camera_plan_layer CHECK (layer IN ('CONTROL','MEDIA')),
     CONSTRAINT ck_camera_plan_dispatch CHECK ((dispatch_mode='POLLING' AND parallelism=1) OR (dispatch_mode='PARALLEL' AND parallelism BETWEEN 1 AND 4)),

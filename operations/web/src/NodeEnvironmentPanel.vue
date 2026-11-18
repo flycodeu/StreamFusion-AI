@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onDeactivated, onUnmounted, ref, watch } from "vue";
-import { ElDialog } from "element-plus";
 import { ApiError, request } from "./api";
 import OpsPagination from "./OpsPagination.vue";
 import { usePagination } from "./pagination";
@@ -15,23 +14,16 @@ import type {
   InstallationMaterial,
   ServiceRecipe,
 } from "./serviceInstallation";
-import {
-  softwareJobStatusLabel,
-  softwareJobErrorMessages,
-  softwareJobDiagnostic,
-  type SoftwareJob,
-} from "./software";
+import type { SoftwareJob } from "./software";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
-import HostPreparationPanel from "./HostPreparationPanel.vue";
-import NodeRegistryPanel from "./NodeRegistryPanel.vue";
-import NodeVersionDialog from "./NodeVersionDialog.vue";
+import NodeEnvironmentContent from "./NodeEnvironmentContent.vue";
+import NodeEnvironmentDialogs from "./NodeEnvironmentDialogs.vue";
 import {
   nodeInitialPlanMatches,
   type NodeInitialIntent,
   nodeActionLabels,
   nodeJobPending,
   nodeMaterials,
-  nodeTerminalCommand,
   nodeVersionRow,
   nodeVersionValue,
   type NodeAction,
@@ -43,6 +35,7 @@ import {
   type NodePlan,
   type NodeRegistry,
 } from "./nodeEnvironment";
+import "./node-environment.css";
 
 const props = defineProps<{ host: Host; initialEnvironmentId?: string }>();
 const emit = defineEmits<{ changed: []; closeState: [state: { blocked: boolean; dirty: boolean; hostChangeBlocked: boolean }] }>();
@@ -927,714 +920,75 @@ poll();
         核对 Node 提交结果
       </button>
     </p>
-    <template v-if="environment">
-      <div class="environment-summary">
-        <div>
-          <span>执行账号</span><strong>{{ environment.account }}</strong>
-        </div>
-        <div>
-          <span>实际默认</span
-          ><strong>{{ environment.observedDefaultVersion || "未设置" }}</strong>
-          <span>期望：{{ desiredDefault }}</span>
-        </div>
-        <div>
-          <span>管理方式</span
-          ><strong
-            >{{
-              environment.managementMode === "MANAGED" ? "Ops 管理" : "只读登记"
-            }}
-            ·
-            {{ environment.managerType === "NVM" ? "nvm" : "系统安装" }}</strong
-          >
-        </div>
-        <div>
-          <span>上次检查</span
-          ><strong>{{ hostTime(environment.observedAt) }}</strong>
-        </div>
-      </div>
-      <div v-if="environment.managerType === 'NVM'" class="terminal-access">
-        <span>{{
-          environment.observation?.terminal?.status === "CONNECTED"
-            ? "Bash 已接入"
-            : environment.observation?.terminal?.status === "CONFLICT"
-              ? "Bash 配置冲突"
-              : environment.observation?.terminal?.status === "UNSUPPORTED"
-                ? "当前终端不支持自动接入"
-                : environment.observation?.terminal?.status === "NOT_CONNECTED" ? "Bash 未接入" : "终端接入待检查"
-        }}</span>
-        <button
-          v-if="environment.managementMode === 'MANAGED' && environment.observation?.terminal?.status !== 'CONNECTED'"
-          class="secondary"
-          :disabled="busy || !writable"
-          @click="openAction('CONNECT_TERMINAL')"
-        >
-          接入终端
-        </button>
-        <span v-if="!environment.observedDefaultVersion && environment.observation?.terminal?.status === 'CONNECTED'" class="hint"
-          >选择默认版本后，新终端可使用 node/npm</span
-        >
-        <span
-          v-else-if="environment.observation?.terminal?.status === 'CONNECTED'"
-          class="hint"
-          >重新登录即可使用 node/npm</span
-        >
-      </div>
-      <details v-if="environment.errorCode" class="hint">
-        <summary>检测未完成，显示上次结果</summary>
-        <ErrorHelpLink :code="environment.errorCode" /><code>{{
-          environment.errorCode
-        }}</code>
-        <p>{{ hostTime(environment.observedAt) }} · {{ environment.id }}</p>
-      </details>
-      <div class="node-tabs" role="tablist" aria-label="Node 环境详情">
-        <button
-          v-for="entry in [
-            { key: 'versions', name: '版本列表' },
-            { key: 'sources', name: '来源与目录' },
-            { key: 'registry', name: 'npm 镜像' },
-            { key: 'history', name: '操作记录' },
-          ]"
-          :key="entry.key"
-          role="tab"
-          :aria-selected="tab === entry.key"
-          :class="{ active: tab === entry.key }"
-          @click="tab = entry.key"
-        >
-          {{ entry.name }}
-        </button>
-      </div>
-      <section v-if="tab === 'versions'" class="version-list">
-        <div class="list-actions">
-          <button
-            class="primary"
-            :disabled="busy || !writable"
-            @click="openAction('INSTALL_NODE')"
-          >
-            安装 Node 版本
-          </button>
-        </div>
-        <article
-          v-for="item in pagedVersions"
-          :key="item.version"
-          class="node-version"
-        >
-          <div class="version-title">
-            <strong>{{ item.version }}</strong
-            ><span
-              v-if="item.version === environment.observedDefaultVersion"
-              class="default-badge"
-              >默认</span
-            >
-          </div>
-          <div class="package-versions">
-            <span
-              >npm <b>{{ item.npmVersion || "未确认" }}</b></span
-            ><span
-              >pnpm <b>{{ item.pnpmVersion || "未安装" }}</b></span
-            >
-          </div>
-          <code>{{ item.binaryPath }}</code>
-          <div class="actions">
-            <button
-              class="quiet"
-              :disabled="
-                busy ||
-                !writable ||
-                item.version === environment.observedDefaultVersion
-              "
-              @click="openAction('SET_DEFAULT', item.version)"
-            >
-              设为默认</button
-            ><button
-              class="quiet"
-              :disabled="busy || !writable"
-              @click="openAction('UPDATE_NPM', item.version)"
-            >
-              更新 npm</button
-            ><button
-              class="quiet"
-              :disabled="busy || !writable"
-              @click="
-                openAction(
-                  item.pnpmVersion ? 'UPDATE_PNPM' : 'INSTALL_PNPM',
-                  item.version,
-                )
-              "
-            >
-              {{ item.pnpmVersion ? "更新 pnpm" : "安装 pnpm" }}</button
-            ><button
-              v-if="item.pnpmVersion"
-              class="quiet"
-              :disabled="busy || !writable"
-              @click="openAction('REMOVE_PNPM', item.version)"
-            >
-              移除 pnpm</button
-            ><button
-              class="quiet danger"
-              :disabled="
-                busy || !writable || !nodeVersionRow(environment, item.version)
-              "
-              @click="openAction('UNINSTALL_NODE', item.version)"
-            >
-              卸载版本
-            </button>
-          </div>
-          <details v-if="item.globalPackages?.length">
-            <summary>全局工具（{{ item.globalPackages.length }}）</summary>
-            <p v-for="pkg in item.globalPackages" :key="pkg.name">
-              <code>{{ pkg.name }}</code> {{ pkg.version }}
-            </p>
-          </details>
-        </article>
-        <p v-if="!versions.length" class="empty">
-          {{
-            environment.managementMode === "MANAGED"
-              ? "尚未安装 Node 版本。"
-              : "未检测到可用版本。"
-          }}
-        </p>
-        <OpsPagination v-model:page="versionPage" v-model:page-size="versionPageSize" :total="versionTotal" label="Node 版本分页" />
-      </section>
-      <section v-else-if="tab === 'sources'" class="environment-details">
-        <details
-          v-for="item in pagedSources"
-          :key="item.id"
-        >
-          <summary>
-            {{ item.name }} ·
-            {{
-              item.installation?.source?.type === "OFFICIAL"
-                ? "官方在线安装"
-                : item.installation?.source?.type === "ARCHIVE"
-                  ? "Ops 离线安装"
-                  : "自行安装，来源未确认"
-            }}
-          </summary>
-          <p v-if="item.installation?.source?.sha256">
-            <code>归档 SHA-256 {{ item.installation.source.sha256 }}</code>
-          </p>
-          <div
-            v-for="part in item.installation?.definition?.native?.parts || []"
-            :key="part.name"
-            class="source-file"
-          >
-            <strong>{{ part.name }}</strong
-            ><a :href="part.url" target="_blank" rel="noopener noreferrer">{{
-              part.url
-            }}</a
-            ><code>SHA-256 {{ part.sha256 }}</code>
-          </div>
-        </details>
-        <OpsPagination v-model:page="sourcePage" v-model:page-size="sourcePageSize" :total="sourceTotal" label="Node 安装来源分页" />
-        <dl>
-          <dt>环境目录</dt>
-          <dd>
-            <code>{{ environment.rootPath }}</code>
-          </dd>
-          <dt>nvm 版本</dt>
-          <dd>{{ environment.nvmVersion || "不适用" }}</dd>
-          <dt>所属账号</dt>
-          <dd>{{ environment.account }} · UID {{ environment.accountUid }}</dd>
-        </dl>
-        <div class="actions">
-          <button class="secondary" @click="terminalOpen = true">
-            终端使用方式</button
-          ><button
-            v-if="environment.managerType === 'NVM'"
-            class="secondary"
-            :disabled="busy || !writable"
-            @click="openAction('UPDATE_NVM')"
-          >
-            检查 nvm 更新</button
-          ><button
-            class="quiet"
-            :disabled="busy || pending"
-            @click="openAction('RELEASE')"
-          >
-            解除管理</button
-          ><button
-            class="quiet danger"
-            :disabled="busy || !writable || !!versions.length"
-            @click="openAction('REMOVE_ENVIRONMENT')"
-          >
-            移除空环境
-          </button>
-        </div>
-      </section>
-      <NodeRegistryPanel v-else-if="tab === 'registry'" :environment="environment" :disabled="busy || !writable" @select="selectRegistry" @close-state="registryCloseState = $event" />
-      <section v-else class="node-history">
-        <button
-          v-for="item in jobs"
-          :key="item.id"
-          class="history-row"
-          @click="showJob(item)"
-        >
-          <span>{{ softwareJobStatusLabel(item.status) }}</span
-          ><time>{{ hostTime(item.updatedAt) }}</time
-          ><span>查看日志</span>
-        </button>
-        <p v-if="!jobs.length" class="empty">暂无操作记录</p>
-        <OpsPagination :page="historyPage" :page-size="historyPageSize" :total="historyTotal" :disabled="busy" label="Node 操作记录分页" @update:page="act(() => loadHistory($event))" @update:page-size="act(() => loadHistory(1, $event))" />
-        <p v-if="logsJobId" class="hint">作业 {{ logsJobId }}</p>
-        <pre v-if="logs">{{ logs }}</pre>
-      </section>
-      <div v-if="job" class="job-result" role="status">
-        <strong>{{ softwareJobStatusLabel(job.status) }}</strong
-        ><span>{{
-          job.targetAckPending
-            ? "正在等待目标确认收尾"
-            : job.status === "UNKNOWN"
-              ? "请核对原操作结果，避免重复执行"
-              : ""
-        }}</span
-        ><p v-if="softwareJobErrorMessages[job.errorCode]">{{ softwareJobErrorMessages[job.errorCode] }}</p><button
-          v-if="job.status === 'UNKNOWN' || job.targetAckPending"
-          class="secondary"
-          :disabled="busy"
-          @click="jobAction('reconcile')"
-        >
-          检查操作结果</button
-        ><button
-          v-if="job.status === 'QUEUED'"
-          class="secondary"
-          :disabled="busy"
-          @click="jobAction('cancel')"
-        >
-          取消排队
-        </button>
-        <details>
-          <summary>诊断信息</summary>
-          <ErrorHelpLink v-if="job.errorCode" :code="job.errorCode" />
-          <p>
-            {{ softwareJobDiagnostic(job.status, job.phase) }}
-            <span v-if="job.errorCode"> · {{ job.errorCode }}</span>
-            · {{ hostTime(job.updatedAt) }}
-          </p>
-          <code>{{ job.id }} · {{ job.traceId }}</code>
-        </details>
-      </div>
-    </template>
-    <NodeVersionDialog
-      v-if="draft && actionOpen"
+    <NodeEnvironmentContent
+      v-if="environment"
+      v-model:tab="tab"
+      v-model:version-page="versionPage"
+      v-model:version-page-size="versionPageSize"
+      v-model:source-page="sourcePage"
+      v-model:source-page-size="sourcePageSize"
+      :environment="environment"
+      :desired-default="desiredDefault"
+      :busy="busy"
+      :writable="writable"
+      :pending="pending"
+      :versions="versions"
+      :paged-versions="pagedVersions"
+      :version-total="versionTotal"
+      :paged-sources="pagedSources"
+      :source-total="sourceTotal"
+      :jobs="jobs"
+      :history-page="historyPage"
+      :history-page-size="historyPageSize"
+      :history-total="historyTotal"
+      :logs-job-id="logsJobId"
+      :logs="logs"
+      :job="job"
+      @open-action="openAction"
+      @open-terminal="terminalOpen = true"
+      @select-registry="selectRegistry"
+      @registry-close-state="registryCloseState = $event"
+      @show-job="showJob"
+      @change-history-page="act(() => loadHistory($event))"
+      @change-history-page-size="act(() => loadHistory(1, $event))"
+      @job-action="jobAction"
+    />
+    <NodeEnvironmentDialogs
+      v-model:preparation-open="preparationOpen"
+      v-model:discovery-open="discoveryOpen"
+      v-model:discovery-account="discoveryAccount"
+      v-model:discovery-path="discoveryPath"
+      v-model:terminal-open="terminalOpen"
       :draft="draft"
+      :action-open="actionOpen"
       :environment="environment"
       :choices="choices"
       :initial-choices="catalog.node"
       :initial-recipe="initialRecipe"
       :initial-materials="initialMaterials"
-      :materials="matchingMaterials"
+      :matching-materials="matchingMaterials"
       :recipe="recipe"
       :plan="plan"
       :busy="busy"
       :attempted="attempted"
-      :error="error?.message"
-      :error-code="error?.code"
-      :diagnostic="
-        error
-          ? [error.code, hostTime(error.at), error.traceId, currentHost.id]
-              .filter(Boolean)
-              .join(' · ')
-          : ''
-      "
-      :host="currentHost"
-      :preparing="preparationOpen"
-      @close="closeAction"
-      @back="preparationOpen = false"
-      @change="changedDraft"
+      :error="error"
+      :current-host="currentHost"
+      :automatic-update="automaticUpdate"
+      :discovery="discovery"
+      @close-action="closeAction"
+      @changed-draft="changedDraft"
       @preflight="preflight"
       @submit="submit"
       @prepare="
         automaticUpdate = undefined;
         preparationOpen = true;
       "
-      @material="materialReady"
-      @initial-material="initialMaterialReady"
+      @material-ready="materialReady"
+      @initial-material-ready="initialMaterialReady"
       @material-busy="busy = $event"
-    >
-      <template #preparation>
-        <HostPreparationPanel
-          v-if="preparationOpen"
-          :host="currentHost"
-          :automatic-update="automaticUpdate"
-          update-only
-          @updated="updatedPreparation"
-        />
-      </template>
-    </NodeVersionDialog>
-    <ElDialog
-      v-model="discoveryOpen"
-      title="检测已有 Node 安装"
-      width="min(680px,94vw)"
-      :close-on-click-modal="false"
-      align-center
-      ><div class="discovery-form">
-        <label
-          >执行账号<input
-            v-model="discoveryAccount"
-            aria-label="检测 Node 账号"
-            :disabled="busy" /></label
-        ><label
-          >指定目录（可选）<input
-            v-model="discoveryPath"
-            aria-label="检测 Node 目录"
-            placeholder="留空检测标准位置"
-            :disabled="busy" /></label
-        ><button
-          class="primary"
-          :disabled="busy || !discoveryAccount.trim()"
-          @click="discover"
-        >
-          {{ busy ? "检测中…" : "开始检测" }}
-        </button>
-        <p v-if="error" role="alert" class="error">
-          {{ error.message }} <ErrorHelpLink :code="error.code" />
-        </p>
-        <article
-          v-for="candidate in discovery?.candidates"
-          :key="candidate.rootPath"
-          class="candidate"
-        >
-          <strong>{{ candidate.managerType }} · {{ candidate.account }}</strong
-          ><code>{{ candidate.rootPath }}</code>
-          <p>
-            {{
-              candidate.versions.map((item) => item.version).join(" / ") ||
-              "未发现 Node 版本"
-            }}
-          </p>
-          <button
-            class="secondary"
-            :disabled="busy"
-            @click="register(candidate)"
-          >
-            登记此环境
-          </button>
-        </article>
-        <p v-if="discovery && !discovery.candidates.length" class="empty">
-          未发现可登记的 Node 环境
-        </p>
-      </div></ElDialog
-    >
-    <ElDialog
-      v-model="terminalOpen"
-      title="终端使用方式"
-      width="min(660px,94vw)"
-      align-center
-      ><p class="hint">
-        使用 {{ environment?.account }} 账号执行；只作用于当前终端。
-      </p>
-      <details>
-        <summary>当前终端临时加载</summary>
-        <pre v-if="environment">{{ nodeTerminalCommand(environment) }}</pre>
-      </details>
-    </ElDialog>
-    <ElDialog
-      v-if="!draft"
-      v-model="preparationOpen"
-      append-to-body
-      :title="automaticUpdate ? '正在准备安装环境' : '更新接入组件'"
-      width="min(720px,94vw)"
-      align-center
-      ><HostPreparationPanel
-        v-if="preparationOpen"
-        :host="currentHost"
-        :automatic-update="automaticUpdate"
-        update-only
-        @updated="updatedPreparation"
-    /></ElDialog>
+      @updated-preparation="updatedPreparation"
+      @discover="discover"
+      @register="register"
+    />
   </section>
 </template>
-
-<style scoped>
-.node-environments {
-  display: grid;
-  gap: 22px;
-  min-width: 0;
-}
-.node-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-}
-.eyebrow {
-  font-size: 11px;
-  color: var(--muted);
-  letter-spacing: 0.08em;
-}
-h2 {
-  font-size: 24px;
-  margin: 7px 0 8px;
-  font-weight: 600;
-}
-.node-header p,
-.hint {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.8;
-  margin: 0;
-}
-.actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-.environment-picker {
-  display: flex;
-  align-items: end;
-  gap: 12px;
-}
-.environment-picker label,
-.discovery-form label {
-  display: grid;
-  gap: 8px;
-  font-size: 12px;
-}
-.environment-picker label {
-  flex: 1;
-}
-select,
-input {
-  min-width: 0;
-  padding: 9px 11px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--panel, #fff);
-  color: var(--text);
-  box-sizing: border-box;
-}
-.terminal-access {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: 14px 0;
-  font-size: 13px;
-}
-.environment-summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 20px;
-  padding: 20px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel, #fff);
-}
-.environment-summary div {
-  display: grid;
-  gap: 8px;
-}
-.environment-summary span {
-  font-size: 11px;
-  color: var(--muted);
-}
-.environment-summary strong {
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-.node-tabs {
-  display: flex;
-  gap: 22px;
-  border-bottom: 1px solid var(--border);
-}
-.node-tabs button {
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: none;
-  padding: 11px 0;
-  color: var(--muted);
-  cursor: pointer;
-}
-.node-tabs button.active {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-.version-list {
-  display: grid;
-  gap: 14px;
-}
-.list-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-.list-actions p {
-  font-size: 12px;
-  color: var(--muted);
-}
-.node-version {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 20px;
-  display: grid;
-  gap: 15px;
-  background: var(--panel, #fff);
-}
-.version-title {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-}
-.version-title strong {
-  font: 600 18px var(--mono);
-}
-.default-badge {
-  font-size: 11px;
-  background: #eef5ed;
-  color: #447048;
-  padding: 3px 8px;
-  border-radius: 4px;
-}
-.package-versions {
-  display: flex;
-  gap: 30px;
-  font-size: 12px;
-  color: var(--muted);
-}
-.package-versions b {
-  color: var(--text);
-  font-weight: 500;
-  margin-left: 6px;
-}
-code,
-pre {
-  font: 11px/1.8 var(--mono);
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-pre {
-  padding: 14px;
-  background: #f5f7fa;
-  border-radius: 5px;
-}
-.node-version > code {
-  color: var(--muted);
-}
-.node-version details {
-  font-size: 12px;
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
-}
-summary {
-  cursor: pointer;
-  font-size: 12px;
-}
-.empty {
-  padding: 30px;
-  color: var(--muted);
-  font-size: 13px;
-  text-align: center;
-  border: 1px dashed var(--border);
-  border-radius: 6px;
-  line-height: 1.8;
-}
-.environment-details {
-  display: grid;
-  gap: 20px;
-}
-.source-file {
-  display: grid;
-  gap: 6px;
-  margin-top: 14px;
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-.source-file a {
-  color: var(--accent);
-}
-dl {
-  display: grid;
-  grid-template-columns: 80px minmax(0, 1fr);
-  gap: 16px;
-  font-size: 12px;
-}
-dt {
-  color: var(--muted);
-}
-dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.job-result {
-  padding: 18px;
-  background: #f6f8fb;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  font-size: 12px;
-}
-.job-result details {
-  width: 100%;
-}
-.error,
-.danger {
-  color: var(--danger, #a74430);
-}
-.error {
-  font-size: 13px;
-  line-height: 1.8;
-}
-.discovery-form {
-  display: grid;
-  gap: 16px;
-}
-.candidate {
-  border-top: 1px solid var(--border);
-  padding-top: 16px;
-  display: grid;
-  gap: 10px;
-}
-.candidate p {
-  margin: 0;
-  font-size: 12px;
-}
-.history-row {
-  width: 100%;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 15px;
-  border: 0;
-  border-bottom: 1px solid var(--border);
-  background: none;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-}
-.history-row time {
-  color: var(--muted);
-  font-size: 12px;
-}
-@media (max-width: 600px) {
-  .node-header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .environment-summary {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 18px;
-    padding: 16px;
-  }
-  .list-actions {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .node-version {
-    padding: 16px;
-  }
-  .actions {
-    gap: 8px;
-  }
-  .node-tabs {
-    gap: 20px;
-  }
-  .history-row {
-    flex-wrap: wrap;
-  }
-}
-</style>
