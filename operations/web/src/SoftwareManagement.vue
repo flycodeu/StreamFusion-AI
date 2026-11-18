@@ -46,8 +46,9 @@ const emit = defineEmits<{
   preparation: [string];
   navigate: [view: "manage" | "install"];
   logs: [target: { jobId?: string; softwareId?: string }];
+  selectionOpened: [string];
 }>();
-const props = withDefaults(defineProps<{ view?: "manage" | "install"; dockerHostId?: string }>(), {
+const props = withDefaults(defineProps<{ view?: "manage" | "install"; dockerHostId?: string; selectedSoftwareId?: string }>(), {
   view: "manage",
 });
 const rows = ref<SoftwareInstance[]>([]);
@@ -286,9 +287,9 @@ async function saved(item: SoftwareInstance) {
   await showDetails(item);
   ElMessage.success("已登记为只读软件");
 }
-async function openInstance(id: string) {
+async function openInstance(id: string, requested = false) {
   const item = await request<SoftwareInstance>(`/software-instances/${id}`);
-  if (disposed) return;
+  if (disposed || requested && (!isActive.value || props.selectedSoftwareId !== id)) return;
   update(item);
   hostId.value = item.hostId;
   mode.value = "ACTIVE";
@@ -515,6 +516,12 @@ function poll() {
 watch(() => props.view, (view) => {
   if (isActive.value && view === "manage") void refreshView();
 });
+watch(() => props.selectedSoftwareId, async (id) => {
+  if (!id) return;
+  try { await openInstance(id, true); }
+  catch (error) { if (!disposed && props.selectedSoftwareId === id) emit("error", error); }
+  finally { emit("selectionOpened", id); }
+}, { immediate: true });
 onMounted(() => { void refreshView(); });
 onActivated(() => {
   const resumed = !isActive.value;

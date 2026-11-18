@@ -36,6 +36,13 @@ export interface SoftwareMetadata {
   executablePath?: string;
   serviceFile?: string;
   listeningPorts?: string[];
+  containerName?: string;
+  dockerRootDir?: string;
+  mounts?: { source?: string; destination: string; volume?: string; readOnly: boolean }[];
+  portMappings?: string[];
+  logSource?: string;
+  logPath?: string;
+  locationStatus?: "AVAILABLE" | "UNAVAILABLE";
 }
 
 export interface SoftwareInstance {
@@ -255,6 +262,20 @@ export const softwareJobLabels: Record<string, string> = {
   CANCELLED: "已取消",
 };
 export const softwareJobErrorMessages: Record<string, string> = {
+  CONFIG_FILE_CHANGED: "配置已被修改，请重新读取并检查。",
+  CONFIG_FILE_INVALID: "配置检查未通过，请修正后重试。",
+  CONFIG_FILE_UNSUPPORTED: "此配置超出当前文件编辑范围，请使用配置模板维护。",
+  CONFIG_FILE_UNSAFE: "配置路径或文件权限异常，请先核对服务器文件。",
+  CONFIG_FILE_UNREADABLE: "配置文件无法读取，请检查目录和读取权限。",
+  CONFIG_FILE_PYTHON_REQUIRED: "配置文件编辑需要服务器已有 Python 3.9 或更新版本。",
+  CONFIG_FILE_CONTENT_INVALID: "配置内容未通过核对，请重新读取并检查。",
+  CONFIG_FILE_RELOAD_FAILED: "Nginx 未确认加载新配置，请查看原任务的恢复结果。",
+  CONFIG_FILE_STATE_CHANGED: "服务状态已变化，请重新读取并检查。",
+  CONFIG_FILE_COMMAND_FAILED: "配置检查或服务操作未完成，请核对原任务。",
+  CONFIG_FILE_RESULT_UNCONFIRMED: "配置结果尚未确认，请核对原任务。",
+  CONFIG_FILE_APPLY_RESTORED: "本次配置未生效，已恢复原配置。",
+  CONFIG_FILE_ROLLBACK_UNCONFIRMED: "原配置恢复结果尚未确认，请核对原任务。",
+  CONFIG_FILE_LIMIT: "配置文件或检查输出超过大小限制，请精简后重试。",
   SERVICE_IMAGE_INSPECT_FAILED: "无法读取目标主机上的固定镜像，请检查 Docker 状态和镜像是否已拉取或导入。",
   SERVICE_IMAGE_PLATFORM_MISMATCH: "镜像平台与安装方案不符，请选择匹配目标主机架构的安装材料。",
   SERVICE_IMAGE_IDENTITY_MISMATCH: "镜像摘要未通过核对，请检查安装方案的固定镜像和目标主机上的实际镜像。",

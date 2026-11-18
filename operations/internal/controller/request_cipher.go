@@ -61,6 +61,10 @@ func sensitiveRequestPath(path string) bool {
 		return true
 	}
 	parts := strings.Split(path, "/")
+	if len(parts) == 5 && parts[0] == "" && parts[1] == "software-instances" && parts[3] == "config-files" && parts[4] == "check" {
+		_, err := uuid.Parse(parts[2])
+		return err == nil
+	}
 	if len(parts) != 4 || parts[0] != "" || parts[1] != "credentials" || parts[3] != "revisions" {
 		return false
 	}

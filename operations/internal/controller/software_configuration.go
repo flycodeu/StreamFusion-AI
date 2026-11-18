@@ -46,6 +46,9 @@ func (p storedConfigurationPlan) change() *serviceinstall.ChangeRequest {
 
 func (h *HTTP) softwareConfigurationRoute(w http.ResponseWriter, r *http.Request, s *session, path string) bool {
 	p := strings.Split(strings.Trim(path, "/"), "/")
+	if h.softwareConfigurationFilesRoute(w, r, s, p) {
+		return true
+	}
 	if h.softwareManagementRoute(w, r, s, p) {
 		return true
 	}

@@ -81,3 +81,35 @@ func nginxManagementDefinition(d serviceinstall.Definition) *serviceinstall.Mana
 	}
 	return m
 }
+
+// Add the fixed file commands only when a file operation is requested. This
+// preserves published/draft templates and existing management-state snapshots.
+func configurationFileDefinition(d serviceinstall.Definition) serviceinstall.Definition {
+	if d.Management == nil {
+		return d
+	}
+	m := *d.Management
+	m.Operations = append([]serviceinstall.ManagementOperation(nil), m.Operations...)
+	for _, operation := range nginxFileOperations(serviceinstall.IsOfficial(d)) {
+		if _, err := d.ManagementOperation(operation.Key); err != nil {
+			m.Operations = append(m.Operations, operation)
+		}
+	}
+	d.Management = &m
+	return d
+}
+
+func nginxFileOperations(official bool) []serviceinstall.ManagementOperation {
+	step := serviceinstall.CommandStep{Name: "处理配置文件", Script: serviceinstall.ConfigurationFileScript, RunAs: "ROOT", TimeoutSeconds: 90}
+	read := func(key, name string) serviceinstall.ManagementOperation {
+		return serviceinstall.ManagementOperation{Key: key, Name: name, Group: "配置文件", ReadOnly: true, ResultFormat: "TEXT", Steps: []serviceinstall.CommandStep{step}}
+	}
+	edit := serviceinstall.ManagementOperation{
+		Key: "config-file-save", Name: "保存配置文件", Group: "配置文件", ResultFormat: "TEXT",
+		Steps: []serviceinstall.CommandStep{step}, VerifySteps: []serviceinstall.CommandStep{step}, RollbackSteps: []serviceinstall.CommandStep{step},
+	}
+	if official {
+		edit.Resources = []serviceinstall.ResourceDefinition{{Key: "system-site", Type: "PATH_WRITE", Value: "/etc/nginx/conf.d/ops-${OPS_SOFTWARE_ID}-${OPS_PARAM_SITE}.conf"}}
+	}
+	return []serviceinstall.ManagementOperation{read("config-file-read", "读取配置文件"), edit}
+}

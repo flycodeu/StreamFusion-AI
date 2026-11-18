@@ -247,14 +247,14 @@ func (x *executor) cleanupReboundContainer(ctx context.Context, req Request, nex
 }
 
 func validManagementRestoredResult(req Request, r Result) bool {
-	return r.JobID == req.JobID && r.InputHash == req.InputHash && r.Status == "FAILED" && r.Phase == "OPERATION_RESTORED" && r.Management == nil && r.Installation == nil && r.Software != nil && r.Software.Kind == req.Software.Kind && r.Software.Locator == req.Software.Locator && r.Software.IdentityHash == req.Software.IdentityHash && (r.Software.State == "RUNNING" || r.Software.State == "STOPPED")
+	return r.JobID == req.JobID && r.InputHash == req.InputHash && r.Status == "FAILED" && r.Phase == "OPERATION_RESTORED" && r.Management == nil && r.Installation == nil && r.Software != nil && r.Software.Kind == req.Software.Kind && r.Software.Locator == req.Software.Locator && r.Software.IdentityHash == req.Software.IdentityHash && restorableManagementState(req, r.Software.State)
 }
 
 func (x *executor) restoreManagement(req Request, dir string, op serviceinstall.ManagementOperation, cause error) Result {
 	r := softwareResult(req)
 	r.Phase, r.ErrorCode = "MANAGEMENT_RESULT_UNCONFIRMED", cause.Error()
 	var before managementBefore
-	if readJSON(filepath.Join(dir, "management-before.json"), &before) != nil || before.InputHash != req.InputHash || before.State != "RUNNING" && before.State != "STOPPED" || x.boundSoftware(*req.Software) != nil {
+	if readJSON(filepath.Join(dir, "management-before.json"), &before) != nil || before.InputHash != req.InputHash || !restorableManagementState(req, before.State) || x.boundSoftware(*req.Software) != nil {
 		return r
 	}
 	account, err := managementAccount(*req.Management)

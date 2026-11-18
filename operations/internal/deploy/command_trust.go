@@ -13,6 +13,7 @@ import (
 )
 
 const DockerRegistryServiceImageVersion = 10
+const ConfigurationFileVersion = 1
 const CommandRecipeVersion = DockerRegistryServiceImageVersion
 
 func RequiredCommandRecipeVersion(d serviceinstall.Definition) int {
@@ -208,6 +209,14 @@ func validateCustomParameterSecrets(req Request, values map[string]string) error
 }
 
 func validateManagementSecrets(req Request, values map[string]string) error {
+	if f := req.Management.ConfigFile; f != nil {
+		body, present := values[serviceinstall.ConfigurationFileSecret]
+		needed := f.Action == "save" && (req.Action == "SOFTWARE_OPERATION" || req.Action == "SOFTWARE_OPERATION_CHECK")
+		if len(values) > 1 || len(values) == 1 && !present || needed != present || present && (!serviceinstall.ValidConfigurationFileBody(body) || serviceinstall.Digest(body) != f.SHA256) {
+			return errors.New("CONFIG_FILE_CONTENT_INVALID")
+		}
+		return nil
+	}
 	if req.Action == "SOFTWARE_OPERATION" || req.Action == "SOFTWARE_OPERATION_CHECK" {
 		return serviceinstall.ValidateCredentialValues(req.Management.CredentialReferences(), values)
 	}

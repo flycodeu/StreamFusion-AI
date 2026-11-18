@@ -39,6 +39,7 @@ type executorCapabilities struct {
 	SoftwareLifecycleVersion  int          `json:"softwareLifecycleVersion"`
 	RuntimePolicyVersion      int          `json:"runtimePolicyVersion"`
 	SoftwareManagementVersion int          `json:"softwareManagementVersion"`
+	ConfigurationFileVersion  int          `json:"configurationFileVersion,omitempty"`
 	InstallVersion            int          `json:"serviceInstallVersion"`
 	CatalogHash               string       `json:"serviceCatalogHash"`
 	NativeInstallVersion      int          `json:"nativeInstallVersion"`

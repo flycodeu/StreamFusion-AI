@@ -6,6 +6,7 @@ import OpsWorkspace from "./OpsWorkspace.vue";
 import ApplicationProjects from "./ApplicationProjects.vue";
 import SoftwareManagement from "./SoftwareManagement.vue";
 import SoftwareCommandTemplates from "./SoftwareCommandTemplates.vue";
+import SoftwareDirectory from "./SoftwareDirectory.vue";
 import SoftwareLogs from "./SoftwareLogs.vue";
 import SoftwareLogDialog from "./SoftwareLogDialog.vue";
 import type { LogSelection } from "./jobs";
@@ -83,6 +84,11 @@ const nav = [
     label: "软件配置",
     icon: "M4 4h16v16H4z M7 8l3 3-3 3 M12 15h5",
   },
+  {
+    id: "software-directory",
+    label: "软件目录",
+    icon: "M4 5h16v14H4z M8 9h8 M8 13h5 M8 17h8",
+  },
   { id: "application-projects", label: "项目管理", icon: "M3 5h7l2 2h9v13H3z M7 11h10 M7 15h7" },
   { id: "instances", label: "应用实例", icon: "M5 5h14v14H5z M9 9h6v6H9z" },
   { id: "artifacts", label: "版本制品", icon: "M4 7h16v13H4z M8 4h8v3H8z" },
@@ -114,7 +120,9 @@ watch(active, (page) => {
 });
 const preparationHostId = ref("");
 const dockerHostId = ref("");
+const selectedSoftwareId = ref("");
 watch(active, (page) => { if (!["software", "software-install"].includes(page)) dockerHostId.value = ""; });
+watch(active, (page) => { if (page !== "software") selectedSoftwareId.value = ""; });
 function showHostPreparation(hostId: string) {
   preparationHostId.value = hostId;
   active.value = "hosts";
@@ -122,7 +130,7 @@ function showHostPreparation(hostId: string) {
 const navigationOpen = ref(false);
 const navigationGroups = [
   { label: "工作空间", ids: ["overview", "hosts", "ports"] },
-  { label: "软件中心", ids: ["software", "software-install", "commands"] },
+  { label: "软件中心", ids: ["software", "software-install", "commands", "software-directory"] },
   { label: "应用交付", ids: ["application-projects", "instances", "artifacts", "jobs"] },
   { label: "控制器", ids: ["credentials", "audit", "settings"] },
 ].map((group) => ({ ...group, items: nav.filter((item) => group.ids.includes(item.id)) }));
@@ -913,11 +921,14 @@ onUnmounted(() => {
           </div>
         </div>
         <SoftwareCommandTemplates class="content" v-if="commandsVisited" v-show="active === 'commands'" :active="active === 'commands'" />
+        <SoftwareDirectory v-if="active === 'software-directory'" @detail="(id) => { selectedSoftwareId = id; active = 'software'; }" />
         <KeepAlive>
           <SoftwareManagement
             v-if="active === 'software' || active === 'software-install'"
             :view="active === 'software-install' ? 'install' : 'manage'"
             :docker-host-id="dockerHostId"
+            :selected-software-id="selectedSoftwareId"
+            @selection-opened="(id) => { if (selectedSoftwareId === id) selectedSoftwareId = ''; }"
             @error="report"
             @preparation="showHostPreparation"
             @navigate="active = $event === 'install' ? 'software-install' : 'software'"

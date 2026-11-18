@@ -167,6 +167,22 @@ func (x *executor) executeSoftware(req Request, output io.Writer) error {
 		if err := validateManagementInput(req); err != nil {
 			return err
 		}
+		if req.Management.ConfigFile != nil {
+			blocked := func(code, message string) error {
+				return json.NewEncoder(output).Encode(serviceinstall.ManagementPreflight{Checks: []serviceinstall.Check{{Key: "MANAGEMENT", Status: "FAIL", Code: code, Message: message}}})
+			}
+			lock, err := targetLock(x.root)
+			if err != nil {
+				if err.Error() == "EXECUTOR_BUSY" {
+					return blocked("EXECUTOR_BUSY", "主机正在执行其他操作，请稍后重新检查")
+				}
+				return err
+			}
+			defer lock.Close()
+			if _, err := os.Lstat(filepath.Join(x.root, "pending.json")); !os.IsNotExist(err) {
+				return blocked("TARGET_PENDING", "主机有未完成的操作，请在执行记录中核对原任务")
+			}
+		}
 		return json.NewEncoder(output).Encode(x.managementPreflight(req))
 	}
 	if req.Action == "GIT_REPOSITORY_CHECK" || req.Action == "GIT_REPOSITORY_OBSERVE" || req.Action == "GIT_REPOSITORY_TEST" {
@@ -214,6 +230,19 @@ func (x *executor) executeSoftware(req Request, output io.Writer) error {
 		}
 		if err != nil {
 			return err
+		}
+		if req.Action == "SOFTWARE_OBSERVE" {
+			EnrichSoftwareLocations(ctx, *req.Software, actual, x.softwareRunner)
+			if actual.Kind == "SYSTEMD" && req.Software.SoftwareKey != "DOCKER" {
+				metadata := *actual
+				metadataCtx, metadataCancel := context.WithTimeout(ctx, 4*time.Second)
+				EnrichSoftwareObservation(metadataCtx, &metadata, x.softwareRunner)
+				metadataCancel()
+				actual.ListeningPorts = metadata.ListeningPorts
+				if actual.ExecutablePath == "" {
+					actual.ExecutablePath = metadata.ExecutablePath
+				}
+			}
 		}
 		if req.Action == "SOFTWARE_OBSERVE" && actual.Kind != "TOOL" {
 			if policy, policyErr := x.softwareRuntimeState(ctx, *req.Software); policyErr == nil {

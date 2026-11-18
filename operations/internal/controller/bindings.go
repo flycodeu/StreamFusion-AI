@@ -192,6 +192,18 @@ func (h *HTTP) probeBinding(w http.ResponseWriter, r *http.Request, id string) {
 func (s *Store) releaseSecrets(req *deploy.Request) error {
 	req.Secrets = map[string]string{}
 	if req.Management != nil {
+		if f := req.Management.ConfigFile; f != nil {
+			if f.Action == "save" && (req.Action == "SOFTWARE_OPERATION_CHECK" || req.Action == "SOFTWARE_OPERATION") {
+				plain, err := unseal(s.Key, configurationFileSecretID(req.Management.SoftwareID, f.Name), 1, f.ContentEnvelope)
+				if err != nil || !serviceinstall.ValidConfigurationFileBody(string(plain)) || serviceinstall.Digest(string(plain)) != f.SHA256 {
+					clear(plain)
+					return errors.New("CONFIG_FILE_CONTENT_INVALID")
+				}
+				req.Secrets[serviceinstall.ConfigurationFileSecret] = string(plain)
+				clear(plain)
+			}
+			return nil
+		}
 		required := req.Action == "SOFTWARE_OPERATION" || req.Action == "SOFTWARE_OPERATION_CHECK"
 		if required {
 			if err := s.checkManagementCredentials(*req.Management); err != nil {

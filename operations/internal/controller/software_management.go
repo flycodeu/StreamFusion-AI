@@ -207,7 +207,7 @@ func (h *HTTP) checkSoftwareOperation(ctx context.Context, t target, i softwareI
 	if capability.Owner.ControllerID != h.store.controllerID() || capability.Owner.TargetID != t.ID || capability.Owner.ExecutorVersion != deploy.Version {
 		return result, errors.New("EXECUTOR_IDENTITY_MISMATCH")
 	}
-	if capability.SoftwareManagementVersion < deploy.SoftwareManagementVersion || capability.CommandRecipeVersion < deploy.RequiredCommandRecipeVersion(m.Definition) {
+	if capability.SoftwareManagementVersion < deploy.SoftwareManagementVersion || capability.CommandRecipeVersion < deploy.RequiredCommandRecipeVersion(m.Definition) || m.ConfigFile != nil && capability.ConfigurationFileVersion < deploy.ConfigurationFileVersion {
 		return result, errors.New("EXECUTOR_UPGRADE_REQUIRED")
 	}
 	if capability.CommandTrustFingerprint != deploy.CommandPublicKeyFingerprint(h.store.commandPublicKey()) {
@@ -257,23 +257,34 @@ func managementPreflightError(p serviceinstall.ManagementPreflight) string {
 	return "MANAGEMENT_CHECK_FAILED"
 }
 
+type softwareOperationPlanInput struct {
+	ExpectedVersion           string                                        `json:"expectedVersion"`
+	ExpectedManagementVersion string                                        `json:"expectedManagementVersion"`
+	TemplateID                string                                        `json:"templateId"`
+	TemplateRevision          int                                           `json:"templateRevision"`
+	OperationKey              string                                        `json:"operationKey"`
+	Parameters                map[string]string                             `json:"parameters"`
+	CredentialRefs            map[string]serviceinstall.CredentialReference `json:"credentialRefs"`
+	OperationParameters       map[string]string                             `json:"operationParameters"`
+	OperationCredentialRefs   map[string]serviceinstall.CredentialReference `json:"operationCredentialRefs"`
+	Account                   string                                        `json:"account,omitempty"`
+	ConfigFile                *serviceinstall.ConfigurationFileRequest      `json:"configFile,omitempty"`
+}
+
 func (h *HTTP) createSoftwareOperationPlan(w http.ResponseWriter, r *http.Request, actor *session, id string) {
-	var in struct {
-		ExpectedVersion           string                                        `json:"expectedVersion"`
-		ExpectedManagementVersion string                                        `json:"expectedManagementVersion"`
-		TemplateID                string                                        `json:"templateId"`
-		TemplateRevision          int                                           `json:"templateRevision"`
-		OperationKey              string                                        `json:"operationKey"`
-		Parameters                map[string]string                             `json:"parameters"`
-		CredentialRefs            map[string]serviceinstall.CredentialReference `json:"credentialRefs"`
-		OperationParameters       map[string]string                             `json:"operationParameters"`
-		OperationCredentialRefs   map[string]serviceinstall.CredentialReference `json:"operationCredentialRefs"`
-		Account                   string                                        `json:"account,omitempty"`
-	}
+	var in softwareOperationPlanInput
 	if err := decode(w, r, &in); err != nil || in.TemplateRevision < 1 || !deploy.ID.MatchString(in.TemplateID) {
 		h.fail(w, r, 400, "MANAGEMENT_INPUT_INVALID", "请选择已发布的管理方案和操作")
 		return
 	}
+	if in.ConfigFile != nil {
+		h.fail(w, r, 400, "CONFIG_FILE_INPUT_INVALID", "请通过配置文件界面提交修改")
+		return
+	}
+	h.createSoftwareOperationPlanInput(w, r, actor, id, in)
+}
+
+func (h *HTTP) createSoftwareOperationPlanInput(w http.ResponseWriter, r *http.Request, actor *session, id string, in softwareOperationPlanInput) {
 	i, err := h.store.readSoftware(id)
 	if err != nil {
 		h.opsError(w, r, err)
@@ -302,7 +313,10 @@ func (h *HTTP) createSoftwareOperationPlan(w http.ResponseWriter, r *http.Reques
 		h.fail(w, r, 409, "HOST_MAINTENANCE", "主机维护中，请恢复后操作")
 		return
 	}
-	m := serviceinstall.ManagementRequest{Definition: *template.Published, SoftwareID: i.ID, BindingRevision: i.BindingRevision, Root: softwareManagementRoot(i, t), OperationKey: in.OperationKey, Parameters: in.Parameters, ParameterCredentials: in.CredentialRefs, OperationParameters: in.OperationParameters, OperationCredentials: in.OperationCredentialRefs, Account: in.Account}
+	m := serviceinstall.ManagementRequest{ConfigFile: in.ConfigFile, Definition: *template.Published, SoftwareID: i.ID, BindingRevision: i.BindingRevision, Root: softwareManagementRoot(i, t), OperationKey: in.OperationKey, Parameters: in.Parameters, ParameterCredentials: in.CredentialRefs, OperationParameters: in.OperationParameters, OperationCredentials: in.OperationCredentialRefs, Account: in.Account}
+	if m.ConfigFile != nil {
+		m.Definition = configurationFileDefinition(m.Definition)
+	}
 	if m.Account == "" {
 		m.Account = i.Installation.Config.Account
 	}
@@ -333,7 +347,7 @@ func (h *HTTP) createSoftwareOperationPlan(w http.ResponseWriter, r *http.Reques
 		h.fail(w, r, 400, "MANAGEMENT_INPUT_INVALID", "请检查操作参数、执行账号和凭据引用")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 55*time.Second)
 	defer cancel()
 	checked, err := h.checkSoftwareOperation(ctx, t, i, m)
 	if err != nil {
@@ -341,6 +355,10 @@ func (h *HTTP) createSoftwareOperationPlan(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if !checked.Ready {
+		if m.ConfigFile != nil && checked.File != nil {
+			h.success(w, r, checked.File)
+			return
+		}
 		h.fail(w, r, 409, managementPreflightError(checked), "操作资源、目录权限或软件身份未通过检查")
 		return
 	}
@@ -399,6 +417,10 @@ func (h *HTTP) createSoftwareOperationPlan(w http.ResponseWriter, r *http.Reques
 		h.internal(w, r, err)
 		return
 	}
+	if m.ConfigFile != nil {
+		h.success(w, r, map[string]any{"status": "PASSED", "message": "完整配置检查通过", "planId": p.ID})
+		return
+	}
 	h.success(w, r, p.softwareOperationPlan)
 }
 
@@ -421,14 +443,24 @@ func verifySoftwareOperationState(tx *sql.Tx, p storedSoftwareOperationPlan) err
 	if p.Operation.Rebind && (p.Management.Installation == nil || deploy.Digest(p.Management.Installation) != deploy.Digest(i.Installation)) {
 		return errors.New("MANAGEMENT_INSTALLATION_CHANGED")
 	}
-	if state.TemplateID != p.TemplateID || state.TemplateRevision != p.TemplateRevision || deploy.Digest(state.Definition) != deploy.Digest(p.Management.Definition) {
+	adopted := state.Definition
+	if p.Management.ConfigFile != nil {
+		adopted = configurationFileDefinition(adopted)
+	}
+	if state.TemplateID != p.TemplateID || state.TemplateRevision != p.TemplateRevision || deploy.Digest(adopted) != deploy.Digest(p.Management.Definition) {
 		var published string
 		var revision int
 		if err = tx.QueryRow("SELECT published_json,revision FROM command_templates WHERE id=?", p.TemplateID).Scan(&published, &revision); err != nil {
 			return err
 		}
 		var definition serviceinstall.Definition
-		if deploy.StrictJSON([]byte(published), &definition) != nil || deploy.Digest(definition) != deploy.Digest(p.Management.Definition) || revision != p.TemplateRevision {
+		if deploy.StrictJSON([]byte(published), &definition) != nil || revision != p.TemplateRevision || definition.Management == nil {
+			return errors.New("MANAGEMENT_TEMPLATE_MISMATCH")
+		}
+		if p.Management.ConfigFile != nil {
+			definition = configurationFileDefinition(definition)
+		}
+		if deploy.Digest(definition) != deploy.Digest(p.Management.Definition) {
 			return errors.New("MANAGEMENT_TEMPLATE_MISMATCH")
 		}
 	}

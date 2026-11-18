@@ -12,12 +12,28 @@ import (
 // Metadata is evidence about the installation, separate from lifecycle identity.
 // A package version does not prove the version loaded by a running process.
 type SoftwareMetadata struct {
-	VersionSource  string   `json:"versionSource,omitempty"`
-	VersionStatus  string   `json:"versionStatus,omitempty"`
-	PackageName    string   `json:"packageName,omitempty"`
-	ExecutablePath string   `json:"executablePath,omitempty"`
-	ServiceFile    string   `json:"serviceFile,omitempty"`
-	ListeningPorts []string `json:"listeningPorts,omitempty"`
+	VersionSource  string          `json:"versionSource,omitempty"`
+	VersionStatus  string          `json:"versionStatus,omitempty"`
+	PackageName    string          `json:"packageName,omitempty"`
+	ExecutablePath string          `json:"executablePath,omitempty"`
+	ServiceFile    string          `json:"serviceFile,omitempty"`
+	ListeningPorts []string        `json:"listeningPorts,omitempty"`
+	ContainerName  string          `json:"containerName,omitempty"`
+	DockerRootDir  string          `json:"dockerRootDir,omitempty"`
+	Mounts         []SoftwareMount `json:"mounts,omitempty"`
+	PortMappings   []string        `json:"portMappings,omitempty"`
+	LogSource      string          `json:"logSource,omitempty"`
+	LogPath        string          `json:"logPath,omitempty"`
+	LocationStatus string          `json:"locationStatus,omitempty"`
+}
+
+// SoftwareMount is a bounded, redacted Docker mount description. It contains
+// paths only; container environment variables and labels are never returned.
+type SoftwareMount struct {
+	Source      string `json:"source,omitempty"`
+	Destination string `json:"destination"`
+	Volume      string `json:"volume,omitempty"`
+	ReadOnly    bool   `json:"readOnly"`
 }
 
 type softwareUnitMetadata struct {
@@ -137,6 +153,10 @@ func EnrichSoftwareObservation(ctx context.Context, actual *SoftwareObservation,
 	metadata, ok := rows[actual.Locator]
 	if !ok {
 		actual.VersionStatus = "NO_PACKAGE_EVIDENCE"
+		return
+	}
+	if metadata.ServiceFile != actual.ServiceFile && actual.ServiceFile != "" {
+		actual.VersionStatus = "METADATA_UNAVAILABLE"
 		return
 	}
 	actual.SoftwareMetadata, actual.Version = metadata.SoftwareMetadata, metadata.Version

@@ -194,6 +194,7 @@ func (h *HTTP) probeSoftware(ctx context.Context, t target, i softwareInstance, 
 		return failedSoftwareObservation(i, code)
 	}
 	deploy.EnrichSoftwareObservation(ctx, fact, run)
+	deploy.EnrichSoftwareLocations(ctx, *probe, fact, run)
 	source := "SSH_READ_ONLY"
 	if t.Kind == "LOCAL" {
 		source = "LOCAL_READ_ONLY"

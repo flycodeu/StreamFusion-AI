@@ -41,8 +41,12 @@ func (h *HTTP) submitSoftwareOperationPlan(w http.ResponseWriter, r *http.Reques
 		h.fail(w, r, 400, "IDEMPOTENCY_REQUIRED", "请携带有效提交标识")
 		return
 	}
+	h.submitSoftwareOperationPlanKey(w, r, actor, id, in.Key)
+}
+
+func (h *HTTP) submitSoftwareOperationPlanKey(w http.ResponseWriter, r *http.Request, actor *session, id, key string) {
 	hash := deploy.Digest(struct{ Plan string }{id})
-	if done, err := h.operationReceipt(w, r, actor, in.Key, hash); done {
+	if done, err := h.operationReceipt(w, r, actor, key, hash); done {
 		return
 	} else if err != nil {
 		h.internal(w, r, err)
@@ -73,9 +77,19 @@ func (h *HTTP) submitSoftwareOperationPlan(w http.ResponseWriter, r *http.Reques
 		h.fail(w, r, 409, "MANAGEMENT_STATE_CHANGED", "主机或软件身份已变化，请重新检查")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 55*time.Second)
 	defer cancel()
 	checked, err := h.checkSoftwareOperation(ctx, t, i, p.Management)
+	if p.Management.ConfigFile != nil && err == nil && !checked.Ready {
+		if checked.File != nil && validDiagnosticCode(checked.File.Code) && checked.File.Message != "" {
+			h.fail(w, r, 409, checked.File.Code, checked.File.Message)
+			return
+		}
+		if code := managementPreflightError(checked); code == "TARGET_PENDING" || code == "EXECUTOR_BUSY" {
+			h.fail(w, r, 409, code, "主机有进行中或待核对的操作，请先查看执行记录")
+			return
+		}
+	}
 	if err != nil || !checked.Ready || checked.ResourceHash != p.Management.ResourceHash {
 		h.fail(w, r, 409, "MANAGEMENT_RESOURCES_CHANGED", "操作资源或权限已变化，请重新检查")
 		return
@@ -89,7 +103,7 @@ func (h *HTTP) submitSoftwareOperationPlan(w http.ResponseWriter, r *http.Reques
 	defer h.store.mu.Unlock()
 	// Serialize this second lookup with all other submissions. Reusing the
 	// accepted key always returns its original receipt, even after plan expiry.
-	if done, err := h.operationReceipt(w, r, actor, in.Key, hash); done {
+	if done, err := h.operationReceipt(w, r, actor, key, hash); done {
 		return
 	} else if err != nil {
 		h.internal(w, r, err)
@@ -128,7 +142,7 @@ func (h *HTTP) submitSoftwareOperationPlan(w http.ResponseWriter, r *http.Reques
 	job, now := uuid.NewString(), Now()
 	req := deploy.Request{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: h.storeIDTx(tx), TargetID: p.TargetID, JobID: job, TraceID: r.Context().Value(traceKey{}).(string), Action: "SOFTWARE_OPERATION", SoftwareOperation: "SOFTWARE_OPERATION", Software: &p.Binding, Management: &p.Management, DeadlineAt: time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)}
 	req.InputHash = deploy.Digest(req)
-	_, err = tx.Exec("INSERT INTO jobs(id,actor_id,kind,target_id,configuration_plan_id,idempotency_key,request_hash,status,phase,input_json,trace_id,created_at,updated_at) VALUES(?,?,'SOFTWARE_OPERATION',?,?,?,?,'QUEUED','PREFLIGHT',?,?,?,?)", job, actor.AdminID, p.TargetID, p.ID, in.Key, hash, jsonText(req), req.TraceID, now, now)
+	_, err = tx.Exec("INSERT INTO jobs(id,actor_id,kind,target_id,configuration_plan_id,idempotency_key,request_hash,status,phase,input_json,trace_id,created_at,updated_at) VALUES(?,?,'SOFTWARE_OPERATION',?,?,?,?,'QUEUED','PREFLIGHT',?,?,?,?)", job, actor.AdminID, p.TargetID, p.ID, key, hash, jsonText(req), req.TraceID, now, now)
 	if err == nil {
 		for _, key := range []string{"target:" + p.TargetID, "software:" + p.SoftwareID} {
 			if _, err = tx.Exec("INSERT INTO operation_locks VALUES(?,?)", key, job); err != nil {
@@ -220,7 +234,7 @@ func (h *HTTP) commitSoftwareOperationResult(id string, req deploy.Request, resu
 		}
 	} else {
 		op, _ := req.Management.Definition.ManagementOperation(req.Management.OperationKey)
-		restored := op.Rebind && result.Phase == "OPERATION_RESTORED" && result.Installation == nil && result.Software != nil && result.Software.Kind == req.Software.Kind && result.Software.Locator == req.Software.Locator && result.Software.IdentityHash == req.Software.IdentityHash && (result.Software.State == "RUNNING" || result.Software.State == "STOPPED")
+		restored := (op.Rebind || req.Management.ConfigFile != nil) && result.Phase == "OPERATION_RESTORED" && result.Installation == nil && result.Software != nil && result.Software.Kind == req.Software.Kind && result.Software.Locator == req.Software.Locator && result.Software.IdentityHash == req.Software.IdentityHash && (result.Software.State == "RUNNING" || result.Software.State == "STOPPED" || req.Management.ConfigFile != nil && result.Software.Kind == "SYSTEMD" && result.Software.State == "FAILED")
 		unapplied := result.Software == nil && result.Installation == nil && (result.Phase == "OPERATION_NOT_APPLIED" || result.Phase == "NOT_STARTED" && result.ErrorCode == "TARGET_NOT_STARTED")
 		if result.Management != nil || !restored && !unapplied {
 			return errors.New("MANAGEMENT_FAILURE_UNCONFIRMED")
@@ -282,12 +296,16 @@ func (h *HTTP) commitSoftwareOperationResult(id string, req deploy.Request, resu
 
 func saveManagementState(tx *sql.Tx, p storedSoftwareOperationPlan, before softwareManagementState, job string, resources []serviceinstall.ResolvedResource) error {
 	m := p.Management
+	definition := m.Definition
+	if m.ConfigFile != nil {
+		definition = serviceinstall.WithoutConfigurationFileOperations(definition)
+	}
 	version, _ := strconv.ParseInt(before.Version, 10, 64)
-	changed := before.TemplateID != p.TemplateID || before.TemplateRevision != p.TemplateRevision || deploy.Digest(before.Definition) != deploy.Digest(m.Definition) || !reflect.DeepEqual(nonNilParameters(before.Parameters), nonNilParameters(m.Parameters)) || !reflect.DeepEqual(nonNilCredentialRefs(before.CredentialRefs), nonNilCredentialRefs(m.ParameterCredentials))
+	changed := before.TemplateID != p.TemplateID || before.TemplateRevision != p.TemplateRevision || deploy.Digest(before.Definition) != deploy.Digest(definition) || !reflect.DeepEqual(nonNilParameters(before.Parameters), nonNilParameters(m.Parameters)) || !reflect.DeepEqual(nonNilCredentialRefs(before.CredentialRefs), nonNilCredentialRefs(m.ParameterCredentials))
 	if changed {
 		version++
 	}
-	_, err := tx.Exec(`INSERT INTO software_management_state(software_id,template_id,template_revision,definition_json,parameters_json,credential_refs_json,resources_json,version,last_job_id,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(software_id) DO UPDATE SET template_id=excluded.template_id,template_revision=excluded.template_revision,definition_json=excluded.definition_json,parameters_json=excluded.parameters_json,credential_refs_json=excluded.credential_refs_json,resources_json=excluded.resources_json,version=excluded.version,last_job_id=excluded.last_job_id,updated_at=excluded.updated_at`, p.SoftwareID, p.TemplateID, p.TemplateRevision, jsonText(m.Definition), jsonText(nonNilParameters(m.Parameters)), jsonText(nonNilCredentialRefs(m.ParameterCredentials)), jsonText(resources), version, job, Now())
+	_, err := tx.Exec(`INSERT INTO software_management_state(software_id,template_id,template_revision,definition_json,parameters_json,credential_refs_json,resources_json,version,last_job_id,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(software_id) DO UPDATE SET template_id=excluded.template_id,template_revision=excluded.template_revision,definition_json=excluded.definition_json,parameters_json=excluded.parameters_json,credential_refs_json=excluded.credential_refs_json,resources_json=excluded.resources_json,version=excluded.version,last_job_id=excluded.last_job_id,updated_at=excluded.updated_at`, p.SoftwareID, p.TemplateID, p.TemplateRevision, jsonText(definition), jsonText(nonNilParameters(m.Parameters)), jsonText(nonNilCredentialRefs(m.ParameterCredentials)), jsonText(resources), version, job, Now())
 	if err != nil {
 		return err
 	}

@@ -457,6 +457,7 @@ func Execute(input io.Reader, output io.Writer) error {
 		// from optional Docker/Compose availability. This action changes no state.
 		capabilities := inspectExecutorCapabilities(x.owner, runtime.GOOS+"/"+runtime.GOARCH, x.dockerWithin)
 		capabilities["commandRecipeVersion"] = CommandRecipeVersion
+		capabilities["configurationFileVersion"] = ConfigurationFileVersion
 		capabilities["commandTrustFingerprint"] = x.commandTrustFingerprint()
 		return json.NewEncoder(output).Encode(capabilities)
 	}
@@ -922,19 +923,22 @@ func Execute(input io.Reader, output io.Writer) error {
 }
 
 func ExecutorRequestLimit(req Request) int {
+	if req.Management != nil && req.Management.ConfigFile != nil && req.Management.ValidateConfigurationFile() == nil {
+		return 256 << 10
+	}
 	if req.Management != nil && managementRebind(req) && req.Management.Installation != nil && req.Management.Validate() == nil {
 		return 128 << 10
 	}
 	return 64 << 10
 }
 
-// ReadExecutorRequest keeps the ordinary 64 KiB envelope boundary. A signed
-// rebind carries two bounded definitions and may use at most 128 KiB.
+// Ordinary requests retain the 64 KiB boundary. Rebinds allow 128 KiB; signed
+// configuration-file requests allow 256 KiB for the encrypted and live payloads.
 func ReadExecutorRequest(input io.Reader) (Request, *bufio.Reader, error) {
-	br := bufio.NewReaderSize(io.LimitReader(input, max(PreviewArchiveLimit, serviceinstall.ArchiveLimit)+(128<<10)), 128<<10)
+	br := bufio.NewReaderSize(io.LimitReader(input, max(PreviewArchiveLimit, serviceinstall.ArchiveLimit)+(256<<10)), 256<<10)
 	line, err := br.ReadSlice('\n')
 	var req Request
-	if err != nil || len(line) > 128<<10 {
+	if err != nil || len(line) > 256<<10 {
 		return req, br, errors.New("ENVELOPE_INVALID")
 	}
 	if err = StrictJSON(line, &req); err != nil {

@@ -165,7 +165,7 @@ func observeSoftwareUnit(ctx context.Context, s SoftwareRequest, run SoftwareCom
 	case "failed":
 		state = "FAILED"
 	}
-	return &SoftwareObservation{Kind: s.Kind, Locator: s.Locator, IdentityHash: Digest(identities), State: state, ObservedAt: stamp()}, nil
+	return &SoftwareObservation{SoftwareMetadata: SoftwareMetadata{ServiceFile: paths[0]}, Kind: s.Kind, Locator: s.Locator, IdentityHash: Digest(identities), State: state, ObservedAt: stamp()}, nil
 }
 
 func softwareUnitFile(file string) bool {

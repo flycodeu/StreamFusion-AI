@@ -125,6 +125,17 @@ func (x *executor) managementPreflight(req Request) serviceinstall.ManagementPre
 		}
 	}
 	p.ResourceHash = Digest(p.Resources)
+	if p.Ready && req.Management.ConfigFile != nil {
+		file, err := x.checkConfigurationFile(req)
+		p.File = &file
+		if err != nil || file.Status == "FAILED" {
+			code := file.Code
+			if code == "" {
+				code = "CONFIG_FILE_CHECK_FAILED"
+			}
+			fail(code, file.Message)
+		}
+	}
 	if p.Ready {
 		p.Checks = append(p.Checks, serviceinstall.Check{Key: "MANAGEMENT", Status: "PASS", Message: "软件身份、参数及资源检查通过"})
 	}
@@ -397,6 +408,9 @@ func parameterEnvironment(values map[string]string) []string {
 }
 
 func (x *executor) runParameterStep(ctx context.Context, req Request, root string, step serviceinstall.CommandStep, account *user.User, values map[string]string, refs map[string]serviceinstall.CredentialReference, stage string) ([]byte, error) {
+	if req.Management.ConfigFile != nil {
+		return x.runConfigurationFile(ctx, req, stage)
+	}
 	command := "/bin/bash"
 	args := []string{"--noprofile", "--norc", "-e", "-o", "pipefail", "-c", managementStepScript(*req.Management, step)}
 	home, username := "/root", "root"
@@ -526,7 +540,12 @@ func (x *executor) runManagementSteps(req Request, dir string, steps []servicein
 		if err := x.checkpoint(req, phase); err != nil {
 			return output, err
 		}
-		x.appendServiceLog(req, phase, fmt.Sprintf("%s [%s]\n$ %s", step.Name, step.RunAs, managementStepScript(*req.Management, step)))
+		if file := req.Management.ConfigFile; file != nil {
+			label := map[string]string{"APPLY": "检查完整配置并应用", "VERIFY": "核对配置与服务状态", "ROLLBACK": "恢复原配置并核对状态"}[stage]
+			x.appendServiceLog(req, phase, fmt.Sprintf("%s：%s.conf", label, file.Name))
+		} else {
+			x.appendServiceLog(req, phase, fmt.Sprintf("%s [%s]\n$ %s", step.Name, step.RunAs, managementStepScript(*req.Management, step)))
+		}
 		limit := time.Duration(step.TimeoutSeconds) * time.Second
 		if stage == "ROLLBACK" {
 			limit = min(limit, time.Until(rollbackDeadline))
@@ -554,6 +573,9 @@ func (x *executor) runManagementSteps(req Request, dir string, steps []servicein
 			return output, errors.New("COMMAND_STEP_INTERRUPTED")
 		}
 		if err != nil {
+			if req.Management.ConfigFile != nil {
+				return output, err
+			}
 			return output, errors.New("COMMAND_STEP_FAILED")
 		}
 	}
@@ -570,7 +592,7 @@ func (x *executor) applyManagement(req Request, dir string) (Result, error) {
 	if m.ResourceHash != preflight.ResourceHash {
 		return r, errors.New("MANAGEMENT_RESOURCES_CHANGED")
 	}
-	if err := serviceinstall.ValidateCredentialValues(m.CredentialReferences(), x.secrets); err != nil {
+	if err := serviceinstall.ValidateCredentialValues(m.CredentialReferences(), x.secrets); err != nil && m.ConfigFile == nil {
 		return r, err
 	}
 	account, err := managementAccount(m)
@@ -603,7 +625,7 @@ func (x *executor) applyManagement(req Request, dir string) (Result, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		before, err := ObserveSoftware(ctx, *req.Software, x.softwareRunner)
 		cancel()
-		if err != nil || len(op.RollbackSteps) > 0 && before.State != "RUNNING" && before.State != "STOPPED" {
+		if err != nil || len(op.RollbackSteps) > 0 && !restorableManagementState(req, before.State) {
 			return r, errors.New("MANAGEMENT_STATE_UNCONFIRMED")
 		}
 		if err = atomicJSON(filepath.Join(dir, "management-before.json"), managementBefore{InputHash: req.InputHash, State: before.State}); err != nil {
@@ -800,7 +822,17 @@ func (x *executor) reconcileManagement(req Request, dir string) Result {
 	}
 	var evidence serviceinstall.ManagementEvidence
 	if readJSON(filepath.Join(dir, "management-verified.json"), &evidence) != nil || evidence.ValidateFor(*req.Management) != nil {
-		return r
+		var err error
+		if req.Management.ConfigFile == nil {
+			return r
+		}
+		if restored, restoreErr := x.reconcileRestoredConfigurationFile(req, dir); restoreErr == nil {
+			return restored
+		}
+		evidence, err = x.reconcileConfigurationFile(req, dir)
+		if err != nil {
+			return r
+		}
 	}
 	completed, err := x.completeManagement(req, dir, evidence)
 	if err != nil {
@@ -815,6 +847,13 @@ func (x *executor) verifyManagementEvidence(req Request, result Result) error {
 	}
 	if err := result.Management.ValidateFor(*req.Management); err != nil {
 		return err
+	}
+	if req.Management.ConfigFile != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		if _, err := x.runConfigurationFile(ctx, req, "VERIFY"); err != nil {
+			return err
+		}
 	}
 	if managementRebind(req) {
 		var receipt managementRebindReceipt

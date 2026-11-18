@@ -71,6 +71,7 @@ type ManagementDefinition struct {
 }
 
 type ManagementRequest struct {
+	ConfigFile           *ConfigurationFileRequest      `json:"configFile,omitempty"`
 	Installation         *Request                       `json:"installation,omitempty"`
 	Definition           Definition                     `json:"definition"`
 	SoftwareID           string                         `json:"softwareId"`
@@ -86,10 +87,11 @@ type ManagementRequest struct {
 }
 
 type ManagementPreflight struct {
-	Ready        bool               `json:"ready"`
-	Checks       []Check            `json:"checks"`
-	Resources    []ResolvedResource `json:"resources"`
-	ResourceHash string             `json:"resourceHash"`
+	File         *ConfigurationFileResult `json:"file,omitempty"`
+	Ready        bool                     `json:"ready"`
+	Checks       []Check                  `json:"checks"`
+	Resources    []ResolvedResource       `json:"resources"`
+	ResourceHash string                   `json:"resourceHash"`
 }
 
 type ManagementTable struct {
@@ -250,10 +252,11 @@ func (d Definition) ValidateManagement() error {
 			return errors.New("MANAGEMENT_OPERATION_INVALID")
 		}
 		seen[op.Key] = true
-		if len(op.RollbackSteps) > 0 && !op.Rebind {
+		fileOperation := d.Key == "nginx" && IsBuiltinCommand(d) && op.Key == "config-file-save"
+		if len(op.RollbackSteps) > 0 && !op.Rebind && !fileOperation {
 			return errors.New("MANAGEMENT_REBIND_INVALID")
 		}
-		if (op.Rebind || len(op.RollbackSteps) != 0) && (op.ReadOnly || op.Key != "configure" && op.Key != "migrate-data" || len(op.RollbackSteps) == 0 || len(op.VerifySteps) == 0 || len(op.RollbackSteps) > 20 || d.Commands == nil || !IsBuiltinCommand(d) && d.Commands.Kind != "SYSTEMD" && d.Commands.Kind != "DOCKER" || d.Kind == "TOOL") {
+		if (op.Rebind || len(op.RollbackSteps) != 0) && (op.ReadOnly || op.Key != "configure" && op.Key != "migrate-data" && !fileOperation || len(op.RollbackSteps) == 0 || len(op.VerifySteps) == 0 || len(op.RollbackSteps) > 20 || d.Commands == nil || !IsBuiltinCommand(d) && d.Commands.Kind != "SYSTEMD" && d.Commands.Kind != "DOCKER" || d.Kind == "TOOL") {
 			return errors.New("MANAGEMENT_REBIND_INVALID")
 		}
 		for _, mode := range op.RuntimeModes {
@@ -333,7 +336,14 @@ func (r ManagementRequest) Validate() error {
 	if !uuid.MatchString(r.SoftwareID) || r.BindingRevision < 1 || !path.IsAbs(r.Root) || path.Clean(r.Root) != r.Root || r.Root == "/" || len(r.Root) > 512 || strings.ContainsAny(r.Root, "\x00\r\n") || r.ResourceHash != "" && !sha.MatchString(r.ResourceHash) {
 		return errors.New("MANAGEMENT_INPUT_INVALID")
 	}
-	if err := ValidateDefinition(r.Definition); err != nil {
+	if err := r.ValidateConfigurationFile(); err != nil {
+		return err
+	}
+	definition := r.Definition
+	if r.ConfigFile != nil {
+		definition = WithoutConfigurationFileOperations(definition)
+	}
+	if err := ValidateDefinition(definition); err != nil {
 		return err
 	}
 	if err := r.Definition.ValidateManagement(); err != nil {
@@ -406,6 +416,15 @@ func (r ManagementRequest) ValidateRebindEvidence(e Evidence) error {
 }
 
 func (r ManagementRequest) ParameterHash() string {
+	if r.ConfigFile != nil {
+		return Digest(struct {
+			Parameters           map[string]string
+			Credentials          map[string]CredentialReference
+			OperationParameters  map[string]string
+			OperationCredentials map[string]CredentialReference
+			File                 *ConfigurationFileRequest
+		}{r.Parameters, r.ParameterCredentials, r.OperationParameters, r.OperationCredentials, r.ConfigFile})
+	}
 	return Digest(struct {
 		Parameters           map[string]string
 		Credentials          map[string]CredentialReference
@@ -415,6 +434,9 @@ func (r ManagementRequest) ParameterHash() string {
 }
 
 func (r ManagementRequest) CredentialReferences() []CredentialReference {
+	if r.ConfigFile != nil {
+		return nil
+	}
 	return uniqueCredentialReferences(r.ParameterCredentials, r.OperationCredentials)
 }
 
@@ -480,6 +502,9 @@ func (r ManagementRequest) ResolveResources(locator string) ([]ResolvedResource,
 		values[key] = value
 	}
 	variables := map[string]string{"OPS_INSTALL_ROOT": r.Root, "OPS_DATA_ROOT": path.Join(r.Root, "data"), "OPS_CONFIG_ROOT": path.Join(r.Root, "config"), "OPS_SOFTWARE_ID": r.SoftwareID, "OPS_SOFTWARE_LOCATOR": locator, "OPS_VERSION": r.Definition.Version}
+	if r.ConfigFile != nil {
+		variables["OPS_PARAM_SITE"] = r.ConfigFile.Name
+	}
 	for key, value := range values {
 		variables["OPS_PARAM_"+key] = value
 	}

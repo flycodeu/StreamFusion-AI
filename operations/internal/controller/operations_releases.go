@@ -420,7 +420,11 @@ func (h *HTTP) ackResult(ctx context.Context, t target, req deploy.Request, resu
 	req.ResultHash = deploy.Digest(result)
 	req.Candidate = nil
 	req.Baseline = nil
-	ackCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	timeout := 15 * time.Second
+	if req.Management != nil && req.Management.ConfigFile != nil {
+		timeout = 55 * time.Second
+	}
+	ackCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var ack deploy.Result
 	if e := h.store.callTarget(ackCtx, t, req, "", &ack); e != nil || !ack.Ack || ack.JobID != result.JobID || ack.InputHash != result.InputHash {
