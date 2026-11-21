@@ -1,0 +1,30 @@
+# Prepare Ubuntu clients in the same privileged operation as the executor.
+# Keep the SSH result bounded; APT's untrusted output can include private URLs.
+if [[ -r /etc/os-release ]]; then
+  . /etc/os-release
+fi
+[[ -n ${ID:-} && ( $ID != ubuntu || -n ${VERSION_ID:-} ) ]] || { printf 'SFOPS_ERROR=TERMINAL_TOOLS_PLATFORM\n' >&2; exit 1; }
+if [[ $ID == ubuntu && $VERSION_ID == 24.04 ]]; then
+  echo '正在准备宿主机终端工具…'
+  set +e
+  terminal_result=$(set -o pipefail; timeout -k 15 780 /bin/bash -c @INSTALLER@ </dev/null 2>&1 | awk '
+    /^SFOPS_TERMINAL_STAGE=(PLATFORM|LAUNCHER|DPKG|APT_UPDATE|APT_PLAN|APT_INSTALL|VERIFY)$/ {stage=substr($0,22)}
+    {ready=($0=="SFOPS_TERMINAL_READY")}
+    END {if (ready) print "READY"; else print (stage ? stage : "INSTALL_FAILED")}
+  ')
+  terminal_rc=$?
+  set -e
+  if [[ $terminal_rc == 124 || $terminal_rc -ge 128 ]]; then
+    echo '终端工具安装中断，请核对接入作业。' >&2
+    exit 1
+  fi
+  if [[ $terminal_rc != 0 || $terminal_result != READY ]]; then
+    [[ $terminal_result != READY ]] || terminal_result=VERIFY
+    printf 'SFOPS_ERROR=TERMINAL_TOOLS_%s\n' "$terminal_result" >&2
+    echo '宿主机终端工具准备失败。请核对上面的阶段、dpkg 状态和 APT 软件源后重试。' >&2
+    exit 1
+  fi
+  echo '宿主机终端工具已就绪。'
+else
+  echo '本机继续安装接入组件。统一客户端适用于 Ubuntu 24.04。'
+fi

@@ -45,12 +45,18 @@ export async function send(
   signal?: AbortSignal,
 ) {
   method = method.toUpperCase();
+  const authorizeOnly = typeof data === "object" && data !== null && "authorizeOnly" in data && data.authorizeOnly === true;
+  // The controller can spend 120 minutes on SSH upload, then finish installation and return the receipt.
+  const preparationWait = authorizeOnly ? 29 * 60_000 : 150 * 60_000;
   const timeout = AbortSignal.timeout(
-    /\/preparation\/(install|repair)$/.test(path)
-      ? 930000
+    /\/preparation\/(?:install|repair)$/.test(path)
+      ? preparationWait
+      : path.endsWith("/terminal-tools/install") ? 930_000
       : /^\/installation-materials\/[^/]+\/confirm$/.test(path) ||
       path === "/installation-materials/official"
       ? 900000
+      : method === "POST" && /^\/hosts\/[^/]+\/checks$/.test(path)
+        ? 120_000
       : /\/(recover|reconcile)$/.test(path)
         ? 300000
         : 60000,

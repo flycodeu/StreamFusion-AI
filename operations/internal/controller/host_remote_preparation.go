@@ -17,14 +17,27 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/streamfusion-ai/operations/internal/deploy"
+	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 	"golang.org/x/crypto/ssh"
 )
 
-// Includes connection checks, upload and installation. Slow but progressing
-// links keep their budget; the separate idle watchdog still stops a dead upload.
+// Connection checks and installation retain their own allowance. Only jobs
+// that send a component archive need the additional transfer time.
 const preparationTimeout = 15 * time.Minute
 const preparationResponseTimeout = preparationTimeout + 30*time.Second
-const preparationUploadIdleTimeout = 45 * time.Second
+const preparationUploadTimeout = 2 * time.Hour
+const preparationUploadIdleTimeout = 15 * time.Minute
+
+func preparationBudget(snapshot preparationSnapshot) time.Duration {
+	if snapshot.AuthorizeOnly || snapshot.TerminalTools {
+		return preparationTimeout
+	}
+	budget := preparationTimeout + preparationUploadTimeout
+	if snapshot.LauncherSHA != "" {
+		budget += 13 * time.Minute
+	}
+	return budget
+}
 
 type preparationInput struct {
 	AuthorizeCommands     bool   `json:"authorizeCommands,omitempty"`
@@ -46,6 +59,8 @@ type preparationRepairInput struct {
 }
 
 type preparationSnapshot struct {
+	LauncherSHA       string `json:"hostTerminalLauncherSha256,omitempty"`
+	TerminalTools     bool   `json:"terminalTools,omitempty"`
 	AuthorizeCommands bool   `json:"authorizeCommands,omitempty"`
 	AuthorizeOnly     bool   `json:"authorizeOnly,omitempty"`
 	UpdateFromSHA     string `json:"updateFromSHA256,omitempty"`
@@ -57,6 +72,17 @@ type preparationSnapshot struct {
 }
 
 var preparationMessages = map[string]string{
+	"TERMINAL_TOOLS_READY":                   "主机终端工具已安装。",
+	"TERMINAL_TOOLS_INSTALL_FAILED":          "终端工具安装未完成，请在主机上执行下载的脚本查看原因，或重新准备。",
+	"TERMINAL_TOOLS_RESULT_UNKNOWN":          "终端工具安装结果待确认，请稍后核对原作业。",
+	"TERMINAL_TOOLS_INTEGRITY":               "上传的脚本未通过完整性检查，请检查主机临时目录后重新准备。",
+	"TERMINAL_TOOLS_PLATFORM":                "安装器要求 Ubuntu 24.04，请用 cat /etc/os-release 核对目标主机系统。",
+	"TERMINAL_TOOLS_LAUNCHER":                "终端入口安装失败，请检查 /usr/local/bin 的所有者、写权限及已有 sf-docker 文件。",
+	"TERMINAL_TOOLS_DPKG":                    "软件包数据库检查失败，请在主机运行 sudo dpkg --audit 并处理未完成的软件包操作。",
+	"TERMINAL_TOOLS_APT_UPDATE":              "更新软件源索引失败，请在主机运行 sudo apt-get update，检查镜像源、签名和网络。",
+	"TERMINAL_TOOLS_APT_PLAN":                "客户端安装计划无法执行，请在主机运行下载的脚本查看依赖或软件包变更。",
+	"TERMINAL_TOOLS_APT_INSTALL":             "客户端软件包安装失败，请检查 apt/dpkg 锁、磁盘空间及软件源，再重新准备。",
+	"TERMINAL_TOOLS_VERIFY":                  "客户端版本检查失败，请在主机分别运行 mysql、redis-cli、psql、curl 的 --version 检查。",
 	"PREPARATION_SUDO_DENIED":                "当前 SSH 账号没有安装所需的管理员权限，请服务器管理员为该账号开通 sudo。",
 	"PREPARATION_UPDATE_UNKNOWN_BINARY":      "当前接入组件没有匹配的成功安装记录，请核对后手动更新。",
 	"PREPARATION_UPDATE_CHANGED":             "接入组件状态已变化，请重新检查后继续。",
@@ -67,7 +93,7 @@ var preparationMessages = map[string]string{
 	"READ_ONLY_RESPONSE_INVALID":             "服务器系统信息返回异常，请检查 SSH 登录输出后重新检测。",
 	"PREPARATION_UPLOAD_FAILED":              "组件上传未完成，请查看传输进度和错误详情。",
 	"PREPARATION_UPLOAD_TIMEOUT":             "组件上传达到时限，安装尚未开始。请查看传输进度后重试，或使用离线接入包。",
-	"PREPARATION_UPLOAD_STALLED":             "组件上传连续45秒无进度，已停止，安装尚未开始。请检查网络连接。",
+	"PREPARATION_UPLOAD_STALLED":             "组件上传长时间无进展或未收到服务器的传输回执，安装尚未开始。请检查网络连接后重试。",
 	"PREPARATION_UPLOAD_INTERRUPTED":         "组件上传连接已中断，安装尚未开始。请检查网络后重试。",
 	"PREPARATION_UPLOAD_NO_SPACE":            "目标服务器临时目录空间或配额不足，安装尚未开始。",
 	"PREPARATION_UPLOAD_DENIED":              "目标服务器拒绝写入临时目录，安装尚未开始。请检查写入权限。",
@@ -96,7 +122,15 @@ func preparationMessage(code string) string {
 
 func preparationScriptFailure(stderr string) string {
 	for _, line := range strings.Split(stderr, "\n") {
-		code := strings.TrimPrefix(strings.TrimSpace(line), "SFOPS_ERROR=")
+		code, ok := strings.CutPrefix(strings.TrimSpace(line), "SFOPS_ERROR=")
+		if !ok {
+			continue
+		}
+		if strings.HasPrefix(code, "TERMINAL_TOOLS_") {
+			if _, known := preparationMessages[code]; known && code != "TERMINAL_TOOLS_READY" && code != "TERMINAL_TOOLS_RESULT_UNKNOWN" {
+				return code
+			}
+		}
 		switch code {
 		case "PREPARATION_INSTALL_FAILED", "PREPARATION_AUTHORIZATION_CONFLICT", "PREPARATION_RECOVERY_IDENTITY_MISMATCH", "PREPARATION_UPDATE_ONLY":
 			return code
@@ -106,11 +140,27 @@ func preparationScriptFailure(stderr string) string {
 }
 
 func (h *HTTP) latestPreparationJob(id string) any {
+	job, _ := h.latestHostSetupJob(id, false)
+	return job
+}
+
+func (h *HTTP) latestHostSetupJob(id string, terminal bool) (any, error) {
 	var job, status, phase, code, trace, created, updated, raw string
-	if h.store.DB.QueryRow("SELECT id,status,phase,error_code,trace_id,created_at,updated_at,result_json FROM jobs WHERE target_id=? AND kind='HOST_PREPARE' ORDER BY created_at DESC,id DESC LIMIT 1", id).Scan(&job, &status, &phase, &code, &trace, &created, &updated, &raw) != nil {
-		return nil
+	var launcherSHA string
+	err := h.store.DB.QueryRow(`SELECT id,status,phase,error_code,trace_id,created_at,updated_at,result_json,
+		coalesce(CASE WHEN json_valid(input_json) THEN json_extract(input_json,'$.hostTerminalLauncherSha256') END,'')
+		FROM jobs WHERE target_id=? AND kind='HOST_PREPARE' AND coalesce(CASE WHEN json_valid(input_json) THEN json_extract(input_json,'$.terminalTools') END,0)=?
+		ORDER BY created_at DESC,rowid DESC LIMIT 1`, id, terminal).Scan(&job, &status, &phase, &code, &trace, &created, &updated, &raw, &launcherSHA)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 	response := map[string]any{"id": job, "status": status, "phase": phase, "errorCode": code, "message": preparationMessage(code), "traceId": trace, "createdAt": created, "updatedAt": updated}
+	if !terminal {
+		response["includesHostTerminal"] = validSHA256(launcherSHA)
+	}
 	var result struct {
 		Message  string               `json:"message,omitempty"`
 		Transfer *preparationTransfer `json:"transfer,omitempty"`
@@ -118,7 +168,10 @@ func (h *HTTP) latestPreparationJob(id string) any {
 	if json.Unmarshal([]byte(raw), &result) == nil {
 		response["result"] = result
 	}
-	return response
+	if terminal && code == "" {
+		response["message"] = ""
+	}
+	return response, nil
 }
 
 func (h *HTTP) preparationRepairSHA(t target) string {
@@ -131,7 +184,7 @@ func (h *HTTP) preparationRepairSHA(t target) string {
 
 func (h *HTTP) preparationRepairSnapshot(t target) *preparationSnapshot {
 	var raw, status string
-	if h.store.DB.QueryRow(`SELECT j.input_json,j.status FROM jobs j JOIN operation_locks l ON l.job_id=j.id AND l.resource_key='target:'||j.target_id WHERE j.target_id=? AND j.kind='HOST_PREPARE' ORDER BY j.created_at DESC,j.id DESC LIMIT 1`, t.ID).Scan(&raw, &status) != nil || status != "UNKNOWN" {
+	if h.store.DB.QueryRow(`SELECT j.input_json,j.status FROM jobs j JOIN operation_locks l ON l.job_id=j.id AND l.resource_key='target:'||j.target_id WHERE j.target_id=? AND j.kind='HOST_PREPARE' AND coalesce(CASE WHEN json_valid(j.input_json) THEN json_extract(j.input_json,'$.terminalTools') END,0)=0 ORDER BY j.created_at DESC,j.id DESC LIMIT 1`, t.ID).Scan(&raw, &status) != nil || status != "UNKNOWN" {
 		return nil
 	}
 	var snapshot preparationSnapshot
@@ -207,6 +260,9 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 	}
 	defer func() { <-h.hostCheckSlots }()
 	snapshot := preparationSnapshot{Host: t, BinarySHA: material.Binary.Hash, ScriptSHA: material.Script.Hash, AuthorizeOnly: in.AuthorizeOnly, AuthorizeCommands: in.AuthorizeCommands}
+	if !in.AuthorizeOnly {
+		snapshot.LauncherSHA = serviceinstall.HostTerminalLauncherSHA()
+	}
 	// Observation timestamps are not part of the user's repeat-submit identity.
 	requestHash := deploy.Digest([]string{t.ID, t.Version, material.Binary.Hash, material.Script.Hash})
 	if in.UpdateOnly {
@@ -233,7 +289,8 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 		h.getJob(w, r, job)
 		return
 	}
-	if err = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(preparationResponseTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+	budget := preparationBudget(snapshot)
+	if err = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(budget + 30*time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		if err = h.finishPreparation(job, "FAILED", "PREPARATION_CONNECT_FAILED"); err != nil {
 			h.internal(w, r, err)
 			return
@@ -241,7 +298,7 @@ func (h *HTTP) installHostPreparation(w http.ResponseWriter, r *http.Request, ac
 		h.getJob(w, r, job)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), preparationTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), budget)
 	defer cancel()
 	var code string
 	var uncertain bool
@@ -305,12 +362,16 @@ func (h *HTTP) acceptPreparation(actor *session, key, hash string, snapshot prep
 		return "", false, errors.New("HOST_BUSY")
 	}
 	job, now := uuid.NewString(), Now()
-	_, err = tx.Exec("INSERT INTO jobs(id,actor_id,kind,target_id,idempotency_key,request_hash,status,phase,input_json,trace_id,created_at,updated_at) VALUES(?,?,'HOST_PREPARE',?,?,?,'RUNNING','CONNECTING',?,?,?,?)", job, actor.AdminID, current.ID, key, hash, jsonText(snapshot), trace, now, now)
+	phase, event := "CONNECTING", "HOST_PREPARATION_ACCEPTED"
+	if snapshot.TerminalTools {
+		phase, event = "TERMINAL_CONNECTING", "HOST_TERMINAL_INSTALL_ACCEPTED"
+	}
+	_, err = tx.Exec("INSERT INTO jobs(id,actor_id,kind,target_id,idempotency_key,request_hash,status,phase,input_json,trace_id,created_at,updated_at) VALUES(?,?,'HOST_PREPARE',?,?,?,'RUNNING',?,?,?,?,?)", job, actor.AdminID, current.ID, key, hash, phase, jsonText(snapshot), trace, now, now)
 	if err == nil {
 		_, err = tx.Exec("INSERT INTO operation_locks VALUES(?,?)", "target:"+current.ID, job)
 	}
 	if err == nil {
-		err = auditTx(tx, actor.Username, "HOST_PREPARATION_ACCEPTED", job, "SUCCESS", trace)
+		err = auditTx(tx, actor.Username, event, job, "SUCCESS", trace)
 	}
 	if err == nil {
 		err = tx.Commit()
@@ -338,7 +399,8 @@ func (h *HTTP) finishPreparation(job, status, code string) error {
 
 func (h *HTTP) finishPreparationTx(tx *sql.Tx, job, status, code string) error {
 	var trace, current string
-	if err := tx.QueryRow("SELECT trace_id,status FROM jobs WHERE id=? AND kind='HOST_PREPARE'", job).Scan(&trace, &current); err != nil {
+	var terminal bool
+	if err := tx.QueryRow("SELECT trace_id,status,coalesce(CASE WHEN json_valid(input_json) THEN json_extract(input_json,'$.terminalTools') END,0) FROM jobs WHERE id=? AND kind='HOST_PREPARE'", job).Scan(&trace, &current, &terminal); err != nil {
 		return err
 	}
 	if current == "SUCCEEDED" || current == "FAILED" {
@@ -352,7 +414,11 @@ func (h *HTTP) finishPreparationTx(tx *sql.Tx, job, status, code string) error {
 		_, err = tx.Exec("DELETE FROM operation_locks WHERE job_id=?", job)
 	}
 	if err == nil {
-		err = auditTx(tx, "worker", "HOST_PREPARATION_RESULT", job, status, trace)
+		event := "HOST_PREPARATION_RESULT"
+		if terminal {
+			event = "HOST_TERMINAL_INSTALL_RESULT"
+		}
+		err = auditTx(tx, "worker", event, job, status, trace)
 	}
 	if err != nil {
 		h.logger.Printf("traceId=%s jobId=%s event=PREPARATION_COMMIT_FAILED", trace, job)
@@ -364,6 +430,10 @@ func (h *HTTP) finishPreparationTx(tx *sql.Tx, job, status, code string) error {
 // A maintenance change during verification advances the host version and must
 // keep the UNKNOWN job locked. Already-maintained hosts may still be checked.
 func (h *HTTP) finishReconciledPreparation(actor *session, observed target, job string) error {
+	return h.finishCheckedHostJob(actor, observed, job, "SUCCEEDED", "PREPARATION_READY")
+}
+
+func (h *HTTP) finishCheckedHostJob(actor *session, observed target, job, finalStatus, code string) error {
 	h.store.mu.Lock()
 	defer h.store.mu.Unlock()
 	tx, err := h.beginAuthorized(actor)
@@ -391,7 +461,16 @@ func (h *HTTP) finishReconciledPreparation(actor *session, observed target, job 
 	if status != "UNKNOWN" {
 		return errors.New("HOST_CHANGED")
 	}
-	if err = h.finishPreparationTx(tx, job, "SUCCEEDED", "PREPARATION_READY"); err != nil {
+	if strings.HasPrefix(code, "TERMINAL_TOOLS_") {
+		var locked bool
+		if err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM operation_locks WHERE job_id=? AND resource_key=?)", job, "target:"+observed.ID).Scan(&locked); err != nil {
+			return err
+		}
+		if !locked {
+			return errors.New("HOST_CHANGED")
+		}
+	}
+	if err = h.finishPreparationTx(tx, job, finalStatus, code); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -399,7 +478,7 @@ func (h *HTTP) finishReconciledPreparation(actor *session, observed target, job 
 
 func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job string, t target, archive *os.File, binarySHA, password string, repair bool, snapshots ...preparationSnapshot) (string, bool) {
 	var update *preparationSnapshot
-	if len(snapshots) > 0 && snapshots[0].UpdateFromSHA != "" {
+	if !repair && len(snapshots) > 0 && snapshots[0].UpdateFromSHA != "" {
 		update = &snapshots[0]
 		if code := h.verifyPreparationUpdate(ctx, t, job, *update); code != "" {
 			return code, false
@@ -468,18 +547,17 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 		_, _ = h.store.DB.Exec("UPDATE jobs SET result_json=json_set(CASE WHEN json_valid(result_json) THEN result_json ELSE '{}' END,'$.transfer',json(?)) WHERE id=? AND kind='HOST_PREPARE' AND status IN ('RUNNING','UNKNOWN')", jsonText(value), job)
 	})
 	stderr.Reset()
-	watchdog := newPreparationUploadWatchdog(preparationUploadIdleTimeout, func() { _ = client.Close() })
+	watchdog := newPreparationUploadWatchdog(preparationUploadIdleTimeout, preparationUploadTimeout, func() { _ = client.Close() })
 	progress.activity = watchdog.touch
 	err = runSSHCommand(client, "/bin/sh -c "+shellQuote(command), progress, io.Discard, stderr)
-	stalled := watchdog.stop()
+	uploadCode := watchdog.stop()
 	progress.publish(true)
-	if err != nil || ctx.Err() != nil || stalled {
-		code := preparationUploadFailure(ctx, err, stderr.String())
-		if stalled && ctx.Err() == nil {
-			code = "PREPARATION_UPLOAD_STALLED"
+	if err != nil || ctx.Err() != nil || uploadCode != "" {
+		if uploadCode == "" || ctx.Err() != nil {
+			uploadCode = preparationUploadFailure(ctx, err, stderr.String())
 		}
-		h.logPreparationFailure(job, "UPLOADING_EXECUTOR", code)
-		return code, false
+		h.logPreparationFailure(job, "UPLOADING_EXECUTOR", uploadCode)
+		return uploadCode, false
 	}
 	if update != nil {
 		if code := h.verifyPreparationUpdate(ctx, t, job, *update); code != "" {
@@ -503,7 +581,7 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 		if strings.Contains(stderr.String(), "SFOPS_SETUP_ENTERED") {
 			code := preparationScriptFailure(stderr.String())
 			h.logPreparationFailure(job, "INSTALLING_EXECUTOR", code)
-			return code, true
+			return code, !strings.HasPrefix(code, "TERMINAL_TOOLS_")
 		}
 		sudoDiagnostic := strings.ToLower(stderr.String())
 		if t.User != "root" && (strings.Contains(sudoDiagnostic, "not in the sudoers") || strings.Contains(sudoDiagnostic, "not allowed to execute") || strings.Contains(sudoDiagnostic, "may not run sudo")) {
@@ -522,7 +600,28 @@ func (h *HTTP) runHostPreparation(ctx context.Context, actor *session, job strin
 		h.logPreparationFailure(job, "VERIFYING_EXECUTOR", code)
 		return code, true
 	}
+	if len(snapshots) != 0 && snapshots[0].LauncherSHA != "" {
+		if code := probePreparedTerminal(client, snapshots[0].LauncherSHA); code != "" {
+			return code, code != "TERMINAL_TOOLS_VERIFY"
+		}
+	}
 	return "PREPARATION_READY", false
+}
+
+func probePreparedTerminal(client *ssh.Client, sha string) string {
+	if !validSHA256(sha) {
+		return "PREPARATION_INPUT_DAMAGED"
+	}
+	out := &limitedOutput{limit: 128}
+	if runSSHCommand(client, "/bin/bash -c "+shellQuote(serviceinstall.HostTerminalProbe(sha)), nil, out, io.Discard) == nil {
+		switch strings.TrimSpace(out.String()) {
+		case "SFOPS_TERMINAL_READY", "SFOPS_TERMINAL_NOT_APPLICABLE":
+			return ""
+		case "SFOPS_TERMINAL_MISSING":
+			return "TERMINAL_TOOLS_VERIFY"
+		}
+	}
+	return "TERMINAL_TOOLS_RESULT_UNKNOWN"
 }
 
 // This counts bytes handed to SSH, not a claim that the target verified them.
@@ -558,50 +657,60 @@ func (p *preparationTransferReader) Read(buf []byte) (int, error) {
 	return n, err
 }
 
-// The watchdog only covers streaming. It is stopped before privilege elevation,
-// so a late timer cannot interrupt installation or misclassify its outcome.
+// The upload includes the SSH command's exit status after the last local
+// read. Stop both time limits before reusing this connection for installation.
 type preparationUploadWatchdog struct {
-	mu               sync.Mutex
-	timer            *time.Timer
-	last             time.Time
-	limit            time.Duration
-	stopped, stalled bool
-	interrupt        func()
+	mu       sync.Mutex
+	timer    *time.Timer
+	last     time.Time
+	deadline time.Time
+	idle     time.Duration
+	stopped  bool
+	code     string
 }
 
-func newPreparationUploadWatchdog(limit time.Duration, interrupt func()) *preparationUploadWatchdog {
-	w := &preparationUploadWatchdog{last: time.Now(), limit: limit, interrupt: interrupt}
-	w.timer = time.AfterFunc(limit, func() {
+func newPreparationUploadWatchdog(idle, total time.Duration, interrupt func()) *preparationUploadWatchdog {
+	now := time.Now()
+	w := &preparationUploadWatchdog{last: now, deadline: now.Add(total), idle: idle}
+	w.mu.Lock()
+	w.timer = time.AfterFunc(min(idle, total), func() {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		if w.stopped {
 			return
 		}
-		if remaining := w.limit - time.Since(w.last); remaining > 0 {
-			w.timer.Reset(remaining)
+		now := time.Now()
+		if !now.Before(w.deadline) {
+			w.code = "PREPARATION_UPLOAD_TIMEOUT"
+		} else if remaining := w.last.Add(w.idle).Sub(now); remaining > 0 {
+			w.timer.Reset(min(remaining, w.deadline.Sub(now)))
 			return
+		} else {
+			w.code = "PREPARATION_UPLOAD_STALLED"
 		}
-		w.stalled = true
-		w.interrupt()
+		interrupt()
 	})
+	w.mu.Unlock()
 	return w
 }
 
 func (w *preparationUploadWatchdog) touch() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if !w.stopped && !w.stalled {
+	if !w.stopped && w.code == "" {
 		w.last = time.Now()
-		w.timer.Reset(w.limit)
 	}
 }
 
-func (w *preparationUploadWatchdog) stop() bool {
+func (w *preparationUploadWatchdog) stop() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.stopped = true
 	w.timer.Stop()
-	return w.stalled
+	if w.code == "" && !time.Now().Before(w.deadline) {
+		w.code = "PREPARATION_UPLOAD_TIMEOUT"
+	}
+	return w.code
 }
 
 func (p *preparationTransferReader) publish(force bool) {
@@ -677,7 +786,7 @@ func (h *HTTP) repairHostPreparation(w http.ResponseWriter, r *http.Request, act
 		return
 	}
 	var raw, status, locked string
-	err := h.store.DB.QueryRow(`SELECT j.input_json,j.status,coalesce(l.job_id,'') FROM jobs j LEFT JOIN operation_locks l ON l.job_id=j.id AND l.resource_key='target:'||j.target_id WHERE j.id=? AND j.target_id=? AND j.kind='HOST_PREPARE'`, in.JobID, id).Scan(&raw, &status, &locked)
+	err := h.store.DB.QueryRow(`SELECT j.input_json,j.status,coalesce(l.job_id,'') FROM jobs j LEFT JOIN operation_locks l ON l.job_id=j.id AND l.resource_key='target:'||j.target_id WHERE j.id=? AND j.target_id=? AND j.kind='HOST_PREPARE' AND coalesce(CASE WHEN json_valid(j.input_json) THEN json_extract(j.input_json,'$.terminalTools') END,0)=0`, in.JobID, id).Scan(&raw, &status, &locked)
 	if err != nil {
 		h.opsError(w, r, err)
 		return
@@ -727,7 +836,8 @@ func (h *HTTP) repairHostPreparation(w http.ResponseWriter, r *http.Request, act
 		return
 	}
 	defer release()
-	if err = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(preparationResponseTimeout)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+	budget := preparationBudget(snapshot)
+	if err = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(budget + 30*time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		h.internal(w, r, err)
 		return
 	}
@@ -735,9 +845,9 @@ func (h *HTTP) repairHostPreparation(w http.ResponseWriter, r *http.Request, act
 		h.opsError(w, r, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), preparationTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), budget)
 	defer cancel()
-	code, _ := h.runHostPreparation(ctx, actor, in.JobID, t, archive, material.Binary.Hash, in.SudoPassword, true)
+	code, _ := h.runHostPreparation(ctx, actor, in.JobID, t, archive, material.Binary.Hash, in.SudoPassword, true, snapshot)
 	in.SudoPassword = ""
 	if code != "PREPARATION_READY" {
 		if code == "PREPARATION_RESULT_UNKNOWN" {
@@ -781,7 +891,7 @@ func (h *HTTP) acceptPreparationRepair(actor *session, observed target, job, exp
 		return errors.New("VERSION_CONFLICT")
 	}
 	var snapshot preparationSnapshot
-	if deploy.StrictJSON([]byte(raw), &snapshot) != nil {
+	if deploy.StrictJSON([]byte(raw), &snapshot) != nil || snapshot.TerminalTools {
 		return errors.New("VERSION_CONFLICT")
 	}
 	if snapshot.RecoveryBinarySHA != "" && !targetPackageMatches(material, snapshot.RecoveryBinarySHA, snapshot.RecoveryScriptSHA) {
@@ -886,7 +996,7 @@ func (h *HTTP) reconcileHostPreparation(w http.ResponseWriter, r *http.Request, 
 
 func (h *HTTP) reconcilePreparation(w http.ResponseWriter, r *http.Request, actor *session, id, jobID, expectedVersion string) {
 	var raw, status string
-	if err := h.store.DB.QueryRow("SELECT input_json,status FROM jobs WHERE id=? AND target_id=? AND kind='HOST_PREPARE'", jobID, id).Scan(&raw, &status); err != nil {
+	if err := h.store.DB.QueryRow("SELECT input_json,status FROM jobs WHERE id=? AND target_id=? AND kind='HOST_PREPARE' AND coalesce(CASE WHEN json_valid(input_json) THEN json_extract(input_json,'$.terminalTools') END,0)=0", jobID, id).Scan(&raw, &status); err != nil {
 		h.opsError(w, r, err)
 		return
 	}
@@ -925,6 +1035,18 @@ func (h *HTTP) reconcilePreparation(w http.ResponseWriter, r *http.Request, acto
 	if (snapshot.AuthorizeOnly || snapshot.AuthorizeCommands) && !h.commandAuthorizationReady(ctx, t) {
 		h.fail(w, r, 409, "COMMAND_TRUST_REQUIRED", "安装权限尚未确认，请核对原授权任务")
 		return
+	}
+	if snapshot.LauncherSHA != "" {
+		client, closeClient, err := h.store.connectSSH(ctx, t)
+		if err != nil {
+			h.fail(w, r, 409, "PREPARATION_CONNECT_FAILED", preparationMessage("PREPARATION_CONNECT_FAILED"))
+			return
+		}
+		defer closeClient()
+		if code := probePreparedTerminal(client, snapshot.LauncherSHA); code != "" {
+			h.fail(w, r, 409, code, preparationMessage(code))
+			return
+		}
 	}
 	if err = h.finishReconciledPreparation(actor, t, jobID); err != nil {
 		if err.Error() != "HOST_CHANGED" {

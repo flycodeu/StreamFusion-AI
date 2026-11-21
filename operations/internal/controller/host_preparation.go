@@ -55,6 +55,7 @@ type targetPreparationStep struct {
 }
 
 type hostPreparation struct {
+	IncludeHostTerminal bool                           `json:"-"`
 	CommandPublicKey    string                         `json:"-"`
 	Update              *preparationUpdate             `json:"update,omitempty"`
 	UpdateFromSHA       string                         `json:"-"`
@@ -197,7 +198,7 @@ func targetPackageMessage(code string) string {
 }
 
 func preparationForHost(t target, controllerID, directory string) (hostPreparation, verifiedTargetPackage) {
-	p := hostPreparation{HostID: t.ID, ExpectedHostVersion: t.Version, ControllerID: controllerID, TargetID: t.ID, InstallRoot: t.InstallRoot, Account: t.User, Platform: "linux/amd64"}
+	p := hostPreparation{HostID: t.ID, ExpectedHostVersion: t.Version, ControllerID: controllerID, TargetID: t.ID, InstallRoot: t.InstallRoot, Account: t.User, Platform: "linux/amd64", IncludeHostTerminal: true}
 	if t.Kind == "LOCAL" && runtime.GOOS == "linux" {
 		if current, err := user.Current(); err == nil && sshUserPattern.MatchString(current.Username) {
 			p.Account = current.Username
@@ -222,19 +223,11 @@ func preparationForHost(t target, controllerID, directory string) (hostPreparati
 	if p.Account != "root" {
 		p.Authorization.Command = "/usr/bin/sudo -n " + p.Authorization.Command
 	}
-	sha := p.Package.SHA256
-	if sha == "" {
-		sha = "REPLACE_WITH_VERIFIED_SHA256"
-	}
 	if sshUserPattern.MatchString(p.Account) {
 		p.Commands.Preview = controllerScript("preparation/install-preview.command")
-		prefix := "sudo "
-		if p.Account == "root" {
-			prefix = ""
-		}
 		p.Commands.Apply = controllerScript("preparation/install.command")
 		p.Commands.Authorize = controllerScript("preparation/install.command")
-		p.Commands.Upgrade = controllerTemplate("preparation/upgrade.command.tmpl", prefix, sha, t.InstallRoot, controllerID, t.ID)
+		p.Commands.Upgrade = "bash ./install.sh --update-only"
 	}
 	expired := true
 	if expiry, e := time.Parse(time.RFC3339Nano, t.Capabilities.ExpiresAt); e == nil {
@@ -251,7 +244,9 @@ func preparationForHost(t target, controllerID, directory string) (hostPreparati
 	executorFact, authorizationFact := t.Capabilities.Mutation, t.Capabilities.Mutation
 	if strings.HasPrefix(t.Capabilities.Mutation.Code, "SUDO_") {
 		executorFact = hostCapability{Status: "UNKNOWN", Code: "EXECUTOR_IDENTITY_UNCONFIRMED", Message: "受限授权未通过，尚不能验证执行器身份"}
-	} else if t.Capabilities.Mutation.Status != "AVAILABLE" {
+	} else if t.Capabilities.Mutation.Status == "UNKNOWN" {
+		authorizationFact = hostCapability{Status: "UNKNOWN", Code: "EXECUTOR_AUTHORIZATION_UNCONFIRMED", Message: "请重新检查主机能力，以确认受限变更授权"}
+	} else if t.Capabilities.Mutation.Status == "UNAVAILABLE" {
 		authorizationFact = hostCapability{Status: "UNKNOWN", Code: "EXECUTOR_AUTHORIZATION_UNCONFIRMED", Message: "先准备匹配的执行器，再核对受限变更授权"}
 	}
 	appendStep("executor", "受管执行器", executorFact)

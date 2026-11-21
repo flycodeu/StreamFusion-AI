@@ -359,7 +359,7 @@ const statusLabels: Record<string, string> = {
 const jobKindLabels: Record<string, string> = {
   ...softwareJobKindLabels,
   FIREWALL_CHANGE: "防火墙变更",
-  HOST_PREPARE: "主机接入",
+  HOST_PREPARE: "主机准备",
   IMPORT: "导入制品",
   PUBLISH: "发布",
   ROLLBACK: "回滚",
@@ -393,6 +393,8 @@ const phaseLabels: Record<string, string> = {
   EMPTY_BASELINE_RESTORED: "候选已停止",
   RECOVERY_REQUIRED: "需要恢复",
   CONNECTING: "连接目标",
+  TERMINAL_CONNECTING: "连接终端工具目标主机",
+  TERMINAL_INSTALLING: "安装主机终端工具",
   UPLOADING_EXECUTOR: "上传接入材料",
   INSTALLING_EXECUTOR: "安装接入组件",
   VERIFYING_EXECUTOR: "检查接入结果",

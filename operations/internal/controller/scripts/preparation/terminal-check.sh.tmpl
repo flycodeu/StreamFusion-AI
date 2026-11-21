@@ -1,0 +1,17 @@
+# SFOPS_TERMINAL_CHECK. Never changes the host, including when the directory is absent.
+missing() {
+    if expired; then printf 'SFOPS_TERMINAL_FAILED\n'; else printf 'SFOPS_TERMINAL_PENDING\n'; fi
+}
+if [[ ! -e $dir && ! -L $dir ]]; then missing; exit; fi
+safe_directory "$dir" || exit 1
+exec 9<"$dir"
+if ! flock -sn 9; then printf 'SFOPS_TERMINAL_PENDING\n'; exit; fi
+if [[ ! -e $receipt ]]; then missing; exit; fi
+[[ -f $receipt && ! -L $receipt && $(stat -c %u -- "$receipt") == 0 ]] || exit 1
+IFS= read -r result < "$receipt"
+case "$result" in
+    "$identity READY") printf 'SFOPS_TERMINAL_READY\n' ;;
+    "$identity FAILED"|"$identity RUNNING") printf 'SFOPS_TERMINAL_FAILED\n' ;;
+    "$identity FAILED_"*) printf 'SFOPS_TERMINAL_%s\n' "${result#"$identity "}" ;;
+    *) missing ;;
+esac

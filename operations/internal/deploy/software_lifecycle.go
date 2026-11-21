@@ -175,6 +175,12 @@ func (x *executor) adoptSoftware(req Request) error {
 }
 
 func (x *executor) verifySoftwareResult(req Request, result Result) error {
+	if req.Installation != nil && req.Installation.PrepareHostTerminal {
+		var hash string
+		if readJSON(filepath.Join(x.root, "jobs", req.JobID, hostTerminalReceipt), &hash) != nil || hash != req.InputHash {
+			return errors.New("SERVICE_INSTALL_RECEIPT_MISMATCH")
+		}
+	}
 	if err := x.verifyRuntimePolicyCleanup(req, result); err != nil {
 		return err
 	}
@@ -265,6 +271,20 @@ func (x *executor) verifySoftwareResult(req Request, result Result) error {
 }
 
 func (x *executor) reconcileSoftware(req Request, dir string) Result {
+	if req.Installation != nil && req.Installation.PrepareHostTerminal {
+		var terminalHash string
+		if err := readJSON(filepath.Join(dir, hostTerminalReceipt), &terminalHash); err != nil || terminalHash != req.InputHash {
+			result := softwareResult(req)
+			if os.IsNotExist(err) {
+				// installService cannot enter any recipe step before committing this
+				// receipt. STATUS holds the target lock and never runs APT.
+				result.Status, result.Phase, result.ErrorCode = "FAILED", hostTerminalPhase, "TERMINAL_TOOLS_INSTALL_FAILED"
+			} else {
+				result.ErrorCode = "SERVICE_INSTALL_RECEIPT_MISMATCH"
+			}
+			return result
+		}
+	}
 	if result, found := x.reconcileRuntimePolicyCleanup(req, dir); found {
 		return result
 	}

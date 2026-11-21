@@ -312,7 +312,7 @@ func (x *executor) serviceImage(req Request) (string, error) {
 func (x *executor) serviceImageIdentity(req Request) (string, error) {
 	i := req.Installation
 	reference := i.Definition.ImageID
-	acceptManifest := i.DockerImageIDMatches(i.Definition.Digest)
+	acceptManifest := i.DockerImageIDMatches(i.Definition.Digest) && (i.Definition.Kind != "TOOL" || i.PrepareHostTerminal)
 	if acceptManifest {
 		reference = i.Definition.Image + "@" + i.Definition.Digest
 	}
@@ -348,6 +348,14 @@ func (x *executor) serviceImageIdentity(req Request) (string, error) {
 func (x *executor) installService(req Request, dir string) (Result, error) {
 	if err := builtinAccountCheck(*req.Installation); err != nil {
 		return softwareResult(req), err
+	}
+	if req.Installation.PrepareHostTerminal {
+		if code := x.prepareInstallationTerminal(req, dir); code != "" {
+			x.appendServiceLog(req, hostTerminalPhase, "主机终端工具准备失败，组件安装尚未开始。"+terminalInstallFailureMessages[code]+" ["+code+"]")
+			result := softwareResult(req)
+			result.Status, result.Phase, result.ErrorCode = "FAILED", hostTerminalPhase, code
+			return result, nil
+		}
 	}
 	result, err := x.installServiceProgram(req, dir)
 	if err == nil {

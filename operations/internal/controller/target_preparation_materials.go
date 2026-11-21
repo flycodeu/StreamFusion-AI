@@ -36,6 +36,7 @@ func (h *HTTP) recoveryPreparation(t target, snapshot preparationSnapshot) (host
 	}
 	p, material := preparationForHost(t, h.store.controllerID(), directory)
 	p.CommandPublicKey, p.RepairSHA = h.store.commandPublicKey(), snapshot.BinarySHA
+	p.IncludeHostTerminal = snapshot.LauncherSHA != ""
 	return p, material, nil
 }
 

@@ -33,6 +33,12 @@ func TestInstallationAuthorizationPrivilegesUpdatesAndRecovery(t *testing.T) {
 			var authorized atomic.Bool
 			handler := func(command string) *hostSSHResponse {
 				switch {
+				case strings.Contains(command, "SFOPS_CHECK_HOST_TERMINAL"):
+					if !upgrade || current.Load().(string) != material.Binary.Hash {
+						t.Error("terminal verification preceded the combined component update")
+						return &hostSSHResponse{Stdout: "SFOPS_TERMINAL_MISSING\n"}
+					}
+					return &hostSSHResponse{Stdout: "SFOPS_TERMINAL_READY\n"}
 				case command == executorSSHCommand(target):
 					owner, fingerprint := target.ID, ""
 					if scenario == "identity-mismatch" {

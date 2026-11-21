@@ -4,6 +4,7 @@ import OpsPagination from "./OpsPagination.vue";
 export interface WorkspaceJobItem {
   id: string;
   kind: string;
+  subjectName?: string;
   status: string;
   phase: string;
   errorCode: string;
@@ -98,7 +99,7 @@ const emit = defineEmits<{
             {{ time(j.createdAt) }}<small>{{ short(j.id) }}</small>
           </td>
           <td>
-            {{ jobKindLabels[j.kind] || "其他操作" }}
+            {{ j.kind === "HOST_PREPARE" ? j.subjectName || "主机接入" : jobKindLabels[j.kind] || "其他操作" }}
           </td>
           <td>
             {{ phaseLabels[j.phase] || "阶段待确认"

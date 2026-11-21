@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import {
+  ElDialog,
   ElDrawer,
   ElTabs,
   ElTabPane,
@@ -10,11 +11,13 @@ import {
 import { request } from "./api";
 import HostConnectionDialog from "./HostConnectionDialog.vue";
 import HostPreparationPanel from "./HostPreparationPanel.vue";
+import HostTerminalToolsPanel from "./HostTerminalToolsPanel.vue";
 import HostSystemPanel from "./HostSystemPanel.vue";
 import OpsPagination from "./OpsPagination.vue";
 import { usePagination } from "./pagination";
 import {
   hostCapabilityLabels,
+  hostCapabilityTimedOut,
   hostObservationExpired,
   hostTime,
   type Host,
@@ -39,9 +42,20 @@ const dialog = ref(false);
 const editingHost = ref<Host>();
 const detailId = ref("");
 const detailTab = ref("connection");
+const terminalAdminId = ref("");
 watch(detailId, () => {
   detailTab.value = "connection";
+  terminalAdminId.value = "";
 });
+async function openTerminalMaintenance() {
+  const hostId = detailId.value;
+  try {
+    const me = await request<{ id: string }>("/auth/me");
+    if (!disposed && detailId.value === hostId) terminalAdminId.value = me.id;
+  } catch (error) {
+    if (!disposed && detailId.value === hostId) emit("error", error);
+  }
+}
 watch(
   () => [props.preparationHostId, hosts.value.length],
   async () => {
@@ -124,23 +138,29 @@ const credentialName = (host: Host) =>
       item.revision === host.credentialRevision,
   )?.name || "凭据不可用";
 const capabilityLabel = (host: Host, key: HostCapabilityKey) => {
-  const status = host.capabilities?.[key]?.status;
+  const fact = host.capabilities?.[key];
   const prefix = hostObservationExpired(host, now.value) ? "上次" : "";
-  return status === "AVAILABLE"
+  if (hostCapabilityTimedOut(fact)) return prefix + "检查超时";
+  return fact?.status === "AVAILABLE"
     ? prefix + "可用"
-    : status === "UNAVAILABLE"
+    : fact?.status === "UNAVAILABLE"
       ? prefix + "不可用"
       : "未确认";
 };
 const capabilityTone = (host: Host, key: HostCapabilityKey) => {
-  if (hostObservationExpired(host, now.value)) return "capability-unknown";
-  const status = host.capabilities?.[key]?.status;
-  return status === "AVAILABLE"
+  const fact = host.capabilities?.[key];
+  if (hostObservationExpired(host, now.value) || hostCapabilityTimedOut(fact)) return "capability-unknown";
+  return fact?.status === "AVAILABLE"
     ? "capability-available"
-    : status === "UNAVAILABLE"
+    : fact?.status === "UNAVAILABLE"
       ? "capability-unavailable"
       : "capability-unknown";
 };
+function capabilityMessage(host: Host, key: HostCapabilityKey) {
+  const fact = host.capabilities?.[key];
+  if (key === "mutation" && hostCapabilityTimedOut(fact)) return "执行器检查未在时限内完成，暂无法确认变更权限。可以重新检查。";
+  return fact?.message || "尚未检查";
+}
 
 async function load() {
   if (loading.value) return;
@@ -440,6 +460,7 @@ onUnmounted(() => {
         </span>
         <span v-if="detail.maintenance" class="maintenance-tag">维护中</span>
         <span class="spacer"></span>
+        <button class="quiet" @click="openTerminalMaintenance">终端工具维护</button>
         <button
           class="secondary"
           :disabled="!!actionHost"
@@ -502,7 +523,7 @@ onUnmounted(() => {
                   {{ capabilityLabel(detail, key) }}
                 </span>
               </header>
-              <p v-if="detail.capabilities?.[key]?.status !== 'AVAILABLE'">{{ detail.capabilities?.[key]?.message || "尚未检查" }}</p>
+              <p v-if="detail.capabilities?.[key]?.status !== 'AVAILABLE'">{{ capabilityMessage(detail, key) }}</p>
               <details
                 v-if="
                   detail.capabilities?.[key]?.observedAt ||
@@ -598,6 +619,9 @@ onUnmounted(() => {
       </footer>
     </template>
   </ElDrawer>
+  <ElDialog v-if="detail" :model-value="!!terminalAdminId" :title="`${detail.name} · 终端工具维护`" width="min(680px, 94vw)" align-center destroy-on-close append-to-body @close="terminalAdminId = ''">
+    <HostTerminalToolsPanel v-if="terminalAdminId" :key="terminalAdminId + detail.id" :host="detail" :admin-id="terminalAdminId" />
+  </ElDialog>
 </template>
 
 <style scoped>

@@ -61,13 +61,14 @@ func (s Source) TargetDownload(c Config) bool {
 }
 
 type Request struct {
-	Node            *NodeContext  `json:"node,omitempty"`
-	Official        *OfficialPlan `json:"official,omitempty"`
-	SoftwareID      string        `json:"softwareId"`
-	BindingRevision int64         `json:"bindingRevision"`
-	Definition      Definition    `json:"definition"`
-	Config          Config        `json:"config"`
-	Source          Source        `json:"source"`
+	PrepareHostTerminal bool          `json:"prepareHostTerminal,omitempty"`
+	Node                *NodeContext  `json:"node,omitempty"`
+	Official            *OfficialPlan `json:"official,omitempty"`
+	SoftwareID          string        `json:"softwareId"`
+	BindingRevision     int64         `json:"bindingRevision"`
+	Definition          Definition    `json:"definition"`
+	Config              Config        `json:"config"`
+	Source              Source        `json:"source"`
 }
 
 type Evidence struct {
@@ -361,6 +362,9 @@ func (s Source) Validate() error {
 }
 
 func (r Request) Validate() error {
+	if r.PrepareHostTerminal && r.Config.Mode() != "DOCKER" {
+		return errors.New("HOST_TERMINAL_RUNTIME_INVALID")
+	}
 	if IsNode(r.Definition) {
 		if r.Node == nil || r.Node.Validate() != nil {
 			return errors.New("NODE_ENVIRONMENT_REQUIRED")
@@ -434,9 +438,21 @@ func (r Request) DockerImageIDMatches(id string) bool {
 	if !strings.HasPrefix(id, "sha256:") || !sha.MatchString(strings.TrimPrefix(id, "sha256:")) {
 		return false
 	}
-	return id == r.Definition.ImageID ||
-		r.Config.Mode() == "DOCKER" && r.Definition.Kind == "SERVICE" && r.Source.Type == "REGISTRY" &&
-			(r.Definition.Commands == nil || IsBuiltinCommand(r.Definition)) && id == r.Definition.Digest
+	if id == r.Definition.ImageID {
+		return true
+	}
+	if id != r.Definition.Digest || r.Config.Mode() != "DOCKER" || r.Source.Type != "REGISTRY" ||
+		(r.Definition.Commands != nil && !IsBuiltinCommand(r.Definition)) {
+		return false
+	}
+	if r.Definition.Kind == "SERVICE" {
+		return true
+	}
+	// Registry tool bindings may use the fixed manifest on containerd stores.
+	// Only a published catalog tool authorizes that alternate identity.
+	catalog, err := Find(r.Definition.Key, r.Definition.Version)
+	return err == nil && r.Definition.Kind == "TOOL" && catalog.Kind == "TOOL" &&
+		catalog.Digest == id && catalog.ImageID == r.Definition.ImageID
 }
 
 // ValidateFor checks mode-specific receipt shape before controller commit.
@@ -493,7 +509,7 @@ func (e Evidence) ValidateFor(r Request) error {
 			return errors.New("NATIVE_RECEIPT_INVALID")
 		}
 	} else if r.Definition.Kind == "TOOL" {
-		if kind != "TOOL" || locator != "image:"+r.Definition.ImageID || e.ImageID != r.Definition.ImageID || e.ContainerID != "" {
+		if kind != "TOOL" || !r.DockerImageIDMatches(e.ImageID) || locator != "image:"+e.ImageID || e.ContainerID != "" {
 			return errors.New("TOOL_RECEIPT_INVALID")
 		}
 	} else if kind != "DOCKER" || !sha.MatchString(locator) || e.ContainerID != locator || !r.DockerImageIDMatches(e.ImageID) {

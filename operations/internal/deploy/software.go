@@ -147,7 +147,7 @@ func softwareResult(req Request) Result {
 }
 
 func (x *executor) executeSoftware(req Request, output io.Writer) error {
-	if commandDefinition(req) != nil {
+	if commandDefinition(req) != nil || req.Installation != nil && req.Installation.PrepareHostTerminal {
 		if err := x.verifyCommandRequest(req); err != nil {
 			return err
 		}

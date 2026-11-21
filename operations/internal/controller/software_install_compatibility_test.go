@@ -15,7 +15,46 @@ import (
 )
 
 func installCompatibilityCapabilities(req deploy.Request, s *Store) executorCapabilities {
-	return executorCapabilities{Owner: deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, Platform: "linux/amd64", DockerEngine: true, InstallVersion: serviceinstall.CapabilityVersion, NativeInstallVersion: 1, CatalogHash: "a-historical-catalog-hash", CommandRecipeVersion: deploy.CommandRecipeVersion, CommandTrustFingerprint: deploy.CommandPublicKeyFingerprint(s.commandPublicKey())}
+	return executorCapabilities{Owner: deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, Platform: "linux/amd64", DockerEngine: true, InstallVersion: serviceinstall.CapabilityVersion, HostTerminalInstallVersion: 1, NativeInstallVersion: 1, CatalogHash: "a-historical-catalog-hash", CommandRecipeVersion: deploy.CommandRecipeVersion, CommandTrustFingerprint: deploy.CommandPublicKeyFingerprint(s.commandPublicKey())}
+}
+
+func TestOldExecutorOnlyNeedsTerminalUpdateForNewDockerInstalls(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	host, _ := installSSHFixture(t, s, b, func(req deploy.Request) ([]byte, bool) {
+		if req.Action != "CAPABILITIES" {
+			return nil, false
+		}
+		capability := installCompatibilityCapabilities(req, s)
+		capability.HostTerminalInstallVersion = 0
+		raw, _ := json.Marshal(capability)
+		return raw, true
+	})
+	target, err := s.readTarget(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := serviceinstall.Find("nginx", "1.30.6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := serviceinstall.Source{Type: "ARCHIVE"}
+	ctx := context.Background()
+	for _, mode := range []string{"NATIVE", "DOCKER"} {
+		err := b.h.installTargetReady(ctx, target, serviceinstall.Config{RuntimeMode: mode}, source, d)
+		if mode == "NATIVE" && err != nil {
+			t.Fatal("native installation unexpectedly required a terminal update", err)
+		}
+		if mode == "DOCKER" {
+			var upgrade *installCompatibilityError
+			if !errors.As(err, &upgrade) || !strings.Contains(upgrade.message, "终端命令") {
+				t.Fatal("missing Docker capability must explain how to update the component", err)
+			}
+		}
+	}
+	if err := b.h.installTargetReady(ctx, target, serviceinstall.Config{RuntimeMode: "DOCKER"}, source); err != nil {
+		t.Fatal("configuring an existing Docker instance must not require a target update", err)
+	}
 }
 
 func TestDockerRegistryServiceReadinessUpdatesOnlyImageAwareExecution(t *testing.T) {

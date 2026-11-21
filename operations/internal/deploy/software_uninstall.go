@@ -397,8 +397,9 @@ func (x *executor) uninstallToolShared(ctx context.Context, req Request) (bool, 
 	if serviceinstall.UsesJavaBridge(req.Uninstallation.Installation.Definition) {
 		original := req
 		original.JobID, original.Installation = s.Ownership.JobID, &req.Uninstallation.Installation
-		if err := x.verifyToolBridge(original); err != nil {
-			return false, err
+		image, err := x.toolBridgeImage(original)
+		if err != nil || image != s.Ownership.ImageID {
+			return false, errors.New("TOOL_PLUGIN_BRIDGE_MISMATCH")
 		}
 	}
 	for _, directory := range []string{"software", "plugins"} {

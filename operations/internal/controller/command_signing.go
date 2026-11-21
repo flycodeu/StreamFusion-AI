@@ -19,5 +19,8 @@ func (s *Store) commandPublicKey() string {
 	return base64.StdEncoding.EncodeToString(s.commandSigningKey().Public().(ed25519.PublicKey))
 }
 func commandRequest(req deploy.Request) bool {
-	return req.Management != nil || req.Installation != nil && req.Installation.Definition.Commands != nil || req.Uninstallation != nil && req.Uninstallation.Installation.Definition.Commands != nil || req.NodeEnvironment != nil && req.NodeEnvironment.Definition != nil && req.NodeEnvironment.Definition.Commands != nil
+	return req.Management != nil ||
+		req.Installation != nil && (req.Installation.Definition.Commands != nil || req.Installation.PrepareHostTerminal) ||
+		req.Uninstallation != nil && req.Uninstallation.Installation.Definition.Commands != nil ||
+		req.NodeEnvironment != nil && req.NodeEnvironment.Definition != nil && req.NodeEnvironment.Definition.Commands != nil
 }

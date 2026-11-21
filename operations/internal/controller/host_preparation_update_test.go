@@ -138,7 +138,7 @@ func TestPreparationUpdateObservationRequiresActualKnownBinary(t *testing.T) {
 }
 
 func TestPreparationAutomaticUpdateLocksFreezesAndNeverInitializes(t *testing.T) {
-	for _, scenario := range []string{"success", "sudo-required", "sudo-denied", "interrupted", "changed-before-start", "changed-after-upload", "material-after-upload", "unknown-history"} {
+	for _, scenario := range []string{"success", "sudo-required", "sudo-denied", "interrupted", "apt-failure", "lost-after-update", "changed-before-start", "changed-after-upload", "material-after-upload", "unknown-history"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, b := setup(t)
 			b.login()
@@ -157,8 +157,15 @@ func TestPreparationAutomaticUpdateLocksFreezesAndNeverInitializes(t *testing.T)
 				current.Store(strings.Repeat("d", 64))
 			}
 			var uploads, privileged atomic.Int32
+			var missingTerminal atomic.Bool
+			missingTerminal.Store(scenario == "lost-after-update")
 			handler := func(command string) *hostSSHResponse {
 				switch {
+				case strings.Contains(command, "SFOPS_CHECK_HOST_TERMINAL"):
+					if missingTerminal.Load() {
+						return &hostSSHResponse{Stdout: "SFOPS_TERMINAL_MISSING\n"}
+					}
+					return &hostSSHResponse{Stdout: "SFOPS_TERMINAL_READY\n"}
 				case strings.Contains(command, "SFOPS_PRIVILEGE_READY"):
 					if scenario == "sudo-denied" {
 						return &hostSSHResponse{Exit: 1, Stderr: "sudo: user is not allowed to execute this command\n"}
@@ -196,6 +203,9 @@ func TestPreparationAutomaticUpdateLocksFreezesAndNeverInitializes(t *testing.T)
 								if !strings.Contains(script, "--expected-current-sha256 '"+oldSHA+"'") || !strings.Contains(script, "target-upgrade") || strings.Contains(script, "--authorize-only") || strings.Contains(script, "target-repair") || strings.Contains(script, "--apply") {
 									t.Error("automatic bundle contains unsafe bootstrap", script)
 								}
+								if strings.Index(script, "SFOPS_TERMINAL_STAGE=") < 0 || strings.Index(script, "SFOPS_TERMINAL_STAGE=") > strings.Index(script, "target-upgrade") {
+									t.Error("terminal tools must be installed before the existing executor is replaced")
+								}
 							}
 						}
 						if !found {
@@ -219,7 +229,13 @@ func TestPreparationAutomaticUpdateLocksFreezesAndNeverInitializes(t *testing.T)
 					if scenario == "interrupted" {
 						return &hostSSHResponse{Exit: 1, Stderr: "SFOPS_SETUP_ENTERED\n"}
 					}
+					if scenario == "apt-failure" && privileged.Load() == 1 {
+						return &hostSSHResponse{Exit: 1, Stderr: "SFOPS_SETUP_ENTERED\nSFOPS_ERROR=TERMINAL_TOOLS_APT_UPDATE\n"}
+					}
 					current.Store(material.Binary.Hash)
+					if scenario == "lost-after-update" {
+						return &hostSSHResponse{Exit: 255, Stderr: "SFOPS_SETUP_ENTERED\n"}
+					}
 					return &hostSSHResponse{Stdout: "SFOPS_SETUP_READY\n", Input: func(data []byte) {
 						if scenario == "sudo-required" && (string(data) != "only-this-request-password\n" || strings.Contains(command, "only-this-request-password")) {
 							t.Error("sudo password was not stdin-only")
@@ -238,7 +254,7 @@ func TestPreparationAutomaticUpdateLocksFreezesAndNeverInitializes(t *testing.T)
 			if scenario == "success" {
 				want = "SUCCEEDED"
 			}
-			if scenario == "interrupted" {
+			if scenario == "interrupted" || scenario == "lost-after-update" {
 				want = "UNKNOWN"
 			}
 			if result["status"] != want {
@@ -247,7 +263,7 @@ func TestPreparationAutomaticUpdateLocksFreezesAndNeverInitializes(t *testing.T)
 			if scenario == "sudo-denied" && result["errorCode"] != "PREPARATION_SUDO_DENIED" {
 				t.Fatal("denied permission mislabeled as password challenge", result)
 			}
-			if scenario == "success" || scenario == "interrupted" {
+			if scenario == "success" || scenario == "interrupted" || scenario == "apt-failure" || scenario == "lost-after-update" {
 				if privileged.Load() != 1 {
 					t.Fatal("missing dispatch")
 				}
@@ -259,7 +275,7 @@ func TestPreparationAutomaticUpdateLocksFreezesAndNeverInitializes(t *testing.T)
 			}
 			var locked int
 			s.DB.QueryRow("SELECT count(*) FROM operation_locks WHERE resource_key=?", "target:"+target.ID).Scan(&locked)
-			if (locked == 1) != (scenario == "interrupted") {
+			if (locked == 1) != (scenario == "interrupted" || scenario == "lost-after-update") {
 				t.Fatal("incorrect lock retention", locked)
 			}
 			if scenario != "material-after-upload" {
@@ -269,6 +285,26 @@ func TestPreparationAutomaticUpdateLocksFreezesAndNeverInitializes(t *testing.T)
 				}
 				if privileged.Load() > 1 {
 					t.Fatal("replayed update")
+				}
+			}
+			if scenario == "apt-failure" {
+				if result["errorCode"] != "TERMINAL_TOOLS_APT_UPDATE" || current.Load() != oldSHA {
+					t.Fatal("failed APT must leave the old executor eligible for retry", result)
+				}
+				input.Key = uuid.NewString()
+				if retried := dataOf(t, b.call("POST", path, input, 200)); retried["status"] != "SUCCEEDED" || privileged.Load() != 2 {
+					t.Fatal("retry could not install component with terminal tools", retried)
+				}
+			}
+			if scenario == "lost-after-update" {
+				check := map[string]any{"jobId": result["id"], "expectedVersion": target.Version}
+				reconcile := "/hosts/" + target.ID + "/preparation/reconcile"
+				if reply := b.call("POST", reconcile, check, 409); !strings.Contains(reply.Body.String(), "TERMINAL_TOOLS_VERIFY") {
+					t.Fatal("new executor masked missing terminal tools", reply.Body.String())
+				}
+				missingTerminal.Store(false)
+				if checked := dataOf(t, b.call("POST", reconcile, check, 200)); checked["status"] != "SUCCEEDED" || privileged.Load() != 1 {
+					t.Fatal("read-only reconciliation did not resolve original update", checked)
 				}
 			}
 			if scenario == "sudo-required" {

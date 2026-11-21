@@ -6,16 +6,19 @@ fail(){ printf 'SFOPS_ERROR=%s\n' "${2:-PREPARATION_INSTALL_FAILED}" >&2; printf
 automatic=false
 preview=false
 repair_only=false
+update_only=false
 while (($#)); do
   case "$1" in
     --non-interactive) automatic=true;;
     --preview) preview=true;;
     --repair-only) repair_only=true;;
-    *) echo '用法: bash install.sh [--repair-only]'; exit 1;;
+    --update-only) update_only=true;;
+    *) echo '用法: bash install.sh [--repair-only|--update-only]'; exit 1;;
   esac
   shift
 done
 if $preview && $repair_only; then fail '预览和权限修复不能同时执行。'; fi
+if $update_only && $repair_only; then fail '组件更新和权限修复不能同时执行。'; fi
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || fail '此包适用于 Linux amd64，请获取与服务器架构匹配的安装包。'
 command -v sha256sum >/dev/null || fail '缺少 sha256sum，请联系服务器管理员。'
 sha256sum -c SHA256SUMS --status || fail '文件摘要不匹配，请重新上传完整安装包。'
@@ -30,6 +33,7 @@ if [[ $EUID != 0 ]]; then
   echo '安装需要管理员权限，接下来可能提示输入当前账号的 sudo 密码。'
   repair_args=()
   $repair_only && repair_args+=(--repair-only)
+  $update_only && repair_args+=(--update-only)
   exec sudo -- bash "$PWD/install.sh" "${repair_args[@]}"
 fi
 if ! $automatic; then
@@ -37,6 +41,20 @@ if ! $automatic; then
   [[ $answer == y || $answer == Y ]] || { echo '已取消。'; exit 0; }
 fi
 chmod 0755 ./streamfusion-ops
+prepare_host_terminal() {
+  :
+@PREPARE_TERMINAL@
+}
+if $update_only; then
+  ./streamfusion-ops target-verify --root '@ROOT@' --controller-id '@CONTROLLER@' --target-id '@TARGET@' || fail '请核对原接入目录及归属。' PREPARATION_UPDATE_ONLY
+  prepare_host_terminal
+  if [[ $(sha256sum '@ROOT@/executor' | cut -d' ' -f1) != '@SHA@' ]]; then
+    ./streamfusion-ops target-upgrade --binary "$PWD/streamfusion-ops" --sha256 '@SHA@' --root '@ROOT@' --controller-id '@CONTROLLER@' --target-id '@TARGET@' || fail '更新接入组件失败。' PREPARATION_UPDATE_ONLY
+  fi
+  ./streamfusion-ops target-verify --root '@ROOT@' --controller-id '@CONTROLLER@' --target-id '@TARGET@'
+  echo SFOPS_SETUP_READY
+  exit 0
+fi
 helper=$(mktemp)
 trap 'rm -f -- "$helper"' EXIT
 cat > "$helper" <<'@HELPER_MARKER@'
@@ -58,6 +76,7 @@ if [[ -e '@ROOT@' || -L '@ROOT@' ]]; then
 	./streamfusion-ops target-verify --root '@ROOT@' --controller-id '@CONTROLLER@' --target-id '@TARGET@' || fail '已有目录不属于当前主机或目录不安全，已保留原文件；请在 Ops 核对主机归属。'
   # Validate the exact sudo policy before changing an existing executor.
   bash "$helper" "${args[@]}" --authorize-only
+  prepare_host_terminal
   if [[ $(sha256sum '@ROOT@/executor' | cut -d' ' -f1) != '@SHA@' ]]; then
     ./streamfusion-ops target-upgrade --binary "$PWD/streamfusion-ops" --sha256 '@SHA@' --root '@ROOT@' --controller-id '@CONTROLLER@' --target-id '@TARGET@' || fail '升级未完成，请先在 Ops 核对未决作业。'
   fi
@@ -65,6 +84,7 @@ if [[ -e '@ROOT@' || -L '@ROOT@' ]]; then
 else
   # Recovery is bound to the protected original job above. The helper accepts
   # an existing sudo rule only when its exact account/path/content match.
+  prepare_host_terminal
   bash "$helper" "${args[@]}" --apply
 fi
 ./streamfusion-ops target-verify --root '@ROOT@' --controller-id '@CONTROLLER@' --target-id '@TARGET@'

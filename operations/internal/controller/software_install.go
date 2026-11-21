@@ -38,20 +38,21 @@ type installPortMapping struct {
 	Key           string `json:"key,omitempty"`
 }
 type softwareInstallPlan struct {
-	Node           *serviceinstall.NodeContext  `json:"node,omitempty"`
-	Official       *serviceinstall.OfficialPlan `json:"official,omitempty"`
-	ID             string                       `json:"id"`
-	TargetID       string                       `json:"targetId"`
-	TargetSnapshot string                       `json:"-"`
-	HostVersion    string                       `json:"-"`
-	SoftwareID     string                       `json:"-"`
-	Definition     serviceinstall.Definition    `json:"definition"`
-	Config         serviceinstall.Config        `json:"config"`
-	Source         installSource                `json:"source"`
-	ExpiresAt      string                       `json:"expiresAt"`
-	Checks         []installCheck               `json:"checks"`
-	Paths          installPaths                 `json:"paths"`
-	PortMappings   []installPortMapping         `json:"portMappings"`
+	PrepareHostTerminal bool                         `json:"prepareHostTerminal,omitempty"`
+	Node                *serviceinstall.NodeContext  `json:"node,omitempty"`
+	Official            *serviceinstall.OfficialPlan `json:"official,omitempty"`
+	ID                  string                       `json:"id"`
+	TargetID            string                       `json:"targetId"`
+	TargetSnapshot      string                       `json:"-"`
+	HostVersion         string                       `json:"-"`
+	SoftwareID          string                       `json:"-"`
+	Definition          serviceinstall.Definition    `json:"definition"`
+	Config              serviceinstall.Config        `json:"config"`
+	Source              installSource                `json:"source"`
+	ExpiresAt           string                       `json:"expiresAt"`
+	Checks              []installCheck               `json:"checks"`
+	Paths               installPaths                 `json:"paths"`
+	PortMappings        []installPortMapping         `json:"portMappings"`
 }
 
 // Plan-private identity is part of the persisted snapshot, never a browser
@@ -64,7 +65,7 @@ type storedInstallPlan struct {
 }
 
 func (p softwareInstallPlan) request() *serviceinstall.Request {
-	return &serviceinstall.Request{SoftwareID: p.SoftwareID, BindingRevision: 1, Definition: p.Definition, Config: p.Config, Source: p.Source.Source, Official: p.Official, Node: p.Node}
+	return &serviceinstall.Request{SoftwareID: p.SoftwareID, BindingRevision: 1, Definition: p.Definition, Config: p.Config, Source: p.Source.Source, Official: p.Official, Node: p.Node, PrepareHostTerminal: p.PrepareHostTerminal}
 }
 func (p softwareInstallPlan) snapshot() string {
 	return jsonText(storedInstallPlan{softwareInstallPlan: p, Snapshot: p.TargetSnapshot, Version: p.HostVersion, Software: p.SoftwareID})
@@ -197,6 +198,13 @@ func (h *HTTP) installTargetReady(ctx context.Context, t target, config servicei
 	}
 	if capability.Platform != "linux/amd64" {
 		return errors.New("INSTALL_PLATFORM_UNSUPPORTED")
+	}
+	if len(selected) > 0 && config.Mode() == "DOCKER" && capability.HostTerminalInstallVersion < 1 {
+		return &installCompatibilityError{message: "这台主机的接入组件尚不支持随 Docker 软件安装终端命令。请在主机安装准备中更新接入组件一次，已有软件可继续使用"}
+	}
+	if len(selected) > 0 && config.Mode() == "DOCKER" && selected[0].Commands == nil &&
+		capability.CommandTrustFingerprint != deploy.CommandPublicKeyFingerprint(h.store.commandPublicKey()) {
+		return errors.New("COMMAND_TRUST_REQUIRED")
 	}
 	if len(selected) > 0 && selected[0].Commands != nil {
 		required := deploy.RequiredCommandRecipeVersion(selected[0])
@@ -350,7 +358,7 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 			return
 		}
 	}
-	p := softwareInstallPlan{Node: node, ID: uuid.NewString(), TargetID: t.ID, TargetSnapshot: pluginTargetSnapshot(t), HostVersion: t.Version, SoftwareID: uuid.NewString(), Definition: d, Config: in.Config, Source: source, ExpiresAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)}
+	p := softwareInstallPlan{Node: node, ID: uuid.NewString(), TargetID: t.ID, TargetSnapshot: pluginTargetSnapshot(t), HostVersion: t.Version, SoftwareID: uuid.NewString(), Definition: d, Config: in.Config, Source: source, ExpiresAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339), PrepareHostTerminal: in.Config.Mode() == "DOCKER"}
 	var preflight serviceinstall.Preflight
 	if err = h.store.callTarget(ctx, t, deploy.Request{Action: "SOFTWARE_INSTALL_CHECK", Installation: p.request()}, "", &preflight); err != nil {
 		code, message := installPreflightError(err)
@@ -493,6 +501,10 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 	expires, parseErr := time.Parse(time.RFC3339, p.ExpiresAt)
 	if err != nil || parseErr != nil || state != "DRAFT" || expiry != p.ExpiresAt || time.Now().After(expires) || p.request().Validate() != nil {
 		h.fail(w, r, 409, "INSTALL_PLAN_STALE", "计划已提交、过期或不匹配当前配方，请重新预检")
+		return
+	}
+	if p.Config.Mode() == "DOCKER" && !p.PrepareHostTerminal {
+		h.fail(w, r, 409, "INSTALL_PLAN_STALE", "请重新预检，新的 Docker 安装计划会一并准备宿主机终端命令")
 		return
 	}
 	t, err := h.store.readTarget(p.TargetID)

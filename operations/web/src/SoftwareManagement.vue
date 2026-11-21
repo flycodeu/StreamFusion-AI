@@ -28,9 +28,7 @@ import {
   softwareInstallationReady,
   softwareLifecycleAvailable,
   softwareTypeLabel,
-  softwareVersionLabel,
-  softwareVersionReason,
-  softwareVersionText,
+  softwareVersionSummary,
   softwareHasInstallationRecord,
   softwareIsHistoryOnly,
   softwareUninstallAvailable,
@@ -176,6 +174,9 @@ const visible = computed(() => {
 });
 const { page, pageSize, total, pageItems: pagedSoftware } = usePagination(
   () => visible.value, [query, hostId, mode],
+);
+const softwareCards = computed(() =>
+  pagedSoftware.value.map((item) => ({ item, version: softwareVersionSummary(item) })),
 );
 const detail = computed(() =>
   rows.value.find((item) => item.id === detailId.value),
@@ -650,7 +651,7 @@ onUnmounted(() => {
       <div v-else-if="!visible.length" class="empty">没有匹配的软件</div>
       <div v-else class="software-cards">
         <article
-          v-for="item in pagedSoftware"
+          v-for="{ item, version } in softwareCards"
           :key="item.id"
           class="software-card"
           :aria-label="item.name"
@@ -682,18 +683,8 @@ onUnmounted(() => {
                 item.hostId
               }}
             </dd>
-            <dt>
-              {{ softwareVersionLabel(item.observation, item.runtimeKind) }}
-            </dt>
-            <dd
-              class="card-version"
-              :title="softwareVersionText(item.observation?.version)"
-            >
-              {{
-                softwareVersionText(item.observation?.version) ||
-                softwareVersionReason(item.observation, item.runtimeKind)
-              }}
-            </dd>
+            <dt>{{ version.label }}</dt>
+            <dd class="card-version" :title="version.value">{{ version.value }}</dd>
           </dl>
           <footer class="software-card-footer">
             <div class="software-row-actions">

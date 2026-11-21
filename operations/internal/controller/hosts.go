@@ -46,6 +46,13 @@ func scanHost(row interface{ Scan(...any) error }) (target, error) {
 	t.Capabilities = unknownHostCapabilities()
 	if err == nil {
 		err = json.Unmarshal([]byte(capabilities), &t.Capabilities)
+		// Older controllers recorded a missing reply as a definitive failure.
+		switch t.Capabilities.Mutation.Code {
+		case "EXECUTOR_CHECK_TIMEOUT", "EXECUTOR_CHECK_EXPIRED", "SSH_TIMEOUT":
+			if t.Capabilities.Mutation.Status == "UNAVAILABLE" {
+				t.Capabilities.Mutation.Status = "UNKNOWN"
+			}
+		}
 	}
 	return t, err
 }
@@ -65,6 +72,9 @@ func (h *HTTP) hostsRoute(w http.ResponseWriter, r *http.Request, s *session, pa
 	p := strings.Split(strings.Trim(path, "/"), "/")
 	if len(p) < 2 || p[0] != "hosts" || !deploy.ID.MatchString(p[1]) {
 		return false
+	}
+	if len(p) >= 3 && p[2] == "terminal-tools" {
+		return h.hostTerminalRoute(w, r, s, p)
 	}
 	if len(p) == 2 {
 		switch r.Method {

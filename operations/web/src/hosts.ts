@@ -55,6 +55,10 @@ export const hostCapabilityLabels: Record<HostCapabilityKey, string> = {
   docker: "Docker 能力",
 };
 
+export function hostCapabilityTimedOut(capability?: HostCapability): boolean {
+  return capability?.code === "EXECUTOR_CHECK_TIMEOUT" || capability?.code === "SSH_TIMEOUT";
+}
+
 export function hostTime(value?: string): string {
   return value
     ? new Date(value).toLocaleString("zh-CN", {

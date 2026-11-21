@@ -1,0 +1,47 @@
+# SFOPS_TERMINAL_APPLY
+[[ $EUID == 0 ]] || exit 1
+umask 077
+if [[ ! -e $dir ]]; then mkdir -m 0755 -- "$dir" || [[ -d $dir ]]; fi
+safe_directory "$dir" || exit 1
+exec 9<"$dir"
+flock -x -w 10 9 || exit 1
+expired && exit 1
+work=$(mktemp -d -- "$dir/.install-XXXXXXXX")
+trap 'rm -f -- "$work/install.sh" "$work/result" "$work/receipt"; rmdir -- "$work"' EXIT
+record() {
+    printf '%s %s\n' "$identity" "$1" > "$work/receipt"
+    chmod 0644 "$work/receipt"
+    mv -fT -- "$work/receipt" "$receipt"
+}
+record RUNNING
+# Copy a bounded upload to a root-owned file, then hash and execute those same bytes.
+if ! { [[ -f @STAGED@ && ! -L @STAGED@ ]] &&
+    timeout 10 head -c @LIMIT@ -- @STAGED@ > "$work/install.sh" &&
+    [[ $(sha256sum -- "$work/install.sh") == @SHA@"  $work/install.sh" ]]; }; then
+    record FAILED_INTEGRITY
+    printf 'SFOPS_TERMINAL_FAILED_INTEGRITY\n'
+    exit 1
+fi
+# Only fixed stage markers cross the SSH boundary. Package manager diagnostics may contain credentials.
+set +e
+timeout -k 15 780 /bin/bash "$work/install.sh" </dev/null 2>&1 | awk '
+    /^SFOPS_TERMINAL_STAGE=(PLATFORM|LAUNCHER|DPKG|APT_UPDATE|APT_PLAN|APT_INSTALL|VERIFY)$/ {stage=substr($0,22)}
+    {ready=($0=="SFOPS_TERMINAL_READY")}
+    END {print (stage ? "FAILED_" stage : "FAILED"); print (ready ? "READY" : "INCOMPLETE")}
+' > "$work/result"
+statuses=("${PIPESTATUS[@]}")
+set -e
+if (( statuses[0] == 124 || statuses[0] >= 128 || statuses[1] != 0 )); then
+    # A signal or timeout needs a read-only check after the remote process has released the lock.
+    printf 'SFOPS_TERMINAL_PENDING\n'
+    exit 1
+fi
+if (( statuses[0] == 0 )) && [[ $(tail -n 1 -- "$work/result") == READY ]]; then
+    record READY
+    printf 'SFOPS_TERMINAL_READY\n'
+else
+    result=$(head -n 1 -- "$work/result")
+    record "${result:-FAILED}"
+    printf 'SFOPS_TERMINAL_%s\n' "${result:-FAILED}"
+    exit 1
+fi

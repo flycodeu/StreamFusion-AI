@@ -29,7 +29,7 @@ func TestNginxConfigurationFilePlanApplyAndHistory(t *testing.T) {
 		if req.Action == "CAPABILITIES" {
 			return encode(executorCapabilities{
 				Owner:    deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID},
-				Platform: "linux/amd64", DockerEngine: true, InstallVersion: serviceinstall.CapabilityVersion,
+				Platform: "linux/amd64", DockerEngine: true, InstallVersion: serviceinstall.CapabilityVersion, HostTerminalInstallVersion: 1,
 				SoftwareManagementVersion: deploy.SoftwareManagementVersion, ConfigurationFileVersion: int(fileVersion.Load()),
 				NativeInstallVersion: 1, CatalogHash: serviceinstall.CatalogHash(), CommandRecipeVersion: deploy.CommandRecipeVersion,
 				CommandTrustFingerprint: deploy.CommandPublicKeyFingerprint(s.commandPublicKey()),

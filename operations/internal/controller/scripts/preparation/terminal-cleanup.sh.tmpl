@@ -1,0 +1,8 @@
+# Only the SSH user that created this private staging directory can remove its contents.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+stage=@STAGE@
+[[ -d /tmp && ! -L /tmp && -k /tmp && $(stat -c %u /tmp) == 0 ]] || exit 1
+[[ -d $stage && ! -L $stage && $(stat -c '%u:%a' -- "$stage") == "$EUID:700" ]] || exit 0
+rm -f -- "$stage/installer.sh"
+rmdir -- "$stage"

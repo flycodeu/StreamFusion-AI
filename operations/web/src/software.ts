@@ -235,6 +235,28 @@ export function softwareVersionText(value?: string) {
     value
   );
 }
+
+export function softwareVersionWithoutDigest(value?: string) {
+  if (!value || /^(?:image:|\S+@)?sha256:[a-f0-9]{12,64}$/i.test(value.trim())) return "";
+  return value;
+}
+
+export function softwareVersionSummary(item: SoftwareInstance) {
+  const observation = item.observation;
+  const value = softwareVersionText(softwareVersionWithoutDigest(observation?.version));
+  if (
+    observation?.versionSource === "IMAGE_REFERENCE" ||
+    observation?.versionStatus === "IMAGE_ONLY" ||
+    (observation?.version && !value) ||
+    (item.runtimeKind === "DOCKER" && !observation?.versionSource && observation?.versionStatus !== "VERIFIED")
+  ) {
+    return { label: "程序版本", value: "版本未确认" };
+  }
+  return {
+    label: softwareVersionLabel(observation),
+    value: value || softwareVersionReason(observation, item.runtimeKind),
+  };
+}
 export const softwareDesiredLabels = {
   PAUSED: "暂停",
   REMOVED: "已卸载",
@@ -262,6 +284,15 @@ export const softwareJobLabels: Record<string, string> = {
   CANCELLED: "已取消",
 };
 export const softwareJobErrorMessages: Record<string, string> = {
+  TERMINAL_TOOLS_PLATFORM: "无法确认宿主机系统，请检查 /etc/os-release 中的发行版和版本。",
+  TERMINAL_TOOLS_LAUNCHER: "无法安装 sf-docker，请检查 /usr/local/bin 的所有者、权限和同名文件。",
+  TERMINAL_TOOLS_DPKG: "请在主机运行 sudo dpkg --audit，处理未完成的软件包操作后重试。",
+  TERMINAL_TOOLS_APT_UPDATE: "无法更新客户端的软件包索引。请在主机运行 sudo apt-get update，检查软件源和网络。",
+  TERMINAL_TOOLS_APT_PLAN: "无法从主机的 APT 软件源补齐客户端，请检查软件包版本及依赖。",
+  TERMINAL_TOOLS_APT_INSTALL: "客户端软件包安装失败，请检查主机的 APT 锁、磁盘空间和软件源。",
+  TERMINAL_TOOLS_VERIFY: "宿主机命令检查失败。请分别运行 mysql、redis-cli、psql 和 curl 的 --version 命令。",
+  TERMINAL_TOOLS_INSTALL_FAILED: "宿主机终端工具准备失败，请打开安装日志查看原因。",
+  HOST_CLIENT_NOT_READY: "客户端未能运行，请查看作业日志，再到主机详情的「终端工具维护」修复。",
   CONFIG_FILE_CHANGED: "配置已被修改，请重新读取并检查。",
   CONFIG_FILE_INVALID: "配置检查未通过，请修正后重试。",
   CONFIG_FILE_UNSUPPORTED: "此配置超出当前文件编辑范围，请使用配置模板维护。",
@@ -303,6 +334,7 @@ export const softwareJobErrorMessages: Record<string, string> = {
   DOCKER_CONTAINER_DEPENDENCIES_UNCONFIRMED: "Docker Engine 当前不可访问，无法确认容器依赖。请检查 Engine 状态；若已停止，请先明确启动 Docker，再提交卸载。启动可能恢复原有容器，请先确认业务影响。",
 };
 export const softwareJobPhaseLabels: Record<string, string> = {
+  SERVICE_HOST_TERMINAL: "准备宿主机终端命令",
   APPLICATION_STATE_VERIFIED: "应用状态已核对",
   APPLICATION_CONTROL: "调整应用运行状态",
   APPLICATION_RECONCILE_REQUIRED: "应用操作结果待核对",
@@ -315,6 +347,7 @@ export const softwareJobPhaseLabels: Record<string, string> = {
   SOFTWARE_PAUSED: "服务已暂停",
   SOFTWARE_UNPAUSED: "服务已继续",
   SOFTWARE_OPERATION_COMPLETED: "操作已完成",
+  HOST_CLIENT_NOT_READY: "宿主机客户端未能运行",
   MANAGEMENT_EXECUTING: "执行管理操作",
   MANAGEMENT_VERIFYING: "核对操作结果",
   MANAGEMENT_EXECUTE: "执行管理操作",

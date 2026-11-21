@@ -58,6 +58,13 @@ func (x *executor) installResumeOffset(req Request, dir string) (int64, error) {
 		return 0, unsafe
 	}
 	allowed := map[string]bool{"intent.json": true, "progress.json": true, "result.json": true, "service-install.log": true}
+	if i.PrepareHostTerminal {
+		var terminalHash string
+		if readJSON(filepath.Join(dir, hostTerminalReceipt), &terminalHash) != nil || terminalHash != req.InputHash {
+			return 0, unsafe
+		}
+		allowed[hostTerminalReceipt] = true
+	}
 	archive := ""
 	switch {
 	case serviceinstall.IsOfficial(i.Definition):

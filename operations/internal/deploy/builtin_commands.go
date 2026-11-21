@@ -390,6 +390,9 @@ func (x *executor) verifyBuiltinInstall(req Request, result Result) Result {
 	if result.Software != nil {
 		v["OPS_CONTAINER_ID"] = result.Software.Locator
 	}
+	if result.Installation != nil && i.Config.Mode() == "DOCKER" && i.DockerImageIDMatches(result.Installation.ImageID) {
+		v["OPS_IMAGE_ID"] = result.Installation.ImageID
+	}
 	if i.Node != nil {
 		v["OPS_NODE_ROOT"], v["OPS_NODE_VERSION"] = i.Node.RootPath, i.Definition.Version
 		account = i.Node.Account

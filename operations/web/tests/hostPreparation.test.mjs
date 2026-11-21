@@ -9,6 +9,10 @@ const component = await readFile(new URL("../src/HostPreparationPanel.vue", impo
 const hostManagement = await readFile(new URL("../src/HostManagement.vue", import.meta.url), "utf8");
 const hostOverview = await readFile(new URL("../src/HostOverview.vue", import.meta.url), "utf8");
 const app = await readFile(new URL("../src/App.vue", import.meta.url), "utf8");
+const hostHelpers = {};
+new Function("exports", ts.transpileModule(await readFile(new URL("../src/hosts.ts", import.meta.url), "utf8"), {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText)(hostHelpers);
 const source = component.split('<script setup lang="ts">')[1].split("</script>")[0]
   .replace(/^import .+;\r?$/gm, "");
 const compiled = ts.transpileModule(source, {
@@ -16,7 +20,7 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 const createPanel = new Function(
   "computed", "ref", "watch", "onUnmounted", "defineProps", "defineEmits",
-  "ApiError", "request", "setTimeout", "clearTimeout", "fetch", "location", "document", "URL", "navigator",
+  "ApiError", "request", "setTimeout", "clearTimeout", "fetch", "location", "document", "URL", "navigator", "hostCapabilityTimedOut",
   compiled + "\nreturn { data, busy, visibleStatus, currentPhaseIndex, phaseOrder, statusTitle, statusLabel, statusSummary, transferPercent, transferSpeed, phaseState, error, sudoPassword, needsSudoPassword, canRecover, checkResult, updateRequested, openUpdate, load, install, repair, check, reconcile, download };",
 );
 
@@ -65,7 +69,7 @@ function harness(request, fetch = async () => Response.json({}), options = {}) {
     (callback, delay) => { const id = ++timerId; timers.set(id, { callback, delay }); return id; },
     (id) => timers.delete(id), fetch, { origin: "http://ops.test" },
     { createElement: () => ({ click() { clicks.push(this.download); } }) },
-    TestURL, { clipboard: { writeText: async () => {} } },
+    TestURL, { clipboard: { writeText: async () => {} } }, hostHelpers.hostCapabilityTimedOut,
   );
   return {
     panel, timers, clicks, emitted,
@@ -328,8 +332,15 @@ test("offline check reports executor and authorization readiness separately from
   const h = harness(async (_path, method) => method === "POST" ? checked : preparation());
   await flush(); await h.panel.check();
   assert.equal(h.panel.checkResult.value.ready, false);
+  assert.equal(h.panel.checkResult.value.title, "服务器尚未接入");
   assert.equal(h.panel.checkResult.value.code, "EXECUTOR_NOT_FOUND");
   assert.equal(h.panel.checkResult.value.message, "请先安装执行器");
+  for (const status of ["UNAVAILABLE", "UNKNOWN"]) {
+    checked.capabilities.mutation = { status, code: "EXECUTOR_CHECK_TIMEOUT", message: "执行器检查超时" };
+    await h.panel.check();
+    assert.equal(h.panel.checkResult.value.ready, false);
+    assert.equal(h.panel.checkResult.value.title, "接入状态未确认");
+  }
   checked.capabilities.mutation = available;
   await h.panel.check();
   assert.equal(h.panel.checkResult.value.ready, true);

@@ -59,36 +59,45 @@ export function webDefinitionError(recipe: ServiceRecipe): string {
   return "";
 }
 
-export function installationWebAccess(recipe: ServiceRecipe, config: ServiceConfiguration, host?: Host, controllerHost = browserHost()): SoftwareAccess | undefined {
+type WebAccessTarget = Host | "HOST_TERMINAL";
+
+export function installationWebAccess(recipe: ServiceRecipe, config: ServiceConfiguration, host?: WebAccessTarget, controllerHost = browserHost()): SoftwareAccess | undefined {
   const web = recipe.web;
   if (!web) return undefined;
   const unavailable = (reason: string): SoftwareAccess => ({ url: "", reason, embed: !!web.embed });
   const invalid = webDefinitionError(recipe);
   if (invalid) return unavailable(invalid);
+  const fromTerminal = host === "HOST_TERMINAL";
+  const canUseLoopback = fromTerminal || host?.kind === "LOCAL" && loopback(normalizedHost(controllerHost));
   const supplied = web.urlParameter && (config.parameters?.[web.urlParameter] ?? recipe.parameters?.find(field => field.key === web.urlParameter)?.default ?? "");
   if (supplied) {
     const url = publicURL(supplied);
     if (!url) return unavailable("请填写不含账号、参数和片段的 HTTP 或 HTTPS 访问地址");
     const address = normalizedHost(new URL(url).hostname);
     if (address === "0.0.0.0" || address === "::") return unavailable("请填写可访问的主机地址");
-    if (loopback(address) && (host?.kind !== "LOCAL" || !loopback(normalizedHost(controllerHost)))) return unavailable("服务仅在服务器本机监听，请填写可访问的系统地址");
+    if (loopback(address) && !canUseLoopback) return unavailable("服务仅在服务器本机监听，请填写可访问的系统地址");
     return { url, reason: "", embed: !!web.embed };
   }
   const port = !web.portKey || web.portKey === "main" ? config.hostPort : config.ports?.[web.portKey];
   if (!Number.isInteger(port) || !port || port < 1 || port > 65535) return unavailable("请先配置入口端口");
   const bindAddress = normalizedHost(config.bindAddress || "");
   if (!bindAddress) return unavailable("请填写监听地址");
-  if (loopback(bindAddress) && (host?.kind !== "LOCAL" || !loopback(normalizedHost(controllerHost)))) return unavailable("服务仅在服务器本机监听，请填写可访问的系统地址");
-  let address = host?.kind === "LOCAL" && loopback(bindAddress) ? bindAddress : normalizedHost(host?.address || "");
-  if (host?.kind === "LOCAL" && (!address || loopback(address)) && !loopback(bindAddress)) address = normalizedHost(controllerHost);
+  if (loopback(bindAddress) && !canUseLoopback) return unavailable("服务仅在服务器本机监听，请填写可访问的系统地址");
+  let address: string;
+  if (fromTerminal) {
+    address = bindAddress === "0.0.0.0" ? "127.0.0.1" : bindAddress === "::" ? "::1" : bindAddress;
+  } else {
+    address = host?.kind === "LOCAL" && loopback(bindAddress) ? bindAddress : normalizedHost(host?.address || "");
+    if (host?.kind === "LOCAL" && (!address || loopback(address)) && !loopback(bindAddress)) address = normalizedHost(controllerHost);
+  }
   if (!address) return unavailable("请填写可访问的主机地址");
-  if (loopback(address) && (host?.kind !== "LOCAL" || !loopback(normalizedHost(controllerHost)))) return unavailable("服务仅在服务器本机监听，请填写可访问的系统地址");
+  if (loopback(address) && !canUseLoopback) return unavailable("服务仅在服务器本机监听，请填写可访问的系统地址");
   if (address === "0.0.0.0" || address === "::") return unavailable("请填写可访问的主机地址");
   const url = publicURL(`${web.scheme}://${address.includes(":") ? `[${address}]` : address}:${port}${web.path || "/"}`);
   return url ? { url, reason: "", embed: !!web.embed } : unavailable("访问地址无效，请检查主机、端口和入口路径");
 }
 
-export function softwareWebAccess(item: SoftwareInstance, host?: Host, controllerHost = browserHost()): SoftwareAccess | undefined {
+export function softwareWebAccess(item: SoftwareInstance, host?: WebAccessTarget, controllerHost = browserHost()): SoftwareAccess | undefined {
   const recipe = item.installation?.definition, config = item.installation?.config;
   if (!recipe?.web || !config) return undefined;
   const access = installationWebAccess(recipe, config, host, controllerHost)!;

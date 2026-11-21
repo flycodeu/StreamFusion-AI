@@ -26,7 +26,8 @@ const jobHistorySQL = `WITH inputs AS (
           nullif(json_extract(j.safe_input,'$.reconfiguration.config.name'),''),
           nullif(s.name,''),nullif(json_extract(j.safe_input,'$.management.definition.name'),''),
           nullif(i.name,''),nullif(json_extract(j.safe_input,'$.plugin.key'),''),
-          CASE WHEN j.kind='NODE_ENVIRONMENT_CHANGE' THEN 'Node.js 环境'
+          CASE WHEN j.kind='HOST_PREPARE' AND json_extract(j.safe_input,'$.terminalTools')=1 THEN '主机终端工具'
+               WHEN j.kind='NODE_ENVIRONMENT_CHANGE' THEN 'Node.js 环境'
                WHEN j.kind='GIT_REPOSITORY_CHANGE' THEN 'Git 仓库'
                WHEN j.kind='GIT_ACCOUNT_CHANGE' THEN 'Git 账号' ELSE '' END) AS subject_name,
  coalesce(json_extract(j.safe_input,'$.management.operationKey'),'') AS operation_key,

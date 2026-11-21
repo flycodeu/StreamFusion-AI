@@ -37,12 +37,13 @@ func (x *executor) installDockerTool(req Request, dir string) (Result, error) {
 			return result, errors.New(check.Code)
 		}
 	}
-	if _, err := x.serviceImage(req); err != nil {
+	imageID, err := x.serviceImage(req)
+	if err != nil {
 		return result, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	s := SoftwareRequest{ID: req.Installation.SoftwareID, Version: req.Installation.BindingRevision, Kind: "TOOL", Locator: "image:" + req.Installation.Definition.ImageID, SoftwareKey: strings.ToUpper(req.Installation.Definition.Key), Ownership: x.installOwnership(req)}
+	s := SoftwareRequest{ID: req.Installation.SoftwareID, Version: req.Installation.BindingRevision, Kind: "TOOL", Locator: "image:" + imageID, SoftwareKey: strings.ToUpper(req.Installation.Definition.Key), Ownership: x.installOwnership(req, imageID)}
 	actual, err := ObserveSoftware(ctx, s, x.softwareRunner)
 	if err != nil || !installedToolVersionMatches(req.Installation.Definition, actualVersion(actual)) {
 		return result, errors.New("TOOL_VERSION_CHECK_FAILED")
@@ -53,7 +54,7 @@ func (x *executor) installDockerTool(req Request, dir string) (Result, error) {
 		if err != nil {
 			return result, err
 		}
-		material := pluginMaterial{InstallationID: s.ID, Definition: d, Managed: true, JobID: req.JobID, ImageID: req.Installation.Definition.ImageID}
+		material := pluginMaterial{InstallationID: s.ID, Definition: d, Managed: true, JobID: req.JobID, ImageID: imageID}
 		if err = os.MkdirAll(filepath.Join(x.root, "plugins"), 0700); err != nil {
 			return result, err
 		}
@@ -72,22 +73,26 @@ func actualVersion(actual *SoftwareObservation) string {
 	}
 	return actual.Version
 }
-func (x *executor) verifyToolBridge(req Request) error {
+func (x *executor) toolBridgeImage(req Request) (string, error) {
 	var material pluginMaterial
 	d, err := toolPluginDefinition(req.Installation.Definition)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if readJSON(filepath.Join(x.root, "plugins", req.Installation.SoftwareID+".json"), &material) != nil || material.InstallationID != req.Installation.SoftwareID || material.JobID != req.JobID || material.Definition != d || material.ImageID != req.Installation.Definition.ImageID || !material.Managed {
-		return errors.New("TOOL_PLUGIN_BRIDGE_MISMATCH")
+	if readJSON(filepath.Join(x.root, "plugins", req.Installation.SoftwareID+".json"), &material) != nil || material.InstallationID != req.Installation.SoftwareID || material.JobID != req.JobID || material.Definition != d || !req.Installation.DockerImageIDMatches(material.ImageID) || !material.Managed {
+		return "", errors.New("TOOL_PLUGIN_BRIDGE_MISMATCH")
 	}
-	return nil
+	return material.ImageID, nil
 }
 func (x *executor) reconcileDockerTool(req Request, dir string) Result {
 	result := softwareResult(req)
 	var binding softwareBinding
-	if serviceinstall.UsesJavaBridge(req.Installation.Definition) && x.verifyToolBridge(req) != nil {
-		return result
+	var bridgeImage string
+	if serviceinstall.UsesJavaBridge(req.Installation.Definition) {
+		var err error
+		if bridgeImage, err = x.toolBridgeImage(req); err != nil {
+			return result
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -95,7 +100,19 @@ func (x *executor) reconcileDockerTool(req Request, dir string) Result {
 		// A lost reply between the durable plugin bridge and the software binding
 		// does not justify re-pulling or re-installing. Reconstruct metadata only
 		// after the exact pinned image and version are observed again.
-		s := SoftwareRequest{ID: req.Installation.SoftwareID, Version: req.Installation.BindingRevision, Kind: "TOOL", Locator: "image:" + req.Installation.Definition.ImageID, SoftwareKey: strings.ToUpper(req.Installation.Definition.Key), Ownership: x.installOwnership(req)}
+		imageID := req.Installation.Definition.ImageID
+		if bridgeImage != "" {
+			imageID = bridgeImage
+		} else if req.Installation.PrepareHostTerminal && req.Installation.DockerImageIDMatches(req.Installation.Definition.Digest) {
+			// Inspect the original pinned registry reference without replaying a pull or a recipe step.
+			ref := req.Installation.Definition.Image + "@" + req.Installation.Definition.Digest
+			out, err := softwareCommand(ctx, x.softwareRunner, "/usr/bin/docker", "image", "inspect", "--format", "{{.Id}}", ref)
+			imageID = strings.TrimSpace(string(out))
+			if err != nil || !req.Installation.DockerImageIDMatches(imageID) {
+				return result
+			}
+		}
+		s := SoftwareRequest{ID: req.Installation.SoftwareID, Version: req.Installation.BindingRevision, Kind: "TOOL", Locator: "image:" + imageID, SoftwareKey: strings.ToUpper(req.Installation.Definition.Key), Ownership: x.installOwnership(req, imageID)}
 		actual, err := ObserveSoftware(ctx, s, x.softwareRunner)
 		if err != nil || !installedToolVersionMatches(req.Installation.Definition, actualVersion(actual)) {
 			return result
@@ -105,7 +122,8 @@ func (x *executor) reconcileDockerTool(req Request, dir string) Result {
 		if atomicJSON(x.softwareFile(s.ID), binding) != nil {
 			return result
 		}
-	} else if err != nil || binding.JobID != req.JobID || x.boundSoftware(binding.Software) != nil {
+	} else if err != nil || binding.JobID != req.JobID || x.boundSoftware(binding.Software) != nil ||
+		bridgeImage != "" && (binding.Software.Ownership == nil || binding.Software.Ownership.ImageID != bridgeImage) {
 		return result
 	}
 	actual, err := ObserveSoftware(ctx, binding.Software, x.softwareRunner)

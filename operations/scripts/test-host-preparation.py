@@ -196,7 +196,8 @@ def main():
                 assert not panel.get_by_text("EXECUTOR_PATH_UNSAFE", exact=True).is_visible()
                 assert panel.get_by_text("只修复", exact=False).count() == 0
                 assert panel.get_by_text("无需手动执行", exact=False).count() == 0
-                assert panel.get_by_role("button", name="修复权限并继续安装", exact=True).is_enabled()
+                repair_button = panel.get_by_role("button", name="验证并继续安装", exact=True)
+                assert repair_button.is_enabled()
                 repair_password = "ui-repair-sudo-$-secret"
                 repair_input = panel.get_by_label("ubuntu 的登录密码", exact=True)
                 repair_input.fill(repair_password)
@@ -213,7 +214,7 @@ def main():
                     current_job["value"] = {**current_job["value"], "status": "SUCCEEDED", "errorCode": "PREPARATION_READY", "message": "主机接入完成，可以继续安装软件。"}
                     route.fulfill(json={"code": "SUCCESS", "data": current_job["value"]})
                 page.route(f"**/hosts/{host['id']}/preparation/repair", repair_response)
-                panel.get_by_role("button", name="修复权限并继续安装", exact=True).click()
+                repair_button.click()
                 panel.get_by_role("heading", name="服务器已接入", exact=True).wait_for()
                 assert panel.get_by_label("ubuntu 的登录密码", exact=True).count() == 0
                 assert panel.get_by_role("button", name="开始安装", exact=True).count() == 0

@@ -460,6 +460,10 @@ func (h *HTTP) reconcile(w http.ResponseWriter, r *http.Request, actor *session,
 			h.fail(w, r, 409, "PREPARATION_INPUT_DAMAGED", preparationMessages["PREPARATION_INPUT_DAMAGED"])
 			return
 		}
+		if snapshot.TerminalTools {
+			h.reconcileTerminalJob(w, r, actor, snapshot.Host.ID, id, "")
+			return
+		}
 		h.reconcilePreparation(w, r, actor, snapshot.Host.ID, id, "")
 		return
 	}

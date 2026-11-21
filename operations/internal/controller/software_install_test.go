@@ -46,7 +46,7 @@ func installSSHFixture(t *testing.T, s *Store, b *browser, extensions ...func(de
 			if fixture.OldExecutor.Load() {
 				version = 0
 			}
-			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerAvailable": false, "dockerEngineAvailable": !fixture.NoDocker.Load(), "softwareLifecycleVersion": 1, "runtimePolicyVersion": 1, "serviceInstallVersion": version, "nativeInstallVersion": 1, "serviceCatalogHash": serviceinstall.CatalogHash(), "commandRecipeVersion": deploy.CommandRecipeVersion, "commandTrustFingerprint": deploy.CommandPublicKeyFingerprint(s.commandPublicKey())})
+			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerAvailable": false, "dockerEngineAvailable": !fixture.NoDocker.Load(), "softwareLifecycleVersion": 1, "runtimePolicyVersion": 1, "hostTerminalInstallVersion": 1, "serviceInstallVersion": version, "nativeInstallVersion": 1, "serviceCatalogHash": serviceinstall.CatalogHash(), "commandRecipeVersion": deploy.CommandRecipeVersion, "commandTrustFingerprint": deploy.CommandPublicKeyFingerprint(s.commandPublicKey())})
 		}
 		if req.Reconfiguration != nil {
 			fixture.mu.Lock()
@@ -181,6 +181,9 @@ func TestServiceInstallPlanSubmitIdentityAckAndReplay(t *testing.T) {
 		t.Fatal(catalog, err)
 	}
 	p := nginxPlan(t, b, host, 18088)
+	if p["prepareHostTerminal"] != true {
+		t.Fatal("Docker plan omitted the integrated host terminal step")
+	}
 	planID := p["id"].(string)
 	if _, exists := p["softwareId"]; exists {
 		t.Fatal("private pending identity leaked", p)
@@ -197,6 +200,10 @@ func TestServiceInstallPlanSubmitIdentityAckAndReplay(t *testing.T) {
 	b.call("POST", "/software-instances/"+id+"/observe", map[string]any{}, 409)
 	var raw string
 	s.DB.QueryRow("SELECT input_json FROM jobs WHERE id=?", job).Scan(&raw)
+	var frozen deploy.Request
+	if err := deploy.StrictJSON([]byte(raw), &frozen); err != nil || frozen.Installation == nil || !frozen.Installation.PrepareHostTerminal {
+		t.Fatal("queued Docker install lost its host terminal step", err)
+	}
 	f.NoAck.Store(true)
 	b.h.processSoftware(context.Background(), job, raw)
 	i, err = s.readSoftware(id)

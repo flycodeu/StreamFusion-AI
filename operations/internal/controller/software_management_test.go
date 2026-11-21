@@ -34,7 +34,7 @@ func readyManagementFixture(t *testing.T) (*Store, *browser, string, commandTemp
 	extension := func(req deploy.Request) ([]byte, bool) {
 		encode := func(v any) ([]byte, bool) { b, _ := json.Marshal(v); return b, true }
 		if req.Action == "CAPABILITIES" {
-			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerEngineAvailable": true, "softwareLifecycleVersion": deploy.SoftwareLifecycleVersion, "runtimePolicyVersion": 1, "softwareManagementVersion": deploy.SoftwareManagementVersion, "serviceInstallVersion": serviceinstall.CapabilityVersion, "nativeInstallVersion": 1, "serviceCatalogHash": serviceinstall.CatalogHash(), "commandRecipeVersion": deploy.CommandRecipeVersion, "commandTrustFingerprint": deploy.CommandPublicKeyFingerprint(store.commandPublicKey())})
+			return encode(map[string]any{"owner": deploy.Owner{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID}, "platform": "linux/amd64", "dockerEngineAvailable": true, "softwareLifecycleVersion": deploy.SoftwareLifecycleVersion, "runtimePolicyVersion": 1, "softwareManagementVersion": deploy.SoftwareManagementVersion, "hostTerminalInstallVersion": 1, "serviceInstallVersion": serviceinstall.CapabilityVersion, "nativeInstallVersion": 1, "serviceCatalogHash": serviceinstall.CatalogHash(), "commandRecipeVersion": deploy.CommandRecipeVersion, "commandTrustFingerprint": deploy.CommandPublicKeyFingerprint(store.commandPublicKey())})
 		}
 		if req.Action == "SOFTWARE_INSTALL_LOGS" {
 			return encode(map[string]any{"text": "$ fixture command\nverified\n", "source": "COMMAND_LOG"})

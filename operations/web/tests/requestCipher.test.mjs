@@ -99,7 +99,7 @@ function reply(data, status = 200, code = "SUCCESS") {
   );
 }
 
-test("only login, password changes and credential writes use the envelope", () => {
+test("credential and host installation submissions use the envelope while reconciliation stays plain", () => {
   for (const path of [
     "/auth/login",
     "/auth/password",
@@ -107,6 +107,7 @@ test("only login, password changes and credential writes use the envelope", () =
     "/credentials/00000000-0000-0000-0000-000000000001/revisions",
     "/hosts/00000000-0000-0000-0000-000000000001/preparation/install",
     "/hosts/00000000-0000-0000-0000-000000000001/preparation/repair",
+    "/hosts/00000000-0000-0000-0000-000000000001/terminal-tools/install",
   ]) {
     assert.equal(isSensitiveRequest(path, "POST"), true);
     assert.equal(isSensitiveRequest(path, "GET"), false);
@@ -117,6 +118,7 @@ test("only login, password changes and credential writes use the envelope", () =
     "/settings",
     "/credentials/00000000-0000-0000-0000-000000000001/revisions/1/revoke",
     "/hosts/00000000-0000-0000-0000-000000000001/preparation/reconcile",
+    "/hosts/00000000-0000-0000-0000-000000000001/terminal-tools/reconcile",
   ]) {
     assert.equal(isSensitiveRequest(path, "POST"), false);
   }
@@ -167,11 +169,20 @@ test("component installation and repair wait for the bounded server budget witho
   for (const action of ["install", "repair"]) {
     budgets.length = 0;
     await request(`/hosts/00000000-0000-0000-0000-000000000001/preparation/${action}`, "POST", { confirmed: true });
-    assert.deepEqual(budgets, [930000, 60000]);
+    assert.deepEqual(budgets, [150 * 60_000, 60000]);
   }
+  budgets.length = 0;
+  await request("/hosts/00000000-0000-0000-0000-000000000001/preparation/install", "POST", { confirmed: true, authorizeOnly: true });
+  assert.deepEqual(budgets, [29 * 60_000, 60000]);
+  budgets.length = 0;
+  await request("/hosts/00000000-0000-0000-0000-000000000001/terminal-tools/install", "POST", { confirmed: true });
+  assert.deepEqual(budgets, [930_000, 60000]);
   budgets.length = 0;
   await request("/hosts");
   assert.deepEqual(budgets, [60000]);
+  budgets.length = 0;
+  await request("/hosts/00000000-0000-0000-0000-000000000001/checks", "POST");
+  assert.deepEqual(budgets, [120_000]);
 });
 
 test("password and all credential writes are protected without changing their payload", async (t) => {

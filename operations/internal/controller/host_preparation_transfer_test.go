@@ -8,19 +8,30 @@ import (
 	"io"
 	"net"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 )
 
 func TestPreparationTimeoutKeepsSlowUploadBounded(t *testing.T) {
-	// The observed 6.7 MiB package needs over six minutes at 17 KiB/s.
-	transferTime := time.Duration((7073520+17*1024-1)/(17*1024)) * time.Second
-	if preparationTimeout < transferTime+2*time.Minute || preparationTimeout > 15*time.Minute {
-		t.Fatal("slow upload has insufficient or unbounded total budget", preparationTimeout)
+	if preparationUploadTimeout != 2*time.Hour || preparationUploadIdleTimeout != 15*time.Minute || preparationResponseTimeout != 15*time.Minute+30*time.Second {
+		t.Fatal("unexpected transfer limits or standalone maintenance allowance")
 	}
-	if preparationResponseTimeout != preparationTimeout+30*time.Second || preparationUploadIdleTimeout != 45*time.Second {
-		t.Fatal("response or stalled-upload guard changed")
+	for _, tc := range []struct {
+		name     string
+		snapshot preparationSnapshot
+		want     time.Duration
+	}{
+		{"install", preparationSnapshot{LauncherSHA: "launcher"}, 148 * time.Minute},
+		{"update", preparationSnapshot{LauncherSHA: "launcher", UpdateFromSHA: "old"}, 148 * time.Minute},
+		{"legacy repair", preparationSnapshot{}, 135 * time.Minute},
+		{"authorize only", preparationSnapshot{AuthorizeOnly: true}, 15 * time.Minute},
+		{"terminal only", preparationSnapshot{TerminalTools: true}, 15 * time.Minute},
+	} {
+		if got := preparationBudget(tc.snapshot); got != tc.want {
+			t.Errorf("%s: got %s, want %s", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -82,35 +93,78 @@ func TestPreparationUploadFailureSeparatesTimeoutFromPermissions(t *testing.T) {
 }
 
 func TestPreparationUploadWatchdogStopsSilentStream(t *testing.T) {
-	interrupted := make(chan struct{})
-	w := newPreparationUploadWatchdog(25*time.Millisecond, func() { close(interrupted) })
-	select {
-	case <-interrupted:
-	case <-time.After(time.Second):
-		t.Fatal("silent upload was not interrupted")
-	}
-	if !w.stop() {
-		t.Fatal("missing stalled classification")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		interrupted := make(chan struct{})
+		w := newPreparationUploadWatchdog(preparationUploadIdleTimeout, preparationUploadTimeout, func() { close(interrupted) })
+		time.Sleep(14 * time.Minute)
+		select {
+		case <-interrupted:
+			t.Fatal("silent transfer was interrupted before its grace period")
+		default:
+		}
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		select {
+		case <-interrupted:
+		default:
+			t.Fatal("silent upload was not interrupted")
+		}
+		if got := w.stop(); got != "PREPARATION_UPLOAD_STALLED" {
+			t.Fatalf("silent transfer returned %q", got)
+		}
+	})
 }
 
 func TestPreparationUploadWatchdogAllowsProgressAndStopsBeforeInstallation(t *testing.T) {
-	interrupted := make(chan struct{})
-	w := newPreparationUploadWatchdog(150*time.Millisecond, func() { close(interrupted) })
-	for i := 0; i < 12; i++ {
+	synctest.Test(t, func(t *testing.T) {
+		interrupted := make(chan struct{})
+		w := newPreparationUploadWatchdog(preparationUploadIdleTimeout, preparationUploadTimeout, func() { close(interrupted) })
+		// Replay the 7.6 MiB archive at about 4.3 KiB/s, which exceeds the old
+		// 28 minute total budget. Allow the final SSH exit status to arrive late.
+		const size = 8015640
+		p := newPreparationTransferReader(bytes.NewReader(make([]byte, size)), size, func(preparationTransfer) {})
+		p.activity = w.touch
+		buf := make([]byte, 4400)
+		for {
+			_, err := p.Read(buf)
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(time.Second)
+		}
+		time.Sleep(10 * time.Minute)
+		if got := w.stop(); got != "" || p.value.SentBytes != size {
+			t.Fatalf("late SSH receipt: code %q, sent %d", got, p.value.SentBytes)
+		}
+		time.Sleep(preparationUploadTimeout)
 		select {
 		case <-interrupted:
-			t.Fatal("progressing slow stream was interrupted")
-		case <-time.After(25 * time.Millisecond):
+			t.Fatal("upload deadline interrupted installation")
+		default:
+		}
+	})
+}
+
+func TestPreparationUploadWatchdogCapsProgressAtTwoHours(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		interrupted := make(chan struct{})
+		w := newPreparationUploadWatchdog(preparationUploadIdleTimeout, preparationUploadTimeout, func() { close(interrupted) })
+		for elapsed := time.Minute; elapsed < preparationUploadTimeout; elapsed += time.Minute {
+			time.Sleep(time.Minute)
 			w.touch()
 		}
-	}
-	if w.stop() {
-		t.Fatal("progressing stream marked stalled")
-	}
-	select {
-	case <-interrupted:
-		t.Fatal("upload timer leaked into installation")
-	case <-time.After(200 * time.Millisecond):
-	}
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		select {
+		case <-interrupted:
+		default:
+			t.Fatal("absolute deadline did not interrupt the active upload")
+		}
+		if got := w.stop(); got != "PREPARATION_UPLOAD_TIMEOUT" {
+			t.Fatalf("active transfer at hard deadline returned %q", got)
+		}
+	})
 }

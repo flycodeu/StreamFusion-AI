@@ -99,7 +99,7 @@ func commandSigningMessage(req Request) []byte {
 
 func SignCommandRequest(req *Request, key ed25519.PrivateKey) error {
 	d := commandDefinition(*req)
-	if len(key) != ed25519.PrivateKeySize || len(req.Secrets) != 0 && d == nil {
+	if len(key) != ed25519.PrivateKeySize || len(req.Secrets) != 0 && d == nil && (req.Installation == nil || !req.Installation.PrepareHostTerminal) {
 		return errors.New("COMMAND_SIGNING_INPUT_INVALID")
 	}
 	if req.Management != nil && len(req.Secrets) != 0 {

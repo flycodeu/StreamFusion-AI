@@ -74,8 +74,8 @@ func TestTargetPreparationArchiveBindsHostAndVerifiesAllFiles(t *testing.T) {
 	if !p.Package.Available || !strings.Contains(p.Package.DownloadURL, "expectedVersion=3") || p.Commands.Apply != "bash ./install.sh" || p.Commands.Authorize != "bash ./install.sh" {
 		t.Fatalf("incorrect host preparation: %+v", p)
 	}
-	if !strings.Contains(p.Commands.Upgrade, `--binary "$(realpath ./streamfusion-ops)"`) {
-		t.Fatal("upgrade command does not provide the required absolute binary path")
+	if p.Commands.Upgrade != "bash ./install.sh --update-only" {
+		t.Fatal("upgrade command must prepare the terminal with the existing target")
 	}
 	archive, err := createTargetPreparationArchive(p, material)
 	if err != nil {

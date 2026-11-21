@@ -9,6 +9,7 @@ import GitManagementPanel from "./GitManagementPanel.vue";
 import SoftwareManagementPanel from "./SoftwareManagementPanel.vue";
 import NginxConfigFilesPanel from "./NginxConfigFilesPanel.vue";
 import SoftwareWebAccess from "./SoftwareWebAccess.vue";
+import SoftwareConnectionCommands from "./SoftwareConnectionCommands.vue";
 import SoftwareRuntimePolicyPanel from "./SoftwareRuntimePolicyPanel.vue";
 import { runtimePolicyStopConfirmed } from "./runtimePolicy";
 import { softwareConfigurationAvailable } from "./softwareManagement";
@@ -29,9 +30,8 @@ import {
   softwareLifecycleAvailable,
   softwareUninstallAvailable,
   softwareTypeLabel,
-  softwareVersionLabel,
-  softwareVersionReason,
-  softwareVersionText,
+  softwareVersionWithoutDigest,
+  softwareVersionSummary,
   type SoftwareInstance,
   type SoftwareJob,
   type SoftwareAction,
@@ -63,12 +63,8 @@ const emit = defineEmits<{
   configure: [SoftwareInstance]; closed: [];
 }>();
 const detailTab = ref("overview");
-watch(
-  () => props.detail?.id,
-  () => {
-    detailTab.value = "overview";
-  },
-);
+const summaryVersion = computed(() => props.detail ? softwareVersionSummary(props.detail) : undefined);
+const installedVersion = computed(() => softwareVersionWithoutDigest(props.detail?.installationEvidence?.observedVersion));
 const active = (item: SoftwareInstance) => item.managementMode !== "RELEASED";
 const configCloseState = ref({ blocked: false, dirty: false });
 const accessCloseBlocked = ref(false);
@@ -76,12 +72,23 @@ const gitCloseState = ref({ blocked: false, dirty: false });
 const managementCloseState = ref({ blocked: false, dirty: false });
 const nginxCloseState = ref({ blocked: false, dirty: false });
 const policyCloseState = ref({ blocked: false, dirty: false });
+watch(
+  () => props.detail?.id,
+  () => {
+    detailTab.value = "overview";
+    configCloseState.value = { blocked: false, dirty: false };
+    accessCloseBlocked.value = false;
+    gitCloseState.value = { blocked: false, dirty: false };
+    managementCloseState.value = { blocked: false, dirty: false };
+    nginxCloseState.value = { blocked: false, dirty: false };
+    policyCloseState.value = { blocked: false, dirty: false };
+  },
+);
 const configurationBlocked = computed(() => configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked || managementCloseState.value.blocked || nginxCloseState.value.blocked || policyCloseState.value.blocked);
 const editingBlocked = computed(() => props.busy || configurationBlocked.value);
 const closeBlocked = computed(() => (props.busy && !props.observing) || configurationBlocked.value);
 const heldConfirmed = computed(() => !!props.detail && props.detail.freshness === "FRESH" && runtimePolicyStopConfirmed(props.detail.observation?.runtimePolicy, props.detail.actualState === "STOPPED", props.detail.runtimeKind === "DOCKER" ? "DOCKER" : "SYSTEMD"));
 const hasManagement = computed(() => !!props.detail?.installation?.definition?.commands && props.detail.managementMode === "MANAGED" && (!!props.detail.installation.definition.management || ["NGINX", "MYSQL"].includes(props.detail.softwareType) || !props.detail.installation.definition.commands.builtin));
-watch(() => props.detail?.id, () => { configCloseState.value = { blocked: false, dirty: false }; accessCloseBlocked.value = false; gitCloseState.value = { blocked: false, dirty: false }; managementCloseState.value = { blocked: false, dirty: false }; nginxCloseState.value = { blocked: false, dirty: false }; policyCloseState.value = { blocked: false, dirty: false }; });
 async function close(done: () => void) {
   if (closeBlocked.value) return;
   if (await confirmDiscard()) done();
@@ -142,6 +149,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
       </div>
       <ElTabs v-model="detailTab">
         <ElTabPane label="软件概览" name="overview">
+          <SoftwareConnectionCommands :key="detail.id" :detail="detail" :host="host" />
           <dl class="software-facts">
             <dt>所在主机</dt>
             <dd>
@@ -196,20 +204,15 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
             </template>
             <dt>确认时间</dt>
             <dd>{{ hostTime(detail.observation?.observedAt) }}</dd>
-            <dt>
-              {{ softwareVersionLabel(detail.observation, detail.runtimeKind) }}
-            </dt>
-            <dd>
-              <pre class="software-version">{{
-                softwareVersionText(detail.observation?.version) ||
-                softwareVersionReason(detail.observation, detail.runtimeKind)
-              }}</pre>
-            </dd>
-            <template v-if="detail.installationEvidence?.observedVersion">
+            <template v-if="summaryVersion">
+              <dt>{{ summaryVersion.label }}</dt>
+              <dd><pre class="software-version">{{ summaryVersion.value }}</pre></dd>
+            </template>
+            <template v-if="installedVersion && detail.installationEvidence">
               <dt>安装时校验版本</dt>
               <dd>
                 <pre class="software-version">{{
-                  detail.installationEvidence.observedVersion
+                  installedVersion
                 }}</pre>
                 <small class="muted"
                   >{{ hostTime(detail.installationEvidence.observedAt) }} ·
@@ -329,7 +332,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
           <div class="software-identifiers">
             <dl class="software-facts">
               <dt>登记版本</dt>
-              <dd>{{ detail.softwareVersion || "未标记" }}</dd>
+              <dd>{{ softwareVersionWithoutDigest(detail.softwareVersion) || "未标记" }}</dd>
               <dt>文件归属</dt>
               <dd>
                 {{

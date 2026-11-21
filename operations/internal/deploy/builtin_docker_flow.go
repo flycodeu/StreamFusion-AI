@@ -67,6 +67,7 @@ func (x *executor) installDockerFlow(req Request, dir string) (Result, error) {
 			if e != nil {
 				return e
 			}
+			vars["OPS_IMAGE_ID"] = imageID
 			if i.Definition.Kind != "TOOL" {
 				args, err = x.prepareService(req, p.Root, imageID)
 				if err != nil {
@@ -77,14 +78,13 @@ func (x *executor) installDockerFlow(req Request, dir string) (Result, error) {
 					return err
 				}
 				creation.ImageID = imageID
-				vars["OPS_IMAGE_ID"] = imageID
 				return atomicJSON(filepath.Join(dir, "service-create.json"), creation)
 			}
 			return err
 		case "INSTALL_CONFIRM":
 			if i.Definition.Kind == "TOOL" {
 				var e error
-				result, e = x.finishDockerToolFlow(req)
+				result, e = x.finishDockerToolFlow(req, vars["OPS_IMAGE_ID"])
 				return e
 			}
 			software, _, err = x.createdService(req, vars["OPS_CONTAINER_ID"], creation.ImageID)
@@ -150,12 +150,12 @@ func (x *executor) installDockerFlow(req Request, dir string) (Result, error) {
 	return result, err
 }
 
-func (x *executor) finishDockerToolFlow(req Request) (Result, error) {
+func (x *executor) finishDockerToolFlow(req Request, imageID string) (Result, error) {
 	result := softwareResult(req)
 	ctx, cancel := builtinFlowContext(req)
 	defer cancel()
 	i := req.Installation
-	s := SoftwareRequest{ID: i.SoftwareID, Version: i.BindingRevision, Kind: "TOOL", Locator: "image:" + i.Definition.ImageID, SoftwareKey: strings.ToUpper(i.Definition.Key), Ownership: x.installOwnership(req)}
+	s := SoftwareRequest{ID: i.SoftwareID, Version: i.BindingRevision, Kind: "TOOL", Locator: "image:" + imageID, SoftwareKey: strings.ToUpper(i.Definition.Key), Ownership: x.installOwnership(req, imageID)}
 	actual, err := ObserveSoftware(ctx, s, x.softwareRunner)
 	if err != nil || !installedToolVersionMatches(i.Definition, actualVersion(actual)) {
 		return result, errors.New("TOOL_VERSION_CHECK_FAILED")
@@ -169,7 +169,7 @@ func (x *executor) finishDockerToolFlow(req Request) (Result, error) {
 		if e = os.MkdirAll(filepath.Join(x.root, "plugins"), 0700); e != nil {
 			return result, e
 		}
-		if e = atomicJSON(filepath.Join(x.root, "plugins", s.ID+".json"), pluginMaterial{InstallationID: s.ID, Definition: d, Managed: true, JobID: req.JobID, ImageID: i.Definition.ImageID}); e != nil {
+		if e = atomicJSON(filepath.Join(x.root, "plugins", s.ID+".json"), pluginMaterial{InstallationID: s.ID, Definition: d, Managed: true, JobID: req.JobID, ImageID: imageID}); e != nil {
 			return result, e
 		}
 	}

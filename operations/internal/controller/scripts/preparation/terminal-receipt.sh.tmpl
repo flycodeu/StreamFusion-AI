@@ -1,0 +1,14 @@
+# Runs in bash. This prelude is also used by the unprivileged receipt reader.
+set -eu -o pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+dir=/var/lib/streamfusion-ops-terminal
+receipt="$dir/receipt-@OWNER@"
+identity=@IDENTITY@
+deadline=@DEADLINE@
+safe_directory() {
+    [[ -d $1 && ! -L $1 && $(stat -c %u -- "$1") == 0 ]] &&
+        (( (8#$(stat -c %a -- "$1") & 0022) == 0 ))
+}
+safe_directory /var && safe_directory /var/lib || exit 1
+expired() { (( $(date +%s) > deadline )); }

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
 import { ApiError, request } from "./api";
-import { type Host } from "./hosts";
+import { hostCapabilityTimedOut, type Host } from "./hosts";
 import type { AutomaticPreparationUpdate } from "./preparationUpdate";
 interface PreparationJob {
   id: string; status: string; phase: string; errorCode: string;
+  includesHostTerminal?: boolean;
   message?: string; traceId: string; createdAt?: string; updatedAt: string;
   result?: { message?: string; transfer?: { sentBytes: number; totalBytes: number; startedAt: string; updatedAt: string } };
 }
@@ -50,6 +51,7 @@ const currentPhaseIndex = computed(() => installing.value && installationIntent.
 const showPhaseTrack = computed(() => Boolean(visibleStatus.value) && props.automaticUpdate?.mode !== "AUTHORIZE");
 const statusTitle = computed(() => {
   if (job.value?.errorCode === "PREPARATION_SUDO_REQUIRED" && visibleStatus.value === "FAILED") return "需要验证权限";
+  if (job.value?.errorCode?.startsWith("TERMINAL_TOOLS_") && visibleStatus.value === "FAILED") return "宿主机终端工具准备失败";
   if (confirmingUpload.value) return "上传完成，正在确认";
   if (props.automaticUpdate?.mode === "AUTHORIZE") return ({ RUNNING: "正在配置安装权限", UNKNOWN: "授权结果待确认", SUCCEEDED: "安装权限已就绪" }[visibleStatus.value] || "安装权限未就绪");
   if (props.updateOnly || updateRequested.value) {
@@ -343,9 +345,10 @@ async function check() {
     if (!currentOperation(active)) return;
     const capabilities = checked.capabilities;
     const facts = [capabilities?.reachability, capabilities?.readOnly, capabilities?.mutation];
-    const unready = facts.find((fact) => fact?.status !== "AVAILABLE");
-    const ready = facts.every((fact) => fact?.status === "AVAILABLE");
-    checkResult.value = { ready, title: ready ? "服务器已接入" : "服务器尚未接入", message: ready ? "现在可以继续安装和管理软件。" : unready?.message || "暂时无法确认接入状态，请重新检查。",
+    const unready = facts.find((fact) => fact?.status !== "AVAILABLE" || hostCapabilityTimedOut(fact));
+    const ready = facts.every((fact) => fact?.status === "AVAILABLE" && !hostCapabilityTimedOut(fact));
+    const unknown = unready?.status !== "UNAVAILABLE" || hostCapabilityTimedOut(unready);
+    checkResult.value = { ready, title: ready ? "服务器已接入" : unknown ? "接入状态未确认" : "服务器尚未接入", message: ready ? "现在可以继续安装和管理软件。" : unready?.message || "暂时无法确认接入状态，请重新检查。",
       code: unready?.code || "" };
     emit("checked");
     if (ready && props.updateOnly && !props.automaticUpdate) emit("updated");
@@ -375,6 +378,7 @@ async function check() {
           <progress :value="transferPercent" max="100" aria-label="已发送比例" />
           <span>{{ confirmingUpload ? '已上传' : '已发送' }} {{ transferSize(transfer.sentBytes) }} / {{ transferSize(transfer.totalBytes) }} · {{ transferPercent }}%{{ confirmingUpload ? '' : transferSpeed }}</span>
         </div>
+        <p v-if="job?.status === 'SUCCEEDED' && !job.includesHostTerminal && !automaticUpdate && !updateRequested && host.kind === 'SSH'">已有 Docker 实例缺少终端命令时，更新接入组件即可在 Ubuntu 24.04 上一次补齐。</p>
         <div v-if="!automaticUpdate || visibleStatus === 'UNKNOWN' || visibleStatus === 'FAILED'" class="status-actions">
           <button v-if="job?.status === 'UNKNOWN'" class="primary" :disabled="busy" @click="reconcile">{{ busy ? '正在检查…' : '检查安装结果' }}</button>
           <button v-if="job?.status === 'SUCCEEDED'" class="secondary" :disabled="busy" @click="check">重新检查</button>
@@ -393,6 +397,7 @@ async function check() {
       </section>
       <section v-if="!blocked && (job?.status !== 'SUCCEEDED' || updateRequested)" class="install-workspace">
         <header class="install-heading"><div><h3>{{ automaticUpdate ? '安装权限' : updateRequested ? updateOnly ? '更新接入组件' : '更新组件与授权' : mode === 'online' ? '安装接入组件' : '离线安装' }}</h3></div><div v-if="!automaticUpdate" class="method-switch"><button :class="{ active: mode === 'online' }" :disabled="busy || host.kind !== 'SSH'" @click="mode = 'online'">在线</button><button :class="{ active: mode === 'offline' }" :disabled="busy" @click="mode = 'offline'">离线</button></div></header>
+        <p v-if="automaticUpdate?.mode !== 'AUTHORIZE'">Ubuntu 24.04 会随接入组件一起准备宿主机终端工具，已有 Docker 实例也可使用。缺少客户端时会从主机的 APT 软件源补装。</p>
         <div v-if="mode === 'online'" class="install-card">
           <form @submit.prevent="install">
             <label v-if="data.account !== 'root' && needsSudoPassword" class="password-field">{{ data.account }} 的登录密码 <span>用于 sudo 提权，仅本次使用</span><input v-model="sudoPassword" type="password" autocomplete="off" maxlength="1024" :disabled="busy" :aria-label="`${data.account} 的登录密码`" placeholder="请输入该账号的系统密码" /></label>

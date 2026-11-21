@@ -243,6 +243,11 @@ const ready = computed(() => {
     t.capabilities?.mutation.status === "AVAILABLE"
   );
 });
+const currentDockerCapability = computed(() => {
+  const host = currentTarget.value;
+  if (host && !hostObservationExpired(host, Date.now())) return host.capabilities?.docker;
+});
+const dockerCanInstall = computed(() => currentDockerCapability.value?.code === "DOCKER_NOT_INSTALLED");
 let timer: ReturnType<typeof setTimeout> | undefined;
 let disposed = false;
 
@@ -297,7 +302,7 @@ watch(() => [props.initialRecipeKey, props.hostId, serviceDefinitions.value.leng
     const recipe = serviceDefinitions.value.find((item) => item.key === props.initialRecipeKey);
     if (recipe) {
       targetId.value = props.hostId;
-      if (!dockerInstance.value && currentTarget.value?.capabilities?.docker.status !== "AVAILABLE") serviceRecipe.value = recipe;
+      if (!dockerInstance.value && (recipe.key !== "docker" || dockerCanInstall.value)) serviceRecipe.value = recipe;
     }
   }
 }, { immediate: true });
@@ -462,12 +467,12 @@ onUnmounted(() => {
       <div>
         <strong>Docker Engine <span>主机容器运行引擎</span></strong>
         <p>{{ dockerInstance ? `已登记 · ${softwareState(dockerInstance).label}` :
-          hostObservationExpired(currentTarget, Date.now()) ? '当前状态待检查' :
-          currentTarget.capabilities?.docker.status === 'AVAILABLE' ? '外部 Docker 已可用' : '安装容器软件前需准备 Docker Engine' }}</p>
+          currentDockerCapability?.status === 'AVAILABLE' ? '外部 Docker 已可用' : currentDockerCapability?.message || '当前状态待检查' }}</p>
       </div>
       <button v-if="dockerInstance" class="secondary" :disabled="busy" @click="emit('openInstance', dockerInstance.id)">管理 Docker</button>
-      <button v-else-if="currentTarget.capabilities?.docker.status !== 'AVAILABLE'" class="secondary" :disabled="busy || !dockerRecipe || currentTarget.maintenance"
+      <button v-else-if="dockerCanInstall" class="secondary" :disabled="busy || !dockerRecipe || currentTarget.maintenance"
         @click="serviceRecord = undefined; serviceRecipe = dockerRecipe">安装 Docker Engine</button>
+      <button v-else-if="currentDockerCapability?.status !== 'AVAILABLE'" class="secondary" :disabled="busy" @click="probe">检查 Docker</button>
     </section>
     <div class="catalog-toolbar">
       <div class="catalog-categories" aria-label="软件分类">
@@ -555,7 +560,7 @@ onUnmounted(() => {
               >{{ definition.commands && !definition.commands.builtin ? '来源说明' : '官方说明' }}</a
             ><button
               class="primary"
-              :disabled="busy || !currentTarget || currentTarget.maintenance || (definition.key === 'docker' && !recipeRecord(definition, true) && (!!dockerInstance || currentTarget.capabilities?.docker.status === 'AVAILABLE'))"
+              :disabled="busy || !currentTarget || currentTarget.maintenance || (definition.key === 'docker' && !recipeRecord(definition, true) && (!!dockerInstance || !dockerCanInstall))"
               @click="openDefinition(definition)"
             >
               {{ recipeRecord(definition, true) ? '查看进度' : definition.key === 'git' && installedGit ? '查看软件' : '安装' }}

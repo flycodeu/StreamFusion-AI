@@ -629,6 +629,7 @@ async function uploadInstallationPackage() {
           <strong>{{ planExpired ? "预检已过期" : "预检完成" }}</strong
           ><small>有效至 {{ hostTime(plan.expiresAt) }}</small>
         </div>
+        <p v-if="plan.config.runtimeMode === 'DOCKER'" class="source-summary">在 Ubuntu 24.04 上，安装时会一起检查宿主机终端工具。缺少的客户端会从主机的 APT 软件源补装。</p>
         <ul v-if="warningChecks.length" class="preflight-checks">
           <li
             v-for="check in warningChecks"

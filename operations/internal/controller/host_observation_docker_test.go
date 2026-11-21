@@ -113,3 +113,61 @@ func TestHostDockerObservationPreservesInstallationEvidence(t *testing.T) {
 		})
 	}
 }
+
+func TestHostCapabilityCheckPreservesKnownFactsWhenExecutorCheckFails(t *testing.T) {
+	for _, tc := range []struct {
+		name, stdout, stderr, status, code string
+		exit                               uint32
+	}{
+		{"timeout", "", "", "UNKNOWN", "EXECUTOR_CHECK_TIMEOUT", 0},
+		{"invalid reply", "unfinished JSON", "", "UNKNOWN", "EXECUTOR_RESPONSE_INVALID", 0},
+		{"denied", "", "sudo: a password is required", "UNAVAILABLE", "SUDO_AUTHORIZATION_REQUIRED", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, b := setup(t)
+			b.login()
+			f := hostSSHServer(t, s, b, true, false)
+			host := f.create(t, b, "capabilities-"+tc.name)
+			target, err := s.readTarget(host["id"].(string))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			responses := func(command string) *hostSSHResponse {
+				switch command {
+				case hostReadOnlyCommand:
+					return &hostSSHResponse{Stdout: "SFOPS_HOST_V1\nLinux\nx86_64\nDOCKER_PRESENT\n"}
+				case executorSSHCommand(target):
+					response := &hostSSHResponse{Stdout: tc.stdout, Stderr: tc.stderr, Exit: tc.exit}
+					if tc.name == "timeout" {
+						response.Input = func([]byte) { <-ctx.Done() }
+					}
+					return response
+				}
+				return nil
+			}
+			f.Responses.Store(&responses)
+			facts := b.h.observeHost(ctx, target)
+			if facts.Reachability.Status != "AVAILABLE" || facts.ReadOnly.Status != "AVAILABLE" {
+				t.Fatalf("lost successful read-only evidence: %+v", facts)
+			}
+			if facts.Mutation.Status != tc.status || facts.Mutation.Code != tc.code {
+				t.Fatalf("unexpected authorization: %+v", facts.Mutation)
+			}
+			if facts.Docker.Status != "UNKNOWN" || !strings.Contains(facts.Docker.Message, "已安装Docker") || facts.DockerCompose.Status != "UNKNOWN" {
+				t.Fatalf("lost installed Docker evidence or inferred access: %+v", facts)
+			}
+			if tc.name == "timeout" {
+				facts.Mutation.Status = "UNAVAILABLE" // A persisted observation from an older controller.
+				if _, err = s.DB.Exec("UPDATE targets SET capabilities_json=? WHERE id=?", jsonText(facts), target.ID); err != nil {
+					t.Fatal(err)
+				}
+				stored, err := s.readTarget(target.ID)
+				if err != nil || stored.Capabilities.Mutation.Status != "UNKNOWN" || stored.Capabilities.Mutation.ObservedAt != facts.Mutation.ObservedAt {
+					t.Fatalf("legacy observation: %+v, %v", stored.Capabilities.Mutation, err)
+				}
+			}
+		})
+	}
+}

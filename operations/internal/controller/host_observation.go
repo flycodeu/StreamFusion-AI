@@ -11,6 +11,12 @@ import (
 	"github.com/streamfusion-ai/operations/internal/deploy"
 )
 
+const (
+	hostReadOnlyCheckTimeout   = 30 * time.Second
+	hostExecutorCheckTimeout   = time.Minute
+	hostCapabilityCheckTimeout = hostReadOnlyCheckTimeout + hostExecutorCheckTimeout
+)
+
 type hostCapability struct {
 	Status     string `json:"status"`
 	Code       string `json:"code"`
@@ -21,32 +27,33 @@ type hostCapability struct {
 
 // Keep the complete additive CAPABILITIES contract in one strict decoder.
 type executorCapabilities struct {
-	CommandRecipeVersion      int          `json:"commandRecipeVersion"`
-	CommandTrustFingerprint   string       `json:"commandTrustFingerprint"`
-	GitRepositoryVersion      int          `json:"gitRepositoryVersion"`
-	GitAccountVersion         int          `json:"gitAccountVersion"`
-	DockerAccessVersion       int          `json:"dockerAccessVersion"`
-	NodeEnvironmentVersion    int          `json:"nodeEnvironmentVersion"`
-	NodeTerminalVersion       int          `json:"nodeTerminalVersion"`
-	NodeRegistryVersion       int          `json:"nodeRegistryVersion"`
-	OfficialInstallVersion    int          `json:"officialInstallVersion"`
-	FirewallVersion           int          `json:"firewallVersion"`
-	Owner                     deploy.Owner `json:"owner"`
-	Platform                  string       `json:"platform"`
-	Docker                    bool         `json:"dockerAvailable"`
-	DockerEngine              bool         `json:"dockerEngineAvailable"`
-	DockerCompose             bool         `json:"dockerComposeAvailable"`
-	SoftwareLifecycleVersion  int          `json:"softwareLifecycleVersion"`
-	RuntimePolicyVersion      int          `json:"runtimePolicyVersion"`
-	SoftwareManagementVersion int          `json:"softwareManagementVersion"`
-	ConfigurationFileVersion  int          `json:"configurationFileVersion,omitempty"`
-	InstallVersion            int          `json:"serviceInstallVersion"`
-	CatalogHash               string       `json:"serviceCatalogHash"`
-	NativeInstallVersion      int          `json:"nativeInstallVersion"`
-	NativeDownloadVersion     int          `json:"nativeDownloadVersion"`
-	SoftwareConfigureVersion  int          `json:"softwareConfigureVersion"`
-	SoftwareUninstallVersion  int          `json:"softwareUninstallVersion"`
-	ToolProbeVersion          int          `json:"toolProbeVersion"`
+	HostTerminalInstallVersion int          `json:"hostTerminalInstallVersion,omitempty"`
+	CommandRecipeVersion       int          `json:"commandRecipeVersion"`
+	CommandTrustFingerprint    string       `json:"commandTrustFingerprint"`
+	GitRepositoryVersion       int          `json:"gitRepositoryVersion"`
+	GitAccountVersion          int          `json:"gitAccountVersion"`
+	DockerAccessVersion        int          `json:"dockerAccessVersion"`
+	NodeEnvironmentVersion     int          `json:"nodeEnvironmentVersion"`
+	NodeTerminalVersion        int          `json:"nodeTerminalVersion"`
+	NodeRegistryVersion        int          `json:"nodeRegistryVersion"`
+	OfficialInstallVersion     int          `json:"officialInstallVersion"`
+	FirewallVersion            int          `json:"firewallVersion"`
+	Owner                      deploy.Owner `json:"owner"`
+	Platform                   string       `json:"platform"`
+	Docker                     bool         `json:"dockerAvailable"`
+	DockerEngine               bool         `json:"dockerEngineAvailable"`
+	DockerCompose              bool         `json:"dockerComposeAvailable"`
+	SoftwareLifecycleVersion   int          `json:"softwareLifecycleVersion"`
+	RuntimePolicyVersion       int          `json:"runtimePolicyVersion"`
+	SoftwareManagementVersion  int          `json:"softwareManagementVersion"`
+	ConfigurationFileVersion   int          `json:"configurationFileVersion,omitempty"`
+	InstallVersion             int          `json:"serviceInstallVersion"`
+	CatalogHash                string       `json:"serviceCatalogHash"`
+	NativeInstallVersion       int          `json:"nativeInstallVersion"`
+	NativeDownloadVersion      int          `json:"nativeDownloadVersion"`
+	SoftwareConfigureVersion   int          `json:"softwareConfigureVersion"`
+	SoftwareUninstallVersion   int          `json:"softwareUninstallVersion"`
+	ToolProbeVersion           int          `json:"toolProbeVersion"`
 }
 
 type hostCapabilities struct {
@@ -118,8 +125,10 @@ func (h *HTTP) observeHost(ctx context.Context, t target) hostCapabilities {
 	errOut := &limitedOutput{limit: 1024}
 	dockerPresent := false
 	if t.Kind == "SSH" {
-		client, closeClient, e := h.store.connectSSH(ctx, t)
+		readOnlyCtx, stopReadOnly := context.WithTimeout(ctx, hostReadOnlyCheckTimeout)
+		client, closeClient, e := h.store.connectSSH(readOnlyCtx, t)
 		if e != nil {
+			stopReadOnly()
 			code, message := hostSSHError(e)
 			facts.Reachability = checkedCapability(false, code, message)
 			return facts
@@ -127,6 +136,7 @@ func (h *HTTP) observeHost(ctx context.Context, t target) hostCapabilities {
 		facts.Reachability = checkedCapability(true, "SSH_CONNECTED", "SSH认证与指纹核对通过")
 		e = runSSHCommand(client, hostReadOnlyCommand, nil, out, errOut)
 		closeClient()
+		stopReadOnly()
 		if e != nil {
 			facts.ReadOnly = checkedCapability(false, "READ_ONLY_PROBE_FAILED", "SSH已连接，但只读系统观察未成功")
 		} else {
@@ -142,11 +152,22 @@ func (h *HTTP) observeHost(ctx context.Context, t target) hostCapabilities {
 			return facts
 		}
 	}
+	executorCtx, stopExecutor := context.WithTimeout(ctx, hostExecutorCheckTimeout)
+	defer stopExecutor()
 	var executor executorCapabilities
-	if e := h.store.callTarget(ctx, t, deploy.Request{Action: "CAPABILITIES"}, "", &executor); e != nil {
-		code, message := h.executorFailure(ctx, t, e)
+	if e := h.store.callTarget(executorCtx, t, deploy.Request{Action: "CAPABILITIES"}, "", &executor); e != nil {
+		code, message := h.executorFailure(executorCtx, t, e)
 		facts.Mutation = checkedCapability(false, code, message)
-		if facts.Docker.Status == "UNKNOWN" {
+		switch code {
+		case "EXECUTOR_MISSING", "EXECUTOR_NOT_EXECUTABLE", "EXECUTOR_INITIALIZATION_REQUIRED",
+			"EXECUTOR_PRIVILEGE_REQUIRED", "EXECUTOR_PATH_UNSAFE", "EXECUTOR_PATH_UNREADABLE",
+			"EXECUTOR_IDENTITY_MISMATCH", "EXECUTOR_UPGRADE_REQUIRED", "SUDO_UNAVAILABLE",
+			"SUDO_AUTHORIZATION_REQUIRED", "LINUX_TARGET_REQUIRED", "TARGET_PATH_INVALID":
+			// A completed check found a concrete reason the executor cannot be used.
+		default:
+			facts.Mutation.Status = "UNKNOWN"
+		}
+		if facts.Docker.Code == "NOT_CHECKED" {
 			facts.Docker = hostCapability{Status: "UNKNOWN", Code: "DOCKER_ACCESS_UNCONFIRMED", Message: "Docker访问能力尚未确认", ObservedAt: Now(), Source: "DOCKER"}
 		}
 		return facts
@@ -218,7 +239,7 @@ func (h *HTTP) checkHost(w http.ResponseWriter, r *http.Request, s *session, id 
 		h.opsError(w, r, e)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), hostCapabilityCheckTimeout)
 	defer cancel()
 	facts := h.observeHost(ctx, t)
 	h.store.mu.Lock()

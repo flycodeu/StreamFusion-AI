@@ -29,7 +29,7 @@ func (h *HTTP) knownPreparationBinary(t target, sha string) bool {
 		if rows.Scan(&raw) != nil || deploy.StrictJSON([]byte(raw), &snapshot) != nil {
 			continue
 		}
-		if snapshot.Host.ID == t.ID && snapshot.Host.sshTarget == t.sshTarget && snapshot.Host.InstallRoot == t.InstallRoot && (snapshot.BinarySHA == sha || snapshot.RecoveryBinarySHA == sha) {
+		if !snapshot.TerminalTools && snapshot.Host.ID == t.ID && snapshot.Host.sshTarget == t.sshTarget && snapshot.Host.InstallRoot == t.InstallRoot && (snapshot.BinarySHA == sha || snapshot.RecoveryBinarySHA == sha) {
 			return true
 		}
 	}

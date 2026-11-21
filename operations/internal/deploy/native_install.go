@@ -234,7 +234,7 @@ func (x *executor) ownedInstallResult(req Request, s SoftwareRequest, version, h
 	if s.Ownership.RuntimeMode == "NATIVE" {
 		e.BinaryHash, e.BinaryPath = s.Ownership.BinaryHash, s.Ownership.BinaryPath
 	} else {
-		e.ImageID = i.Definition.ImageID
+		e.ImageID = s.Ownership.ImageID
 		result.ImageID = e.ImageID
 	}
 	result.Installation = e
@@ -252,7 +252,10 @@ func (x *executor) verifyOwnedInstallation(req Request, result Result) error {
 		return errors.New("SOFTWARE_BINDING_REVISION_MISMATCH")
 	}
 	if serviceinstall.UsesJavaBridge(req.Installation.Definition) && req.Installation.Config.Mode() == "DOCKER" {
-		return x.verifyToolBridge(req)
+		image, err := x.toolBridgeImage(req)
+		if err != nil || image != result.Installation.ImageID {
+			return errors.New("TOOL_PLUGIN_BRIDGE_MISMATCH")
+		}
 	}
 	return nil
 }

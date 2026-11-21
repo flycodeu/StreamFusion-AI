@@ -17,6 +17,7 @@ function moduleFrom(source, imports = {}, timers = {}) {
 const installationSource = await readFile(new URL("../src/serviceInstallation.ts", import.meta.url), "utf8");
 const installation = moduleFrom(installationSource);
 const software = moduleFrom(await readFile(new URL("../src/software.ts", import.meta.url), "utf8"));
+const hostHelpers = moduleFrom(await readFile(new URL("../src/hosts.ts", import.meta.url), "utf8"));
 const softwareCatalog = moduleFrom(await readFile(new URL("../src/softwareCatalog.ts", import.meta.url), "utf8"));
 const pagination = moduleFrom(await readFile(new URL("../src/pagination.ts", import.meta.url), "utf8"), { vue });
 const webAccess = moduleFrom(await readFile(new URL("../src/webAccess.ts", import.meta.url), "utf8"));
@@ -31,6 +32,24 @@ test("operator labels hide protocol codes without claiming unknown work succeede
   assert.equal(software.softwareObservationMessage("FUTURE_CODE"), "检查结果待确认");
   assert.equal(software.softwareObservationMessage("SERVICE_INSTALLED", "SSH_TIMEOUT"), "检查未完成，请查看诊断信息");
   assert.equal(software.softwareVersionLabel({ versionSource: "TEMPLATE", versionStatus: "DECLARED" }, "DOCKER"), "配置版本");
+});
+test("registered software summaries distinguish image evidence from program versions", () => {
+  const digest = "sha256:" + "a".repeat(64);
+  for (const observation of [
+    { versionSource: "IMAGE_REFERENCE", versionStatus: "IMAGE_ONLY", version: "redis:7" },
+    { version: digest },
+    { versionSource: "VERSION_COMMAND", version: "repo/redis@" + digest },
+    { version: "redis:7" },
+  ]) {
+    assert.deepEqual(software.softwareVersionSummary({ runtimeKind: "DOCKER", observation }),
+      { label: "程序版本", value: "版本未确认" });
+  }
+  assert.deepEqual(software.softwareVersionSummary({
+    runtimeKind: "DOCKER", observation: { versionSource: "VERSION_COMMAND", version: "7.2.4" },
+  }), { label: "程序版本", value: "7.2.4" });
+  assert.deepEqual(software.softwareVersionSummary({
+    runtimeKind: "SYSTEMD", observation: { versionSource: "PACKAGE", version: "1.2.3+sha256:abc" },
+  }), { label: "安装包版本", value: "1.2.3+sha256:abc" });
 });
 const useSource = await readFile(new URL("../src/useServiceInstallation.ts", import.meta.url), "utf8");
 const preparationUpdate = moduleFrom(await readFile(new URL("../src/preparationUpdate.ts", import.meta.url), "utf8"));
@@ -930,6 +949,32 @@ test("catalog reopens a failed installation receipt without replacing the new in
   flow.openInstallationHistory(flow.recipeRecord(mysql));
   assert.deepEqual(events, [["logs", "original-job"]]);
   assert.equal(flow.serviceRecipe.value, undefined);
+  scope.stop();
+});
+
+test("catalog only offers Docker installation for fresh evidence that Docker is missing", () => {
+  const flow = new Function("require", "exports", "defineProps", "defineEmits", compile(
+    catalogScript + "\nexport { targets, targetId, currentDockerCapability, dockerCanInstall };",
+  ));
+  const exports = {};
+  const scope = vue.effectScope();
+  scope.run(() => flow(name => name === "vue" ? { ...vue, onMounted() {}, onUnmounted() {} } :
+    name === "./pagination" ? pagination : name === "./serviceInstallation" ? installation :
+    name === "./softwareCatalog" ? softwareCatalog : name === "./software" ? software :
+    name === "./hosts" ? hostHelpers : {}, exports, () => ({ hostId: "host-a" }), () => () => {}));
+  exports.targetId.value = "host-a";
+  for (const [status, code, fresh, canInstall] of [
+    ["UNKNOWN", "DOCKER_ACCESS_UNCONFIRMED", true, false],
+    ["UNAVAILABLE", "DOCKER_ENGINE_UNAVAILABLE", true, false],
+    ["AVAILABLE", "DOCKER_ENGINE_READY", true, false],
+    ["UNAVAILABLE", "DOCKER_NOT_INSTALLED", false, false],
+    ["UNAVAILABLE", "DOCKER_NOT_INSTALLED", true, true],
+  ]) {
+    const docker = { status, code, message: "检查证据" };
+    exports.targets.value = [{ id: "host-a", capabilities: { docker, expiresAt: fresh ? "2099-01-01" : "2000-01-01" } }];
+    assert.deepEqual(exports.currentDockerCapability.value, fresh ? docker : undefined);
+    assert.equal(exports.dockerCanInstall.value, canInstall, code);
+  }
   scope.stop();
 });
 

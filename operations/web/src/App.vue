@@ -264,6 +264,8 @@ const actionLabels: Record<string, string> = {
   HOST_DELETED: "移除主机登记",
   HOST_PREPARATION_ACCEPTED: "开始主机接入",
   HOST_PREPARATION_RESULT: "主机接入结果",
+  HOST_TERMINAL_INSTALL_ACCEPTED: "开始安装主机终端工具",
+  HOST_TERMINAL_INSTALL_RESULT: "主机终端工具安装结果",
   HOST_PREPARATION_REPAIR_ACCEPTED: "开始修复接入权限",
   HOST_PREPARATION_REPAIR_RESULT: "接入权限修复结果",
   HOST_PREPARED: "准备主机运行依赖",
