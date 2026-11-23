@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onDeactivated, onUnmounted, ref, watch } from "vue";
 import { ApiError, request } from "./api";
-import OpsPagination from "./OpsPagination.vue";
 import { usePagination } from "./pagination";
 import type { ListPage } from "./listPages";
 import {
@@ -10,10 +9,7 @@ import {
   type PreparationUpdateCheck,
 } from "./preparationUpdate";
 import { hostTime, type Host } from "./hosts";
-import type {
-  InstallationMaterial,
-  ServiceRecipe,
-} from "./serviceInstallation";
+import type { InstallationMaterial } from "./serviceInstallation";
 import type { SoftwareJob } from "./software";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
 import NodeEnvironmentContent from "./NodeEnvironmentContent.vue";
@@ -21,7 +17,6 @@ import NodeEnvironmentDialogs from "./NodeEnvironmentDialogs.vue";
 import {
   nodeInitialPlanMatches,
   type NodeInitialIntent,
-  nodeActionLabels,
   nodeJobPending,
   nodeMaterials,
   nodeVersionRow,

@@ -26,6 +26,11 @@ func (x *executor) serviceSecrets(i serviceinstall.Request) (string, string, str
 	return secret, userSecret, accessKey, nil
 }
 
+func redisUsersACL(secret string) string {
+	hash := sha256.Sum256([]byte(secret))
+	return deployTemplate("config/redis.acl.tmpl", hex.EncodeToString(hash[:]))
+}
+
 func serviceFile(filename string, content []byte, gid int, secret bool) error {
 	f, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -144,8 +149,7 @@ func (x *executor) prepareServiceAt(req Request, root, outputConfig string, init
 		}
 		command = deployCommand("docker-runtime-mysql")
 	case "redis":
-		hash := sha256.Sum256([]byte(secret))
-		if err = write("users.acl", deployTemplate("docker/redis-users.acl.tmpl", hex.EncodeToString(hash[:])), true); err != nil {
+		if err = write("users.acl", redisUsersACL(secret), true); err != nil {
 			return nil, err
 		}
 		conf := deployTemplate("docker/redis.conf.tmpl", c.MemoryMiB*3/4)

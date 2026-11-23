@@ -77,29 +77,31 @@ func TestServiceOwnedContainerDoesNotWeakenExternalProtection(t *testing.T) {
 
 func TestServicePublishedPortsCoversNATWildcardAndRanges(t *testing.T) {
 	for _, test := range []struct {
-		ports string
-		port  int
-		busy  bool
+		ports    string
+		port     int
+		protocol string
+		busy     bool
 	}{
-		{"0.0.0.0:13306->3306/tcp, [::]:13306->3306/tcp", 13306, true},
-		{"127.0.0.1:8088->80/tcp", 8088, true},
-		{"192.0.2.3:8088->80/tcp", 8088, false},
-		{"0.0.0.0:8080-8090->80-90/tcp", 8088, true},
-		{"0.0.0.0:8088->80/udp", 8088, false},
-		{"3306/tcp", 3306, false},
+		{"0.0.0.0:13306->3306/tcp, [::]:13306->3306/tcp", 13306, "TCP", true},
+		{"127.0.0.1:8088->80/tcp", 8088, "TCP", true},
+		{"192.0.2.3:8088->80/tcp", 8088, "TCP", false},
+		{"0.0.0.0:8080-8090->80-90/tcp", 8088, "TCP", true},
+		{"0.0.0.0:8088->80/udp", 8088, "TCP", false},
+		{"0.0.0.0:8088->80/udp", 8088, "UDP", true},
+		{"3306/tcp", 3306, "TCP", false},
 	} {
-		t.Run(test.ports, func(t *testing.T) {
+		t.Run(test.protocol+"/"+test.ports, func(t *testing.T) {
 			x := &executor{softwareRun: func(time.Duration, string, ...string) ([]byte, error) {
 				return json.Marshal(map[string]string{"id": "abc123", "name": "existing-database", "ports": test.ports})
 			}}
-			owner, err := x.servicePublishedPort(context.Background(), "127.0.0.1", test.port)
+			owner, err := x.servicePublishedPortFor(context.Background(), "127.0.0.1", test.port, test.protocol)
 			if err != nil || (owner != "") != test.busy {
 				t.Fatalf("mapping got owner=%q err=%v", owner, err)
 			}
 		})
 	}
 	x := &executor{softwareRun: func(time.Duration, string, ...string) ([]byte, error) { return []byte("not valid metadata"), nil }}
-	if _, err := x.servicePublishedPort(context.Background(), "127.0.0.1", 8333); err == nil {
+	if _, err := x.servicePublishedPortFor(context.Background(), "127.0.0.1", 8333, "TCP"); err == nil {
 		t.Fatal("unknown metadata accepted as free")
 	}
 }

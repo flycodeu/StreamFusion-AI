@@ -7,6 +7,13 @@ import (
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
+func TestRedisUsersACLRetainsOriginalBytes(t *testing.T) {
+	const want = "user default on #27ef311678b9488450adf16ad298729bf9e58fbe0967680675e502f7016aab55 ~* &* +@all\n"
+	if got := redisUsersACL("redis-acl-test-only"); got != want {
+		t.Fatal("Redis ACL changed from the original Docker and native templates")
+	}
+}
+
 func TestServiceJSONTemplatesPreserveCredentialEscaping(t *testing.T) {
 	secret := "s<e&c>r\"et\\value\n"
 	access := "a<\"ccess"

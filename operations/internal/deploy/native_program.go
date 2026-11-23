@@ -2,8 +2,6 @@ package deploy
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -247,8 +245,7 @@ func (x *executor) nativeConfigurationAt(req Request, root, outputConfig string,
 			return errors.New("NATIVE_MYSQL_INITIALIZE_FAILED")
 		}
 	case "redis":
-		hashed := sha256.Sum256([]byte(secret))
-		if err = write("users.acl", deployTemplate("config/redis.acl.tmpl", hex.EncodeToString(hashed[:])), true); err != nil {
+		if err = write("users.acl", redisUsersACL(secret), true); err != nil {
 			return err
 		}
 		return write("redis.conf", deployTemplate("config/redis.conf.tmpl", c.BindAddress, c.HostPort, config, data, c.MemoryMiB*3/4), false)

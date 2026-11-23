@@ -173,9 +173,6 @@ func (x *executor) serviceDocker(req Request, phase string, limit time.Duration,
 	return out, err
 }
 
-func (x *executor) servicePublishedPort(ctx context.Context, bind string, port int) (string, error) {
-	return x.servicePublishedPortFor(ctx, bind, port, "TCP")
-}
 func (x *executor) servicePublishedPortFor(ctx context.Context, bind string, port int, wantedProtocol string) (string, error) {
 	out, err := x.softwareRunner(ctx, "/usr/bin/docker", "container", "ls", "--format", `{"id":{{json .ID}},"name":{{json .Names}},"ports":{{json .Ports}}}`)
 	if err != nil || len(out) >= 64<<10 {
