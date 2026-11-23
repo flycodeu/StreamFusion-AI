@@ -40,11 +40,17 @@ func (h *HTTP) applicationProjectsRoute(w http.ResponseWriter, r *http.Request, 
 	if len(p) < 2 || p[0] != "application-projects" || !deploy.ID.MatchString(p[1]) {
 		return false
 	}
+	if len(p) == 3 && p[2] == "jenkins-connection" {
+		return h.jenkinsProjectRoute(w, r, s, jenkinsScope{project: p[1], connection: true}, []string{"jenkins-monitor"})
+	}
 	if len(p) >= 3 && (p[2] == "jenkins-monitor" || p[2] == "jenkins-build") {
 		return h.jenkinsProjectRoute(w, r, s, jenkinsScope{project: p[1]}, p[2:])
 	}
 	if len(p) >= 5 && p[2] == "service-instances" && deploy.ID.MatchString(p[3]) {
 		return h.jenkinsProjectRoute(w, r, s, jenkinsScope{project: p[1], instance: p[3]}, p[4:])
+	}
+	if len(p) >= 5 && p[2] == "modules" && deploy.ID.MatchString(p[3]) {
+		return h.jenkinsProjectRoute(w, r, s, jenkinsScope{project: p[1], module: p[3]}, p[4:])
 	}
 	if len(p) == 3 && p[2] == "archive" && r.Method == "POST" {
 		h.saveApplicationProject(w, r, s, p[1], true)

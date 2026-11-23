@@ -2,6 +2,7 @@ import { jenkinsLink } from "./applicationProjects";
 
 export interface JenkinsMonitor {
   configured: boolean;
+  reason?: string;
   version: string;
   softwareId: string;
   username: string;
@@ -10,10 +11,15 @@ export interface JenkinsMonitor {
   instances: { id: string; name: string; hostName: string; url: string }[];
 }
 
+export function moduleJenkinsPath(projectId: string, moduleId: string, instanceId?: string) {
+  const scope = instanceId ? "service-instances/" + encodeURIComponent(instanceId) : "modules/" + encodeURIComponent(moduleId);
+  return `/application-projects/${encodeURIComponent(projectId)}/${scope}`;
+}
+
 export interface JenkinsInstanceContext {
   moduleId: string;
   moduleName: string;
-  serviceInstanceId: string;
+  serviceInstanceId?: string;
   environmentId?: string;
   environmentName?: string;
   readOnly?: boolean;

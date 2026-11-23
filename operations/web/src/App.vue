@@ -93,8 +93,9 @@ const nav = [
     label: "软件目录",
     icon: "M4 5h16v14H4z M8 9h8 M8 13h5 M8 17h8",
   },
-  { id: "application-projects", label: "项目管理", icon: "M3 5h7l2 2h9v13H3z M7 11h10 M7 15h7" },
-  { id: "instances", label: "应用实例", icon: "M5 5h14v14H5z M9 9h6v6H9z" },
+  { id: "application-projects", label: "项目维护", icon: "M3 5h7l2 2h9v13H3z M7 11h10 M7 15h7" },
+  { id: "instances", label: "项目发布", icon: "M5 5h14v14H5z M9 9h6v6H9z" },
+  { id: "managed-instances", label: "上线目标管理", icon: "M4 4h16v6H4z M4 14h16v6H4z" },
   { id: "artifacts", label: "版本制品", icon: "M4 7h16v13H4z M8 4h8v3H8z" },
   { id: "jobs", label: "发布作业", icon: "M6 3h12v4H6z M6 11h12 M6 16h8" },
 
@@ -125,6 +126,16 @@ function readHashPage(): string | undefined {
 }
 const active = ref(readHashPage() || "overview");
 const instanceRegistrationSource = ref<ProjectInstanceSource>();
+const maintenanceSource = ref<ProjectInstanceSource>();
+const managedReturnSource = ref<ProjectInstanceSource>();
+function openMaintenance(source?: ProjectInstanceSource) {
+  maintenanceSource.value = source;
+  active.value = "application-projects";
+}
+function openManagedTargets(source?: ProjectInstanceSource) {
+  managedReturnSource.value = source;
+  active.value = "managed-instances";
+}
 function openProjectInstances(projectId: string, moduleId: string) {
   instanceRegistrationSource.value = { projectId, moduleId };
   active.value = "instances";
@@ -136,6 +147,8 @@ function onHashChange() {
 }
 watch(active, (page) => {
   if (page !== "instances") instanceRegistrationSource.value = undefined;
+  if (page !== "application-projects") maintenanceSource.value = undefined;
+  if (page !== "managed-instances") managedReturnSource.value = undefined;
   if (page === "commands") commandsVisited.value = true;
   if (
     typeof globalThis.history?.replaceState === "function" &&
@@ -649,7 +662,7 @@ onUnmounted(() => {
       v-if="loggedIn"
       id="ops-navigation"
       class="sidebar"
-      :class="{ 'is-open': navigationOpen }"
+      :class="{ 'is-open': navigationOpen, 'delivery-navigation': ['application-projects', 'instances', 'managed-instances', 'artifacts', 'jobs'].includes(active) }"
     >
       <div class="brand">
         <img
@@ -670,7 +683,7 @@ onUnmounted(() => {
           <button
             v-for="item in group.items"
             :key="item.id"
-            :class="{ active: active === item.id }"
+            :class="{ active: active === item.id || (active === 'managed-instances' && item.id === 'application-projects') }"
             :aria-current="active === item.id ? 'page' : undefined"
             @click="
               active = item.id;
@@ -759,16 +772,20 @@ onUnmounted(() => {
           @preparation="showHostPreparation"
         />
         <OpsWorkspace
-          v-else-if="['instances', 'artifacts', 'jobs'].includes(active)"
+          v-else-if="['instances', 'managed-instances', 'artifacts', 'jobs'].includes(active)"
           :page="active"
           :application-source="instanceRegistrationSource"
           @application-source-used="instanceRegistrationSource = undefined"
+          @maintain="openMaintenance($event || managedReturnSource)"
           @logs="openLogs"
           @error="report"
         />
         <ApplicationProjects
           class="content"
           v-else-if="active === 'application-projects'"
+          :source="maintenanceSource"
+          @source-used="maintenanceSource = undefined"
+          @manage-targets="openManagedTargets"
           @error="report"
           @install-jenkins="showJenkinsInstallation"
           @view-instances="openProjectInstances"

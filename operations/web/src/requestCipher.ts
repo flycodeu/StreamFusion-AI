@@ -19,6 +19,7 @@ export function isSensitiveRequest(path: string, method: string): boolean {
       /^\/software-instances\/[0-9a-f-]{36}\/jenkins-unlock$/i.test(path) ||
       /^\/software-instances\/[0-9a-f-]{36}\/login-account(?:\/copy-password)?$/i.test(path) ||
       /^\/software-instances\/[0-9a-f-]{36}\/login-accounts(?:\/[\w-]+(?:\/copy-password)?)?$/i.test(path) ||
+      /^\/application-projects\/[0-9a-f-]{36}\/jenkins-connection$/i.test(path) ||
       /^\/application-projects\/[0-9a-f-]{36}(?:\/service-instances\/[0-9a-f-]{36})?\/jenkins-monitor$/i.test(path) ||
       /^\/credentials\/[0-9a-f-]{36}\/revisions$/i.test(path))
   );

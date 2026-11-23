@@ -1,25 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { ElDialog } from "element-plus";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { ApiError, request } from "./api";
 import { hostTime } from "./hosts";
-import { jenkinsLink } from "./applicationProjects";
-import { jenkinsBuildLink, jenkinsElapsed, jenkinsState, type JenkinsBuild, type JenkinsBuildLog, type JenkinsInstanceContext, type JenkinsMonitor } from "./projectJenkins";
+import { moduleJenkinsPath, jenkinsBuildLink, jenkinsElapsed, jenkinsState, type JenkinsBuild, type JenkinsBuildLog, type JenkinsInstanceContext, type JenkinsMonitor } from "./projectJenkins";
 
-const props = defineProps<{ projectId: string; jobUrl?: string; context?: JenkinsInstanceContext }>();
-const emit = defineEmits<{ error: [unknown] }>();
-const projectBase = `/application-projects/${props.projectId}`;
-const base = props.context ? `${projectBase}/service-instances/${encodeURIComponent(props.context.serviceInstanceId)}` : projectBase;
+const props = defineProps<{ projectId: string; context: JenkinsInstanceContext; monitor: JenkinsMonitor }>();
+const emit = defineEmits<{ error: [unknown]; observed: [build: JenkinsBuild] }>();
+const base = moduleJenkinsPath(props.projectId, props.context.moduleId, props.context.serviceInstanceId);
 const lifetime = new AbortController();
-const monitor = ref<JenkinsMonitor>();
 const build = ref<JenkinsBuild>();
-const loadingMonitor = ref(false), loadingStatus = ref(false), settingsOpen = ref(false), saving = ref(false);
-const statusError = ref(""), settingsError = ref("");
-const softwareId = ref(""), username = ref(""), token = ref("");
-const jobDraft = ref("");
-const jobUrl = computed(() => (props.context ? monitor.value?.jobUrl : props.jobUrl) || "");
-const validJob = computed(() => !props.context || !!jenkinsLink(jobDraft.value.trim()) && /\/job\//.test(new URL(jobDraft.value.trim()).pathname));
-const retainedToken = computed(() => monitor.value?.hasToken && monitor.value.softwareId === softwareId.value && monitor.value.username === username.value.trim() && (!props.context || jobDraft.value.trim() === jobUrl.value));
+const loadingStatus = ref(false);
+const statusError = ref("");
+const jobUrl = computed(() => props.monitor.jobUrl || "");
 const state = computed(() => jenkinsState(build.value?.status));
 const running = computed(() => build.value?.status === "QUEUED" || build.value?.status === "RUNNING");
 const queuedWithPrevious = computed(() => build.value?.status === "QUEUED" && !!build.value.number);
@@ -33,7 +25,7 @@ const stageLabel = computed(() => {
 const consoleUrl = computed(() => jenkinsBuildLink(jobUrl.value, build.value?.consoleUrl));
 const runUrl = computed(() => jenkinsBuildLink(jobUrl.value, build.value?.buildUrl));
 
-const logOpen = ref(props.context?.action === "logs"), loadingLog = ref(false), logMore = ref(false), logLimited = ref(false);
+const logOpen = ref(props.context.action === "logs"), loadingLog = ref(false), logMore = ref(false), logLimited = ref(false);
 const log = ref(""), logError = ref("");
 const submitting = ref(false), submitError = ref("");
 type QaTracking = { version: string; requestId: string; queueId?: number; number?: number };
@@ -42,14 +34,12 @@ const awaitingReceipt = computed(() => !!tracking.value && !tracking.value.queue
 const trackingKey = `ops.qa:${base}`;
 function remember(value?: QaTracking) {
   tracking.value = value;
-  if (!props.context) return;
   try {
     if (value) sessionStorage.setItem(trackingKey, JSON.stringify(value));
     else sessionStorage.removeItem(trackingKey);
   } catch { /* Current-panel tracking remains available. */ }
 }
 function restore(version: string) {
-  if (!props.context) return;
   try {
     const item: QaTracking | null = JSON.parse(sessionStorage.getItem(trackingKey) || "null");
     if (item?.version === version && typeof item.requestId === "string" && /^[a-f0-9-]{36}$/i.test(item.requestId)
@@ -78,44 +68,15 @@ function stopTimer() {
 
 function schedule() {
   stopTimer();
-  if (!running.value || statusError.value || settingsOpen.value || lifetime.signal.aborted) return;
+  if (!running.value || statusError.value || lifetime.signal.aborted) return;
   timer = setTimeout(() => {
     if (document.hidden) schedule();
     else void refreshStatus();
   }, 5000);
 }
 
-async function loadMonitor() {
-  if (loadingMonitor.value || loadingStatus.value || submitting.value) return;
-  stopTimer();
-  loadingMonitor.value = true;
-  statusError.value = "";
-  try {
-    const data = await request<JenkinsMonitor>(`${base}/jenkins-monitor`, "GET", undefined, lifetime.signal);
-    if (lifetime.signal.aborted) return;
-    if (monitor.value && monitor.value.version !== data.version) {
-      remember();
-      clearLog();
-      build.value = undefined;
-      submitError.value = "";
-    }
-    monitor.value = data;
-    restore(data.version);
-    if (data.configured) await refreshStatus();
-    else {
-      build.value = undefined;
-      logOpen.value = false;
-      clearLog();
-    }
-  } catch (error) {
-    if (!lifetime.signal.aborted) statusError.value = message(error, "无法读取 Jenkins 监控设置，请刷新后重试。");
-  } finally {
-    loadingMonitor.value = false;
-  }
-}
-
 async function refreshStatus() {
-  if (!monitor.value?.configured || loadingStatus.value || submitting.value) return;
+  if (!props.monitor.configured || lifetime.signal.aborted || loadingStatus.value || submitting.value) return;
   stopTimer();
   const controller = statusRequest = new AbortController();
   loadingStatus.value = true;
@@ -129,6 +90,7 @@ async function refreshStatus() {
     const wasBuilding = build.value?.building;
     if (changedRun) clearLog();
     build.value = data;
+    emit("observed", data);
     if (pinned?.queueId && data.number && data.status !== "QUEUED") remember({ ...pinned, number: data.number });
     if (logOpen.value && data.number && (changedRun || logMore.value || data.building || wasBuilding)) void readLog();
   } catch (error) {
@@ -143,7 +105,7 @@ async function refreshStatus() {
 }
 
 async function startQa() {
-  if (props.context?.action !== "qa" || props.context.readOnly || !monitor.value?.configured || loadingStatus.value || submitting.value || settingsOpen.value) return;
+  if (props.context.action !== "qa" || props.context.readOnly || lifetime.signal.aborted || !props.monitor.configured || loadingStatus.value || submitting.value) return;
   const pending = tracking.value && !tracking.value.queueId;
   if (!pending && (!build.value || running.value || statusError.value)) return;
   stopTimer();
@@ -151,7 +113,7 @@ async function startQa() {
   submitError.value = "";
   let queued = false;
   try {
-    const intent = pending ? tracking.value! : { version: monitor.value.version, requestId: crypto.randomUUID() };
+    const intent = pending ? tracking.value! : { version: props.monitor.version, requestId: crypto.randomUUID() };
     remember(intent);
     const receipt = await request<{ queueId: number; status: string }>(`${base}/jenkins-build`, "POST", {
       expectedVersion: intent.version, requestId: intent.requestId,
@@ -162,6 +124,7 @@ async function startQa() {
     clearLog();
     build.value = { configured: true, status: "QUEUED", stagesAvailable: false, observedAt: "" };
     logOpen.value = true;
+    emit("observed", build.value);
     queued = true;
   } catch (error) {
     if (!lifetime.signal.aborted) submitError.value = message(error, "无法确认 QA 是否已提交，请核对提交结果。");
@@ -180,50 +143,6 @@ function showLatest() {
   build.value = undefined;
   clearLog();
   void refreshStatus();
-}
-
-function editMonitor() {
-  if (props.context?.readOnly || !monitor.value || saving.value || submitting.value) return;
-  settingsError.value = "";
-  jobDraft.value = jobUrl.value;
-  softwareId.value = monitor.value.softwareId || (monitor.value.instances.length === 1 ? monitor.value.instances[0]?.id ?? "" : "");
-  username.value = monitor.value.username;
-  token.value = "";
-  settingsOpen.value = true;
-  stopTimer();
-}
-
-async function saveMonitor() {
-  if (props.context?.readOnly || !monitor.value || !validJob.value || !softwareId.value || !username.value.trim() || (!retainedToken.value && !token.value.trim()) || saving.value) return;
-  const data = {
-    expectedVersion: monitor.value.version,
-    softwareId: softwareId.value,
-    username: username.value.trim(),
-    token: token.value.trim(),
-    ...(props.context ? { jobUrl: jobDraft.value.trim() } : {}),
-  };
-  saving.value = true;
-  settingsError.value = "";
-  try {
-    const saved = await request<JenkinsMonitor>(`${base}/jenkins-monitor`, "POST", data, lifetime.signal);
-    if (lifetime.signal.aborted) return;
-    statusRequest?.abort();
-    statusRequest = undefined;
-    loadingStatus.value = false;
-    monitor.value = saved;
-    remember();
-    submitError.value = "";
-    build.value = undefined;
-    logOpen.value = props.context?.action === "logs";
-    clearLog();
-    settingsOpen.value = false;
-    void refreshStatus();
-  } catch (error) {
-    if (!lifetime.signal.aborted) settingsError.value = message(error, "保存 Jenkins 监控设置失败，请检查后重试。");
-  } finally {
-    data.token = "";
-    saving.value = false;
-  }
 }
 
 function clearLog() {
@@ -272,53 +191,43 @@ async function readLog() {
   }
 }
 
-watch(settingsOpen, open => {
-  if (open) return;
-  token.value = "";
-  schedule();
-});
-onMounted(loadMonitor);
+// A row click is the operator's intent. Refresh and log navigation only read.
+async function openRun() {
+  restore(props.monitor.version);
+  await refreshStatus();
+  if (lifetime.signal.aborted || props.context.action !== "qa" || props.context.readOnly || statusError.value || running.value) return;
+  if (tracking.value?.queueId) {
+    remember();
+    await refreshStatus();
+  }
+  await startQa();
+}
+onMounted(openRun);
 onUnmounted(() => {
   lifetime.abort();
   statusRequest?.abort();
   logRequest?.abort();
   stopTimer();
-  token.value = "";
 });
 </script>
 
 <template>
-  <section class="jenkins-build" :class="{ 'panel-card': !context }" aria-label="Jenkins 构建">
+  <section class="jenkins-build" aria-label="构建详情" :aria-busy="submitting">
     <header class="build-toolbar">
       <div class="build-heading">
-        <h3>{{ context ? 'QA 作业' : '项目构建' }}</h3>
-        <span v-if="build" class="state-tag" :class="statusError ? 'state-muted' : state.tone">{{ state.label }}</span>
+        <span v-if="submitting || !build && loadingStatus" role="status">{{ submitting ? '正在提交 QA…' : '正在读取构建…' }}</span>
+        <span v-else-if="build" class="state-tag" :class="statusError ? 'state-muted' : state.tone">{{ state.label }}</span>
+        <span v-if="tracking?.queueId && build?.status === 'QUEUED'">队列 #{{ tracking.queueId }}</span>
       </div>
-      <div class="build-actions">
-        <button v-if="context?.action === 'qa' && !context.readOnly && monitor?.configured" type="button" class="primary"
-          :disabled="submitting || loadingStatus || loadingMonitor || (!awaitingReceipt && (!build || running || !!statusError))" @click="startQa">{{ submitting ? '提交中…' : awaitingReceipt ? '核对提交结果' : '运行 QA' }}</button>
-        <button v-if="monitor?.configured && !context?.readOnly" type="button" class="secondary" :disabled="submitting" @click="editMonitor">{{ context ? '作业设置' : '监控设置' }}</button>
-        <button type="button" class="quiet" :disabled="loadingMonitor || loadingStatus || submitting" @click="loadMonitor">{{ loadingMonitor || loadingStatus ? "读取中…" : "刷新" }}</button>
-      </div>
+      <button type="button" class="quiet" :disabled="loadingStatus || submitting" @click="refreshStatus">刷新</button>
     </header>
-
     <div v-if="submitError" class="build-error" role="alert">
       {{ submitError }}
-      <button v-if="awaitingReceipt" type="button" class="quiet" :disabled="submitting || loadingStatus" @click="showLatest">已核对 Jenkins 记录，结束本次跟踪</button>
+      <button v-if="awaitingReceipt" type="button" class="quiet" :disabled="loadingStatus || submitting" @click="startQa">核对提交结果</button>
+      <button v-if="awaitingReceipt" type="button" class="quiet" :disabled="loadingStatus || submitting" @click="showLatest">已核对记录，结束本次跟踪</button>
     </div>
-    <p v-if="statusError" class="build-error" role="alert">{{ build ? "本次读取失败，仍显示上次结果。" : "" }}{{ statusError }}</p>
-    <p v-else-if="loadingMonitor && !monitor" class="build-note" role="status">正在读取 Jenkins 构建…</p>
-    <div v-if="monitor && !monitor.configured" class="build-unconfigured">
-      <p class="build-note">{{ context ? '此环境尚未绑定模块的 QA 作业。' : '绑定已安装的 Jenkins，并填写用于读取此作业的 API Token。' }}</p>
-      <button v-if="!context?.readOnly" type="button" class="primary" @click="editMonitor">{{ context ? '配置 QA 作业' : '配置构建监控' }}</button>
-    </div>
-
-    <div v-if="context && monitor?.configured" class="build-source">
-      <span>Jenkins 作业</span>
-      <a v-if="jenkinsLink(jobUrl)" :href="jenkinsLink(jobUrl)" target="_blank" rel="noopener noreferrer">{{ jobUrl }}</a>
-      <span v-if="tracking?.queueId && build?.status === 'QUEUED'">队列 #{{ tracking.queueId }}</span>
-      <button v-if="tracking?.queueId && (statusError || !running)" type="button" class="quiet" :disabled="loadingStatus || submitting" @click="showLatest">查看最新构建</button>
-    </div>
+    <p v-if="statusError" class="build-error" role="alert">{{ statusError }}</p>
+    <button v-if="tracking?.number && !running" type="button" class="quiet latest-run" :disabled="loadingStatus || submitting" @click="showLatest">查看作业最新构建</button>
     <template v-if="build?.configured">
       <p v-if="build.status === 'NEVER_BUILT'" class="build-note">此作业尚无构建记录。</p>
       <p v-if="build.queueReason" class="build-note">{{ build.queueReason }}</p>
@@ -328,14 +237,14 @@ onUnmounted(() => {
         <div v-if="build.startedAt"><dt>开始时间</dt><dd>{{ hostTime(build.startedAt) }}</dd></div>
         <div v-if="jenkinsElapsed(build.durationMs)"><dt>耗时</dt><dd>{{ jenkinsElapsed(build.durationMs) }}</dd></div>
       </dl>
-      <ol v-if="context?.action !== 'logs' && build.stagesAvailable && build.stages?.length" class="build-stages" :aria-label="queuedWithPrevious ? '上次构建阶段' : '构建阶段'">
+      <ol v-if="context.action !== 'logs' && build.stagesAvailable && build.stages?.length" class="build-stages" :aria-label="queuedWithPrevious ? '上次构建阶段' : '构建阶段'">
         <li v-for="(stage, index) in build.stages" :key="index">
           <strong>{{ stage.name }}</strong>
           <span class="state-tag" :class="jenkinsState(stage.status).tone">{{ jenkinsState(stage.status).label }}</span>
           <small v-if="jenkinsElapsed(stage.durationMs)">{{ jenkinsElapsed(stage.durationMs) }}</small>
         </li>
       </ol>
-      <section v-if="context?.action !== 'logs' && build.number" class="build-artifacts" aria-label="构建产物">
+      <section v-if="context.action !== 'logs' && build.number" class="build-artifacts" aria-label="构建产物">
         <h4>{{ queuedWithPrevious ? '上次构建产物' : '归档产物' }}</h4>
         <ul v-if="build.artifacts?.length">
           <li v-for="artifact in build.artifacts" :key="artifact.path">
@@ -346,7 +255,7 @@ onUnmounted(() => {
         <p v-else class="build-note">暂无归档产物。</p>
       </section>
       <div v-if="build.number" class="build-actions">
-        <button v-if="context?.action !== 'logs'" type="button" class="secondary" :aria-expanded="logOpen" @click="toggleLog">{{ logOpen ? '收起日志' : queuedWithPrevious ? '查看上次构建日志' : '查看构建日志' }}</button>
+        <button v-if="context.action !== 'logs'" type="button" class="secondary" :aria-expanded="logOpen" @click="toggleLog">{{ logOpen ? '收起日志' : queuedWithPrevious ? '查看上次构建日志' : '查看构建日志' }}</button>
         <a v-if="consoleUrl" :href="consoleUrl" target="_blank" rel="noopener noreferrer">{{ queuedWithPrevious ? '上次构建控制台' : 'Jenkins 控制台' }} ↗</a>
       </div>
       <section v-if="logOpen && build.number" class="build-log" aria-label="Jenkins 构建日志">
@@ -361,42 +270,14 @@ onUnmounted(() => {
     </template>
   </section>
 
-  <ElDialog v-model="settingsOpen" :title="context ? '配置 QA 作业' : 'Jenkins 构建监控'" width="min(510px, 94vw)" align-center append-to-body destroy-on-close :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving">
-    <form class="dialog-form monitor-form" @submit.prevent="saveMonitor">
-      <p v-if="context" class="build-note">为 {{ context.moduleName }}{{ context.environmentName ? ' · ' + context.environmentName : '' }} 选择 QA 流水线。Jenkins 账号需具备该作业的读取和构建权限。</p>
-      <p v-else class="build-note">选择与项目作业链接对应的 Jenkins 实例。API Token 使用具备作业读取权限的 Jenkins 账户。</p>
-      <p v-if="!monitor?.instances.length" class="build-note">没有可绑定的 Jenkins 实例。请先核对软件安装与项目的作业链接。</p>
-      <label>Jenkins 实例
-        <select v-model="softwareId" aria-label="Jenkins 实例" required :disabled="saving">
-          <option value="" disabled>选择实例</option>
-          <option v-for="instance in monitor?.instances" :key="instance.id" :value="instance.id">{{ instance.name }} · {{ instance.hostName }}</option>
-        </select>
-      </label>
-      <label v-if="context">QA 作业地址 <input v-model="jobDraft" type="url" required :disabled="saving" placeholder="https://jenkins.example.com/job/platform-api-qa/" /></label>
-      <details v-if="context" class="qa-job-help">
-        <summary>首次使用，如何创建 QA 作业？</summary>
-        <p>在 Jenkins 新建「流水线」，选择「Pipeline script from SCM」，填写模块的 Git 仓库、分支和流水线脚本路径。保存后，将作业首页地址填入上方。</p>
-        <p v-if="context.moduleName === 'platform-api'">本仓库的脚本路径为 <code>operations/jenkins/platform-api.Jenkinsfile</code>，构建节点标签为 <code>linux-jdk21</code>。</p>
-      </details>
-      <label>Jenkins 用户名 <input v-model="username" required maxlength="128" :disabled="saving" autocomplete="off" /></label>
-      <label>Jenkins API Token
-        <input v-model="token" type="password" :required="!retainedToken" :disabled="saving" maxlength="512" autocomplete="new-password" :placeholder="retainedToken ? '留空保留已有 Token' : ''" />
-      </label>
-      <p v-if="settingsError" class="build-error" role="alert">{{ settingsError }}</p>
-      <div class="dialog-footer">
-        <button type="button" class="secondary" :disabled="saving" @click="settingsOpen = false">取消</button>
-        <button type="submit" class="primary" :disabled="saving || !validJob || !softwareId || !username.trim() || (!retainedToken && !token.trim())">{{ saving ? "保存中…" : "保存" }}</button>
-      </div>
-    </form>
-  </ElDialog>
 </template>
 
 <style scoped>
-.jenkins-build { display: grid; gap: 12px; padding: 12px 16px; min-width: 0; }
-.build-toolbar, .build-heading, .build-actions, .build-unconfigured { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.jenkins-build { display: grid; gap: 12px; padding: 0; min-width: 0; }
+.build-toolbar, .build-heading, .build-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .build-toolbar { justify-content: space-between; }
 .build-heading h3 { margin: 0; font-size: 16px; }
-.jenkins-build:not(.panel-card) { padding: 0; }
+.latest-run { justify-self: start; }
 .build-source { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border-subtle); font-size: 13px; }
 .build-source > span { color: var(--muted); }
 .build-note, .build-artifacts h4 { margin: 0; font-size: 13px; }
@@ -421,11 +302,6 @@ onUnmounted(() => {
 .build-log footer p { margin: 0; color: #fecaca; overflow-wrap: anywhere; }
 .build-log .quiet { color: #d1e0ed; }
 .build-log pre { margin: 0; padding: 12px; min-height: 70px; max-height: min(360px, 50vh); overflow: auto; overscroll-behavior: contain; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.75 var(--mono); }
-.monitor-form label { display: grid; gap: 6px; }
-.monitor-form input, .monitor-form select { width: 100%; margin: 0; }
-.qa-job-help { font-size: 13px; color: var(--muted); }
-.qa-job-help summary { cursor: pointer; color: var(--accent); }
-.qa-job-help p { margin: 6px 0 0; overflow-wrap: anywhere; }
 @media (max-width: 540px) {
   .jenkins-build { padding: 12px; }
   .build-stages li { grid-template-columns: minmax(0, 1fr) max-content; }

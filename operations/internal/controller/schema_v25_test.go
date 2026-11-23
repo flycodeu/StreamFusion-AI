@@ -11,7 +11,7 @@ import (
 
 // Old-schema fixtures remove additive Ops tables before replaying their historical migration.
 // Real upgrade coverage below builds schema 24.
-const dropApplicationFixtureTables = `DROP TABLE IF EXISTS application_qa_requests; DROP TABLE IF EXISTS application_qa_monitors; DROP TABLE IF EXISTS application_jenkins_monitors;
+const dropApplicationFixtureTables = `DROP TABLE IF EXISTS application_jenkins_connections; DROP TABLE IF EXISTS application_qa_requests; DROP TABLE IF EXISTS application_qa_monitors; DROP TABLE IF EXISTS application_jenkins_monitors;
 DROP TABLE IF EXISTS software_login_accounts;
 DROP TABLE IF EXISTS application_deployments;
 DROP TABLE IF EXISTS application_environments;

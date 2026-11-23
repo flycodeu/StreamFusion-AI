@@ -69,7 +69,7 @@ function harness(override = () => undefined) {
     "element-plus": {},
     "./api": { request, ApiError },
     "./applicationProjects": model,
-  }, { defineEmits: () => () => {} }).flow);
+  }, { defineProps: () => ({}), defineEmits: () => () => {} }).flow);
   return { flow, calls, close() { cleanup.forEach(fn => fn()); scope.stop(); } };
 }
 
@@ -92,7 +92,8 @@ test("name-only registration and reading an existing project need no host or dep
   assert.equal(h.flow.projectEditorOpen.value, false);
   await h.flow.openProject(sampleProject());
   assert.deepEqual(h.calls.map(({ signal, ...call }) => call), [
-    { path: "/application-projects/catalog", method: "POST", body: { name: "新项目", description: "", jenkinsUrl: "" } },
+    { path: "/application-projects/catalog", method: "POST", body: { name: "新项目", description: "" } },
+    { path: model.projectListPath(1, 10, "", "false"), method: "GET", body: undefined },
     { path: "/application-projects/project", method: "GET", body: undefined },
   ]);
 });
@@ -103,11 +104,11 @@ test("project edits send only the changed primary repository and avoid writing h
   await h.flow.openProject(sampleProject());
   h.flow.editProject();
   h.flow.projectDraft.value.repositoryUrl = "https://git.example/renamed.git";
-  h.flow.projectDraft.value.jenkinsUrl = "https://jenkins.example/job/project/";
+  h.flow.projectDraft.value.branch = "qa";
   await h.flow.saveProject();
   assert.deepEqual(h.calls.at(-1).body, {
-    version: "3", name: "StreamFusion AI", description: "", jenkinsUrl: "https://jenkins.example/job/project/",
-    repositories: [{ id: "primary", name: "主仓库", url: "https://git.example/renamed.git", branch: "main" }],
+    version: "3", name: "StreamFusion AI", description: "",
+    repositories: [{ id: "primary", name: "主仓库", url: "https://git.example/renamed.git", branch: "qa" }],
   });
 });
 
@@ -290,5 +291,5 @@ test("a referenced module stays at the selected position and shows why deletion 
   await h.flow.deleteModule();
   assert.equal(h.flow.moduleDeleteOpen.value, true);
   assert.equal(h.flow.selectedModuleId.value, "backend");
-  assert.match(h.flow.formError.value, /应用实例.*APPLICATION_MODULE_IN_USE.*request-id/);
+  assert.match(h.flow.formError.value, /运行配置.*APPLICATION_MODULE_IN_USE.*request-id/);
 });

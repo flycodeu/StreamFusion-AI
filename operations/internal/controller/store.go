@@ -21,7 +21,7 @@ import (
 )
 
 const Version = "0.2.0"
-const SchemaVersion = 32
+const SchemaVersion = 33
 
 //go:embed schema.sql
 var schema string
@@ -197,6 +197,14 @@ func Open(dir string) (*Store, error) {
 			}
 			if count > 0 {
 				return nil, errors.New("KEY_MISSING: 存在模块 QA 凭据，拒绝生成替代密钥")
+			}
+		}
+		if version >= 33 {
+			if err = s.DB.QueryRow("SELECT count(*) FROM application_jenkins_connections").Scan(&count); err != nil {
+				return nil, err
+			}
+			if count > 0 {
+				return nil, errors.New("KEY_MISSING: 存在项目 Jenkins 凭据，拒绝生成替代密钥")
 			}
 		}
 		s.Key = make([]byte, 32)
@@ -1195,6 +1203,34 @@ func Open(dir string) (*Store, error) {
 		return nil, errors.New("SCHEMA_MISMATCH: 迁移32摘要不匹配")
 	}
 	if err = s.verifyJenkinsMonitors(true); err != nil {
+		return nil, err
+	}
+	if version > 0 && version <= 32 {
+		backupPath := filepath.Join(abs, "before-schema-33-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 32 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV33); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(33,?,?,?)", hashToken(schemaV33), Version, Now())
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=33").Scan(&checksum); err != nil || checksum != hashToken(schemaV33) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移33摘要不匹配")
+	}
+	if err = s.verifyJenkinsTokens(`SELECT 'connection/'||project_id,software_id,'',endpoint_identity,username,version,token_ciphertext FROM application_jenkins_connections`); err != nil {
 		return nil, err
 	}
 	if err = s.seedBuiltinCommandTemplates(); err != nil {

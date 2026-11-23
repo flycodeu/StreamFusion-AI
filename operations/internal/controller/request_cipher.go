@@ -69,7 +69,7 @@ func sensitiveRequestPath(path string) bool {
 		_, instanceErr := uuid.Parse(parts[4])
 		return projectErr == nil && instanceErr == nil
 	}
-	if len(parts) == 4 && parts[0] == "" && parts[1] == "application-projects" && parts[3] == "jenkins-monitor" {
+	if len(parts) == 4 && parts[0] == "" && parts[1] == "application-projects" && (parts[3] == "jenkins-monitor" || parts[3] == "jenkins-connection") {
 		_, err := uuid.Parse(parts[2])
 		return err == nil
 	}

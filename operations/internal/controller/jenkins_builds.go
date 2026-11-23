@@ -68,11 +68,12 @@ type jenkinsBuildLog struct {
 }
 
 type jenkinsBuildClient struct {
-	client   *http.Client
-	job      url.URL
-	version  string
-	username string
-	token    []byte
+	client     *http.Client
+	job        url.URL
+	version    string
+	username   string
+	token      []byte
+	managedJob bool
 }
 
 func (h *HTTP) jenkinsError(w http.ResponseWriter, r *http.Request, err error) {
@@ -83,6 +84,8 @@ func (h *HTTP) jenkinsError(w http.ResponseWriter, r *http.Request, err error) {
 		h.fail(w, r, 409, errJenkinsBinding.Error(), "Jenkins 实例绑定已变化或无法核实，请检查安装记录并重新配置查询")
 	case errors.Is(err, errJenkinsJob):
 		h.fail(w, r, 400, errJenkinsJob.Error(), "请在项目中填写所选 Jenkins 实例的作业首页链接")
+	case errors.Is(err, errJenkinsJobConflict):
+		h.fail(w, r, 409, errJenkinsJobConflict.Error(), "Jenkins 上同名作业的流水线已变更，请在 Jenkins 核对该作业。")
 	case errors.Is(err, errJenkinsSecret):
 		h.fail(w, r, 409, errJenkinsSecret.Error(), "Jenkins 查询凭据不可用，请重新配置 API Token")
 	case errors.Is(err, errJenkinsTriggerUnknown):
@@ -92,11 +95,11 @@ func (h *HTTP) jenkinsError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, errJenkinsArchived):
 		h.fail(w, r, 409, errJenkinsArchived.Error(), "此项目已归档")
 	case errors.Is(err, errJenkinsNotConfigured):
-		h.fail(w, r, 409, errJenkinsNotConfigured.Error(), "请先配置 Jenkins 构建查询")
+		h.fail(w, r, 409, errJenkinsNotConfigured.Error(), "请在项目维护中核对 Jenkins 连接、模块类型和仓库。")
 	case errors.Is(err, errJenkinsBusy):
 		h.fail(w, r, 429, errJenkinsBusy.Error(), "Jenkins 查询繁忙，请稍后刷新")
 	case errors.Is(err, errJenkinsAuth):
-		h.fail(w, r, 502, errJenkinsAuth.Error(), "Jenkins 拒绝访问，请核对 API Token 和此作业的读取或构建权限")
+		h.fail(w, r, 502, errJenkinsAuth.Error(), "Jenkins 拒绝访问，请核对项目 API Token 及 QA 作业的创建、读取配置和构建权限。")
 	case errors.Is(err, errJenkinsMissing):
 		h.fail(w, r, 404, errJenkinsMissing.Error(), "Jenkins 作业、构建或日志已不存在，请刷新并核对作业链接")
 	case errors.Is(err, errJenkinsPeer):
@@ -118,7 +121,7 @@ func (s *Store) jenkinsBuildBinding(ctx context.Context, scope jenkinsScope) (je
 		return monitor, endpoint, nil, err
 	}
 	defer tx.Rollback()
-	savedJob, monitor, err := readJenkinsMonitor(tx, scope)
+	savedJob, monitor, _, err := effectiveJenkinsMonitor(tx, scope)
 	if err != nil {
 		return monitor, endpoint, nil, err
 	}
@@ -146,7 +149,7 @@ func (h *HTTP) readJenkinsBuild(w http.ResponseWriter, r *http.Request, scope je
 	if !log && r.URL.Query().Has("queueId") {
 		var e error
 		queueID, e = strconv.Atoi(r.URL.Query().Get("queueId"))
-		if scope.instance == "" || e != nil || queueID <= 0 || queueID > 1<<31-1 || r.URL.Query().Has("number") {
+		if scope.instance == "" && scope.module == "" || e != nil || queueID <= 0 || queueID > 1<<31-1 || r.URL.Query().Has("number") {
 			h.fail(w, r, 400, "INVALID_INPUT", "队列号无效")
 			return
 		}
@@ -180,7 +183,7 @@ func (h *HTTP) readJenkinsBuild(w http.ResponseWriter, r *http.Request, scope je
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 18*time.Second)
 	defer cancel()
-	token, err := unseal(h.store.Key, monitor.secretID(scope.bindingID()), monitor.Version, monitor.Ciphertext)
+	token, err := monitor.openToken(h.store.Key, scope)
 	if err != nil || !jenkinsToken.Match(token) {
 		clear(token)
 		h.jenkinsError(w, r, errJenkinsSecret)
@@ -206,7 +209,7 @@ func (h *HTTP) readJenkinsBuild(w http.ResponseWriter, r *http.Request, scope je
 	switch {
 	case queueID > 0:
 		var known bool
-		err = h.store.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM application_qa_requests WHERE deployment_id=? AND monitor_version=? AND queue_id=?)", scope.instance, monitor.Version, queueID).Scan(&known)
+		err = h.store.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM application_qa_requests WHERE scope_id=? AND monitor_version=? AND queue_id=?)", scope.requestScope(), monitor.Version, queueID).Scan(&known)
 		if err == nil && !known {
 			err = errJenkinsMissing
 		}
@@ -216,6 +219,7 @@ func (h *HTTP) readJenkinsBuild(w http.ResponseWriter, r *http.Request, scope je
 	case number > 0:
 		value, err = client.readRun(ctx, number, jenkinsBuildStatus{Configured: true, ObservedAt: Now()}, false)
 	default:
+		client.managedJob = monitor.automation != nil
 		value, err = client.status(ctx)
 	}
 	if err != nil {
@@ -347,6 +351,9 @@ func (c jenkinsBuildClient) status(ctx context.Context) (jenkinsBuildStatus, err
 		} `json:"lastBuild"`
 	}
 	if err := c.readJSON(ctx, "api/json", "inQueue,queueItem[why],lastBuild[number]", &job); err != nil {
+		if c.managedJob && errors.Is(err, errJenkinsMissing) {
+			return out, nil
+		}
 		return out, err
 	}
 	if job.InQueue {

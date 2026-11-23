@@ -167,8 +167,6 @@ defineProps<{
   eligibleArtifacts: WorkspaceArtifact[];
   planInstance?: WorkspaceInstance;
   projectRelease?: ProjectReleaseSource;
-  releaseTargets: WorkspaceInstance[];
-  releaseTargetError: string;
   maintenancePermit: string;
   plan?: WorkspacePlan;
   artifactOptions: WorkspaceArtifact[];
@@ -204,8 +202,6 @@ const emit = defineEmits<{
   openRuntimePolicy: [instance: WorkspaceInstance];
   instanceAction: [instance: WorkspaceInstance, action: "START" | "STOP" | "RESTART"];
   preview: [];
-  selectReleaseTarget: [target: WorkspaceInstance];
-  createReleaseTarget: [];
   submit: [];
   changeReleasePage: [page: number];
   changeReleaseSize: [size: number];
@@ -260,7 +256,6 @@ function onImportSourceChange(e: Event, currentRecipe: string) {
           registration: '预览节点登记与维护',
           import: '导入制品',
           candidate: '选择候选',
-          'project-release': '选择上线目标',
           plan: '发布计划',
           history: '版本记录',
           logs: '实例日志',
@@ -713,20 +708,6 @@ function onImportSourceChange(e: Event, currentRecipe: string) {
         </button>
       </div>
     </form>
-    <section v-else-if="dialog === 'project-release' && projectRelease" class="dialog-form">
-      <strong>{{ projectRelease.moduleName }} · {{ projectRelease.environmentName }}</strong>
-      <p>目标主机 {{ targets.find(host => host.id === projectRelease?.hostId)?.name || projectRelease.hostId }}。选择承载此模块的受管实例。</p>
-      <p v-if="optionsLoading" role="status">正在读取受管实例…</p>
-      <p v-else-if="releaseTargetError" role="alert">{{ releaseTargetError }}</p>
-      <template v-else>
-        <div v-for="item in releaseTargets" :key="item.id" class="release-target-row">
-          <div><strong>{{ item.name }}</strong><small>{{ item.config.preview ? "预览节点" : item.config.zlm ? "ZLMediaKit" : "Java 应用" }} · {{ item.config.bindAddress }}:{{ item.config.hostPort }}</small></div>
-          <button class="secondary" :disabled="busy || !!item.pendingJob" @click="emit('selectReleaseTarget', item)">{{ item.pendingJob ? "作业处理中" : "选择制品" }}</button>
-        </div>
-        <p v-if="!releaseTargets.length">该主机在此环境下还没有受管实例。</p>
-        <div class="dialog-footer"><button class="secondary" @click="emit('createReleaseTarget')">新增受管实例</button></div>
-      </template>
-    </section>
     <form
       v-else-if="dialog === 'candidate'"
       class="dialog-form"

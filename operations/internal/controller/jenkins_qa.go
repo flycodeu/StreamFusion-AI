@@ -29,21 +29,23 @@ func (h *HTTP) reserveQA(actor *session, scope jenkinsScope, version int, reques
 		return 0, err
 	}
 	defer tx.Rollback()
-	var current int
 	var archived bool
-	err = tx.QueryRow(`SELECT m.version,p.archived FROM application_qa_monitors m JOIN application_deployments d ON d.id=m.deployment_id
-      JOIN application_projects p ON p.id=d.project_id WHERE d.id=? AND p.id=?`, scope.instance, scope.project).Scan(&current, &archived)
+	err = tx.QueryRow("SELECT archived FROM application_projects WHERE id=?", scope.project).Scan(&archived)
 	if err != nil {
 		return 0, err
 	}
-	if current != version {
+	_, current, _, err := effectiveJenkinsMonitor(tx, scope)
+	if err != nil {
+		return 0, err
+	}
+	if current.Version != version {
 		return 0, errJenkinsConfigChanged
 	}
 	if archived {
 		return 0, errJenkinsArchived
 	}
 	var previous, queue int
-	err = tx.QueryRow("SELECT monitor_version,queue_id FROM application_qa_requests WHERE deployment_id=? AND request_id=?", scope.instance, requestID).Scan(&previous, &queue)
+	err = tx.QueryRow("SELECT monitor_version,queue_id FROM application_qa_requests WHERE scope_id=? AND request_id=?", scope.requestScope(), requestID).Scan(&previous, &queue)
 	if err == nil {
 		if previous != version {
 			return 0, errJenkinsConfigChanged
@@ -56,9 +58,9 @@ func (h *HTTP) reserveQA(actor *session, scope jenkinsScope, version int, reques
 	if !errors.Is(err, sql.ErrNoRows) {
 		return 0, err
 	}
-	_, err = tx.Exec("INSERT INTO application_qa_requests(deployment_id,request_id,monitor_version) VALUES(?,?,?)", scope.instance, requestID, version)
+	_, err = tx.Exec("INSERT INTO application_qa_requests(deployment_id,module_id,request_id,monitor_version) VALUES(NULLIF(?,''),NULLIF(?,''),?,?)", scope.instance, scope.module, requestID, version)
 	if err == nil {
-		err = auditTx(tx, actor.Username, "JENKINS_QA_REQUESTED", scope.instance, "SUCCESS", trace)
+		err = auditTx(tx, actor.Username, "JENKINS_QA_REQUESTED", scope.requestScope(), "SUCCESS", trace)
 	}
 	if err != nil {
 		return 0, err
@@ -113,12 +115,12 @@ func (h *HTTP) triggerJenkinsQA(w http.ResponseWriter, r *http.Request, actor *s
 	safeToRetry := true
 	defer func() {
 		if safeToRetry {
-			if _, e := h.store.DB.Exec("DELETE FROM application_qa_requests WHERE deployment_id=? AND request_id=? AND queue_id=0", scope.instance, in.RequestID); e != nil {
+			if _, e := h.store.DB.Exec("DELETE FROM application_qa_requests WHERE scope_id=? AND request_id=? AND queue_id=0", scope.requestScope(), in.RequestID); e != nil {
 				h.logger.Printf("traceId=%s error=QA_REQUEST_CLEANUP_FAILED", trace)
 			}
 		}
 	}()
-	token, err := unseal(h.store.Key, monitor.secretID(scope.bindingID()), version, monitor.Ciphertext)
+	token, err := monitor.openToken(h.store.Key, scope)
 	defer clear(token)
 	if err != nil || !jenkinsToken.Match(token) {
 		h.jenkinsError(w, r, errJenkinsSecret)
@@ -130,12 +132,25 @@ func (h *HTTP) triggerJenkinsQA(w http.ResponseWriter, r *http.Request, actor *s
 		return
 	}
 	defer done()
+	if monitor.automation != nil {
+		if err = client.ensureWorkflow(ctx, endpoint.base, monitor.automation); err != nil {
+			h.jenkinsError(w, r, err)
+			return
+		}
+	}
 	queue, safeToRetry, err = client.enqueue(ctx, endpoint.base)
 	if err != nil {
 		h.jenkinsError(w, r, err)
 		return
 	}
-	_, err = h.store.DB.Exec("UPDATE application_qa_requests SET queue_id=? WHERE deployment_id=? AND request_id=?", queue, scope.instance, in.RequestID)
+	result, err := h.store.DB.Exec("UPDATE application_qa_requests SET queue_id=? WHERE scope_id=? AND request_id=? AND monitor_version=?", queue, scope.requestScope(), in.RequestID, version)
+	if err == nil {
+		var updated int64
+		updated, err = result.RowsAffected()
+		if err == nil && updated != 1 {
+			err = errJenkinsTriggerUnknown
+		}
+	}
 	if err != nil {
 		h.jenkinsError(w, r, errJenkinsTriggerUnknown)
 		return

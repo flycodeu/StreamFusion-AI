@@ -15,9 +15,10 @@ import (
 
 func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id string) {
 	var in struct {
-		MaintenancePermit string `json:"maintenancePermit"`
-		Kind              string `json:"kind"`
-		ArtifactID        string `json:"artifactId"`
+		ProjectDeploymentID string `json:"projectDeploymentId,omitempty"`
+		MaintenancePermit   string `json:"maintenancePermit"`
+		Kind                string `json:"kind"`
+		ArtifactID          string `json:"artifactId"`
 	}
 	if e := decode(w, r, &in); e != nil {
 		h.fail(w, r, 400, "INVALID_INPUT", e.Error())
@@ -34,6 +35,10 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 	}
 	p := plan{ID: uuid.NewString(), Kind: in.Kind, TargetID: i.TargetID, InstanceID: id, ExpectedVersion: i.Version, ExpectedGeneration: i.Generation, ExpiresAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339)}
 	p.MaintenancePermit = in.MaintenancePermit
+	p.ProjectDeploymentID = in.ProjectDeploymentID
+	if !h.checkProjectReleaseTarget(w, r, h.store.DB, p) {
+		return
+	}
 	if i.Current != "" {
 		baseline, e := h.store.readRelease(i.Current)
 		if e != nil {
@@ -160,6 +165,9 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 		return
 	}
 	defer tx.Rollback()
+	if !h.checkProjectReleaseTarget(w, r, tx, p) {
+		return
+	}
 	var version, gen string
 	e = tx.QueryRow("SELECT CAST(version AS TEXT),CAST(applied_generation AS TEXT) FROM instances WHERE id=?", id).Scan(&version, &gen)
 	if e != nil {
@@ -189,6 +197,31 @@ func (h *HTTP) createPlan(w http.ResponseWriter, r *http.Request, s *session, id
 	}
 	h.success(w, r, p)
 }
+
+// A plan opened from a project stays tied to the module's configured target.
+// Managed instance operations outside the project view have no deployment ID.
+func (h *HTTP) checkProjectReleaseTarget(w http.ResponseWriter, r *http.Request, q applicationReader, p plan) bool {
+	if p.ProjectDeploymentID == "" {
+		return true
+	}
+	var matches bool
+	err := q.QueryRow(`SELECT EXISTS(
+		SELECT 1 FROM application_deployments d
+		JOIN application_projects a ON a.id=d.project_id AND a.archived=0
+		JOIN application_environments e ON e.id=d.environment_id AND e.project_id=d.project_id
+		JOIN instances i ON i.id=json_extract(d.config_json,'$.managedInstanceId') AND i.target_id=d.host_id
+		WHERE d.id=? AND i.id=? AND json_extract(i.draft_json,'$.environment')=e.name COLLATE NOCASE)`,
+		p.ProjectDeploymentID, p.InstanceID).Scan(&matches)
+	if err != nil {
+		h.internal(w, r, err)
+		return false
+	}
+	if !matches {
+		h.fail(w, r, 409, "PROJECT_RELEASE_TARGET_CHANGED", "模块的上线目标已变更，请在项目维护中核对后重新预检")
+	}
+	return matches
+}
+
 func (h *HTTP) submitPlan(w http.ResponseWriter, r *http.Request, s *session, id string) {
 	var in struct {
 		IdempotencyKey string `json:"idempotencyKey"`
@@ -245,6 +278,9 @@ func (h *HTTP) submitPlan(w http.ResponseWriter, r *http.Request, s *session, id
 		return
 	}
 	expiry, _ := time.Parse(time.RFC3339, p.ExpiresAt)
+	if !h.checkProjectReleaseTarget(w, r, tx, p) {
+		return
+	}
 	var version, gen string
 	if e = tx.QueryRow("SELECT CAST(version AS TEXT),CAST(applied_generation AS TEXT) FROM instances WHERE id=?", p.InstanceID).Scan(&version, &gen); e != nil {
 		h.internal(w, r, e)

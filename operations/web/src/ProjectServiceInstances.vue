@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { ElDialog, ElDropdown, ElDropdownItem, ElDropdownMenu, ElMessage, ElMessageBox } from "element-plus";
+import { ElDrawer } from "element-plus";
 import { ApiError, request } from "./api";
 import {
   isProjectBuildService, moduleKinds, type ApplicationProject, type ProjectEnvironment, type ProjectInstanceSource,
@@ -9,9 +9,8 @@ import {
 import type { Host } from "./hosts";
 import type { LogSelection } from "./jobs";
 import { requestAllPages } from "./listPages";
-import type { JenkinsInstanceContext } from "./projectJenkins";
+import { moduleJenkinsPath, jenkinsState, type JenkinsBuild, type JenkinsInstanceContext, type JenkinsMonitor } from "./projectJenkins";
 import { softwareState, type SoftwareInstance } from "./software";
-import ProjectEnvironmentBinding from "./ProjectEnvironmentBinding.vue";
 import ProjectJenkinsBuild from "./ProjectJenkinsBuild.vue";
 
 interface ModuleRow {
@@ -21,13 +20,14 @@ interface ModuleRow {
 }
 
 const props = defineProps<{ hosts: Host[]; source?: ProjectInstanceSource }>();
-const emit = defineEmits<{ "source-used": []; logs: [LogSelection]; release: [ProjectReleaseSource]; error: [unknown] }>();
+const emit = defineEmits<{ "source-used": []; logs: [LogSelection]; release: [ProjectReleaseSource]; verify: [ProjectReleaseSource]; maintain: [source: ProjectInstanceSource]; error: [unknown] }>();
 const lifetime = new AbortController();
 const projects = ref<ApplicationProject[]>([]);
 const projectId = ref(""), projectSearch = ref(""), moduleSearch = ref(""), environmentFilter = ref("");
+const queryDraft = ref(""), environmentDraft = ref("");
 const focusedModuleId = ref("");
 const listElement = ref<HTMLElement>();
-const loading = ref(false), removing = ref(false), pageError = ref("");
+const loading = ref(false), pageError = ref("");
 const project = computed(() => projects.value.find(item => item.id === projectId.value));
 const projectOptions = computed(() => projects.value.filter(item =>
   item.name.toLowerCase().includes(projectSearch.value.trim().toLowerCase()),
@@ -62,12 +62,25 @@ const visibleRows = computed(() => {
   ).map(row => {
     const runtime = runtimes.value.get(row.registration?.runtimeSoftwareId || "");
     const buildService = !!runtime && isProjectBuildService(row.module.name, runtime);
-    return { ...row, runtime, buildService, state: runtime && !buildService ? softwareState(runtime) : undefined };
+    return { ...row, runtime, buildService, record: records.value.get(row.registration?.id || row.module.id),
+      state: runtime && !buildService ? softwareState(runtime) : undefined };
   });
 });
 const runtimeRefresh = ref(0), runtimeLoading = ref(false), runtimeError = ref("");
-const binding = ref<ModuleRow>();
-const panel = ref<JenkinsInstanceContext>();
+const panel = ref<{ context: JenkinsInstanceContext; monitor: JenkinsMonitor }>();
+const records = ref(new Map<string, JenkinsBuild>());
+const opening = ref("");
+const setupNotice = ref<{ message: string; row: ModuleRow }>();
+let selectionRequest: AbortController | undefined;
+
+function searchModules() {
+  moduleSearch.value = queryDraft.value;
+  environmentFilter.value = environmentDraft.value;
+}
+function clearFilters() {
+  queryDraft.value = environmentDraft.value = "";
+  searchModules();
+}
 
 function describe(error: unknown, fallback: string) {
   if (error instanceof ApiError && error.code === "AUTH_REQUIRED") emit("error", error);
@@ -78,11 +91,12 @@ function describe(error: unknown, fallback: string) {
 
 function selectProject(id: string) {
   projectId.value = id;
-  moduleSearch.value = "";
-  environmentFilter.value = "";
+  clearFilters();
   focusedModuleId.value = "";
   panel.value = undefined;
-  binding.value = undefined;
+  selectionRequest?.abort();
+  opening.value = "";
+  setupNotice.value = undefined;
 }
 function useSource() {
   const source = props.source;
@@ -106,52 +120,72 @@ async function refresh() {
     useSource();
     runtimeRefresh.value++;
   } catch (error) {
-    if (!lifetime.signal.aborted) pageError.value = describe(error, "无法读取项目实例");
+    if (!lifetime.signal.aborted) pageError.value = describe(error, "无法读取项目发布清单");
   } finally { loading.value = false; }
 }
-function apply(saved: ApplicationProject) {
-  projects.value = projects.value.map(item => item.id === saved.id ? saved : item);
+function maintain(row: ModuleRow) {
+  if (!project.value || project.value.archived) return;
+  emit("maintain", {
+    projectId: project.value.id, moduleId: row.module.id,
+    ...(row.registration && { serviceInstanceId: row.registration.id }),
+  });
 }
-function openServiceLog(runtime?: SoftwareInstance) {
-  if (runtime) emit("logs", { softwareId: runtime.id, title: runtime.name });
+function openServiceLog(runtime: SoftwareInstance) {
+  emit("logs", { softwareId: runtime.id, title: runtime.name });
 }
-function openBuild(row: ModuleRow, action: JenkinsInstanceContext["action"]) {
-  if (!row.registration || !row.environment || !project.value || (action === "qa" && project.value.archived)) return;
-  panel.value = {
-    action, readOnly: project.value.archived, moduleId: row.module.id, moduleName: row.module.name, serviceInstanceId: row.registration.id,
-    environmentId: row.environment.id, environmentName: row.environment.name,
-  };
+async function openBuild(row: ModuleRow, action: JenkinsInstanceContext["action"] | "record") {
+  const current = project.value;
+  if (!current || action === "qa" && current.archived) return;
+  const id = row.registration?.id || row.module.id;
+  if (opening.value === id) return;
+  selectionRequest?.abort();
+  const controller = selectionRequest = new AbortController();
+  opening.value = id;
+  setupNotice.value = undefined;
+  pageError.value = "";
+  try {
+    const path = moduleJenkinsPath(current.id, row.module.id, row.registration?.id);
+    const monitor = await request<JenkinsMonitor>(path + "/jenkins-monitor", "GET", undefined, controller.signal);
+    if (controller.signal.aborted) return;
+    if (!monitor.configured) {
+      setupNotice.value = { row, message: monitor.reason || "请在项目维护中设置 Jenkins 连接和模块类型。" };
+      return;
+    }
+    if (action === "record") {
+      const latest = await request<JenkinsBuild>(path + "/jenkins-build", "GET", undefined, controller.signal);
+      if (!controller.signal.aborted) recordBuild(id, latest);
+      return;
+    }
+    panel.value = {
+      monitor, context: {
+        action, readOnly: current.archived, moduleId: row.module.id, moduleName: row.module.name,
+        serviceInstanceId: row.registration?.id, environmentId: row.environment?.id, environmentName: row.environment?.name,
+      },
+    };
+  } catch (error) {
+    if (!controller.signal.aborted) pageError.value = describe(error, "读取 QA 配置失败，请重试。");
+  } finally {
+    if (selectionRequest === controller) opening.value = "";
+  }
 }
-function openRelease(row: ModuleRow) {
-  if (!row.registration || !row.environment || !project.value || project.value.archived) return;
-  emit("release", {
+function recordBuild(id: string, build: JenkinsBuild) {
+  records.value.set(id, build);
+}
+function openRelease(row: ModuleRow, action: "release" | "verify" = "release") {
+  if (!project.value || project.value.archived) return;
+  if (!row.registration?.managedInstanceId || !row.environment) {
+    setupNotice.value = { row, message: "请在项目维护中选择该环境的上线目标。" };
+    return;
+  }
+  const source: ProjectReleaseSource = {
     projectId: project.value.id, moduleId: row.module.id, moduleName: row.module.name,
     serviceInstanceId: row.registration.id, hostId: row.registration.hostId,
     environmentId: row.environment.id, environmentName: row.environment.name,
-  });
+    managedInstanceId: row.registration.managedInstanceId,
+  };
+  if (action === "verify") emit("verify", source);
+  else emit("release", source);
 }
-async function remove(row: ModuleRow) {
-  const current = project.value;
-  if (!current || current.archived || !row.registration || !row.environment || row.registration.runtimeSoftwareId || removing.value) return;
-  try {
-    await ElMessageBox.confirm(`解除「${row.module.name}」在「${row.environment.name}」的绑定？此环境的实例登记和版本记录将移除。`, "解除环境绑定", {
-      confirmButtonText: "解除绑定", cancelButtonText: "取消", type: "warning",
-    });
-  } catch { return; }
-  if (lifetime.signal.aborted || removing.value) return;
-  removing.value = true;
-  pageError.value = "";
-  try {
-    const saved = await request<ApplicationProject>(`/application-projects/${current.id}/service-instances/${row.registration.id}`, "DELETE", { version: current.version }, lifetime.signal);
-    if (!lifetime.signal.aborted) {
-      apply(saved);
-      ElMessage.success("环境绑定已解除");
-    }
-  } catch (error) {
-    if (!lifetime.signal.aborted) pageError.value = describe(error, "解除环境绑定失败");
-  } finally { removing.value = false; }
-}
-
 watch([runtimeIds, runtimeRefresh], async ([ids], _, cleanup) => {
   const controller = new AbortController();
   cleanup(() => controller.abort());
@@ -171,204 +205,188 @@ watch([runtimeIds, runtimeRefresh], async ([ids], _, cleanup) => {
 });
 watch(() => props.source, useSource);
 onMounted(refresh);
-onUnmounted(() => lifetime.abort());
+onUnmounted(() => { lifetime.abort(); selectionRequest?.abort(); });
 </script>
 
 <template>
-  <section class="project-instances" aria-label="项目实例">
-    <p v-if="pageError" class="workspace-error" role="alert">{{ pageError }}</p>
-    <div class="instance-workspace">
-      <aside class="project-rail" aria-label="项目列表">
-        <header class="rail-header"><h3>项目</h3><span class="count">{{ projects.length }}</span></header>
-        <input v-if="projects.length > 6" v-model="projectSearch" type="search" aria-label="搜索项目" placeholder="搜索项目" />
-        <ul v-if="projectOptions.length" class="project-nav">
-          <li v-for="item in projectOptions" :key="item.id">
-            <button type="button" :aria-pressed="item.id === projectId" @click="selectProject(item.id)">
-              <span>{{ item.name }}<small v-if="item.archived">已归档</small></span>
-            </button>
-          </li>
-        </ul>
-        <p v-else class="empty-note">{{ loading ? "正在读取项目…" : projectSearch ? "没有匹配的项目" : "暂无项目" }}</p>
-      </aside>
-
-      <div v-if="project" ref="listElement" class="module-workspace">
-        <header class="project-header">
-          <div>
-            <h3>{{ project.name }}</h3>
-            <p>{{ project.modules.length }} 个模块<span aria-hidden="true"> / </span>{{ project.environments?.length || 0 }} 个环境<template v-if="project.archived"> · 已归档</template></p>
-          </div>
-          <button class="secondary refresh-button" type="button" :disabled="loading" @click="refresh">{{ loading ? "刷新中…" : "刷新" }}</button>
-        </header>
-        <div v-if="project.modules.length" class="module-section">
-          <div class="list-toolbar">
-            <h4>模块实例</h4>
-            <div class="list-filters">
-              <input v-model="moduleSearch" type="search" aria-label="搜索模块" placeholder="搜索模块或目录" />
-              <select v-if="project.environments?.length" v-model="environmentFilter" aria-label="筛选环境">
-                <option value="">全部环境</option>
-                <option v-for="env in project.environments" :key="env.id" :value="env.id">{{ env.name }}</option>
-              </select>
-            </div>
-          </div>
-          <p v-if="runtimeError" class="workspace-error" role="alert">{{ runtimeError }}</p>
-          <table aria-label="模块实例列表" class="module-table">
-            <thead><tr><th scope="col">模块</th><th scope="col">环境 / 主机</th><th scope="col">运行对象</th><th scope="col">登记版本</th><th scope="col">操作</th></tr></thead>
-            <tbody>
-              <tr v-for="row in visibleRows" :key="row.registration?.id || row.module.id" :data-focused="row.module.id === focusedModuleId" :data-bound="!!row.registration">
-                <th scope="row" class="module-identity">
-                  <span class="module-name">{{ row.module.name }}</span>
-                  <span class="cell-detail">{{ row.module.catalog?.kind ? moduleKinds[row.module.catalog.kind] : '待分类' }}<template v-if="row.module.directory && row.module.directory !== row.module.name"> · {{ row.module.directory }}</template></span>
-                </th>
-                <td data-label="环境 / 主机">
-                  <template v-if="row.environment && row.registration">
-                    <span class="env-name">{{ row.environment.name }}</span>
-                    <span class="cell-detail">{{ hostsById.get(row.registration.hostId) || '主机待核对' }}</span>
-                  </template>
-                  <span v-else class="muted-value">未绑定环境</span>
-                </td>
-                <td data-label="运行对象">
-                  <span v-if="row.buildService" class="binding-mismatch">Jenkins · 需重新绑定</span>
-                  <template v-else-if="row.runtime">
-                    <span>{{ row.runtime.name }}</span>
-                    <span class="cell-detail observed-state" :class="row.state?.tone">{{ row.state?.label }}</span>
-                  </template>
-                  <span v-else class="muted-value">{{ row.registration?.runtimeSoftwareId ? (runtimeLoading ? '读取中…' : '对象待核对') : '—' }}</span>
-                </td>
-                <td data-label="登记版本" class="version-cell"><span :class="{ 'muted-value': !row.registration?.recordedVersion }">{{ row.registration?.recordedVersion || '—' }}</span></td>
-                <td class="actions-cell">
-                  <div v-if="row.registration" class="row-actions">
-                    <button v-if="!project.archived" type="button" class="row-button qa" @click="openBuild(row, 'qa')">QA</button>
-                    <button v-if="!project.archived" type="button" class="row-button" @click="openRelease(row)">上线</button>
-                    <button type="button" class="row-link" @click="openBuild(row, 'logs')">构建日志</button>
-                    <ElDropdown v-if="!project.archived || (row.runtime && !row.buildService)" trigger="click">
-                      <button type="button" class="more-button" :aria-label="row.module.name + ' 更多操作'">•••</button>
-                      <template #dropdown>
-                        <ElDropdownMenu>
-                          <ElDropdownItem v-if="row.runtime && !row.buildService" @click="openServiceLog(row.runtime)">{{ row.runtime.name }} 服务日志</ElDropdownItem>
-                          <ElDropdownItem v-if="!project.archived" @click="binding = row">编辑环境绑定</ElDropdownItem>
-                          <ElDropdownItem v-if="!project.archived" @click="binding = { module: row.module }">绑定其他环境</ElDropdownItem>
-                          <ElDropdownItem v-if="!project.archived && !row.registration.runtimeSoftwareId" divided :disabled="removing" @click="remove(row)">解除环境绑定</ElDropdownItem>
-                        </ElDropdownMenu>
-                      </template>
-                    </ElDropdown>
-                  </div>
-                  <button v-else-if="!project.archived" type="button" class="row-link bind-link" @click="binding = { module: row.module }">绑定环境</button>
-                  <span v-else class="muted-value">—</span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <p v-if="!visibleRows.length" class="empty-note">没有符合条件的模块。<button type="button" class="row-link" @click="moduleSearch = ''; environmentFilter = ''">清除筛选</button></p>
+  <section class="release-ledger" aria-label="项目发布">
+    <aside class="project-picker" aria-label="项目列表">
+      <header><h3>项目</h3><span>{{ projects.length }}</span></header>
+      <input v-model="projectSearch" type="search" aria-label="搜索项目" placeholder="输入项目名称筛选" />
+      <ul v-if="projectOptions.length">
+        <li v-for="item in projectOptions" :key="item.id">
+          <button type="button" :aria-pressed="item.id === projectId" @click="selectProject(item.id)">
+            {{ item.name }}<small v-if="item.archived">已归档</small>
+          </button>
+        </li>
+      </ul>
+      <p v-else class="empty-state">{{ loading ? '正在读取…' : projectSearch ? '没有匹配的项目' : '暂无项目' }}</p>
+    </aside>
+    <div ref="listElement" class="release-main">
+      <form class="filters" @submit.prevent="searchModules">
+        <label>模块名称<input v-model="queryDraft" type="search" placeholder="请输入模块名称" aria-label="模块名称" /></label>
+        <label>环境<select v-model="environmentDraft" aria-label="环境"><option value="">全部环境</option>
+          <option v-for="env in project?.environments" :key="env.id" :value="env.id">{{ env.name }}</option>
+        </select></label>
+        <div class="filter-buttons">
+          <button type="submit" class="search-button">搜索</button>
+          <button type="button" class="plain-button" @click="clearFilters">重置</button>
         </div>
-        <p v-else class="empty-note">请先在项目管理添加模块。</p>
+      </form>
+      <div class="table-heading">
+        <div><h3>{{ project?.name || '发布模块' }}</h3><span v-if="project">{{ project.modules.length }} 个模块<template v-if="project.archived"> · 已归档</template></span></div>
+        <button type="button" class="plain-button" :disabled="loading" @click="refresh">{{ loading ? '刷新中…' : '刷新' }}</button>
       </div>
-      <div v-else-if="!loading" class="empty-note">请先在项目管理创建项目。<button type="button" class="row-link" @click="refresh">刷新</button></div>
+      <p v-if="pageError || runtimeError" class="sheet-message error-msg" role="alert">{{ pageError || runtimeError }}</p>
+      <div v-if="setupNotice" class="sheet-message" role="status">
+        <span><strong>{{ setupNotice.row.module.name }}</strong> · {{ setupNotice.message }}</span>
+        <button v-if="!project?.archived" type="button" class="text-action" @click="maintain(setupNotice.row)">前往项目维护</button>
+        <button type="button" class="dismiss" aria-label="关闭提示" @click="setupNotice = undefined">×</button>
+      </div>
+      <div class="table-viewport" tabindex="0" aria-label="模块发布表格">
+        <table aria-label="模块发布列表" class="release-table">
+          <thead>
+            <tr><th scope="col">模块名称</th><th scope="col">模块类型</th><th scope="col">源码目录</th>
+              <th scope="col">环境</th><th scope="col">运行服务器</th><th scope="col">QA 记录</th><th scope="col">操作</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in visibleRows" :key="row.registration?.id || row.module.id" :data-focused="row.module.id === focusedModuleId">
+              <th scope="row">{{ row.module.name }}<small class="mobile-kind">{{ row.module.catalog?.kind ? moduleKinds[row.module.catalog.kind] : '' }}<template v-if="row.record?.number"> · #{{ row.record.number }}</template></small></th>
+              <td>{{ row.module.catalog?.kind ? moduleKinds[row.module.catalog.kind] : '—' }}</td>
+              <td class="source-path" :title="row.module.directory">{{ row.module.directory || '—' }}</td>
+              <td>{{ row.environment?.name || '—' }}</td>
+              <td>
+                <span>{{ row.registration ? hostsById.get(row.registration.hostId) || '—' : '—' }}</span><small v-if="row.environment" class="mobile-env">{{ row.environment.name }}</small>
+                <small v-if="row.state" :class="row.state.tone">{{ row.state.label }}</small>
+              </td>
+              <td>
+                <button type="button" class="text-action lookup" :disabled="!!opening" @click="openBuild(row, 'record')">
+                  <template v-if="row.record"><span v-if="row.record.number">#{{ row.record.number }} · </span>{{ jenkinsState(row.record.status).label }}</template>
+                  <template v-else>查记录</template>
+                </button>
+              </td>
+              <td class="action-col">
+                <div class="row-ops">
+                  <button v-if="!project?.archived" type="button" class="text-action" :disabled="!!opening" @click="openBuild(row, 'qa')">QA</button>
+                  <button type="button" class="text-action" :disabled="!!opening" @click="openBuild(row, 'logs')">QA 日志</button>
+                  <button v-if="!project?.archived" type="button" class="text-action" @click="openRelease(row)">上线</button>
+                  <button v-if="!project?.archived && row.registration?.managedInstanceId" type="button" class="text-action" @click="openRelease(row, 'verify')">验证</button>
+                  <button v-if="row.runtime && !row.buildService" type="button" class="text-action" @click="openServiceLog(row.runtime)">服务日志</button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p v-if="!visibleRows.length" class="empty-state">{{ loading ? '正在读取模块…' : moduleSearch || environmentFilter ? '没有符合筛选条件的模块' : '暂无发布模块' }}</p>
     </div>
-
-    <ProjectEnvironmentBinding v-if="binding && project" :project="project" :module-id="binding.module.id" :environment="binding.environment" :registration="binding.registration"
-      @saved="apply" @close="binding = undefined" @error="emit('error', $event)" />
-
-    <ElDialog :model-value="!!panel" :title="panel?.action === 'qa' ? '模块 QA' : '构建日志'" width="min(820px, 94vw)" append-to-body destroy-on-close
-      :close-on-click-modal="false" @update:model-value="open => { if (!open) panel = undefined }">
-      <template v-if="project && panel">
-        <p class="panel-path">{{ project.name }}<span>/</span><strong>{{ panel.moduleName }}</strong><span>/</span>{{ panel.environmentName }}</p>
-        <ProjectJenkinsBuild :key="panel.serviceInstanceId + panel.action" :project-id="project.id" :context="panel" @error="emit('error', $event)" />
+    <ElDrawer :model-value="!!panel" :title="panel?.context.action === 'qa' ? 'QA 执行' : 'QA 日志'" size="min(680px, 96vw)"
+      append-to-body destroy-on-close :close-on-click-modal="false" @update:model-value="open => { if (!open) panel = undefined }">
+      <template v-if="panel && project">
+        <p class="run-context">{{ project.name }}<span>/</span><strong>{{ panel.context.moduleName }}</strong><template v-if="panel.context.environmentName"><span>/</span>{{ panel.context.environmentName }}</template></p>
+        <ProjectJenkinsBuild :key="(panel.context.serviceInstanceId || panel.context.moduleId) + panel.context.action" :project-id="project.id" :context="panel.context" :monitor="panel.monitor"
+          @observed="recordBuild(panel.context.serviceInstanceId || panel.context.moduleId, $event)" @error="emit('error', $event)" />
       </template>
-    </ElDialog>
+    </ElDrawer>
   </section>
 </template>
 
 <style scoped>
-.project-instances { min-width: 0; container: instances / inline-size; }
-.instance-workspace { display: grid; grid-template-columns: clamp(158px, 16%, 218px) minmax(0, 1fr); min-height: 340px; border: 1px solid var(--border); border-radius: var(--card-radius); background: var(--surface); }
-.project-rail { min-width: 0; padding: 18px 10px; background: #f7f9fc; border-right: 1px solid var(--border); border-radius: var(--card-radius) 0 0 var(--card-radius); }
-.rail-header, .project-header, .list-toolbar, .list-filters, .row-actions, .panel-path { display: flex; align-items: center; }
-.rail-header { gap: 7px; padding: 0 8px 12px; }
-.rail-header h3, .list-toolbar h4 { margin: 0; font-size: 14px; font-weight: 650; color: #334155; }
-.count { font: 12px var(--mono); color: var(--muted); }
-.project-rail input { width: 100%; margin: 0 0 8px; }
-.project-nav { display: grid; gap: 3px; max-height: 60vh; margin: 0; padding: 0; overflow: auto; list-style: none; }
-.project-nav button { display: block; position: relative; width: 100%; min-height: 38px; padding: 9px 12px; border: 0; border-radius: 4px; text-align: left; color: var(--text); background: transparent; overflow-wrap: anywhere; }
-.project-nav button:hover { background: #eef2f8; }
-.project-nav button[aria-pressed=true] { background: #e5eefd; color: #174b9d; font-weight: 650; }
-.project-nav button[aria-pressed=true]::before { position: absolute; content: ""; inset: 9px auto 9px 0; width: 3px; border-radius: 3px; background: var(--accent); }
-.project-nav small { margin-left: 8px; font-weight: 400; }
-.module-workspace { min-width: 0; }
-.project-header { justify-content: space-between; gap: 12px; padding: 20px 22px 17px; border-bottom: 1px solid var(--border); }
-.project-header h3 { margin: 0; font-size: 21px; letter-spacing: -.025em; color: #15283e; overflow-wrap: anywhere; }
-.project-header p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
-.project-header p span { margin: 0 5px; color: #adb8c8; }
-.refresh-button { min-height: 30px; padding: 5px 12px; flex-shrink: 0; }
-.list-toolbar { padding: 14px 20px; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
-.list-filters { gap: 8px; }
-.list-filters input, .list-filters select, .project-rail input { height: 32px; min-height: 32px; margin: 0; border: 1px solid var(--border); border-radius: 5px; padding: 4px 8px; font-size: 12px; background: white; color: var(--text); }
-.list-filters input { width: 166px; } .list-filters select { max-width: 150px; }
-.module-table { width: 100%; min-width: 0; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
-.module-table thead th { text-align: left; background: #f5f7fa; color: #526379; font-size: 12px; font-weight: 550; padding: 9px 10px; border-block: 1px solid var(--border); }
-.module-table thead th:first-child { width: 24%; padding-left: 20px; }
-.module-table thead th:nth-child(3) { width: 17%; }
-.module-table thead th:nth-child(4) { width: 12%; }
-.module-table thead th:last-child { width: 199px; }
-.module-table tbody td, .module-table tbody th { padding: 12px 10px; border: none; border-bottom: 1px solid var(--border-subtle); vertical-align: middle; overflow-wrap: anywhere; text-align: left; line-height: 1.5; font-weight: 400; }
-.module-table tbody :is(td, th) { white-space: normal; background: transparent; }
-.module-table tbody th { padding-left: 20px; }
-.module-table tbody tr:last-child > * { border-bottom: 0; }
-.module-table tbody tr:hover, .module-table tbody tr[data-focused=true] { background: #f5f9ff; }
-.module-name { color: #142942; font-weight: 650; font-size: 14px; }
-.cell-detail { display: block; margin: 3px 0 0; color: var(--muted); font-size: 12px; font-weight: 400; }
-.env-name { display: inline-block; border: 1px solid #cbd9ed; padding: 0 6px; border-radius: 4px; color: #315572; background: #f4f8fd; font-size: 12px; }
-.muted-value { color: var(--muted); font-size: 12px; }
-.binding-mismatch { color: #8a5618; font-size: 12px; }
-.version-cell { font-variant-numeric: tabular-nums; }
-.observed-state { display: flex; align-items: center; gap: 5px; width: fit-content; background: none; border: 0; }
-.observed-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.observed-state.state-success { color: #16734d; }
-.observed-state.state-error { color: #b42318; }
-.observed-state.state-warning { color: #965c11; }
-.row-actions { gap: 6px; flex-wrap: wrap; }
-.row-button, .more-button, .row-link { font-size: 12px; line-height: 18px; min-height: 28px; white-space: nowrap; }
-.row-button, .more-button { border-radius: 4px; border: 1px solid #cbd5e1; background: var(--surface); color: #31445a; padding: 3px 8px; }
-.row-button:hover, .more-button:hover { border-color: #869cba; background: #f3f6fa; }
-.row-button.qa { color: #174a9a; background: #edf3ff; border-color: #bfcef0; font-weight: 650; }
-.row-button.qa:hover { background: #dfeaff; border-color: #90abe4; }
-.row-link { border: none; background: transparent; color: var(--accent); padding: 3px 2px; }
-.row-link:hover { text-decoration: underline; text-underline-offset: 3px; }
-.more-button { border-color: transparent; padding: 3px 4px; color: var(--muted); }
-.empty-note { margin: 0; padding: 16px; color: var(--muted); font-size: 13px; }
-.workspace-error { margin: 0 0 8px; padding: 9px 12px; border: 1px solid #fecaca; background: #fef2f2; border-radius: 5px; color: #991b1b; overflow-wrap: anywhere; }
-.panel-path { flex-wrap: wrap; gap: 8px; margin: 0 0 14px; font-size: 13px; color: var(--muted); }
-.panel-path span { color: #a6b2c1; }
-.panel-path strong { font-weight: 600; color: var(--text); }
-@container instances (max-width: 900px) {
-  .instance-workspace { grid-template-columns: 140px minmax(0, 1fr); }
-  .module-table thead th:first-child { width: 24%; }
-  .module-table thead th:nth-child(3) { width: 16%; }
-  .module-table thead th:nth-child(4) { width: 10%; }
+.release-ledger {
+  --line: #dfe5ed;
+  --blue: #2468ba;
+  display: grid;
+  grid-template-columns: clamp(170px, 18%, 270px) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 12px;
+  min-width: 0;
+  min-height: min(62vh, 600px);
+  color: #23384e;
+  container: release-ledger / inline-size;
 }
-@container instances (max-width: 740px) {
-  .instance-workspace { grid-template-columns: minmax(0, 1fr); }
-  .project-rail { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: none; border-bottom: 1px solid var(--border); border-radius: var(--card-radius) var(--card-radius) 0 0; flex-wrap: wrap; }
-  .rail-header { padding: 0; }
-  .project-nav { display: flex; min-width: 0; max-width: 100%; }
-  .project-nav button { width: max-content; min-height: 30px; padding: 4px 10px; }
-  .project-rail input { max-width: 160px; margin: 0; }
-  .project-header { padding: 14px; }
-  .list-toolbar { padding: 12px 14px; }
+.project-picker, .release-main { min-width: 0; border: 1px solid var(--line); background: #fff; border-radius: 4px; }
+.project-picker { padding: 14px 10px; }
+.project-picker header, .table-heading, .table-heading > div, .row-ops, .filters, .filter-buttons, .run-context { display: flex; align-items: center; }
+.project-picker header { gap: 8px; margin: 0 5px 12px; }
+.project-picker h3, .table-heading h3 { margin: 0; color: #20344c; font-size: 15px; font-weight: 650; }
+.project-picker header span, .table-heading span { font-size: 12px; color: #62748a; }
+.project-picker input, .filters input, .filters select {
+  box-sizing: border-box;
+  margin: 0;
+  min-height: 32px;
+  height: 32px;
+  border: 1px solid #cdd7e3;
+  border-radius: 3px;
+  padding: 0 9px;
+  background: white;
+  color: #26384d;
+  font: inherit;
 }
-@container instances (max-width: 580px) {
-  .list-toolbar { display: grid; gap: 8px; }
-  .list-filters { flex-wrap: wrap; min-width: 0; }
-  .list-filters input { width: min(155px, 54%); }
-  .list-filters select { width: min(128px, 42%); }
-  .module-table, .module-table tbody { display: block; }
-  .module-table thead { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; }
-  .module-table tbody tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px 12px; border-top: 1px solid var(--border); padding: 12px 14px; }
-  .module-table tbody td, .module-table tbody th { display: block; border: 0; padding: 0; min-width: 0; }
-  .module-table .module-identity, .module-table .actions-cell { grid-column: 1 / -1; }
-  .module-identity .cell-detail { display: inline; margin-left: 8px; }
-  .module-table tr[data-bound=false] { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
-  .module-table tr[data-bound=false] .module-identity, .module-table tr[data-bound=false] .actions-cell { grid-column: auto; }
-  .module-table tr[data-bound=false] td[data-label] { display: none; }
-  .module-table td[data-label]::before { display: block; content: attr(data-label); color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+.project-picker input { width: 100%; font-size: 12px; }
+.project-picker ul { list-style: none; margin: 10px 0 0; padding: 0; max-height: 65vh; overflow: auto; }
+.project-picker li + li { margin-top: 2px; }
+.project-picker li button { display: block; width: 100%; border: 0; border-left: 3px solid transparent; border-radius: 0; padding: 7px 10px; background: transparent; color: #34475c; text-align: left; overflow-wrap: anywhere; font-size: 13px; }
+.project-picker li button:hover { background: #f4f7fa; }
+.project-picker li button[aria-pressed=true] { border-left-color: #2d76cb; background: #edf4fe; color: #1556a0; font-weight: 600; }
+.project-picker small { margin-left: 6px; font-size: 11px; }
+.release-main { padding: 15px 17px 20px; }
+.filters { flex-wrap: wrap; gap: 12px 17px; padding-bottom: 14px; border-bottom: 1px solid #edf0f4; font-size: 13px; }
+.filters label { display: inline-flex; align-items: center; gap: 8px; margin: 0; white-space: nowrap; color: #34465a; }
+.filters input { width: clamp(140px, 15vw, 245px); }
+.filters select { width: 115px; }
+.filter-buttons { gap: 7px; }
+.search-button, .plain-button { min-height: 30px; padding: 4px 13px; border: 1px solid #ccd5e0; border-radius: 3px; font-size: 13px; }
+.plain-button { color: #354b61; background: #fff; }
+.search-button { color: #fff; background: #2869b3; border-color: #2869b3; }
+.table-heading { justify-content: space-between; gap: 8px; margin: 15px 0 10px; }
+.table-heading > div { gap: 10px; }
+.table-viewport { overflow-x: auto; min-width: 0; border: 1px solid var(--line); }
+.release-table { width: 100%; min-width: 750px; border-collapse: collapse; font-size: 13px; text-align: left; }
+.release-table tr > * { padding: 10px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); text-align: left; overflow-wrap: anywhere; }
+.release-table thead th { background: #f5f7fa; font-size: 12px; font-weight: 650; color: #36475b; white-space: nowrap; }
+.release-table tbody th { font-weight: 600; background: transparent; }
+.release-table tbody tr:nth-child(even) { background: #f8fafc; }
+.release-table tbody tr:hover, .release-table tbody tr[data-focused=true] { background: #edf4fe; }
+.release-table tbody tr:last-child > * { border-bottom: 0; }
+.release-table tr > :last-child { border-right: 0; }
+.release-table .source-path { max-width: 205px; color: #526375; }
+.release-table td small { display: block; margin-top: 3px; color: #64758a; font-size: 11px; }
+.release-table td small, .release-table th small { background: transparent; }
+.release-table .mobile-kind, .release-table .mobile-env { display: none; }
+.release-table td small.state-success { color: #217146; }
+.release-table .action-col { width: 210px; }
+.row-ops { flex-wrap: wrap; gap: 3px 11px; }
+.text-action { border: 0; background: transparent; color: var(--blue); font: inherit; font-weight: 500; padding: 3px 0; white-space: nowrap; }
+.text-action:hover { text-decoration: underline; }
+.text-action:disabled { color: #8d9bae; }
+.lookup { font-size: 12px; color: #596e87; }
+.empty-state { margin: 0; padding: 18px 8px; color: #67798c; font-size: 13px; }
+.sheet-message { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; margin: 0 0 11px; padding: 8px 11px; background: #fff8e8; border: 1px solid #ebd6a0; color: #6c501b; font-size: 13px; }
+.sheet-message.error-msg { border-color: #f0c4bd; background: #fff5f4; color: #983c30; }
+.dismiss { margin-left: auto; border: 0; background: transparent; color: inherit; }
+.run-context { flex-wrap: wrap; gap: 8px; margin: 0 0 16px; font-size: 13px; color: var(--muted); }
+.run-context strong { color: var(--text); }
+@media (max-width: 850px) {
+  .release-ledger { grid-template-columns: minmax(0, 1fr); min-height: auto; }
+  .project-picker { display: grid; grid-template-columns: 1fr minmax(0, 1.2fr); align-items: center; gap: 8px; padding: 10px; }
+  .project-picker header, .project-picker ul { margin: 0; }
+  .project-picker ul { display: flex; gap: 4px; grid-column: 1/-1; overflow: auto; }
+  .project-picker li { flex: 0 0 auto; }
+  .project-picker li + li { margin: 0; }
+  .release-main { padding: 12px 10px; }
+  .filters { gap: 8px; }
+  .filters label { gap: 5px; }
+  .filters input { width: 145px; }
+  .filters select { width: 100px; }
+  .release-table { min-width: 650px; }
+  .release-table th, .release-table td { padding: 7px 8px; }
+}
+@media (max-width: 540px) {
+  .release-table { min-width: 0; table-layout: fixed; font-size: 12px; }
+  .release-table td, .release-table th { padding: 8px 6px; white-space: normal; }
+  .release-table tr > :is(:nth-child(2), :nth-child(3), :nth-child(4), :nth-child(6)) { display: none; }
+  .release-table tr > :last-child { width: 34%; }
+  .release-table .mobile-kind, .release-table .mobile-env { display: block; margin: 3px 0 0; color: #64758a; font-size: 11px; font-weight: 400; }
+  .row-ops { gap: 1px 8px; }
 }
 </style>

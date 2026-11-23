@@ -8,6 +8,46 @@ import (
 	"github.com/google/uuid"
 )
 
+func TestModuleReleaseUsesTheSavedTargetAndRechecksItBeforeSubmit(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	host := dataOf(t, b.call("POST", "/hosts", map[string]string{"name": "发布服务器", "kind": "LOCAL"}, 201))["id"].(string)
+	targetID := uuid.NewString()
+	if _, err := s.DB.Exec(`INSERT INTO instances(id,name,target_id,draft_json,created_at)
+		VALUES(?,?,?,'{"environment":"qa"}',?)`, targetID, "业务后台", host, Now()); err != nil {
+		t.Fatal(err)
+	}
+	project := applicationResponse(t, b.call("POST", "/application-projects", projectDraft28("发布测试"), 200))
+	path := "/application-projects/" + project.ID + "/service-instances"
+	input := applicationServiceInstanceInput{Version: project.Version, ModuleID: project.Modules[0].ID, Environment: "other", HostID: host, ManagedInstanceID: &targetID}
+	b.call("POST", path, input, 400)
+	input.Environment = project.Environments[0].Name
+	input.ID = project.Environments[0].Deployments[0].ID
+	project = applicationResponse(t, b.call("POST", path, input, 200))
+	if project.Environments[0].Deployments[0].ManagedInstanceID != targetID {
+		t.Fatal("module has no saved release target")
+	}
+	input.Version = project.Version
+	input.ManagedInstanceID = nil
+	project = applicationResponse(t, b.call("POST", path, input, 200))
+	if project.Environments[0].Deployments[0].ManagedInstanceID != targetID {
+		t.Fatal("an older caller discarded the release target")
+	}
+	// A plan created before the operator cleared the target must not publish.
+	p := plan{ID: uuid.NewString(), Kind: "PUBLISH", InstanceID: targetID, TargetID: host, ProjectDeploymentID: input.ID}
+	if _, err := s.DB.Exec("INSERT INTO operation_plans VALUES(?,?,?,?,?)", p.ID, targetID, jsonText(p), Now(), Now()); err != nil {
+		t.Fatal(err)
+	}
+	clearTarget := ""
+	input.Version = project.Version
+	input.ManagedInstanceID = &clearTarget
+	b.call("POST", path, input, 200)
+	stale := b.call("POST", "/plans/"+p.ID+"/submit", map[string]string{"idempotencyKey": uuid.NewString()}, 409)
+	if !strings.Contains(stale.Body.String(), "PROJECT_RELEASE_TARGET_CHANGED") {
+		t.Fatal("expected module target conflict", stale.Body.String())
+	}
+}
+
 func TestApplicationServiceInstanceRegistrationAndRemoval(t *testing.T) {
 	s, b := setup(t)
 	b.login()

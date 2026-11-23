@@ -87,6 +87,7 @@ type applicationDeployment struct {
 	ModuleID          string                `json:"moduleId"`
 	HostID            string                `json:"hostId"`
 	RuntimeSoftwareID string                `json:"runtimeSoftwareId"`
+	ManagedInstanceID string                `json:"managedInstanceId,omitempty"`
 	RecordedVersion   string                `json:"recordedVersion,omitempty"`
 	BindAddress       string                `json:"bindAddress"`
 	MemoryMiB         int                   `json:"memoryMiB"`
@@ -532,6 +533,9 @@ func validateApplicationReferences(tx *sql.Tx, p applicationProject) error {
 	}
 	for _, e := range p.Environments {
 		for _, d := range e.Deployments {
+			if err := checkManagedInstance(tx, d.ManagedInstanceID, d.HostID, e.Name); err != nil {
+				return err
+			}
 			if err := checkModuleRuntimeRole(tx, moduleNames[d.ModuleID], d.ID, d.RuntimeSoftwareID); err != nil {
 				return err
 			}

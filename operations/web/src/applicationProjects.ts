@@ -36,6 +36,7 @@ export interface ProjectServiceRegistration {
   moduleId: string;
   hostId: string;
   runtimeSoftwareId?: string;
+  managedInstanceId?: string;
   recordedVersion?: string;
 }
 
@@ -48,9 +49,11 @@ export interface ProjectEnvironment {
 export interface ProjectInstanceSource {
   projectId: string;
   moduleId: string;
+  serviceInstanceId?: string;
 }
 
 export interface ProjectReleaseSource extends ProjectInstanceSource {
+  managedInstanceId?: string;
   serviceInstanceId: string;
   environmentId: string;
   environmentName: string;

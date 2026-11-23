@@ -29,6 +29,7 @@ type jenkinsMonitor struct {
 	SoftwareID, JobURL, EndpointIdentity, Username string
 	Version                                        int
 	Ciphertext                                     []byte
+	automation                                     *jenkinsAutomation
 }
 
 type jenkinsInstanceOption struct {
@@ -47,11 +48,23 @@ type jenkinsEndpoint struct {
 }
 
 type jenkinsScope struct {
-	project  string
-	instance string
+	project    string
+	instance   string
+	module     string
+	connection bool
+}
+
+func (s jenkinsScope) requestScope() string {
+	if s.module != "" {
+		return "module/" + s.module
+	}
+	return "env/" + s.instance
 }
 
 func (s jenkinsScope) bindingID() string {
+	if s.connection {
+		return "connection/" + s.project
+	}
 	if s.instance == "" {
 		return s.project
 	}
@@ -69,9 +82,12 @@ func (h *HTTP) jenkinsProjectRoute(w http.ResponseWriter, r *http.Request, actor
 			h.success(w, r, data)
 		}
 	case "POST jenkins-monitor":
+		if scope.module != "" {
+			return false
+		}
 		h.saveJenkinsMonitor(w, r, actor, scope)
 	case "POST jenkins-build":
-		if scope.instance == "" {
+		if scope.instance == "" && scope.module == "" {
 			return false
 		}
 		h.triggerJenkinsQA(w, r, actor, scope)
@@ -88,6 +104,17 @@ func (h *HTTP) jenkinsProjectRoute(w http.ResponseWriter, r *http.Request, actor
 func readJenkinsMonitor(q applicationReader, scope jenkinsScope) (string, jenkinsMonitor, error) {
 	var job string
 	var saved jenkinsMonitor
+	if scope.module != "" {
+		var id string
+		err := q.QueryRow("SELECT id FROM application_modules WHERE project_id=? AND id=?", scope.project, scope.module).Scan(&id)
+		return "", saved, err
+	}
+	if scope.connection {
+		err := q.QueryRow(`SELECT coalesce(c.software_id,''),coalesce(c.endpoint_identity,''),coalesce(c.username,''),coalesce(c.version,0),c.token_ciphertext
+            FROM application_projects p LEFT JOIN application_jenkins_connections c ON c.project_id=p.id WHERE p.id=?`, scope.project).
+			Scan(&saved.SoftwareID, &saved.EndpointIdentity, &saved.Username, &saved.Version, &saved.Ciphertext)
+		return "", saved, err
+	}
 	if scope.instance != "" {
 		err := q.QueryRow(`SELECT coalesce(m.job_url,''),coalesce(m.software_id,''),coalesce(m.job_url,''),coalesce(m.endpoint_identity,''),
             coalesce(m.username,''),coalesce(m.version,0),m.token_ciphertext FROM application_deployments d
@@ -112,6 +139,10 @@ func (s *Store) verifyJenkinsMonitors(instances bool) error {
 		query = `SELECT d.project_id||'/'||d.id,m.software_id,m.job_url,m.endpoint_identity,m.username,m.version,m.token_ciphertext
                  FROM application_qa_monitors m JOIN application_deployments d ON d.id=m.deployment_id`
 	}
+	return s.verifyJenkinsTokens(query)
+}
+
+func (s *Store) verifyJenkinsTokens(query string) error {
 	rows, err := s.DB.Query(query)
 	if err != nil {
 		return err
@@ -292,7 +323,7 @@ func jenkinsInstanceOptions(q applicationReader) ([]jenkinsInstanceOption, error
 }
 
 func readJenkinsMonitorMetadata(q applicationReader, scope jenkinsScope) (map[string]any, error) {
-	job, saved, err := readJenkinsMonitor(q, scope)
+	job, saved, reason, err := effectiveJenkinsMonitor(q, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +331,7 @@ func readJenkinsMonitorMetadata(q applicationReader, scope jenkinsScope) (map[st
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"configured": saved.Version > 0 && saved.JobURL == job, "hasToken": saved.Version > 0, "jobUrl": job,
+	return map[string]any{"configured": reason == "" && saved.Version > 0 && saved.JobURL == job, "reason": reason, "hasToken": saved.Version > 0, "jobUrl": job,
 		"version": strconv.Itoa(saved.Version), "softwareId": saved.SoftwareID, "username": saved.Username, "instances": options}, nil
 }
 
@@ -344,6 +375,17 @@ func (h *HTTP) saveJenkinsMonitor(w http.ResponseWriter, r *http.Request, actor 
 		h.fail(w, r, 409, "VERSION_CONFLICT", "Jenkins 查询配置已更新，请刷新后重试")
 		return
 	}
+	if scope.connection {
+		var archived bool
+		if err = tx.QueryRow("SELECT archived FROM application_projects WHERE id=?", scope.project).Scan(&archived); err != nil {
+			h.opsError(w, r, err)
+			return
+		}
+		if archived {
+			h.jenkinsError(w, r, errJenkinsArchived)
+			return
+		}
+	}
 	endpoint, err := readJenkinsEndpoint(tx, in.SoftwareID)
 	if err != nil {
 		h.jenkinsError(w, r, err)
@@ -352,13 +394,15 @@ func (h *HTTP) saveJenkinsMonitor(w http.ResponseWriter, r *http.Request, actor 
 	if scope.instance != "" {
 		job = strings.TrimSpace(in.JobURL)
 	}
-	canonical, err := jenkinsJobURL(endpoint, job)
-	if err != nil {
-		h.jenkinsError(w, r, err)
-		return
-	}
-	if scope.instance != "" {
-		job = canonical.String()
+	if !scope.connection {
+		canonical, e := jenkinsJobURL(endpoint, job)
+		if e != nil {
+			h.jenkinsError(w, r, e)
+			return
+		}
+		if scope.instance != "" {
+			job = canonical.String()
+		}
 	}
 	project := scope.bindingID()
 	saved := jenkinsMonitor{SoftwareID: in.SoftwareID, JobURL: job, EndpointIdentity: endpoint.identity, Username: in.Username, Version: old.Version + 1}
@@ -389,6 +433,10 @@ func (h *HTTP) saveJenkinsMonitor(w http.ResponseWriter, r *http.Request, actor 
                 endpoint_identity=excluded.endpoint_identity,username=excluded.username,version=excluded.version,token_ciphertext=excluded.token_ciphertext`,
 				scope.instance, saved.SoftwareID, job, saved.EndpointIdentity, saved.Username, saved.Version, saved.Ciphertext)
 		}
+	} else if err == nil && scope.connection {
+		_, err = tx.Exec(`INSERT INTO application_jenkins_connections(project_id,software_id,endpoint_identity,username,version,token_ciphertext)
+            VALUES(?,?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET software_id=excluded.software_id,endpoint_identity=excluded.endpoint_identity,
+            username=excluded.username,version=excluded.version,token_ciphertext=excluded.token_ciphertext`, scope.project, saved.SoftwareID, saved.EndpointIdentity, saved.Username, saved.Version, saved.Ciphertext)
 	} else if err == nil {
 		_, err = tx.Exec(`INSERT INTO application_jenkins_monitors(project_id,software_id,job_url,endpoint_identity,username,version,token_ciphertext)
 			VALUES(?,?,?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET software_id=excluded.software_id, job_url=excluded.job_url,

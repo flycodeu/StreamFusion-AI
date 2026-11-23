@@ -44,18 +44,19 @@ type instancePendingJob struct {
 	TargetAckPending bool   `json:"targetAckPending"`
 }
 type plan struct {
-	MaintenancePermit  string          `json:"maintenancePermit,omitempty"`
-	ID                 string          `json:"id"`
-	Kind               string          `json:"kind"`
-	TargetID           string          `json:"targetId"`
-	InstanceID         string          `json:"instanceId"`
-	ExpectedVersion    string          `json:"expectedVersion"`
-	HostVersion        string          `json:"hostVersion"`
-	ExpectedGeneration string          `json:"expectedGeneration"`
-	Candidate          deploy.Release  `json:"candidate"`
-	Baseline           *deploy.Release `json:"baseline"`
-	ExpiresAt          string          `json:"expiresAt"`
-	InputHash          string          `json:"inputHash"`
+	ProjectDeploymentID string          `json:"projectDeploymentId,omitempty"`
+	MaintenancePermit   string          `json:"maintenancePermit,omitempty"`
+	ID                  string          `json:"id"`
+	Kind                string          `json:"kind"`
+	TargetID            string          `json:"targetId"`
+	InstanceID          string          `json:"instanceId"`
+	ExpectedVersion     string          `json:"expectedVersion"`
+	HostVersion         string          `json:"hostVersion"`
+	ExpectedGeneration  string          `json:"expectedGeneration"`
+	Candidate           deploy.Release  `json:"candidate"`
+	Baseline            *deploy.Release `json:"baseline"`
+	ExpiresAt           string          `json:"expiresAt"`
+	InputHash           string          `json:"inputHash"`
 }
 type importInput struct {
 	SourceKind           string                     `json:"sourceKind,omitempty"`

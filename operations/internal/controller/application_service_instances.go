@@ -19,6 +19,7 @@ type applicationServiceInstanceInput struct {
 	HostID            string  `json:"hostId"`
 	RecordedVersion   string  `json:"recordedVersion"`
 	RuntimeSoftwareID *string `json:"runtimeSoftwareId,omitempty"`
+	ManagedInstanceID *string `json:"managedInstanceId,omitempty"`
 }
 
 var (
@@ -152,6 +153,19 @@ func checkApplicationServiceInstanceHost(tx *sql.Tx, hostID string) error {
 	return nil
 }
 
+func checkManagedInstance(tx *sql.Tx, id, hostID, environment string) error {
+	if id == "" {
+		return nil
+	}
+	var matches bool
+	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM instances WHERE id=? AND target_id=?
+		AND json_extract(draft_json,'$.environment')=? COLLATE NOCASE)`, id, hostID, environment).Scan(&matches)
+	if err == nil && !matches {
+		return applicationInvalid("上线目标须属于模块所选服务器和环境")
+	}
+	return err
+}
+
 func checkModuleRuntimeRole(tx *sql.Tx, moduleName, deploymentID, softwareID string) error {
 	if softwareID == "" || strings.EqualFold(strings.TrimSpace(moduleName), "jenkins") {
 		return nil
@@ -238,6 +252,12 @@ func insertApplicationServiceInstance(tx *sql.Tx, project applicationProject, in
 		ID: in.ID, ModuleID: in.ModuleID, HostID: in.HostID, RecordedVersion: in.RecordedVersion, RuntimeSoftwareID: softwareID,
 		Ports: []applicationPort{}, Variables: []applicationVariable{}, Mounts: []applicationMount{},
 	}
+	if in.ManagedInstanceID != nil {
+		newDeployment.ManagedInstanceID = *in.ManagedInstanceID
+		if err := checkManagedInstance(tx, newDeployment.ManagedInstanceID, in.HostID, in.Environment); err != nil {
+			return err
+		}
+	}
 	_, err := tx.Exec(`INSERT INTO application_deployments(id,project_id,environment_id,module_id,host_id,runtime_software_id,config_json,position)
 		VALUES(?,?,?,?,?,NULLIF(?,''),?,(SELECT COALESCE(MAX(position),-1)+1 FROM application_deployments WHERE environment_id=?))`, in.ID, project.ID, environmentID, in.ModuleID, in.HostID, softwareID, jsonText(newDeployment), environmentID)
 	return err
@@ -287,6 +307,22 @@ func updateApplicationServiceInstance(tx *sql.Tx, project applicationProject, in
 		hostID = in.HostID
 		_, err = tx.Exec("UPDATE application_deployments SET host_id=?,config_json=json_set(config_json,'$.hostId',?) WHERE project_id=? AND id=?", hostID, hostID, project.ID, in.ID)
 		if err != nil {
+			return err
+		}
+	}
+	var managedID string
+	err = tx.QueryRow(`SELECT coalesce(json_extract(config_json,'$.managedInstanceId'),'') FROM application_deployments WHERE id=?`, in.ID).Scan(&managedID)
+	if err != nil {
+		return err
+	}
+	if in.ManagedInstanceID != nil {
+		managedID = *in.ManagedInstanceID
+	}
+	if err = checkManagedInstance(tx, managedID, hostID, environmentName); err != nil {
+		return err
+	}
+	if in.ManagedInstanceID != nil {
+		if _, err = tx.Exec(`UPDATE application_deployments SET config_json=json_set(config_json,'$.managedInstanceId',?) WHERE id=?`, managedID, in.ID); err != nil {
 			return err
 		}
 	}

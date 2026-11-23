@@ -911,7 +911,8 @@ try:
         screenshot_ready()
         page.screenshot(path=str(output / "plugins-wide.png"), full_page=True, animations="disabled")
         checks.extend(["I02-P1-catalog-matches-recipes-and-Node-entry", "I02-P1-tools-can-open-install-preflight-with-diagnostics", "I02-P1-service-port-form-only-inside-installation-drawer"])
-        page.get_by_role("button", name="应用实例", exact=True).click()
+        page.get_by_role("button", name="项目维护", exact=True).click()
+        page.get_by_role("button", name="上线目标管理", exact=True).first.click()
         page.locator(".dependency-section > summary").click()
         page.get_by_role("button", name="绑定已有服务", exact=True).click()
         dialog = page.get_by_role("dialog", name="绑定已有依赖", exact=True)
@@ -928,7 +929,8 @@ try:
         page.locator(".probe-result summary").click()
         assert page.get_by_text("未验证", exact=True).count() == 2
         checks.append("UX-OPS-dependency-host-only-does-not-claim-authentication")
-        page.get_by_role("button", name="应用实例", exact=True).click()
+        page.get_by_role("button", name="项目维护", exact=True).click()
+        page.get_by_role("button", name="上线目标管理", exact=True).first.click()
         page.get_by_role("button", name="新增实例", exact=True).click()
         dialog = page.get_by_role("dialog", name="实例配置草稿", exact=True)
         dialog.get_by_label("实例名称", exact=True).fill("视频流后端")
@@ -982,7 +984,7 @@ try:
         page.get_by_role("heading", name="运行总览", exact=True).wait_for()
         checks.append("password-change-relogin")
         page.set_viewport_size({"width": 390, "height": 844})
-        for name in ["运行总览", "主机管理", "软件管理", "应用实例", "版本制品", "发布作业", "连接凭据", "日志记录", "系统设置"]:
+        for name in ["运行总览", "主机管理", "软件管理", "项目发布", "版本制品", "发布作业", "连接凭据", "日志记录", "系统设置"]:
             page.get_by_role("button", name="展开导航", exact=True).click()
             page.get_by_role("button", name=name, exact=True).click()
             if name == "主机管理":

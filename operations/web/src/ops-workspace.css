@@ -10,27 +10,6 @@
 .ops-content .actions button {
   padding: 5px;
 }
-.ops-content .instance-views {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 3px;
-  background: var(--bg-page);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--control-radius);
-}
-.ops-content .instance-views button {
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid transparent;
-  padding: 6px 12px;
-}
-.ops-content .instance-views button[aria-pressed="true"] {
-  color: var(--accent);
-  background: var(--surface);
-  border-color: var(--border);
-  font-weight: 600;
-}
 .ops-workspace-dialog .runtime-actions,
 .ops-content .runtime-actions {
   display: flex;
@@ -171,12 +150,3 @@
     min-width: 0;
   }
 }
-.release-target-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border);
-}
-.release-target-row small { display: block; margin-top: 4px; color: var(--muted); }

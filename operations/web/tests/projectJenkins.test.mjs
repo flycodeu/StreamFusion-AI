@@ -18,12 +18,12 @@ function load(source, imports = {}, globals = {}) {
   return exports;
 }
 
-function harness(handler, context, stored = new Map()) {
+function harness(handler, context = { ...instance, action: "logs" }, stored = new Map()) {
   let unmount;
   const calls = [];
   const scope = vue.effectScope();
   const flow = scope.run(() => load(component + `
-    export const flow = { monitor, build, queuedWithPrevious, stageLabel, settingsOpen, softwareId, username, token, statusError, log, logError, logOpen, jobDraft, submitError, loadMonitor, refreshStatus, editMonitor, saveMonitor, startQa, toggleLog, readLog };
+    export const flow = { build, queuedWithPrevious, stageLabel, statusError, log, logError, logOpen, submitError, openRun, refreshStatus, startQa, readLog };
   `, {
     vue: { ...vue, onMounted: () => {}, onUnmounted: fn => { unmount = fn; } },
     "element-plus": {},
@@ -33,7 +33,7 @@ function harness(handler, context, stored = new Map()) {
     } },
     "./projectJenkins": helpers,
     "./applicationProjects": project,
-  }, { defineProps: () => ({ projectId: "project", jobUrl, context }), defineEmits: () => () => {},
+  }, { defineProps: () => ({ projectId: "project", monitor: { ...bound, jobUrl }, context }), defineEmits: () => () => {},
     sessionStorage: { getItem: key => stored.get(key) ?? null, setItem: (key, v) => stored.set(key, v), removeItem: key => stored.delete(key) } }).flow);
   return { flow, calls, close() { unmount(); scope.stop(); } };
 }
@@ -42,6 +42,8 @@ const bound = {
   configured: true, version: "1", softwareId: "instance", username: "reader", hasToken: true,
   instances: [{ id: "instance", name: "Jenkins", hostName: "惠普", url: "https://jenkins.example/ci/" }],
 };
+const instance = { action: "qa", serviceInstanceId: "deployment", moduleId: "module", moduleName: "platform-api", environmentName: "test" };
+const instancePath = path + "/service-instances/deployment";
 const run = number => ({ configured: true, status: "SUCCESS", number, currentStage: "归档产物", stagesAvailable: true });
 
 test("build links remain in the project job and unknown stage state stays unknown", () => {
@@ -54,19 +56,17 @@ test("build links remain in the project job and unknown stage state stays unknow
   assert.equal(helpers.jenkinsState("UNKNOWN").label, "待确认");
 });
 
-test("monitor opens with read-only calls and a late log reply cannot attach to a newer build", async t => {
+test("reading QA logs is read-only; a late log reply cannot attach to a newer build", async t => {
   let latest = 7, oldLog;
   const h = harness((target, method, data, signal) => {
-    if (target === `${path}/jenkins-monitor`) return bound;
-    if (target === `${path}/jenkins-build`) return run(latest);
-    if (target === `${path}/jenkins-build/log?number=7&offset=0`) return new Promise(resolve => { oldLog = { resolve, signal }; });
-    if (target === `${path}/jenkins-build/log?number=8&offset=0`) return { number: 8, offset: 0, nextOffset: 9, text: "新构建输出", more: false };
-    throw new Error(`unexpected request ${target}`);
+    if (target === instancePath + "/jenkins-build") return run(latest);
+    if (target.endsWith("/log?number=7&offset=0")) return new Promise(resolve => { oldLog = { resolve, signal }; });
+    if (target.endsWith("/log?number=8&offset=0")) return { number: 8, offset: 0, nextOffset: 9, text: "新构建输出", more: false };
+    throw new Error("unexpected request " + target);
   });
   t.after(h.close);
-  await h.flow.loadMonitor();
-  assert.deepEqual(h.calls.map(({ target, method }) => [target, method]), [[`${path}/jenkins-monitor`, "GET"], [`${path}/jenkins-build`, "GET"]]);
-  h.flow.toggleLog();
+  await h.flow.openRun();
+  assert.ok(h.calls.every(call => call.method === "GET"));
   latest = 8;
   await h.flow.refreshStatus();
   assert.equal(oldLog.signal.aborted, true);
@@ -74,7 +74,6 @@ test("monitor opens with read-only calls and a late log reply cannot attach to a
   await Promise.resolve();
   assert.equal(h.flow.log.value, "新构建输出");
 });
-
 test("queued builds keep previous stages distinct and unavailable stages stay unconfirmed", t => {
   const h = harness(() => { throw new Error("unexpected request"); });
   t.after(h.close);
@@ -89,25 +88,6 @@ test("queued builds keep previous stages distinct and unavailable stages stay un
   assert.equal(h.flow.stageLabel.value, "阶段待确认");
 });
 
-test("binding preserves or replaces the token intentionally without reopening it as input", async t => {
-  const h = harness((target, method) => target.endsWith("/jenkins-build") ? run(1) : { ...bound, version: method === "POST" ? "2" : "1" });
-  t.after(h.close);
-  await h.flow.loadMonitor();
-  h.flow.editMonitor();
-  assert.equal(h.flow.token.value, "");
-  h.flow.username.value = "different-user";
-  await h.flow.saveMonitor();
-  assert.equal(h.calls.filter(call => call.method === "POST").length, 0);
-  h.flow.username.value = "reader";
-  await h.flow.saveMonitor();
-  assert.deepEqual(h.calls.find(call => call.method === "POST").data, { expectedVersion: "1", softwareId: "instance", username: "reader", token: "" });
-  assert.equal(h.flow.settingsOpen.value, false);
-  assert.equal(h.flow.token.value, "");
-});
-
-const instance = { action: "qa", serviceInstanceId: "deployment", moduleId: "module", moduleName: "platform-api", environmentName: "test" };
-const instancePath = `${path}/service-instances/deployment`;
-
 test("QA pins its own queue and build instead of attaching a newer job's console", async t => {
   let queueRead = 0;
   const h = harness((target, method) => {
@@ -121,9 +101,7 @@ test("QA pins its own queue and build instead of attaching a newer job's console
     throw new Error(`unexpected ${target}`);
   }, instance);
   t.after(h.close);
-  await h.flow.loadMonitor();
-  assert.equal(h.calls.some(call => call.method === "POST"), false);
-  await h.flow.startQa();
+  await h.flow.openRun();
   assert.equal(h.flow.build.value.status, "QUEUED");
   assert.equal(h.flow.build.value.number, undefined);
   await h.flow.refreshStatus();
@@ -147,39 +125,33 @@ test("uncertain QA submission reuses the request id after reopening, logs stay r
     return { configured: true, status: "NEVER_BUILT" };
   }
   const first = harness(handler, instance, stored);
-  await first.flow.loadMonitor();
-  await first.flow.startQa();
+  await first.flow.openRun();
   assert.ok(first.flow.submitError.value);
   first.close();
   const logs = harness(handler, { ...instance, action: "logs" }, stored);
-  await logs.flow.loadMonitor();
+  await logs.flow.openRun();
   await logs.flow.startQa();
   assert.equal(ids.length, 1);
   logs.close();
   const reopened = harness(handler, instance, stored);
   t.after(reopened.close);
-  await reopened.flow.loadMonitor();
-  await reopened.flow.startQa();
+  await reopened.flow.openRun();
   assert.match(ids[0], /^[0-9a-f-]{36}$/i);
   assert.equal(ids[0], ids[1]);
   assert.equal(reopened.flow.build.value.status, "QUEUED");
 });
 
-test("an instance's first QA job binding uses its own URL and token", async t => {
-  const h = harness((target, method, data) => {
-    if (method === "POST") return { ...bound, jobUrl: data.jobUrl };
-    if (target.endsWith("jenkins-monitor")) return { ...bound, configured: false, hasToken: false, jobUrl: "", version: "0" };
-    return run(5);
-  }, instance);
+test("selecting QA while the job is running opens its progress without queueing a second build", async t => {
+  const h = harness(() => ({ configured: true, status: "RUNNING", building: true, number: 42 }), instance);
   t.after(h.close);
-  await h.flow.loadMonitor();
-  h.flow.editMonitor();
-  assert.equal(h.flow.jobDraft.value, "");
-  h.flow.jobDraft.value = "https://example.org/";
-  h.flow.token.value = "qa-example-test-token";
-  await h.flow.saveMonitor();
-  assert.equal(h.calls.some(call => call.method === "POST"), false);
-  h.flow.jobDraft.value = jobUrl;
-  await h.flow.saveMonitor();
-  assert.deepEqual(h.calls.find(call => call.method === "POST").data, { expectedVersion: "0", softwareId: "instance", username: "reader", token: "qa-example-test-token", jobUrl });
+  await h.flow.openRun();
+  assert.equal(h.flow.build.value.number, 42);
+  assert.ok(h.calls.every(call => call.method === "GET"));
+});
+
+test("archived execution context can only inspect the existing build", async t => {
+  const h = harness(() => run(5), { ...instance, readOnly: true });
+  t.after(h.close);
+  await h.flow.openRun();
+  assert.equal(h.calls.filter(call => call.method === "POST").length, 0);
 });

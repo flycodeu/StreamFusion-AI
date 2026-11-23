@@ -223,7 +223,7 @@ func TestJenkinsMonitorV29MigrationPreservesProjectsAndProtectsKey(t *testing.T)
 	pid := testJenkinsProject(t, b, origin+jenkinsFixtureJob)
 	software := installedJenkinsFixture(t, s, b, origin)
 	dir := s.Dir
-	if _, err := s.DB.Exec("DROP TRIGGER application_qa_scope_changed; DROP TABLE application_qa_requests; DROP TABLE application_qa_monitors; DROP TABLE application_jenkins_monitors; DROP TABLE software_login_accounts; DELETE FROM schema_migrations WHERE version>=30;" + schemaV29); err != nil {
+	if _, err := s.DB.Exec("DROP TABLE application_jenkins_connections; DROP TRIGGER application_qa_scope_changed; DROP TABLE application_qa_requests; DROP TABLE application_qa_monitors; DROP TABLE application_jenkins_monitors; DROP TABLE software_login_accounts; DELETE FROM schema_migrations WHERE version>=30;" + schemaV29); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {

@@ -1,0 +1,57 @@
+pipeline {
+    agent any
+    options {
+        skipDefaultCheckout()
+        disableConcurrentBuilds()
+        timeout(time: 60, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '10'))
+    }
+    stages {
+        stage('拉取源码') {
+            steps {
+                echo 'SFOPS_STAGE: 拉取源码'
+                deleteDir()
+                checkout([$class: 'GitSCM', branches: [[name: {{.Branch}}]], userRemoteConfigs: [[url: {{.Repository}}]]])
+                sh 'git rev-parse HEAD'
+            }
+        }
+        stage('检查环境') {
+            steps {
+                echo 'SFOPS_STAGE: 检查环境'
+                dir({{.Directory}}) {
+                    {{if eq .Kind "BACKEND"}}sh 'java -version && javac -version && test -f pom.xml && if test -f mvnw; then sh mvnw -version; else mvn -version; fi'
+                    {{else if eq .Kind "FRONTEND"}}sh 'node --version && test -f package.json && if test -f pnpm-lock.yaml; then pnpm --version; elif test -f package-lock.json; then npm --version; else echo "缺少 pnpm-lock.yaml 或 package-lock.json" >&2; exit 1; fi'
+                    {{else}}sh 'uv --version && test -f pyproject.toml && test -f uv.lock'
+                    {{end}}
+                }
+            }
+        }
+        stage('编译与测试') {
+            steps {
+                echo 'SFOPS_STAGE: 编译与测试'
+                dir({{.Directory}}) {
+                    {{if eq .Kind "BACKEND"}}sh 'if test -f mvnw; then sh mvnw -B -ntp test; else mvn -B -ntp test; fi'
+                    {{else if eq .Kind "FRONTEND"}}sh 'if test -f pnpm-lock.yaml; then pnpm install --frozen-lockfile && pnpm run test; else npm ci && npm test; fi'
+                    {{else}}sh 'uv sync --locked && uv run --locked python -m pytest -q --junitxml=qa-tests.xml'
+                    {{end}}
+                }
+            }
+        }
+        stage('打包与归档') {
+            steps {
+                echo 'SFOPS_STAGE: 打包与归档'
+                dir({{.Directory}}) {
+                    {{if eq .Kind "BACKEND"}}sh 'if test -f mvnw; then sh mvnw -B -ntp -DskipTests verify; else mvn -B -ntp -DskipTests verify; fi'
+                    sh 'sha256sum target/*.jar'
+                    archiveArtifacts artifacts: 'target/*.jar', excludes: '**/*-preview-node.jar,**/*-sources.jar,**/*-javadoc.jar,**/*-tests.jar', allowEmptyArchive: false, fingerprint: true, followSymlinks: false
+                    {{else if eq .Kind "FRONTEND"}}sh 'if test -f pnpm-lock.yaml; then pnpm run build; else npm run build; fi'
+                    sh 'tar -czf web-dist.tar.gz -C dist . && sha256sum web-dist.tar.gz'
+                    archiveArtifacts artifacts: 'web-dist.tar.gz', fingerprint: true
+                    {{else}}sh 'git archive --format=tar.gz --output=module-source.tar.gz HEAD -- . && sha256sum module-source.tar.gz'
+                    archiveArtifacts artifacts: 'module-source.tar.gz,qa-tests.xml', fingerprint: true
+                    {{end}}
+                }
+            }
+        }
+    }
+}

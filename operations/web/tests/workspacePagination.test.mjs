@@ -76,7 +76,7 @@ test("workspace jobs use server cursors and filters and keep details while pagin
 });
 
 test("a pending instance operation opens its original receipt and can reconcile acknowledgement", async t => {
-  const fixture = harness("instances"); t.after(() => fixture.close());
+  const fixture = harness("managed-instances"); t.after(() => fixture.close());
   await fixture.start();
   const instance = { id: "instance-a", currentReleaseId: "release-a", pendingJob: { id: "job-0", status: "SUCCEEDED", targetAckPending: true } };
   assert.equal(fixture.panel.instanceProgressLabel(instance), "等待收尾");
@@ -92,7 +92,7 @@ test("a pending instance operation opens its original receipt and can reconcile 
 });
 
 test("saving an application draft includes its runtime policy without applying it to the server", async t => {
-  const fixture = harness("instances"); t.after(() => fixture.close());
+  const fixture = harness("managed-instances"); t.after(() => fixture.close());
   fixture.panel.instanceDraft.value.config.runtimePolicy = { restart: "on-failure", autoStart: false, maxRetries: 3, stopTimeoutSeconds: 10 };
   await fixture.panel.saveInstance();
   assert.equal(fixture.writes.length, 1);
@@ -153,7 +153,7 @@ test("workspace lists page beyond one hundred and commit paging only after succe
 });
 
 test("dialog choices load when opened and preserve every credential revision", async t => {
-  const fixture = harness("instances"); t.after(() => fixture.close());
+  const fixture = harness("managed-instances"); t.after(() => fixture.close());
   await fixture.start();
   assert.equal(fixture.calls.some(path => path.startsWith("/bindings")), false);
   fixture.panel.dialog.value = "instance"; await flush();

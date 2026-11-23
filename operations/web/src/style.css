@@ -99,6 +99,27 @@ summary:focus-visible {
     sans-serif;
   color: #0f172a;
 }
+.sidebar.delivery-navigation {
+  --border-subtle: #35404f;
+  background: #202530;
+  border-right-color: #202530;
+}
+.delivery-navigation .brand,
+.delivery-navigation .side-foot span {
+  color: #f5f8fc;
+}
+.delivery-navigation .brand small,
+.delivery-navigation .nav-group-label,
+.delivery-navigation .side-foot {
+  color: #a8b3c2;
+}
+.sidebar.delivery-navigation nav button { color: #d8dfe9; }
+.sidebar.delivery-navigation nav button:hover { background: #2c3441; color: white; }
+.sidebar.delivery-navigation nav button.active {
+  color: white;
+  background: #10151e;
+  box-shadow: inset 3px 0 #5799ff;
+}
 .sidebar .brand {
   padding: 0 8px 20px;
   border-bottom: 1px solid var(--border-subtle);
