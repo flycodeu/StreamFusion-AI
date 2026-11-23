@@ -373,6 +373,11 @@ onUnmounted(() => {
         </select>
       </label>
       <label v-if="context">QA 作业地址 <input v-model="jobDraft" type="url" required :disabled="saving" placeholder="https://jenkins.example.com/job/platform-api-qa/" /></label>
+      <details v-if="context" class="qa-job-help">
+        <summary>首次使用，如何创建 QA 作业？</summary>
+        <p>在 Jenkins 新建「流水线」，选择「Pipeline script from SCM」，填写模块的 Git 仓库、分支和流水线脚本路径。保存后，将作业首页地址填入上方。</p>
+        <p v-if="context.moduleName === 'platform-api'">本仓库的脚本路径为 <code>operations/jenkins/platform-api.Jenkinsfile</code>，构建节点标签为 <code>linux-jdk21</code>。</p>
+      </details>
       <label>Jenkins 用户名 <input v-model="username" required maxlength="128" :disabled="saving" autocomplete="off" /></label>
       <label>Jenkins API Token
         <input v-model="token" type="password" :required="!retainedToken" :disabled="saving" maxlength="512" autocomplete="new-password" :placeholder="retainedToken ? '留空保留已有 Token' : ''" />
@@ -418,6 +423,9 @@ onUnmounted(() => {
 .build-log pre { margin: 0; padding: 12px; min-height: 70px; max-height: min(360px, 50vh); overflow: auto; overscroll-behavior: contain; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.75 var(--mono); }
 .monitor-form label { display: grid; gap: 6px; }
 .monitor-form input, .monitor-form select { width: 100%; margin: 0; }
+.qa-job-help { font-size: 13px; color: var(--muted); }
+.qa-job-help summary { cursor: pointer; color: var(--accent); }
+.qa-job-help p { margin: 6px 0 0; overflow-wrap: anywhere; }
 @media (max-width: 540px) {
   .jenkins-build { padding: 12px; }
   .build-stages li { grid-template-columns: minmax(0, 1fr) max-content; }
