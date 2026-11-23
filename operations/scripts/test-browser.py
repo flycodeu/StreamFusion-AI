@@ -786,8 +786,8 @@ try:
                 dialog.get_by_role("button", name="只读登记", exact=True).click()
             assert registration_response.value.status == 201
             detail = page.get_by_role("dialog", name=software_name, exact=True)
-            detail.get_by_role("button", name="解除管理", exact=True).click()
-            page.locator(".el-message-box").get_by_role("button", name="解除管理", exact=True).click()
+            detail.get_by_role("button", name="移除登记", exact=True).click()
+            page.locator(".el-message-box").get_by_role("button", name="移除登记", exact=True).click()
             detail.get_by_text("已解除", exact=True).first.wait_for()
             detail.get_by_role("button", name="Close this dialog").click()
 
@@ -841,6 +841,7 @@ try:
             detail.get_by_text("观测有效", exact=False).wait_for()
         else:
             detail.get_by_text("当前无法确认", exact=False).wait_for()
+            detail.get_by_role("tab", name="来源与归属").click()
             detail.locator("details.software-diagnostics > summary").click()
             detail.get_by_text(observed["latestAttempt"]["code"], exact=True).first.wait_for()
         detail.get_by_role("button", name="Close this dialog").click()
@@ -856,8 +857,8 @@ try:
         page.screenshot(path=str(output / "software-wide.png"), full_page=True, animations="disabled")
         page.locator(".software-cards").get_by_role("button", name="详情", exact=True).click()
         detail = page.get_by_role("dialog", name="已有 Java 工具", exact=True)
-        detail.get_by_role("button", name="解除管理", exact=True).click()
-        page.locator(".el-message-box").get_by_role("button", name="解除管理", exact=True).click()
+        detail.get_by_role("button", name="移除登记", exact=True).click()
+        page.locator(".el-message-box").get_by_role("button", name="移除登记", exact=True).click()
         detail.get_by_text("已解除", exact=True).first.wait_for()
         detail.get_by_role("button", name="Close this dialog").click()
         page.get_by_text("没有匹配的软件", exact=True).wait_for()
@@ -867,44 +868,73 @@ try:
         page.get_by_role("button", name="软件安装", exact=True).click()
         page.locator(".software-recipes").wait_for()
         catalog = page.request.get(url + "/ops/api/v1/software-recipes").json()["data"]
-        catalog_keys = {entry["key"] for entry in catalog if entry["key"] != "node"}
-        expected_cards = len(catalog_keys) + 1  # Node has one version-management entry.
-        page.wait_for_function("count => document.querySelectorAll('.plugin-card').length === count", arg=expected_cards)
-        page.get_by_role("heading", name="Node.js", exact=True).wait_for()
+        grouped = {}
+        for recipe in catalog:
+            if recipe["key"] != "node":
+                grouped.setdefault(recipe.get("catalogKey") or recipe["key"], []).append(recipe)
+        names = {key: next((r["name"] for r in versions if r["key"] == key and
+                            (not r.get("commands") or r["commands"].get("builtin"))), versions[0]["name"])
+                 for key, versions in grouped.items()}
+        expected_names = sorted(["Node.js", *names.values()])
+        cards = page.locator(".software-recipes .plugin-card")
+        pagination = page.get_by_role("navigation", name="软件安装分页")
+        search = page.get_by_label("搜索安装软件", exact=True)
+        expect(page.get_by_role("heading", name="Node.js", exact=True)).to_be_visible()
+        expect(pagination).to_contain_text(str(len(expected_names)))
+        seen = []
+        while True:
+            visible_names = cards.locator("h3").all_text_contents()
+            assert visible_names and len(seen) + len(visible_names) <= len(expected_names)
+            seen.extend(visible_names)
+            next_page = pagination.locator(".btn-next")
+            if not next_page.count() or next_page.is_disabled():
+                break
+            next_page.click()
+            expect(cards.locator("h3").first).not_to_have_text(visible_names[0])
+        assert sorted(seen) == expected_names
         assert page.get_by_label("目标主机", exact=True).input_value()
-        assert page.get_by_role("heading", name="Maven", exact=True).count() == 1
-        assert page.get_by_role("button", name="安装", exact=True).count() == len(catalog_keys)
-        java_card = page.locator(".plugin-card").filter(has=page.get_by_role("heading", name="Java", exact=True))
-        assert java_card.locator("select").count() == 0
+        search.fill("Java")
+        java_card = cards.filter(has=page.get_by_role("heading", name="Java", exact=True))
+        java_versions = {r["version"] for r in grouped["java"]}
+        card_version = java_card.get_by_label("Java版本", exact=True)
+        expect(card_version.locator("option")).to_have_count(len(java_versions))
+        card_version.select_option("17")
         java_card.get_by_role("button", name="安装", exact=True).click()
-        java_install = page.locator(".el-drawer:visible").last
-        java_install.get_by_role("button", name="原生安装", exact=True).click()
-        java_install.get_by_label("原生安装来源", exact=True).select_option("OFFLINE")
-        java_version = java_install.get_by_label("安装版本", exact=True)
-        java_native = [entry for entry in catalog if entry["key"] == "java" and "NATIVE" in entry["runtimeModes"]]
-        assert java_version.locator('option[value]:not([value=""])').count() == len(java_native)
-        java17 = next(entry for entry in java_native if entry["version"] == "17")
-        java_version.select_option(java17["revision"])
-        assert java_version.input_value() == java17["revision"]
+        java_install = page.locator(".service-install-dialog:visible").last
+        expect(java_install.get_by_role("group", name="安装方式")).to_be_visible()
+        native = java_install.get_by_role("button", name="原生安装", exact=True)
+        if native.count():
+            native.click()
+            java_version = java_install.get_by_label("Java 版本", exact=True)
+            java_version.select_option("17")
+            expect(java_version).to_have_value("17")
+            source = java_install.get_by_role("combobox", name="安装来源", exact=True)
+            source.select_option("LIBRARY")
+            expect(java_install.get_by_role("region", name="安装来源")).to_be_visible()
+        else:
+            expect(java_install.get_by_text("当前系统暂无原生安装方案，可管理已有软件。")).to_be_visible()
         java_install.get_by_role("button", name="取消", exact=True).click()
         discard = page.get_by_role("dialog", name="关闭窗口", exact=True)
         if discard.is_visible():
             discard.get_by_role("button", name="放弃修改", exact=True).click()
         java_install.wait_for(state="hidden")
+        search.fill("")
         page.get_by_role("button", name="构建工具", exact=True).click()
-        assert page.locator(".plugin-card").count() == 2
-        page.get_by_role("heading", name="Maven", exact=True).wait_for()
-        page.get_by_role("heading", name=next(entry["name"] for entry in catalog if entry["key"] == "git"), exact=True).wait_for()
+        build_keys = {k for k, versions in grouped.items()
+                      if any(r["key"] in ("maven", "git") or r.get("category") == "BUILD_TOOLS" for r in versions)}
+        expect(cards).to_have_count(len(build_keys))
+        assert sorted(cards.locator("h3").all_text_contents()) == sorted(names[k] for k in build_keys)
         page.get_by_role("button", name="全部软件", exact=True).click()
-        page.get_by_label("搜索安装软件", exact=True).fill("17")
-        assert page.locator(".plugin-card").count() == 1
-        page.get_by_label("搜索安装软件", exact=True).fill("no-such-software")
+        search.fill("17")
+        java_card.wait_for()
+        search.fill("no-such-software")
         page.get_by_text("没有匹配的软件", exact=True).wait_for()
-        page.get_by_label("搜索安装软件", exact=True).fill("")
         checks.extend(["UI01-catalog-grouped-software", "UI01-version-select", "UI01-category-filter", "UI01-catalog-search"])
         for tool_name in ("Java", "Maven"):
-            tool_card = page.locator(".plugin-card").filter(has=page.get_by_role("heading", name=tool_name, exact=True))
-            assert tool_card.get_by_role("button", name="安装", exact=True).is_enabled()
+            search.fill(tool_name)
+            tool_card = cards.filter(has=page.get_by_role("heading", name=tool_name, exact=True))
+            expect(tool_card.get_by_role("button", name="安装", exact=True)).to_be_enabled()
+        search.fill("")
         assert page.get_by_label("宿主端口", exact=True).count() == 0
         assert page.get_by_label("控制器名称", exact=True).count() == 0
         page.wait_for_function("() => document.querySelectorAll('.el-message').length === 0")
@@ -962,9 +992,12 @@ try:
         queued = page.request.post(url + "/ops/api/v1/artifact-imports", headers={"Origin": url, "X-CSRF-Token": csrf}, data={"name":"browser-cancel-input", "archiveSha256":"a"*64, "byteSize":1, "idempotencyKey":"browser-cancel-"+secrets.token_hex(8)})
         assert queued.status == 202, queued.text()
         page.get_by_role("button", name="发布作业", exact=True).click()
-        page.get_by_role("button", name="取消排队", exact=True).click()
-        page.get_by_role("cell", name="已取消", exact=True).wait_for()
-        assert page.get_by_role("button", name="取消排队", exact=True).count() == 0
+        job_id = queued.json()["data"]["jobId"]
+        job_row = page.get_by_role("row").filter(has=page.get_by_text(job_id[:8], exact=True))
+        cancel_job = job_row.get_by_role("button", name="取消排队", exact=True)
+        cancel_job.click()
+        expect(job_row.locator(".state-tag")).to_have_text("已取消")
+        expect(cancel_job).to_have_count(0)
         checks.extend(["UX-OPS-JAR-fixed-recipe-ready-Java21-only", "UX-OPS-complete-image-no-JRE-override", "UX-OPS-real-queued-import-cancel"])
         page.get_by_role("button", name="系统设置", exact=True).click()
         page.get_by_role("button", name="修改密码", exact=True).click()
@@ -1013,7 +1046,8 @@ try:
                 page.get_by_role("button", name="展开导航", exact=True).click()
                 page.get_by_role("button", name="软件安装", exact=True).click()
                 page.locator(".software-recipes").wait_for()
-                page.wait_for_function("count => document.querySelectorAll('.plugin-card').length === count", arg=expected_cards)
+                expect(page.get_by_role("heading", name="Node.js", exact=True)).to_be_visible()
+                expect(page.get_by_role("navigation", name="软件安装分页")).to_contain_text(str(len(expected_names)))
                 page.wait_for_function("() => document.querySelectorAll('.el-message').length === 0")
                 screenshot_ready()
                 page.screenshot(path=str(output / "plugins-narrow.png"), full_page=True, animations="disabled")
