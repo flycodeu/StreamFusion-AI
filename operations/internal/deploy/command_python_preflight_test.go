@@ -63,11 +63,15 @@ func TestCommandPythonProbeUsesOnlyRequiredModulesAndWritesNoFiles(t *testing.T)
 	}
 	for _, profile := range []string{"", "ytlabel", "label-studio"} {
 		t.Run("profile-"+profile, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			// A cold Python process can take over ten seconds on Windows CI.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			command := exec.CommandContext(ctx, python, "-I", "-S", "-B", "-c", deployScript("software/python-preflight.py"), profile)
 			command.Dir = t.TempDir()
 			data, err := command.CombinedOutput()
+			if ctx.Err() != nil {
+				t.Fatalf("Python probe did not complete: %v", ctx.Err())
+			}
 			var probe commandPythonProbe
 			if err != nil || StrictJSON(data, &probe) != nil || len(probe.Version) != 3 || probe.Version[0] != 3 {
 				t.Fatalf("probe output: %s %v", data, err)
