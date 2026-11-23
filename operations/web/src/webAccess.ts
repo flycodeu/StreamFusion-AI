@@ -61,6 +61,10 @@ export function webDefinitionError(recipe: ServiceRecipe): string {
 
 type WebAccessTarget = Host | "HOST_TERMINAL";
 
+export function isPresetJenkins(recipe: ServiceRecipe): boolean {
+  return /^custom-jenkins-(docker|native)-(online|offline)$/.test(recipe.key);
+}
+
 export function installationWebAccess(recipe: ServiceRecipe, config: ServiceConfiguration, host?: WebAccessTarget, controllerHost = browserHost()): SoftwareAccess | undefined {
   const web = recipe.web;
   if (!web) return undefined;
@@ -93,7 +97,9 @@ export function installationWebAccess(recipe: ServiceRecipe, config: ServiceConf
   if (!address) return unavailable("请填写可访问的主机地址");
   if (loopback(address) && !canUseLoopback) return unavailable("服务仅在服务器本机监听，请填写可访问的系统地址");
   if (address === "0.0.0.0" || address === "::") return unavailable("请填写可访问的主机地址");
-  const url = publicURL(`${web.scheme}://${address.includes(":") ? `[${address}]` : address}:${port}${web.path || "/"}`);
+  const path = web.path || "/";
+  const defaultJenkinsEntry = path === "/" && !web.urlParameter && isPresetJenkins(recipe);
+  const url = publicURL(`${web.scheme}://${address.includes(":") ? `[${address}]` : address}:${port}${defaultJenkinsEntry ? "/login" : path}`);
   return url ? { url, reason: "", embed: !!web.embed } : unavailable("访问地址无效，请检查主机、端口和入口路径");
 }
 
@@ -105,4 +111,15 @@ export function softwareWebAccess(item: SoftwareInstance, host?: WebAccessTarget
   if (item.installationStatus !== "READY") return { ...access, url: "", reason: "安装完成后可打开系统" };
   if (item.actualState !== "RUNNING") return { ...access, url: "", reason: item.actualState === "STOPPED" ? "软件已停止，请先启动" : "请先检查软件运行状态" };
   return access;
+}
+
+export function jenkinsPluginManagerAccess(item: SoftwareInstance, host?: Host): SoftwareAccess | undefined {
+  const recipe = item.installation?.definition;
+  if (!recipe || !isPresetJenkins(recipe)) return undefined;
+  const access = softwareWebAccess(item, host);
+  if (!access?.url) return access;
+  const url = new URL(access.url);
+  const root = url.pathname.replace(/\/login\/?$/, "").replace(/\/$/, "");
+  url.pathname = `${root}/pluginManager/available`;
+  return { ...access, url: url.href };
 }

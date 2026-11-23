@@ -29,6 +29,10 @@ func (s *Store) secret(id, revision, kind string) ([]byte, error) {
 	if e != nil {
 		return nil, errors.New("CREDENTIAL_UNAVAILABLE")
 	}
+	return s.openCredentialMaterial(id, revision, material)
+}
+
+func (s *Store) openCredentialMaterial(id, revision, material string) ([]byte, error) {
 	rev, e := strconv.Atoi(revision)
 	if e != nil {
 		return nil, e

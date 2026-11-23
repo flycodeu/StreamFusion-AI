@@ -23,6 +23,7 @@ INSTALL_JOB = "33333333-3333-4333-8333-333333333334"
 LOCAL = "11111111-1111-4111-8111-111111111112"
 STAMP = "2026-11-21T09:00:00Z"
 ADMIN = "44444444-4444-4444-8444-444444444441"
+ACCOUNT_PATH = f"/software-instances/{MYSQL}/login-accounts"
 
 
 class StaticHandler(SimpleHTTPRequestHandler):
@@ -84,6 +85,12 @@ class Fixture:
         self.submits, self.reconciles, self.unhandled = [], [], []
         self.job = None
         self.challenges = {}
+        self.accounts = [
+            {"id": "mysql-root", "source": "INSTALL", "label": "root 初始密码", "username": "root", "hasPassword": True,
+             "version": "root-binding-1", "fullName": "", "email": ""},
+            {"id": "mysql-user", "source": "INSTALL", "label": "业务账号密码", "username": "operator", "hasPassword": False,
+             "version": "user-binding-1", "fullName": "", "email": ""},
+        ]
         self.admin_id = ADMIN
         self.busy_once = False
         self.page = None
@@ -144,14 +151,41 @@ class Fixture:
                           headers={"Content-Disposition": "attachment; filename=install-sf-docker.sh"})
             return
         elif path == "/auth/secure-challenge":
-            assert request.post_data_json == {"path": f"/hosts/{HOST}/terminal-tools/install"}
+            target = request.post_data_json["path"]
+            assert target == f"/hosts/{HOST}/terminal-tools/install" or target == ACCOUNT_PATH or target.startswith(ACCOUNT_PATH + "/")
             key = secrets.token_hex(32)
-            self.challenges[key] = True
+            self.challenges[key] = target
             data = {"challengeId": key, "serverPublicKey": self.public}
+        elif path == ACCOUNT_PATH and request.method == "GET":
+            data = {"accounts": self.accounts}
+        elif path == f"/software-instances/{REDIS}/login-accounts" and request.method == "GET":
+            data = {"accounts": []}
+        elif path == ACCOUNT_PATH or path.startswith(ACCOUNT_PATH + "/"):
+            envelope = request.post_data_json
+            assert set(envelope) == {"challengeId", "clientPublicKey", "iv", "ciphertext"}
+            assert self.challenges.pop(envelope["challengeId"]) == path
+            fields = self.page.evaluate("([envelope, path]) => fixtureDecrypt(envelope, path)", [envelope, path])
+            if path.endswith("/copy-password"):
+                row = next(row for row in self.accounts if row["id"] == path.split("/")[-2])
+                assert row["hasPassword"] and fields["expectedVersion"] == row["version"]
+                if fields["password"] != "fixture-admin-confirm":
+                    route.fulfill(status=403, json={"code": "REAUTH_FAILED", "msg": "管理员密码不正确"})
+                    return
+                data = {"password": "fixture-root-secret" if row["source"] == "INSTALL" else "fixture-manual-secret"}
+            elif path == ACCOUNT_PATH:
+                assert fields["expectedVersion"] == "0" and fields["password"] == "fixture-manual-secret"
+                assert all(row["id"] != fields["id"] for row in self.accounts)
+                data = {key: fields[key] for key in ["id", "username", "email", "fullName"]}
+                data.update(version="1", source="MANUAL", label="", hasPassword=True)
+                self.accounts.append(data)
+            else:
+                data = next(row for row in self.accounts if row["id"] == path.split("/")[-1])
+                assert data["source"] == "MANUAL" and fields["expectedVersion"] == "1" and fields["password"] == ""
+                data.update(fullName=fields["fullName"], version="2")
         elif path == f"/hosts/{HOST}/terminal-tools/install":
             envelope = request.post_data_json
             assert set(envelope) == {"challengeId", "clientPublicKey", "iv", "ciphertext"}
-            assert self.challenges.pop(envelope["challengeId"])
+            assert self.challenges.pop(envelope["challengeId"]) == path
             submitted = self.page.evaluate("([envelope, path]) => fixtureDecrypt(envelope, path)", [envelope, path])
             assert submitted.pop("confirmed") is True
             password = submitted.pop("sudoPassword", None)
@@ -252,6 +286,9 @@ def run(chromium):
             copy_and_check(redis, "容器内连接", "docker exec -it sf-redis redis-cli --askpass")
             copy_and_check(redis, "宿主机 TCP 连接", "redis-cli -h 127.0.0.1 -p 16379 --askpass")
             expect(redis.get_by_role("button", name="补装宿主机客户端")).to_have_count(0)
+            redis.get_by_role("tab", name="登录账号", exact=True).click()
+            expect(redis.get_by_text("暂无登录账号", exact=True)).to_be_visible()
+            expect(redis.get_by_role("button", name="添加登录账号")).to_be_enabled()
             close_detail(redis)
 
             native = open_detail("原生 Redis")
@@ -262,6 +299,45 @@ def run(chromium):
             mysql = open_detail("旧版 MySQL")
             copy_and_check(mysql, "容器内连接", "docker exec -it sf-mysql mysql --protocol=SOCKET --user=operator --password --database=warehouse")
             copy_and_check(mysql, "宿主机 TCP 连接", "mysql --protocol=TCP --host=127.0.0.1 --port=13306 --user=operator --password --database=warehouse")
+            mysql.get_by_role("tab", name="登录账号", exact=True).click()
+            accounts = mysql.get_by_role("region", name="软件登录账号")
+            root = accounts.get_by_role("listitem").filter(has=page.get_by_text("root", exact=True))
+            expect(root).to_contain_text("密码已保存")
+            expect(root.get_by_role("button", name="编辑")).to_have_count(0)
+            unavailable = accounts.get_by_role("listitem").filter(has=page.get_by_text("operator", exact=True))
+            expect(unavailable.get_by_role("button", name="复制密码")).to_be_disabled()
+            root.get_by_role("button", name="复制密码").click()
+            confirmation = page.get_by_role("dialog", name="复制软件登录密码")
+            previous_clipboard = page.evaluate("() => navigator.clipboard.readText()")
+            confirmation.get_by_label("Ops 管理员登录密码").fill("fixture-wrong-confirmation")
+            confirmation.get_by_role("button", name="验证并复制").click()
+            expect(confirmation.get_by_role("alert")).to_have_text("管理员密码不正确")
+            assert page.evaluate("() => navigator.clipboard.readText()") == previous_clipboard
+            confirmation.get_by_label("Ops 管理员登录密码").fill("fixture-admin-confirm")
+            confirmation.get_by_role("button", name="验证并复制").click()
+            expect(confirmation).not_to_be_visible()
+            assert page.evaluate("() => navigator.clipboard.readText()") == "fixture-root-secret"
+            expect(accounts).not_to_contain_text("fixture-root-secret")
+            for username in ["backup", "analyst"]:
+                accounts.get_by_role("button", name="添加登录账号").click()
+                accounts.get_by_label("用户名", exact=True).fill(username)
+                accounts.get_by_label("密码", exact=True).fill("fixture-manual-secret")
+                accounts.get_by_role("button", name="保存登录账号").click()
+                expect(accounts.get_by_text(username, exact=True)).to_be_visible()
+            backup = accounts.get_by_role("listitem").filter(has=page.get_by_text("backup", exact=True))
+            backup.get_by_role("button", name="编辑").click()
+            accounts.get_by_label("全名", exact=True).fill("备份账号")
+            mysql.get_by_role("tab", name="软件概览").click()
+            page.get_by_role("button", name="继续编辑").click()
+            expect(accounts.get_by_label("全名", exact=True)).to_have_value("备份账号")
+            accounts.get_by_role("button", name="保存登录账号").click()
+            expect(backup).to_contain_text("备份账号")
+            expect(accounts.get_by_role("listitem")).to_have_count(4)
+            backup.get_by_role("button", name="复制密码").click()
+            confirmation.get_by_label("Ops 管理员登录密码").fill("fixture-admin-confirm")
+            confirmation.get_by_role("button", name="验证并复制").click()
+            expect(confirmation).not_to_be_visible()
+            assert page.evaluate("() => navigator.clipboard.readText()") == "fixture-manual-secret"
             close_detail(mysql)
             pg = open_detail("已登记 PostgreSQL")
             page.set_viewport_size({"width": 390, "height": 844})
@@ -383,7 +459,7 @@ def run(chromium):
             job_row = page.get_by_role("row").filter(has_text="主机终端工具")
             expect(job_row).to_contain_text("安装主机终端工具")
             assert not errors and not fixture.unhandled, (errors, fixture.unhandled)
-            print("PASS: one Docker installation submission including host terminal setup, host bundle confirmation, instance commands, optional host repair and download.")
+            print("PASS: Docker installation, instance commands, login account creation and editing, verified password copy, host repair and download.")
             browser.close()
     finally:
         server.shutdown()

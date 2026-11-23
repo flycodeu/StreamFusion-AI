@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/streamfusion-ai/operations/internal/deploy"
@@ -152,16 +153,21 @@ func (s *Store) findInstallRecipe(key, version string) (serviceinstall.Definitio
 }
 
 func findInstallRecipe(q interface{ QueryRow(string, ...any) *sql.Row }, key, version string) (serviceinstall.Definition, error) {
-	var raw string
+	d, _, err := findInstallRecipeRecord(q, key, version)
+	return d, err
+}
+
+func findInstallRecipeRecord(q interface{ QueryRow(string, ...any) *sql.Row }, key, version string) (serviceinstall.Definition, string, error) {
+	var id, raw string
 	var d serviceinstall.Definition
-	err := q.QueryRow("SELECT published_json FROM command_templates WHERE recipe_key=? AND published_json<>''", commandTemplateKey(key, version)).Scan(&raw)
+	err := q.QueryRow("SELECT id,published_json FROM command_templates WHERE recipe_key=? AND published_json<>''", commandTemplateKey(key, version)).Scan(&id, &raw)
 	if err == nil {
 		err = deploy.StrictJSON([]byte(raw), &d)
 	}
 	if err == nil && d.Version != version {
 		err = errors.New("INSTALL_RECIPE_INVALID")
 	}
-	return d, err
+	return d, id, err
 }
 
 // A command edit cannot invalidate an unchanged vendor package. Custom archives
@@ -206,7 +212,8 @@ func (h *HTTP) commandTemplateRoute(w http.ResponseWriter, r *http.Request, s *s
 	edit := len(p) == 2 && deploy.ID.MatchString(p[1]) && r.Method == "PUT"
 	publish := len(p) == 3 && deploy.ID.MatchString(p[1]) && p[2] == "publish" && r.Method == "POST"
 	withdraw := len(p) == 2 && deploy.ID.MatchString(p[1]) && r.Method == "DELETE"
-	if !create && !edit && !publish && !withdraw {
+	remove := len(p) == 3 && deploy.ID.MatchString(p[1]) && p[2] == "definition" && r.Method == "DELETE"
+	if !create && !edit && !publish && !withdraw && !remove {
 		return false
 	}
 	var in struct {
@@ -288,6 +295,21 @@ func (h *HTTP) commandTemplateRoute(w http.ResponseWriter, r *http.Request, s *s
 			case withdraw:
 				_, err = tx.Exec("UPDATE command_templates SET published_json='',version=version+1,updated_at=? WHERE id=?", Now(), id)
 				action = "COMMAND_TEMPLATE_WITHDRAWN"
+			case remove:
+				if serviceinstall.IsBuiltinCommand(old.Draft) || !strings.HasPrefix(old.Draft.Key, "custom-") {
+					h.fail(w, r, 409, "COMMAND_TEMPLATE_BUILTIN", "该安装方案由系统提供，可以编辑或下架")
+					return true
+				}
+				var inUse bool
+				inUse, err = commandTemplateInUse(tx, old)
+				if err == nil && inUse {
+					h.fail(w, r, 409, "COMMAND_TEMPLATE_IN_USE", "安装计划、软件实例、管理记录或安装材料已关联此方案，可从软件目录下架")
+					return true
+				}
+				if err == nil {
+					err = tx.QueryRow("DELETE FROM command_templates WHERE id=? AND builtin=0 RETURNING id", id).Scan(&id)
+				}
+				action = "COMMAND_TEMPLATE_DELETED"
 			}
 		}
 	}
@@ -307,6 +329,10 @@ func (h *HTTP) commandTemplateRoute(w http.ResponseWriter, r *http.Request, s *s
 		}
 		return true
 	}
+	if remove {
+		h.success(w, r, map[string]string{"id": id})
+		return true
+	}
 	saved, err := scanCommandTemplate(h.store.DB.QueryRow("SELECT "+commandTemplateColumns+" FROM command_templates WHERE id=?", id))
 	if err != nil {
 		h.internal(w, r, err)
@@ -314,4 +340,15 @@ func (h *HTTP) commandTemplateRoute(w http.ResponseWriter, r *http.Request, s *s
 		h.success(w, r, saved)
 	}
 	return true
+}
+
+func commandTemplateInUse(tx *sql.Tx, template commandTemplate) (bool, error) {
+	var used bool
+	err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM software_management_state WHERE template_id=?1)
+		OR EXISTS(SELECT 1 FROM software_install_plans WHERE json_extract(snapshot_json,'$.definition.key')=?2 AND (status='SUBMITTED' OR (status='DRAFT' AND expires_at>?3)))
+		OR EXISTS(SELECT 1 FROM software_instances WHERE json_extract(installation_json,'$.definition.key')=?2)
+		OR EXISTS(SELECT 1 FROM software_configuration_plans WHERE json_extract(snapshot_json,'$.templateId')=?1 AND (status='SUBMITTED' OR (status='DRAFT' AND expires_at>?3)))
+		OR EXISTS(SELECT 1 FROM installation_materials WHERE json_extract(definition_json,'$.key')=?2 AND status<>'DELETED')`,
+		template.ID, template.Draft.Key, time.Now().UTC().Format(time.RFC3339)).Scan(&used)
+	return used, err
 }

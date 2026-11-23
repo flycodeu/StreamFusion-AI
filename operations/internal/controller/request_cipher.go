@@ -60,12 +60,24 @@ func sensitiveRequestPath(path string) bool {
 	if strings.HasPrefix(path, "/hosts/") && (strings.HasSuffix(path, "/preparation/install") || strings.HasSuffix(path, "/preparation/repair") || strings.HasSuffix(path, "/terminal-tools/install")) {
 		return true
 	}
+	if _, ok := softwareLoginAccountPath(path); ok {
+		return true
+	}
 	parts := strings.Split(path, "/")
+	if len(parts) == 6 && parts[0] == "" && parts[1] == "application-projects" && parts[3] == "service-instances" && parts[5] == "jenkins-monitor" {
+		_, projectErr := uuid.Parse(parts[2])
+		_, instanceErr := uuid.Parse(parts[4])
+		return projectErr == nil && instanceErr == nil
+	}
+	if len(parts) == 4 && parts[0] == "" && parts[1] == "application-projects" && parts[3] == "jenkins-monitor" {
+		_, err := uuid.Parse(parts[2])
+		return err == nil
+	}
 	if len(parts) == 5 && parts[0] == "" && parts[1] == "software-instances" && parts[3] == "config-files" && parts[4] == "check" {
 		_, err := uuid.Parse(parts[2])
 		return err == nil
 	}
-	if len(parts) != 4 || parts[0] != "" || parts[1] != "credentials" || parts[3] != "revisions" {
+	if len(parts) != 4 || parts[0] != "" || !(parts[1] == "credentials" && parts[3] == "revisions" || parts[1] == "software-instances" && parts[3] == "jenkins-unlock") {
 		return false
 	}
 	_, err := uuid.Parse(parts[2])

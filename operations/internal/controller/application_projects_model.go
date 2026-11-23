@@ -21,6 +21,7 @@ type applicationProject struct {
 	Code         string                   `json:"code"`
 	Name         string                   `json:"name"`
 	Description  string                   `json:"description"`
+	JenkinsURL   string                   `json:"jenkinsUrl,omitempty"`
 	Version      string                   `json:"version"`
 	Archived     bool                     `json:"archived"`
 	CreatedAt    string                   `json:"createdAt"`
@@ -37,12 +38,13 @@ type applicationRepository struct {
 	Branch       string `json:"branch"`
 }
 type applicationModule struct {
-	ID           string             `json:"id"`
-	Name         string             `json:"name"`
-	RepositoryID string             `json:"repositoryId"`
-	Directory    string             `json:"directory"`
-	Build        applicationBuild   `json:"build"`
-	Runtime      applicationRuntime `json:"runtime"`
+	ID           string                    `json:"id"`
+	Name         string                    `json:"name"`
+	RepositoryID string                    `json:"repositoryId"`
+	Directory    string                    `json:"directory"`
+	Build        applicationBuild          `json:"build"`
+	Runtime      applicationRuntime        `json:"runtime"`
+	Catalog      *applicationModuleCatalog `json:"catalog,omitempty"`
 }
 type applicationBuild struct {
 	Kind       string            `json:"kind"`
@@ -85,6 +87,7 @@ type applicationDeployment struct {
 	ModuleID          string                `json:"moduleId"`
 	HostID            string                `json:"hostId"`
 	RuntimeSoftwareID string                `json:"runtimeSoftwareId"`
+	RecordedVersion   string                `json:"recordedVersion,omitempty"`
 	BindAddress       string                `json:"bindAddress"`
 	MemoryMiB         int                   `json:"memoryMiB"`
 	Ports             []applicationPort     `json:"ports"`
@@ -144,6 +147,23 @@ func applicationRelative(value string) bool {
 }
 func applicationAbsolute(value string) bool {
 	return len(value) <= 240 && strings.HasPrefix(value, "/") && value != "/" && path.Clean(value) == value && !strings.ContainsAny(value, "\\\r\n\x00")
+}
+
+func normalizeApplicationRepository(r *applicationRepository) error {
+	r.Name, r.URL, r.Branch = strings.TrimSpace(r.Name), strings.TrimSpace(r.URL), strings.TrimSpace(r.Branch)
+	if !validName(r.Name) {
+		return errors.New("请填写仓库名称，最多60个字符")
+	}
+	if _, err := applicationRepositoryEndpoint(r.URL); err != nil {
+		return err
+	}
+	if !applicationText(r.Branch, 240) || strings.ContainsAny(r.Branch, "\r\n\t ") || strings.HasPrefix(r.Branch, "-") {
+		return errors.New("分支、标签或提交格式不正确")
+	}
+	if r.GitAccountID != "" && !deploy.ID.MatchString(r.GitAccountID) {
+		return errors.New("Git账号不正确")
+	}
+	return nil
 }
 
 type applicationGitEndpoint struct {
@@ -222,6 +242,9 @@ func normalizeApplicationProject(p *applicationProject) error {
 	if !validName(p.Name) || !applicationText(p.Description, 2000) {
 		return errors.New("请填写项目名称，说明最多2000字节")
 	}
+	if err := normalizeApplicationJenkinsURL(&p.JenkinsURL); err != nil {
+		return err
+	}
 	if len(p.Repositories) > 20 || len(p.Modules) > 40 || len(p.Environments) > 20 {
 		return errors.New("每项目最多20个仓库、40个模块和20个环境")
 	}
@@ -240,23 +263,16 @@ func normalizeApplicationProject(p *applicationProject) error {
 	names := map[string]bool{}
 	for i := range p.Repositories {
 		r := &p.Repositories[i]
-		r.Name, r.URL, r.Branch = strings.TrimSpace(r.Name), strings.TrimSpace(r.URL), strings.TrimSpace(r.Branch)
 		if err := assign(&r.ID); err != nil {
 			return err
 		}
-		if !validName(r.Name) || names[strings.ToLower(r.Name)] {
-			return errors.New("仓库名称不能为空或重复")
-		}
-		names[strings.ToLower(r.Name)] = true
-		if _, err := applicationRepositoryEndpoint(r.URL); err != nil {
+		if err := normalizeApplicationRepository(r); err != nil {
 			return err
 		}
-		if !applicationText(r.Branch, 240) || strings.ContainsAny(r.Branch, "\r\n\t ") || strings.HasPrefix(r.Branch, "-") {
-			return errors.New("分支、标签或提交格式不正确")
+		if names[strings.ToLower(r.Name)] {
+			return errors.New("仓库名称不能重复")
 		}
-		if r.GitAccountID != "" && !deploy.ID.MatchString(r.GitAccountID) {
-			return errors.New("Git账号不正确")
-		}
+		names[strings.ToLower(r.Name)] = true
 		repositories[r.ID] = true
 	}
 	names = map[string]bool{}
@@ -271,6 +287,9 @@ func normalizeApplicationProject(p *applicationProject) error {
 		}
 		if !validName(m.Name) || names[strings.ToLower(m.Name)] {
 			return errors.New("模块名称不能为空或重复")
+		}
+		if err := m.Catalog.normalize(); err != nil {
+			return err
 		}
 		names[strings.ToLower(m.Name)] = true
 		if m.RepositoryID != "" && !repositories[m.RepositoryID] {
@@ -364,6 +383,9 @@ func normalizeApplicationProject(p *applicationProject) error {
 				return errors.New("每环境的模块配置必须属于本项目且不能重复")
 			}
 			seenModules[d.ModuleID] = true
+			if err := normalizeApplicationRecordedVersion(&d.RecordedVersion); err != nil {
+				return err
+			}
 			if d.RuntimePolicy != nil {
 				kind := "SYSTEMD"
 				for _, module := range p.Modules {
@@ -504,8 +526,15 @@ func validateApplicationReferences(tx *sql.Tx, p applicationProject) error {
 			return applicationInvalid("构建主机及系统账号须与所选Git账号一致")
 		}
 	}
+	moduleNames := make(map[string]string, len(p.Modules))
+	for _, m := range p.Modules {
+		moduleNames[m.ID] = m.Name
+	}
 	for _, e := range p.Environments {
 		for _, d := range e.Deployments {
+			if err := checkModuleRuntimeRole(tx, moduleNames[d.ModuleID], d.ID, d.RuntimeSoftwareID); err != nil {
+				return err
+			}
 			if err := checkHost(d.HostID); err != nil {
 				return err
 			}

@@ -37,6 +37,6 @@ func (h *HTTP) readManagedSoftware(ctx context.Context, t target, i softwareInst
 	default:
 		return nil, errors.New("EXECUTOR_RESPONSE_INVALID")
 	}
-	fact.Log = deploy.RedactSoftwareLogs(fact.Log)
+	fact.Log = deploy.RedactSoftwareInstanceLogs(fact.Log, i.SoftwareType)
 	return fact, nil
 }

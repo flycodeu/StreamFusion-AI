@@ -20,6 +20,7 @@ parser.add_argument("--browser-executable", help="已有Chromium可执行文件�
 parser.add_argument("--error-docs-only", action="store_true", help="仅验证系统设置的错误说明文档")
 parser.add_argument("--settings-only", action="store_true", help="仅验证系统设置与运行监控")
 parser.add_argument("--logs-only", action="store_true", help="仅验证执行记录分页与原位日志弹窗")
+parser.add_argument("--login-accounts-only", action="store_true", help="验证软件多账号保存和验证复制")
 args = parser.parse_args()
 binary = str(pathlib.Path(args.binary).resolve())
 output = pathlib.Path(args.output).resolve()
@@ -72,6 +73,55 @@ try:
         page.reload()
         page.get_by_role("heading", name="运行总览", exact=True).wait_for()
         checks.extend(["login", "session-after-reload", "real-status"])
+        if args.login_accounts_only:
+            host_id = "11111111-1111-4111-8111-111111111115"
+            software_id = "22222222-2222-4222-8222-222222222215"
+            stamp = "2026-11-23T00:00:00Z"
+            with sqlite3.connect(state / "controller.sqlite") as db:
+                db.execute("INSERT INTO targets(id,name,install_root,kind,address,created_at) VALUES(?,?,?,'LOCAL','127.0.0.1',?)",
+                           (host_id, "账号测试主机", str(output / "fixture-target"), stamp))
+                db.execute("INSERT INTO software_instances(id,name,host_id,software_type,runtime_kind,locator,management_mode,desired_state,actual_state,created_at,updated_at) VALUES(?,?,?,'MYSQL','SYSTEMD','mysql-fixture.service','OBSERVE','UNCHANGED','STOPPED',?,?)",
+                           (software_id, "账号测试软件", host_id, stamp, stamp))
+            page.context.grant_permissions(["clipboard-read", "clipboard-write"], origin=url)
+            page.get_by_role("button", name="软件管理", exact=True).click()
+            card = page.get_by_role("article", name="账号测试软件", exact=True)
+            detail = page.get_by_role("dialog", name="账号测试软件", exact=True)
+            accounts = detail.get_by_role("region", name="软件登录账号")
+            def open_accounts():
+                card.get_by_role("button", name="详情", exact=True).click()
+                detail.get_by_role("tab", name="登录账号", exact=True).click()
+            open_accounts()
+            expect(accounts.get_by_text("暂无登录账号")).to_be_visible()
+            samples = {user: secrets.token_urlsafe(24) for user in ("first-operator", "second-operator")}
+            for user, value in samples.items():
+                accounts.get_by_role("button", name="添加登录账号").click()
+                accounts.get_by_label("用户名", exact=True).fill(user)
+                accounts.get_by_label("密码", exact=True).fill(value)
+                accounts.get_by_role("button", name="保存登录账号").click()
+                expect(accounts.get_by_text(user, exact=True)).to_be_visible()
+            detail.get_by_role("button", name="Close this dialog").click()
+            expect(detail).not_to_be_visible()
+            open_accounts()
+            expect(accounts.get_by_role("listitem")).to_have_count(2)
+            confirmation = page.get_by_role("dialog", name="复制软件登录密码")
+            for user, value in samples.items():
+                row = accounts.get_by_role("listitem").filter(has=page.get_by_text(user, exact=True))
+                expect(row).to_contain_text("密码已保存")
+                row.get_by_role("button", name="复制密码", exact=True).click()
+                confirmation.get_by_label("Ops 管理员登录密码").fill(password)
+                confirmation.get_by_role("button", name="验证并复制").click()
+                expect(confirmation).not_to_be_visible()
+                assert page.evaluate("() => navigator.clipboard.readText()") == value, "Copied password does not match the selected account"
+            page.evaluate("() => navigator.clipboard.writeText('')")
+            with sqlite3.connect(state / "controller.sqlite") as db:
+                assert db.execute("SELECT count(*) FROM software_login_accounts WHERE software_id=?", (software_id,)).fetchone()[0] == 2
+            assert not errors, errors
+            checks.extend(["add-two-accounts-via-ui", "reopen-and-read-saved-list", "verify-and-copy-each-account", "two-persisted-account-rows"])
+            result = {"passed": checks, "pageErrors": errors, "backend": "real binary / disposable state", "browserUIFixtures": []}
+            (output / "result.json").write_text(json.dumps(result, indent=2), encoding="utf8")
+            print(json.dumps(result))
+            browser.close()
+            raise SystemExit(0)
         if args.logs_only:
             # Terminal history fixtures live only in this script's disposable
             # state. Every row is already SUCCEEDED; none is a queued operation.

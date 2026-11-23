@@ -21,7 +21,7 @@ import (
 )
 
 const Version = "0.2.0"
-const SchemaVersion = 27
+const SchemaVersion = 32
 
 //go:embed schema.sql
 var schema string
@@ -174,6 +174,30 @@ func Open(dir string) (*Store, error) {
 		}
 		if count > 0 {
 			return nil, errors.New("KEY_MISSING: 存在凭据，拒绝生成替代密钥")
+		}
+		if version >= 29 {
+			if err = s.DB.QueryRow("SELECT count(*) FROM software_login_accounts").Scan(&count); err != nil {
+				return nil, err
+			}
+			if count > 0 {
+				return nil, errors.New("KEY_MISSING: 存在软件登录账号，拒绝生成替代密钥")
+			}
+		}
+		if version >= 30 {
+			if err = s.DB.QueryRow("SELECT count(*) FROM application_jenkins_monitors").Scan(&count); err != nil {
+				return nil, err
+			}
+			if count > 0 {
+				return nil, errors.New("KEY_MISSING: 存在 Jenkins 查询凭据，拒绝生成替代密钥")
+			}
+		}
+		if version >= 32 {
+			if err = s.DB.QueryRow("SELECT count(*) FROM application_qa_monitors").Scan(&count); err != nil {
+				return nil, err
+			}
+			if count > 0 {
+				return nil, errors.New("KEY_MISSING: 存在模块 QA 凭据，拒绝生成替代密钥")
+			}
 		}
 		s.Key = make([]byte, 32)
 		if _, err = rand.Read(s.Key); err == nil {
@@ -1036,6 +1060,142 @@ func Open(dir string) (*Store, error) {
 	}
 	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=27").Scan(&checksum); err != nil || checksum != hashToken(schemaV27) {
 		return nil, errors.New("SCHEMA_MISMATCH: 迁移27摘要不匹配")
+	}
+	if version > 0 && version <= 27 {
+		backupPath := filepath.Join(abs, "before-schema-28-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 27 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV28); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(28,?,?,?)", hashToken(schemaV28), Version, Now())
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=28").Scan(&checksum); err != nil || checksum != hashToken(schemaV28) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移28摘要不匹配")
+	}
+	if version > 0 && version <= 28 {
+		backupPath := filepath.Join(abs, "before-schema-29-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 28 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV29); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(29,?,?,?)", hashToken(schemaV29), Version, Now())
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=29").Scan(&checksum); err != nil || checksum != hashToken(schemaV29) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移29摘要不匹配")
+	}
+	if version > 0 && version <= 29 {
+		backupPath := filepath.Join(abs, "before-schema-30-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 29 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV30); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(30,?,?,?)", hashToken(schemaV30), Version, Now())
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=30").Scan(&checksum); err != nil || checksum != hashToken(schemaV30) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移30摘要不匹配")
+	}
+	if err = s.verifyJenkinsMonitors(false); err != nil {
+		return nil, err
+	}
+	if version > 0 && version <= 30 {
+		backupPath := filepath.Join(abs, "before-schema-31-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 30 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV31); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(31,?,?,?)", hashToken(schemaV31), Version, Now())
+		}
+		if e == nil {
+			e = s.verifySoftwareLoginAccounts(tx)
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	} else if err = s.verifySoftwareLoginAccounts(s.DB); err != nil {
+		return nil, err
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=31").Scan(&checksum); err != nil || checksum != hashToken(schemaV31) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移31摘要不匹配")
+	}
+	if version > 0 && version <= 31 {
+		backupPath := filepath.Join(abs, "before-schema-32-"+time.Now().UTC().Format("20060102T150405.000000000")+".tar.gz")
+		if err = s.BackupTo(backupPath); err != nil {
+			return nil, fmt.Errorf("SCHEMA_BACKUP_FAILED: %w", err)
+		}
+	}
+	if version <= 31 {
+		tx, e := s.DB.Begin()
+		if e != nil {
+			return nil, e
+		}
+		if _, e = tx.Exec(schemaV32); e == nil {
+			_, e = tx.Exec("INSERT INTO schema_migrations VALUES(32,?,?,?)", hashToken(schemaV32), Version, Now())
+		}
+		if e != nil {
+			tx.Rollback()
+			return nil, e
+		}
+		if e = tx.Commit(); e != nil {
+			return nil, e
+		}
+	}
+	if err = s.DB.QueryRow("SELECT checksum FROM schema_migrations WHERE version=32").Scan(&checksum); err != nil || checksum != hashToken(schemaV32) {
+		return nil, errors.New("SCHEMA_MISMATCH: 迁移32摘要不匹配")
+	}
+	if err = s.verifyJenkinsMonitors(true); err != nil {
+		return nil, err
 	}
 	if err = s.seedBuiltinCommandTemplates(); err != nil {
 		return nil, err

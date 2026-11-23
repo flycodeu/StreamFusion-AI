@@ -108,6 +108,17 @@ test("credential and host installation submissions use the envelope while reconc
     "/hosts/00000000-0000-0000-0000-000000000001/preparation/install",
     "/hosts/00000000-0000-0000-0000-000000000001/preparation/repair",
     "/hosts/00000000-0000-0000-0000-000000000001/terminal-tools/install",
+    "/software-instances/00000000-0000-0000-0000-000000000001/jenkins-unlock",
+    "/software-instances/00000000-0000-0000-0000-000000000001/login-account",
+    "/software-instances/00000000-0000-0000-0000-000000000001/login-account/copy-password",
+    "/software-instances/00000000-0000-0000-0000-000000000001/login-accounts",
+    "/software-instances/00000000-0000-0000-0000-000000000001/login-accounts/00000000-0000-0000-0000-000000000002",
+    "/software-instances/00000000-0000-0000-0000-000000000001/login-accounts/00000000-0000-0000-0000-000000000002/copy-password",
+    "/software-instances/00000000-0000-0000-0000-000000000001/login-accounts/mysql-root/copy-password",
+    "/software-instances/00000000-0000-0000-0000-000000000001/login-accounts/mysql-user/copy-password",
+    "/software-instances/00000000-0000-0000-0000-000000000001/login-accounts/redis-default/copy-password",
+    "/application-projects/00000000-0000-0000-0000-000000000001/jenkins-monitor",
+    "/application-projects/00000000-0000-0000-0000-000000000001/service-instances/00000000-0000-0000-0000-000000000002/jenkins-monitor",
   ]) {
     assert.equal(isSensitiveRequest(path, "POST"), true);
     assert.equal(isSensitiveRequest(path, "GET"), false);
@@ -155,6 +166,26 @@ test("actual request layer sends ciphertext, preserves CSRF and does not echo pl
     assert.equal(call.options.cache, "no-store");
     assert.equal(call.options.credentials, "same-origin");
   }
+});
+
+test("Jenkins unlock re-authentication is encrypted and bound to the selected software instance", async (t) => {
+  const path = "/software-instances/00000000-0000-0000-0000-000000000001/jenkins-unlock";
+  const payload = { password: "reauth-test-password", expectedVersion: "3" };
+  const issued = await challenge();
+  const calls = [];
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    calls.push(url);
+    if (url.endsWith("/auth/secure-challenge")) {
+      assert.deepEqual(JSON.parse(options.body), { path });
+      return reply(issued.public);
+    }
+    assert.equal(url, "/ops/api/v1" + path);
+    assert.ok(!options.body.includes(payload.password));
+    assert.deepEqual(await decrypt(issued.server, JSON.parse(options.body), path), payload);
+    return reply({ password: "test-jenkins-secret" });
+  });
+  assert.deepEqual(await request(path, "POST", payload), { password: "test-jenkins-secret" });
+  assert.equal(calls.length, 2);
 });
 
 test("component installation and repair wait for the bounded server budget without lengthening ordinary requests", async (t) => {

@@ -13,8 +13,10 @@ import InstallationMaterialDetails from "./InstallationMaterialDetails.vue";
 import RecipeSystemStepDetails from "./RecipeSystemStepDetails.vue";
 import SoftwareParameterFields from "./SoftwareParameterFields.vue";
 import RuntimePolicyFields from "./RuntimePolicyFields.vue";
+import JenkinsUnlockPassword from "./JenkinsUnlockPassword.vue";
+import { canCopyJenkinsUnlockPassword } from "./jenkinsUnlock";
 import { softwareJobErrorMessages, softwareJobPhaseLabel } from "./software";
-import { installationWebAccess, softwareWebAccess } from "./webAccess";
+import { installationWebAccess, isPresetJenkins, softwareWebAccess } from "./webAccess";
 import {
   defaultInstallationRuntime,
   recipeCatalogKey,
@@ -310,6 +312,12 @@ const webPreview = computed(() => {
   return recipe.value && config ? installationWebAccess(plan.value?.definition || recipe.value, config, host.value) : undefined;
 });
 const installedWeb = computed(() => existing.value ? softwareWebAccess(existing.value, host.value) : job.value?.status === "SUCCEEDED" && !job.value.targetAckPending ? webPreview.value : undefined);
+const unlockInstanceId = computed(() => {
+  if (!props.open || job.value?.status !== "SUCCEEDED" || job.value.targetAckPending) return "";
+  if (existing.value) return canCopyJenkinsUnlockPassword(existing.value) ? existing.value.id : "";
+  const definition = plan.value?.definition || recipe.value;
+  return definition && isPresetJenkins(definition) ? receipt.value?.softwareInstanceId || "" : "";
+});
 const successfulChecks = computed(() => plan.value?.checks.filter(check => check.status !== "WARNING") || []);
 const warningChecks = computed(() => plan.value?.checks.filter(check => check.status === "WARNING") || []);
 function showJobLogs(id = receipt.value?.jobId) {
@@ -765,6 +773,7 @@ async function uploadInstallationPackage() {
         <div class="inline-actions">
           <button v-if="canRetryInstallation && retryRecipe" class="primary" @click="retryFailedInstallation()">重新安装</button>
           <a v-if="installedWeb?.url" class="primary installed-web-link" :href="installedWeb.url" target="_blank" rel="noopener noreferrer">进入系统 ↗</a>
+          <JenkinsUnlockPassword v-if="unlockInstanceId" :key="unlockInstanceId" :instance-id="unlockInstanceId" :instance="existing" />
           <button class="secondary" @click="showJobLogs()">查看日志</button>
         </div>
       </section>

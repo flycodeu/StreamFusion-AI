@@ -92,6 +92,37 @@ func TestApplicationProjectBindingReplacementAndCrossProjectRejectionAreAtomic(t
 	}
 }
 
+func TestApplicationProjectDeleteOnlyRemovesConfirmedProjectAndChildren(t *testing.T) {
+	s, b := setup(t)
+	b.call("DELETE", "/application-projects/"+uuid.NewString(), map[string]string{"version": "1"}, 401)
+	b.login()
+	project := applicationResponse(t, b.call("POST", "/application-projects", projectDraft28("待删除项目"), 200))
+	other := applicationResponse(t, b.call("POST", "/application-projects", projectDraft28("另一个项目"), 200))
+	endpoint := "/application-projects/" + project.ID
+	b.call("DELETE", endpoint, map[string]string{}, 400)
+	b.call("DELETE", endpoint, map[string]string{"version": "0"}, 409)
+	b.call("GET", endpoint, nil, 200)
+	confirmation := map[string]string{"version": project.Version}
+	b.call("DELETE", endpoint, confirmation, 200)
+	b.call("DELETE", endpoint, confirmation, 404)
+	b.call("GET", endpoint, nil, 404)
+	kept := applicationResponse(t, b.call("GET", "/application-projects/"+other.ID, nil, 200))
+	if kept.Version != other.Version || kept.Environments[0].Deployments[0].ID != other.Environments[0].Deployments[0].ID {
+		t.Fatalf("deleting a project changed a different project: %+v", kept)
+	}
+	for _, table := range []string{"application_deployments", "application_environments", "application_modules", "application_repositories"} {
+		var count int
+		if err := s.DB.QueryRow("SELECT count(*) FROM "+table+" WHERE project_id=?", project.ID).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("project cleanup left rows in %s: count=%d err=%v", table, count, err)
+		}
+	}
+	var audit, jobs int
+	err := s.DB.QueryRow("SELECT (SELECT count(*) FROM audit WHERE object_id=? AND action='APPLICATION_PROJECT_DELETED'),(SELECT count(*) FROM jobs)", project.ID).Scan(&audit, &jobs)
+	if err != nil || audit != 1 || jobs != 0 {
+		t.Fatalf("unexpected delete receipt or remote mutation: audit=%d jobs=%d err=%v", audit, jobs, err)
+	}
+}
+
 func TestApplicationProjectPaginationAndAuthentication(t *testing.T) {
 	_, b := setup(t)
 	b.call("GET", "/application-projects", nil, 401)

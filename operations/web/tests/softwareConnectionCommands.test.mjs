@@ -10,7 +10,7 @@ async function load(name, dependencies = {}) {
   new Function("exports", "require", js)(exports, key => dependencies[key]);
   return exports;
 }
-const { softwareConnectionCommands: commands } = await load("softwareConnectionCommands", {
+const { softwareConnectionCommands: commands, softwareDockerCommands: dockerCommands } = await load("softwareConnectionCommands", {
   "./officialInstallation": await load("officialInstallation"), "./webAccess": await load("webAccess"),
 });
 function database(type, runtime = "DOCKER") {
@@ -137,8 +137,8 @@ test("tools, declared PostgreSQL accounts and other service runtimes get distinc
   assert.equal(commands(item)[0].command, "docker exec -it production-db psql -U analyst -d metrics -W");
   assert.doesNotMatch(JSON.stringify(commands(item)), /private-value/);
   delete item.installation;
-  assert.match(commands(item)[0].command, /inspect --format/);
-  assert.equal(commands(item)[1].command, "sf-docker ports production-db");
+  assert.deepEqual(commands(item), []);
+  assert.equal(dockerCommands(item)[2].command, "docker container port production-db");
   assert.equal(commands({ runtimeKind: "SYSTEMD", locator: "worker.service" })[0].command, "systemctl is-active -- worker.service");
 });
 
@@ -180,4 +180,52 @@ test("HTTP commands honor a valid declared URL, do not invent an alternative, an
   item.actualState = "RUNNING";
   item.installationStatus = "INSTALLING";
   assert.deepEqual(commands(item), []);
+});
+
+test("Jenkins keeps the HTTP entry and offers Docker maintenance alongside it", () => {
+  const item = database("OTHER");
+  item.installation.definition = { key: "custom-jenkins-docker-online", catalogKey: "jenkins", kind: "SERVICE",
+    web: { scheme: "http", path: "/", portKey: "main" }, port: 8080 };
+  item.installation.config.hostPort = 8080;
+  const rows = commands(item);
+  assert.match(rows[0].command, /http:\/\/127\.0\.0\.1:8080\/login$/);
+  assert.equal(rows.length, 1);
+  assert.deepEqual(dockerCommands(item).map(row => row.command), [
+    "docker container inspect --format '{{.State.Status}}' production-db",
+    "docker container logs --tail 100 production-db",
+    "docker container port production-db",
+    "docker container exec -it production-db /bin/sh",
+  ]);
+});
+
+test("Docker commands use the resolved container ID instead of a name that can be reused", () => {
+  const id = "a".repeat(64);
+  const item = { ...database("REDIS"), managementMode: "OBSERVE", observation: { locator: id, containerName: "production-db" } };
+  assert.equal(dockerCommands(item)[3].command, `docker container exec -it ${id} /bin/sh`);
+  assert.match(commands(item)[0].command, new RegExp(`docker exec -it ${id} redis-cli`));
+  item.locator = "b".repeat(64);
+  assert.equal(dockerCommands(item)[2].command, `docker container port ${id}`);
+  item.managementMode = "MANAGED";
+  assert.equal(dockerCommands(item)[2].command, `docker container port ${item.locator}`);
+});
+
+test("Docker diagnostics stay available when stopped or paused; only running containers offer a shell", () => {
+  const item = database("OTHER");
+  for (const state of ["STOPPED", "PAUSED", "UNKNOWN"]) {
+    item.actualState = state;
+    assert.deepEqual(dockerCommands(item).map(row => row.label), ["查看容器状态", "查看容器日志", "查看容器发布端口"]);
+  }
+  for (const state of ["REMOVED", "MISSING"]) {
+    item.actualState = state;
+    assert.deepEqual(dockerCommands(item), []);
+  }
+  item.actualState = "RUNNING";
+  for (const detail of [
+    { runtimeKind: "SYSTEMD", locator: "docker.service" },
+    { runtimeKind: "TOOL", locator: "image:sha256:" + "b".repeat(64) },
+    { installationStatus: "INSTALLING", locator: "pending:container" },
+    { managementMode: "RELEASED" },
+    { locator: "bad; echo NO" },
+    { locator: "-malicious-option" },
+  ]) assert.deepEqual(dockerCommands({ ...item, ...detail }), []);
 });

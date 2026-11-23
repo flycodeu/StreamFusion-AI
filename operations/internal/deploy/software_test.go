@@ -184,6 +184,21 @@ func TestSoftwareLogsAreBoundedRedactedAndIdentityChecked(t *testing.T) {
 	}
 }
 
+func TestJenkinsInitialAdminPasswordIsRedactedFromSoftwareLogs(t *testing.T) {
+	password := strings.Repeat("a123", 8)
+	for _, prefix := range []string{"", "2026-11-23T10:00:00.253987981Z ", "2026-11-23T10:00:00+08:00 runner run[84]: "} {
+		log := "service starting\n" + prefix + password + "\nlistener ready"
+		for _, key := range []string{"JENKINS", "CUSTOM-JENKINS-DOCKER-ONLINE", "CUSTOM-JENKINS-NATIVE-OFFLINE"} {
+			if got := RedactSoftwareInstanceLogs(log, key); got != "service starting\n"+prefix+"[REDACTED]\nlistener ready" {
+				t.Fatal("Jenkins setup password line did not redact while preserving the surrounding log")
+			}
+		}
+		if got := RedactSoftwareInstanceLogs(log, "OTHER"); got != log {
+			t.Fatal("other software log line was changed")
+		}
+	}
+}
+
 func TestSoftwareTimeoutAndOversizedObservationDoNotBecomeStopped(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

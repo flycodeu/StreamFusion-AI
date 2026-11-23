@@ -47,6 +47,9 @@ func TestCommandOfflineMaterialKeepsOriginalRevisionAndReplaysAfterWithdrawal(t 
 			if got, err := os.ReadFile(s.installationMaterialPath(id, false)); err != nil || string(got) != string(content) {
 				t.Fatal("confirmed bytes changed", err)
 			}
+			if blocked := b.call("DELETE", "/command-templates/"+saved["id"].(string)+"/definition", map[string]any{"expectedVersion": published["version"]}, 409); !strings.Contains(blocked.Body.String(), "COMMAND_TEMPLATE_IN_USE") {
+				t.Fatal(blocked.Body.String())
+			}
 			withdrawn := dataOf(t, b.call("DELETE", "/command-templates/"+saved["id"].(string), map[string]any{"expectedVersion": published["version"]}, 200))
 			if replay := dataOf(t, b.call("POST", "/installation-materials", input, 200)); replay["id"] != id || replay["recipeRevision"] != d.Revision {
 				t.Fatal("withdrawal lost the original upload receipt", replay)
@@ -146,6 +149,11 @@ func TestCommandSoftwareInstallAndUninstallKeepFrozenTemplate(t *testing.T) {
 				return encode(result)
 			})
 			plan := dataOf(t, b.call("POST", "/hosts/"+host+"/software-install-plans", map[string]any{"expectedHostVersion": "1", "recipeKey": d.Key, "recipeVersion": d.Version, "recipeRevision": d.Revision, "config": serviceinstall.Config{Name: "demo", RuntimeMode: d.RuntimeModes[0], MemoryMiB: 512}, "source": map[string]string{"type": d.SourceModes[0]}}, 200))
+			deleteEndpoint := "/command-templates/" + saved["id"].(string) + "/definition"
+			deleteInput := map[string]any{"expectedVersion": published["version"]}
+			if blocked := b.call("DELETE", deleteEndpoint, deleteInput, 409); !strings.Contains(blocked.Body.String(), "COMMAND_TEMPLATE_IN_USE") {
+				t.Fatal(blocked.Body.String())
+			}
 			accepted := dataOf(t, b.call("POST", "/software-install-plans/"+plan["id"].(string)+"/submit", map[string]string{"idempotencyKey": "command-install-test"}, 202))
 			installJob, id := accepted["jobId"].(string), accepted["softwareInstanceId"].(string)
 			var raw string
@@ -165,7 +173,10 @@ func TestCommandSoftwareInstallAndUninstallKeepFrozenTemplate(t *testing.T) {
 			if kind == "SYSTEMD" && (i.InstallationPaths.Bin != "" || request.Ownership.BinaryPath != "") {
 				t.Fatal("system service invented a binary directory")
 			}
-			b.call("DELETE", "/command-templates/"+saved["id"].(string), map[string]any{"expectedVersion": published["version"]}, 200)
+			if blocked := b.call("DELETE", deleteEndpoint, deleteInput, 409); !strings.Contains(blocked.Body.String(), "COMMAND_TEMPLATE_IN_USE") {
+				t.Fatal(blocked.Body.String())
+			}
+			withdrawn := dataOf(t, b.call("DELETE", "/command-templates/"+saved["id"].(string), deleteInput, 200))
 			input := map[string]any{"expectedVersion": i.Version, "action": "UNINSTALL", "idempotencyKey": "command-uninstall-test", "confirmed": true, "deleteData": true, "confirmationName": i.Name}
 			if response := b.call("POST", "/software-instances/"+id+"/actions", input, 409); !strings.Contains(response.Body.String(), "COMMAND_DATA_REMOVAL_UNAVAILABLE") {
 				t.Fatal(response.Body.String())
@@ -187,6 +198,9 @@ func TestCommandSoftwareInstallAndUninstallKeepFrozenTemplate(t *testing.T) {
 			}
 			if err = s.DB.QueryRow("SELECT input_json FROM jobs WHERE id=?", installJob).Scan(&raw); err != nil || raw != original {
 				t.Fatal("old job was rewritten", err)
+			}
+			if blocked := b.call("DELETE", deleteEndpoint, map[string]any{"expectedVersion": withdrawn["version"]}, 409); !strings.Contains(blocked.Body.String(), "COMMAND_TEMPLATE_IN_USE") {
+				t.Fatal(blocked.Body.String())
 			}
 		})
 	}

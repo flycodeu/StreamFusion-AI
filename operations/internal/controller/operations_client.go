@@ -72,6 +72,13 @@ func (s *Store) callTarget(ctx context.Context, t target, req deploy.Request, ar
 	}
 	out := &limitedOutput{limit: responseLimit}
 	errOut := &limitedOutput{limit: 1024}
+	if req.Action == deploy.JenkinsUnlockReadAction {
+		out.limit = 4 << 10
+		defer func() {
+			clear(out.Bytes())
+			clear(errOut.Bytes())
+		}()
+	}
 	if t.Kind == "SSH" {
 		if e := s.sshExecute(ctx, t, input, out, errOut); e != nil {
 			return e

@@ -147,6 +147,9 @@ func softwareResult(req Request) Result {
 }
 
 func (x *executor) executeSoftware(req Request, output io.Writer) error {
+	if req.Action == JenkinsUnlockReadAction {
+		return x.readJenkinsUnlock(req, output)
+	}
 	if commandDefinition(req) != nil || req.Installation != nil && req.Installation.PrepareHostTerminal {
 		if err := x.verifyCommandRequest(req); err != nil {
 			return err

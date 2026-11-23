@@ -5,10 +5,11 @@ import * as vue from "vue";
 import ts from "typescript";
 
 const helperSource = await readFile(new URL("../src/pagination.ts", import.meta.url), "utf8");
-const exports = {};
-new Function("require", "exports", ts.transpileModule(helperSource, {
+const makePaginationModule = new Function("require", "exports", "ResizeObserver", "getComputedStyle", "window", ts.transpileModule(helperSource, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
-}).outputText)(() => vue, exports);
+}).outputText);
+const exports = {};
+makePaginationModule(() => vue, exports);
 const { usePagination, pageSizes } = exports;
 
 test("client pagination resets filters and size, clamps deleted pages, and preserves refresh position", () => {
@@ -34,6 +35,63 @@ test("client pagination resets filters and size, clamps deleted pages, and prese
   assert.deepEqual(pager.pageItems.value, []);
 });
 
+test("grid pagination uses resolved columns and preserves page position and row count on resize", async () => {
+  const helpers = {}, scope = vue.effectScope(), items = Array.from({ length: 28 }, (_, index) => index);
+  const grid = { clientWidth: 1400 };
+  let tracks = "330px 330px 330px 330px", resize, disconnected = false;
+  class Observer {
+    constructor(callback) { resize = callback; }
+    observe() {}
+    disconnect() { disconnected = true; }
+  }
+  makePaginationModule(() => vue, helpers, Observer, () => ({ gridTemplateColumns: tracks }));
+  const pagination = scope.run(() => helpers.useGridPagination(() => items));
+  pagination.grid.value = grid;
+  await vue.nextTick();
+  assert.deepEqual(pagination.pageSizeOptions.value, [8, 12, 20]);
+  pagination.page.value = 2;
+  assert.equal(pagination.pageItems.value[0], 12);
+  tracks = "340px 340px 340px";
+  resize();
+  assert.deepEqual(pagination.pageSizeOptions.value, [6, 9, 15]);
+  assert.equal(pagination.page.value, 2);
+  assert.ok(pagination.pageItems.value.includes(12));
+  pagination.pageSize.value = 15;
+  grid.clientWidth = 0;
+  tracks = "380px";
+  resize();
+  assert.equal(pagination.pageSize.value, 15, "hidden grids must retain their measured size");
+  grid.clientWidth = 380;
+  resize();
+  assert.equal(pagination.pageSize.value, 5);
+  scope.stop();
+  assert.equal(disconnected, true);
+});
+
+test("compact software lists adjust page size without losing the visible record", () => {
+  const helpers = {}, scope = vue.effectScope(), items = Array.from({ length: 30 }, (_, index) => index);
+  let change, cleanup;
+  const media = {
+    matches: false,
+    addEventListener(event, listener) { assert.equal(event, "change"); change = listener; },
+    removeEventListener(event, listener) { assert.equal(event, "change"); assert.equal(listener, change); change = undefined; },
+  };
+  makePaginationModule(() => ({ ...vue, onMounted: callback => callback(), onUnmounted: callback => { cleanup = callback; } }),
+    helpers, undefined, undefined, { matchMedia: query => { assert.equal(query, "(max-width: 710px)"); return media; } });
+  const pagination = scope.run(() => helpers.useCompactListPagination(() => items));
+  pagination.page.value = 3;
+  assert.equal(pagination.pageItems.value[0], 20);
+  media.matches = true;
+  change();
+  assert.deepEqual(pagination.pageSizeOptions.value, [3, 5, 10, 25, 50]);
+  assert.equal(pagination.pageSize.value, 5);
+  assert.equal(pagination.page.value, 5);
+  assert.equal(pagination.pageItems.value[0], 20);
+  cleanup();
+  assert.equal(change, undefined);
+  scope.stop();
+});
+
 function componentScript(source) {
   return ts.transpileModule(source.split('<script setup lang="ts">')[1].split("</script>")[0]
     .replace(/^import[\s\S]*?;\r?$/gm, ""), {
@@ -42,7 +100,7 @@ function componentScript(source) {
 }
 const pagerSource = await readFile(new URL("../src/OpsPagination.vue", import.meta.url), "utf8");
 const makePager = new Function("computed", "pageSizes", "defineProps", "withDefaults", "defineEmits",
-  componentScript(pagerSource) + "\nreturn { changePage, changeSize };");
+  componentScript(pagerSource) + "\nreturn { changePage, changeSize, numberedLayout };");
 
 test("pager blocks disabled and unavailable cursor actions without inventing totals", () => {
   const props = vue.reactive({ page: 1, pageSize: 10, disabled: true, hasNext: true });
@@ -67,6 +125,14 @@ test("pager blocks disabled and unavailable cursor actions without inventing tot
   props.page = 3; props.total = 21;
   pager.changePage(99);
   assert.deepEqual(events, [], "a clamp to the current page must not replay a fetch");
+  props.sizeOptions = [8, 12, 20];
+  props.pageSize = 12;
+  pager.changeSize(50);
+  pager.changeSize(8);
+  assert.deepEqual(events, [["update:pageSize", 8]], "the card grid only offers sizes that fill whole rows");
+  assert.equal(pager.numberedLayout.value, "total, sizes, ->, prev, pager, next");
+  props.total = 10;
+  assert.equal(pager.numberedLayout.value, "total, sizes");
 });
 
 const logsSource = await readFile(new URL("../src/SoftwareLogs.vue", import.meta.url), "utf8");

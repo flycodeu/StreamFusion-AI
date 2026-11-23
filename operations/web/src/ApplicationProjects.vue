@@ -1,962 +1,711 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
-import { ElDialog, ElMessageBox, ElStep, ElSteps } from "element-plus";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { ElDialog } from "element-plus";
 import { ApiError, request } from "./api";
-import { requestAllPages } from "./listPages";
+import { hostTime } from "./hosts";
 import OpsPagination from "./OpsPagination.vue";
-import RuntimePolicyFields from "./RuntimePolicyFields.vue";
-import { normalizeRuntimePolicy } from "./runtimePolicy";
-import { hostTime, type Host } from "./hosts";
-import type { GitProfile } from "./gitManagement";
-import { softwareInstallationReady, softwareIsDockerEngine, softwareIsTool, softwareVersionText, type SoftwareInstance } from "./software";
+import ProjectEnvironmentBinding from "./ProjectEnvironmentBinding.vue";
+import ProjectJenkinsBuild from "./ProjectJenkinsBuild.vue";
+import TerminalCommandEntry from "./TerminalCommandEntry.vue";
 import {
-  copyApplicationProject, latestProjectCredentials, newApplicationProject, newProjectDeployment, newProjectEnvironment,
-  newProjectModule, newProjectRepository, projectListPath, projectModuleUsage, projectValidationError,
-  projectRepositoryUsage, projectVariableMode,
-  type ApplicationProject, type ApplicationProjectPage, type ProjectCredential, type ProjectDeployment, type ProjectSection, type ProjectVariable,
+  jenkinsLink, moduleDirectory, moduleEdit, moduleKinds, newModuleDraft, projectListPath, repositoryId,
+  type ApplicationProject, type ApplicationProjectPage, type InspectedModule,
+  type InspectionSource, type ProjectEnvironment, type ProjectModule, type ProjectServiceRegistration,
 } from "./applicationProjects";
 
-const emit = defineEmits<{ error: [unknown] }>();
+const emit = defineEmits<{ error: [unknown]; "install-jenkins": []; "view-instances": [projectId: string, moduleId: string] }>();
+const rootPath = "/application-projects";
 const records = ref<ApplicationProject[]>([]);
 const page = ref(1), pageSize = ref(10), total = ref(0);
 const query = ref(""), archived = ref("false");
-const loading = ref(false), saving = ref(false), opening = ref(false);
-const listError = ref(""), editorError = ref("");
-const editorOpen = ref(false);
-const editorElement = ref<HTMLElement>();
-const activeStep = ref<ProjectSection>("basics");
-const steps: { id: ProjectSection; label: string }[] = [
-  { id: "basics", label: "基本信息" }, { id: "repositories", label: "代码仓库" },
-  { id: "modules", label: "应用模块" }, { id: "environments", label: "部署环境" },
-];
-const stepIndex = computed(() => steps.findIndex(step => step.id === activeStep.value));
-const draft = ref(newApplicationProject()), baseline = ref("");
-const selectedModuleId = ref(""), selectedEnvironmentId = ref(""), selectedDeploymentId = ref("");
-const archiveTarget = ref("");
-const hosts = ref<Host[]>([]), accounts = ref<GitProfile[]>([]), software = ref<SoftwareInstance[]>([]);
-const credentials = ref<ProjectCredential[]>([]);
-const credentialVariables = reactive(new WeakSet<ProjectVariable>());
-const variableSections = reactive(new Set<string>());
-let listSequence = 0, editorSequence = 0;
+const loading = ref(false), opening = ref(false), saving = ref(false);
+const listError = ref(""), formError = ref(""), archiveTarget = ref("");
+const project = ref<ApplicationProject>();
+const selectedModuleId = ref("");
+const selectedModule = computed(() => project.value?.modules.find(item => item.id === selectedModuleId.value));
+const primaryRepository = computed(() => project.value?.repositories[0]);
+const selectedRepository = computed(() => project.value?.repositories.find(item => item.id === selectedModule.value?.repositoryId));
+const selectedRegistrations = computed(() => (project.value?.environments || []).flatMap(environment =>
+  environment.deployments.filter(registration => registration.moduleId === selectedModuleId.value).map(registration => ({ environment, registration })),
+));
+const environmentBinding = ref<{ moduleId: string; environment?: ProjectEnvironment; registration?: ProjectServiceRegistration }>();
+
+const projectEditorOpen = ref(false), moduleEditorOpen = ref(false), projectDeleteOpen = ref(false), moduleDeleteOpen = ref(false);
+const projectDraft = ref({ name: "", description: "", repositoryUrl: "", jenkinsUrl: "" });
+const projectDeleteTarget = ref<ApplicationProject>();
+const moduleDeleteTarget = ref<ProjectModule>();
+const moduleDraft = ref(newModuleDraft());
+const separateRepository = "new-repository";
+
+const inspectionOpen = ref(false), sourcesLoading = ref(false), inspecting = ref(false), inspected = ref(false);
+const inspectionModuleId = ref(""), sourceId = ref(""), inspectionRepository = ref("");
+const inspectionSources = ref<InspectionSource[]>([]);
+const inspectionResults = ref<InspectedModule[]>([]);
+const selectedDirectories = ref<string[]>([]);
 let listController: AbortController | undefined;
-let editorController: AbortController | undefined;
+let projectController: AbortController | undefined;
+let inspectionController: AbortController | undefined;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
-const module = computed(() => draft.value.modules.find(item => item.id === selectedModuleId.value));
-const environment = computed(() => draft.value.environments.find(item => item.id === selectedEnvironmentId.value));
-const deployment = computed(() => environment.value?.deployments.find(item => item.id === selectedDeploymentId.value));
-const deploymentRuntime = computed(() => draft.value.modules.find(item => item.id === deployment.value?.moduleId)?.runtime.kind);
-const dirty = computed(() => JSON.stringify(draft.value) !== baseline.value);
-const availableModules = computed(() => draft.value.modules.filter(item => !environment.value?.deployments.some(target => target.moduleId === item.id)));
-const buildKinds = { DOCKERFILE: "Dockerfile", COMMAND: "编译与打包", STATIC: "前端静态文件" };
-const runtimeKinds = { DOCKER: "Docker 容器", NATIVE: "原生服务", STATIC: "静态文件" };
-const healthKinds = { NONE: "暂不配置", HTTP: "HTTP 请求", TCP: "TCP 端口", COMMAND: "验证命令" };
-const logKinds = { FILE: "文件日志", DOCKER: "Docker 控制台", JOURNAL: "系统日志" };
-const moduleName = (id: string) => draft.value.modules.find(item => item.id === id)?.name || "未命名模块";
-const accountLabel = (account: GitProfile) => `${account.name} · ${account.systemAccount || "未配置"}@${account.sshHost}`;
-const softwareChoices = (hostId: string) => hostId ? software.value.filter(item =>
-  item.hostId === hostId && item.name.trim() && item.managementMode !== "RELEASED" &&
-  item.desiredState !== "REMOVED" && item.actualState !== "REMOVED" && softwareInstallationReady(item) &&
-  (softwareIsTool(item) || softwareIsDockerEngine(item)),
-) : [];
-
-function errorMessage(error: unknown) {
+function describeError(error: unknown, fallback: string) {
   if (error instanceof ApiError && error.code === "AUTH_REQUIRED") emit("error", error);
-  return error instanceof Error && /[\u4e00-\u9fff]/.test(error.message)
-    ? error.message : "读取项目配置失败，请刷新后重试";
+  const message = error instanceof Error && /[\u4e00-\u9fff]/.test(error.message) ? error.message : fallback;
+  const details = error instanceof ApiError ? [error.code, error.traceId, error.timestamp].filter(Boolean) : [];
+  return [message, ...details].join(" · ");
 }
 
 async function load() {
   listController?.abort();
-  const sequence = ++listSequence, controller = new AbortController();
-  listController = controller;
+  const controller = listController = new AbortController();
   loading.value = true;
   listError.value = "";
   try {
     const data = await request<ApplicationProjectPage>(projectListPath(page.value, pageSize.value, query.value, archived.value), "GET", undefined, controller.signal);
-    if (sequence !== listSequence) return;
+    if (controller.signal.aborted) return;
     const last = Math.max(1, Math.ceil(data.total / pageSize.value));
     if (page.value > last) { page.value = last; return; }
     records.value = data.items;
     total.value = data.total;
   } catch (error) {
-    if (sequence === listSequence && !controller.signal.aborted) listError.value = errorMessage(error);
+    if (!controller.signal.aborted) listError.value = describeError(error, "项目列表读取失败，请刷新后重试");
   } finally {
-    if (sequence === listSequence) loading.value = false;
+    if (listController === controller) loading.value = false;
   }
 }
 
-async function loadOptions(signal: AbortSignal) {
-  const data = await Promise.all([
-    request<Host[]>("/hosts", "GET", undefined, signal), request<GitProfile[]>("/git-accounts", "GET", undefined, signal),
-    requestAllPages<SoftwareInstance>("/software-instances", signal),
-    request<ProjectCredential[]>("/credentials", "GET", undefined, signal),
-  ]);
-  return { hosts: data[0], accounts: data[1], software: data[2], credentials: latestProjectCredentials(data[3]) };
+function showProject(record: ApplicationProject, moduleId = record.modules[0]?.id ?? "") {
+  project.value = record;
+  selectedModuleId.value = moduleId;
 }
 
-async function editProject(project?: ApplicationProject) {
-  if (saving.value) return;
-  editorController?.abort();
-  const sequence = ++editorSequence, controller = new AbortController();
-  editorController = controller;
+async function openProject(record: ApplicationProject) {
+  projectController?.abort();
+  const controller = projectController = new AbortController();
   opening.value = true;
   listError.value = "";
   try {
-    const [saved, options] = await Promise.all([
-      project ? request<ApplicationProject>(`/application-projects/${project.id}`, "GET", undefined, controller.signal) : Promise.resolve(newApplicationProject()),
-      loadOptions(controller.signal),
-    ]);
-    if (sequence !== editorSequence) return;
-    hosts.value = options.hosts; accounts.value = options.accounts;
-    software.value = options.software; credentials.value = options.credentials;
-    draft.value = copyApplicationProject(saved);
-    baseline.value = JSON.stringify(draft.value);
-    selectedModuleId.value = saved.modules[0]?.id || "";
-    selectedEnvironmentId.value = saved.environments[0]?.id || "";
-    selectedDeploymentId.value = saved.environments[0]?.deployments[0]?.id || "";
-    editorError.value = "";
-    activeStep.value = "basics";
-    variableSections.clear();
-    editorOpen.value = true;
+    const detail = await request<ApplicationProject>(`${rootPath}/${record.id}`, "GET", undefined, controller.signal);
+    if (!controller.signal.aborted) showProject(detail);
   } catch (error) {
-    if (sequence === editorSequence && !controller.signal.aborted) listError.value = errorMessage(error);
-  } finally { if (sequence === editorSequence) opening.value = false; }
-}
-
-async function closeEditor(done: () => void) {
-  if (saving.value) { done(); return; }
-  if (dirty.value) {
-    try { await ElMessageBox.confirm("放弃尚未保存的项目配置？", "关闭配置", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑", type: "warning" }); }
-    catch { return; }
+    if (!controller.signal.aborted) listError.value = describeError(error, "项目详情读取失败，请重新打开");
+  } finally {
+    if (controller === projectController) opening.value = false;
   }
-  done();
 }
 
-async function showSection(section: ProjectSection) {
-  activeStep.value = section;
-  await nextTick();
-  if (editorElement.value) editorElement.value.scrollTop = 0;
+function backToProjects() {
+  project.value = undefined;
+  formError.value = "";
+  void load();
 }
 
-async function selectStep(section: ProjectSection) {
-  if (saving.value) return;
-  editorError.value = "";
-  await showSection(section);
-}
-
-async function showValidationError(error: NonNullable<ReturnType<typeof projectValidationError>>) {
-  editorError.value = error.message;
-  if (error.section === "modules" && error.itemId) selectedModuleId.value = error.itemId;
-  if (error.section === "environments" && error.itemId) selectEnvironment(error.itemId);
-  await showSection(error.section);
-}
-
-async function nextStep() {
-  if (saving.value || stepIndex.value === steps.length - 1) return;
-  const error = projectValidationError(draft.value, activeStep.value);
-  if (error) { await showValidationError(error); return; }
-  await selectStep(steps[stepIndex.value + 1]!.id);
-}
-
-async function previousStep() {
-  if (stepIndex.value > 0) await selectStep(steps[stepIndex.value - 1]!.id);
+function editProject() {
+  const record = project.value;
+  projectDraft.value = {
+    name: record?.name ?? "",
+    description: record?.description ?? "",
+    repositoryUrl: primaryRepository.value?.url ?? "",
+    jenkinsUrl: record?.jenkinsUrl ?? "",
+  };
+  formError.value = "";
+  projectEditorOpen.value = true;
 }
 
 async function saveProject() {
-  if (saving.value) return;
-  const error = projectValidationError(draft.value);
-  editorError.value = error?.message || "";
-  if (error) {
-    await showValidationError(error);
+  if (saving.value || !projectDraft.value.name.trim()) return;
+  const { name, description, repositoryUrl, jenkinsUrl } = projectDraft.value;
+  if (jenkinsUrl.trim() && !jenkinsLink(jenkinsUrl.trim())) {
+    formError.value = "请输入 Jenkins 作业的完整 HTTP 或 HTTPS 地址，去掉登录信息和 URL 参数";
     return;
   }
-  for (const environment of draft.value.environments) {
-    const target = environment.deployments.find(target => target.variables.some(variable => usesCredential(variable) && !variable.credentialId));
-    if (target) {
-      selectedEnvironmentId.value = environment.id; selectedDeploymentId.value = target.id;
-      variableSections.add(target.id);
-      editorError.value = "请为凭据变量选择连接凭据";
-      await showSection("environments");
-      return;
-    }
-  }
-  const submitted = copyApplicationProject(draft.value);
-  submitted.code = submitted.code.trim();
+  const record = project.value;
+  const primary = primaryRepository.value;
+  const repoChanged = repositoryUrl.trim() && repositoryUrl.trim() !== primary?.url;
   saving.value = true;
+  formError.value = "";
   try {
-    const saved = await request<ApplicationProject>(submitted.id ? `/application-projects/${submitted.id}` : "/application-projects", submitted.id ? "PATCH" : "POST", submitted);
-    draft.value = copyApplicationProject(saved);
-    baseline.value = JSON.stringify(draft.value);
-    editorOpen.value = false;
-    await load();
+    const saved = await request<ApplicationProject>(record ? `${rootPath}/${record.id}/catalog` : `${rootPath}/catalog`, record ? "PATCH" : "POST", {
+      version: record?.version,
+      name: name.trim(),
+      description: description.trim(),
+      jenkinsUrl: jenkinsUrl.trim(),
+      repositories: repoChanged ? [{ id: primary?.id, name: primary?.name ?? "主仓库", url: repositoryUrl.trim(), branch: primary?.branch ?? "" }] : undefined,
+    });
+    showProject(saved, record ? selectedModuleId.value : undefined);
+    projectEditorOpen.value = false;
   } catch (error) {
-    editorError.value = errorMessage(error);
-    if (error instanceof ApiError && error.code === "APPLICATION_CODE_DUPLICATED") await showSection("basics");
-  }
-  finally { saving.value = false; }
+    formError.value = describeError(error, "项目保存失败，请检查填写内容后重试");
+  } finally { saving.value = false; }
 }
 
-async function setArchived(project: ApplicationProject, value: boolean) {
-  if (loading.value || saving.value) return;
+async function setArchived(record: ApplicationProject, value: boolean) {
+  if (saving.value) return;
   saving.value = true;
   listError.value = "";
   try {
-    if (value) await request(`/application-projects/${project.id}/archive`, "POST", { version: project.version });
-    else {
-      const saved = await request<ApplicationProject>(`/application-projects/${project.id}`);
-      await request(`/application-projects/${project.id}`, "PATCH", { ...saved, archived: false });
-    }
+    await request(value ? `${rootPath}/${record.id}/archive` : `${rootPath}/${record.id}/catalog`, value ? "POST" : "PATCH", {
+      version: record.version,
+      ...(value ? {} : { archived: false }),
+    });
     archiveTarget.value = "";
     await load();
-  } catch (error) { listError.value = errorMessage(error); }
-  finally { saving.value = false; }
+  } catch (error) {
+    listError.value = describeError(error, "归档状态更新失败，请刷新列表后重试");
+  } finally { saving.value = false; }
 }
 
-function addRepository() { draft.value.repositories.push(newProjectRepository()); }
-function removeRepository(id: string) {
-  const usage = projectRepositoryUsage(draft.value, id);
-  if (usage.length) { editorError.value = `请先调整使用此仓库的模块：${usage.join("、")}`; return; }
-  draft.value.repositories = draft.value.repositories.filter(item => item.id !== id);
-  editorError.value = "";
+function confirmProjectDeletion(record: ApplicationProject) {
+  projectDeleteTarget.value = record;
+  formError.value = "";
+  projectDeleteOpen.value = true;
 }
-function addModule() {
-  const item = newProjectModule(draft.value.repositories.length === 1 ? draft.value.repositories[0].id : "");
-  draft.value.modules.push(item); selectedModuleId.value = item.id;
+
+async function deleteProject() {
+  const target = projectDeleteTarget.value;
+  if (!target || !projectDeleteOpen.value || saving.value) return;
+  saving.value = true;
+  formError.value = "";
+  try {
+    await request(`${rootPath}/${target.id}`, "DELETE", { version: target.version });
+    projectDeleteOpen.value = false;
+    await load();
+  } catch (error) {
+    formError.value = describeError(error, "项目删除失败，请刷新后重试");
+  } finally { saving.value = false; }
 }
-function removeModule() {
-  if (!module.value) return;
-  const usage = projectModuleUsage(draft.value, module.value.id);
-  if (usage.length) { editorError.value = `请先移除此模块的环境配置：${usage.join("、")}`; return; }
-  draft.value.modules = draft.value.modules.filter(item => item.id !== module.value!.id);
-  selectedModuleId.value = draft.value.modules[0]?.id || "";
-  editorError.value = "";
+
+function confirmModuleDeletion(item: ProjectModule) {
+  moduleDeleteTarget.value = item;
+  formError.value = "";
+  moduleDeleteOpen.value = true;
 }
-function addEnvironment() {
-  const item = newProjectEnvironment(); draft.value.environments.push(item);
-  selectedEnvironmentId.value = item.id; selectedDeploymentId.value = "";
+
+async function deleteModule() {
+  const record = project.value;
+  const target = moduleDeleteTarget.value;
+  if (!record || !target || !moduleDeleteOpen.value || saving.value) return;
+  saving.value = true;
+  formError.value = "";
+  try {
+    const saved = await request<ApplicationProject>(`${rootPath}/${record.id}/modules/${target.id}`, "DELETE", { version: record.version });
+    const selected = saved.modules.some(item => item.id === selectedModuleId.value) ? selectedModuleId.value : undefined;
+    showProject(saved, selected);
+    moduleDeleteOpen.value = false;
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "APPLICATION_MODULE_IN_USE") {
+      formError.value = ["请先在「应用实例」解除该模块关联的环境或服务实例", error.code, error.traceId, error.timestamp].filter(Boolean).join(" · ");
+    } else {
+      formError.value = describeError(error, "模块删除失败，请刷新后重试");
+    }
+  } finally { saving.value = false; }
 }
-function runtimeKindChanged() {
-  if (!module.value) return;
-  const { id, runtime } = module.value;
-  for (const environment of draft.value.environments) for (const target of environment.deployments) {
-    if (target.moduleId !== id || !target.runtimePolicy) continue;
-    if (runtime.kind === "STATIC") delete target.runtimePolicy;
-    else target.runtimePolicy = normalizeRuntimePolicy(target.runtimePolicy, runtime.kind === "DOCKER" ? "DOCKER" : "SYSTEMD");
+
+function editModule(item?: ProjectModule) {
+  moduleDraft.value = newModuleDraft(primaryRepository.value?.id, item);
+  formError.value = "";
+  moduleEditorOpen.value = true;
+}
+
+async function saveModules(modules: ReturnType<typeof moduleEdit>[], repositories?: { id: string; name: string; url: string; branch: string }[]) {
+  const record = project.value;
+  if (!record || saving.value) return false;
+  saving.value = true;
+  formError.value = "";
+  try {
+    const saved = await request<ApplicationProject>(`${rootPath}/${record.id}/catalog`, "PATCH", { version: record.version, modules, repositories });
+    const newModule = saved.modules.find(item => !record.modules.some(previous => previous.id === item.id));
+    showProject(saved, modules[0]?.id || newModule?.id || selectedModuleId.value);
+    return true;
+  } catch (error) {
+    formError.value = describeError(error, "模块保存失败，请检查填写内容后重试");
+    return false;
+  } finally { saving.value = false; }
+}
+
+async function saveModule() {
+  const draft = moduleDraft.value;
+  if (!draft.name.trim()) return;
+  if (draft.repositoryId !== separateRepository) {
+    if (await saveModules([moduleEdit(draft)])) moduleEditorOpen.value = false;
+    return;
+  }
+  const url = draft.repositoryUrl.trim();
+  if (!url) return;
+  const existing = project.value?.repositories.find(item => item.url === url);
+  const id = existing?.id ?? repositoryId();
+  if (await saveModules([moduleEdit(draft, id)], existing ? undefined : [{ id, name: draft.name.trim(), url, branch: "" }])) {
+    moduleEditorOpen.value = false;
   }
 }
-function selectEnvironment(id: string) {
-  selectedEnvironmentId.value = id;
-  selectedDeploymentId.value = environment.value?.deployments[0]?.id || "";
-}
-function removeEnvironment() {
-  draft.value.environments = draft.value.environments.filter(item => item.id !== selectedEnvironmentId.value);
-  selectEnvironment(draft.value.environments[0]?.id || "");
-}
-function addDeployment(moduleId: string) {
-  if (!environment.value || !moduleId) return;
-  const item = newProjectDeployment(moduleId, draft.value.modules.find(item => item.id === moduleId)?.runtime.kind);
-  environment.value.deployments.push(item); selectedDeploymentId.value = item.id;
-}
-function removeDeployment() {
-  if (!environment.value) return;
-  environment.value.deployments = environment.value.deployments.filter(item => item.id !== selectedDeploymentId.value);
-  selectedDeploymentId.value = environment.value.deployments[0]?.id || "";
-}
-function setVariableCredential(variable: ProjectVariable, id: string) {
-  variable.value = ""; variable.credentialId = id;
-  variable.credentialRevision = credentials.value.find(item => item.id === id)?.revision || "";
-}
-function usesCredential(variable: ProjectVariable) { return !!variable.credentialId || credentialVariables.has(variable); }
-function changeVariableMode(variable: ProjectVariable, mode: "VALUE" | "CREDENTIAL") {
-  projectVariableMode(variable, mode);
-  if (mode === "CREDENTIAL") credentialVariables.add(variable);
-  else credentialVariables.delete(variable);
-}
-function addVariable(target: ProjectDeployment) { target.variables.push({ name: "", value: "", credentialId: "", credentialRevision: "" }); }
 
-watch([page, pageSize, archived], () => { void load(); });
-watch(pageSize, () => { page.value = 1; }, { flush: "sync" });
-watch(archived, () => { page.value = 1; }, { flush: "sync" });
+function matchingModule(directory: string) {
+  const modules = project.value?.modules ?? [];
+  if (inspectionModuleId.value) return modules.find(item => item.id === inspectionModuleId.value);
+  const atDirectory = modules.filter(item => moduleDirectory(item.directory) === directory);
+  const known = atDirectory.find(item => item.repositoryId === inspectionRepository.value);
+  return known ?? (inspectionRepository.value === primaryRepository.value?.id ? atDirectory.find(item => !item.repositoryId) : undefined);
+}
+
+async function openInspection(item?: ProjectModule) {
+  inspectionController?.abort();
+  const controller = inspectionController = new AbortController();
+  inspectionModuleId.value = item?.id ?? "";
+  inspectionRepository.value = item?.repositoryId ?? primaryRepository.value?.id ?? "";
+  inspectionSources.value = [];
+  sourceId.value = "";
+  inspectionResults.value = [];
+  selectedDirectories.value = [];
+  formError.value = "";
+  inspected.value = false;
+  inspecting.value = false;
+  sourcesLoading.value = true;
+  inspectionOpen.value = true;
+  try {
+    const { items } = await request<{ items: InspectionSource[] }>(`${rootPath}/inspection-sources`, "GET", undefined, controller.signal);
+    if (controller.signal.aborted) return;
+    inspectionSources.value = items;
+    if (items.length === 1) sourceId.value = items[0].id;
+  } catch (error) {
+    if (!controller.signal.aborted) formError.value = describeError(error, "识别来源读取失败，可以手动填写模块");
+  } finally {
+    if (controller === inspectionController) sourcesLoading.value = false;
+  }
+}
+
+function resetInspectionResults() {
+  inspectionResults.value = [];
+  selectedDirectories.value = [];
+  formError.value = "";
+  inspected.value = false;
+}
+
+function selectNewDirectories() {
+  selectedDirectories.value = inspectionResults.value.filter(item => !matchingModule(item.directory)).map(item => item.directory);
+}
+
+async function inspect() {
+  if (!sourceId.value || inspecting.value || saving.value) return;
+  const directory = project.value?.modules.find(item => item.id === inspectionModuleId.value)?.directory;
+  inspectionController?.abort();
+  const controller = inspectionController = new AbortController();
+  resetInspectionResults();
+  inspecting.value = true;
+  try {
+    const body = { sourceId: sourceId.value, directory: inspectionModuleId.value ? directory || "." : undefined };
+    const { modules } = await request<{ modules: InspectedModule[] }>(`${rootPath}/inspect`, "POST", body, controller.signal);
+    if (controller.signal.aborted) return;
+    inspectionResults.value = modules;
+    selectNewDirectories();
+    inspected.value = true;
+  } catch (error) {
+    if (!controller.signal.aborted) formError.value = describeError(error, "环境识别失败，可以手动填写模块");
+  } finally {
+    if (controller === inspectionController) inspecting.value = false;
+  }
+}
+
+function closeInspection() {
+  inspectionController?.abort();
+}
+
+function reviewSuggestion(suggestion: InspectedModule) {
+  const existing = matchingModule(suggestion.directory);
+  if (!existing) return;
+  inspectionOpen.value = false;
+  editModule(existing);
+  const draft = moduleDraft.value;
+  if (!existing.catalog) draft.kind = suggestion.kind;
+  draft.environment ||= suggestion.environment;
+  draft.startCommand ||= suggestion.startCommand;
+}
+
+async function addSuggestions() {
+  const modules = inspectionResults.value
+    .filter(item => selectedDirectories.value.includes(item.directory) && !matchingModule(item.directory))
+    .map(item => moduleEdit({ ...newModuleDraft(inspectionRepository.value), ...item }));
+  if (modules.length && await saveModules(modules)) inspectionOpen.value = false;
+}
+
+watch([page, pageSize, archived], () => void load());
+watch([pageSize, archived], () => { page.value = 1; }, { flush: "sync" });
 watch(query, () => {
   if (searchTimer) clearTimeout(searchTimer);
-  listController?.abort(); ++listSequence;
+  listController?.abort();
   searchTimer = setTimeout(() => { if (page.value === 1) void load(); else page.value = 1; }, 250);
 });
 onMounted(load);
 onUnmounted(() => {
-  ++listSequence; ++editorSequence;
-  listController?.abort(); editorController?.abort();
+  listController?.abort();
+  projectController?.abort();
+  inspectionController?.abort();
   if (searchTimer) clearTimeout(searchTimer);
 });
 </script>
 
 <template>
   <section class="application-projects" aria-label="项目管理">
-    <div class="project-toolbar">
-      <div class="project-filters">
-        <input v-model="query" type="search" placeholder="搜索名称或代码" aria-label="搜索项目" />
-        <select v-model="archived" aria-label="项目状态">
-          <option value="false">使用中的项目</option>
-          <option value="true">已归档</option>
-          <option value="all">全部项目</option>
-        </select>
-      </div>
-      <div class="project-actions">
-        <button class="secondary" :disabled="loading || opening" @click="load">刷新</button>
-        <button class="primary" :disabled="opening || saving" @click="editProject()">{{ opening ? "正在读取…" : "新建项目" }}</button>
-      </div>
-    </div>
-    <p v-if="listError" class="project-error" role="alert">{{ listError }}</p>
-    <div class="project-list" :aria-busy="loading">
-      <article v-for="project in records" :key="project.id" class="project-card">
-        <div class="project-card-title">
-          <span class="project-symbol" aria-hidden="true">{{ project.name.slice(0, 1) }}</span>
-          <div>
-            <h2>{{ project.name }}</h2>
-            <span class="project-code">{{ project.code }}</span>
-            <p v-if="project.description">{{ project.description }}</p>
+    <template v-if="!project">
+      <p v-if="listError" class="project-error" role="alert">{{ listError }}</p>
+      <section class="project-list panel-card" :aria-busy="loading || opening" aria-label="项目目录">
+        <header class="project-toolbar directory-toolbar">
+          <div class="project-actions project-filters">
+            <input v-model="query" type="search" placeholder="搜索项目名称或代码" aria-label="搜索项目" />
+            <select v-model="archived" aria-label="项目状态">
+              <option value="false">使用中的项目</option>
+              <option value="true">已归档</option>
+              <option value="all">全部项目</option>
+            </select>
           </div>
-          <span class="project-state" :class="{ archived: project.archived }">{{ project.archived ? "已归档" : "使用中" }}</span>
-        </div>
-        <div class="project-card-summary">
-          <span>{{ project.repositories.length }} 个仓库</span>
-          <span>{{ project.modules.length }} 个模块</span>
-          <span>{{ project.environments.length }} 个环境</span>
-        </div>
-        <footer>
-          <span>{{ hostTime(project.updatedAt) }}</span>
-          <div v-if="archiveTarget === project.id" class="project-actions">
-            <span>归档此项目？</span>
-            <button class="quiet" :disabled="saving" @click="archiveTarget = ''">取消</button>
-            <button class="quiet danger" :disabled="saving" @click="setArchived(project, true)">确认归档</button>
-          </div>
-          <div v-else class="project-actions">
-            <button class="quiet" :disabled="opening || saving" @click="editProject(project)">配置</button>
-            <button v-if="!project.archived" class="quiet" :disabled="saving" @click="archiveTarget = project.id">归档</button>
-            <button v-else class="quiet" :disabled="saving" @click="setArchived(project, false)">恢复使用</button>
-          </div>
-        </footer>
-      </article>
-      <div v-if="!records.length" class="project-empty">
-        <h2>{{ loading ? "正在读取项目…" : "尚无项目" }}</h2>
-        <p v-if="!loading">创建项目，配置代码仓库、应用模块与部署环境。</p>
-      </div>
-    </div>
-    <OpsPagination v-model:page="page" v-model:page-size="pageSize" :total="total" :disabled="loading" label="项目分页" />
-    <ElDialog
-      v-model="editorOpen"
-      class="application-project-dialog"
-      :title="draft.id ? `配置项目 · ${draft.name}` : '新建项目'"
-      width="min(1180px, 96vw)"
-      align-center
-      append-to-body
-      destroy-on-close
-      :before-close="closeEditor"
-      :close-on-click-modal="true"
-      :close-on-press-escape="true"
-    >
-      <ElSteps class="project-wizard-steps" :active="stepIndex" finish-status="wait" align-center aria-label="项目配置步骤">
-        <ElStep v-for="item in steps" :key="item.id" @click="selectStep(item.id)">
-          <template #title>
-            <button type="button" :aria-current="activeStep === item.id ? 'step' : undefined" :disabled="saving" @click.stop="selectStep(item.id)">{{ item.label }}</button>
-          </template>
-        </ElStep>
-      </ElSteps>
-      <div ref="editorElement" class="project-editor">
-        <fieldset :disabled="saving" @input="editorError = ''">
-          <section v-show="activeStep === 'basics'" class="project-step-panel" data-project-section="basics" aria-label="基本信息">
-            <div class="project-section-body project-fields">
-              <label>
-                项目名称
-                <input v-model="draft.name" maxlength="60" placeholder="例如：智能化平台" />
-              </label>
-              <label>
-                项目代码
-                <input v-model="draft.code" maxlength="60" placeholder="例如：intelligentize" />
-              </label>
-              <label class="project-full">
-                项目描述
-                <textarea v-model="draft.description" maxlength="500" rows="2" placeholder="选填" />
-              </label>
-            </div>
-          </section>
-          <section v-show="activeStep === 'repositories'" class="project-step-panel" data-project-section="repositories" aria-label="代码仓库">
-            <div class="project-section-body">
-              <div class="project-section-heading">
-                <button type="button" class="secondary" @click="addRepository">添加仓库</button>
-              </div>
-              <section v-for="(repository, index) in draft.repositories" :key="repository.id" class="project-config-block">
-                <div class="project-section-heading">
-                  <h4>仓库 {{ index + 1 }}</h4>
-                  <button type="button" class="quiet danger" @click="removeRepository(repository.id)">移除</button>
-                </div>
-                <div class="project-fields">
-                  <label>
-                    仓库名称
-                    <input v-model="repository.name" maxlength="60" placeholder="例如：业务源码" />
-                  </label>
-                  <label>
-                    仓库地址
-                    <input v-model="repository.url" placeholder="https://git.example.com/team/project.git" />
-                  </label>
-                  <label>
-                    Git 账号
-                    <select v-model="repository.gitAccountId">
-                      <option value="">公共仓库，不使用账号</option>
-                      <option v-for="account in accounts" :key="account.id" :value="account.id">{{ accountLabel(account) }}</option>
-                    </select>
-                  </label>
-                  <label>
-                    默认分支
-                    <input v-model="repository.branch" placeholder="留空采用仓库默认分支" />
-                  </label>
-                </div>
-              </section>
-            </div>
-          </section>
-          <section v-show="activeStep === 'modules'" class="project-step-panel" data-project-section="modules" aria-label="应用模块">
-            <div class="project-section-body">
-              <div class="project-section-heading">
-                <button type="button" class="secondary" @click="addModule">添加模块</button>
-              </div>
-              <div v-if="draft.modules.length" class="project-split">
-                <nav class="project-item-nav" aria-label="模块列表">
-                  <button
-                    v-for="item in draft.modules"
-                    :key="item.id"
-                    type="button"
-                    :class="{ active: selectedModuleId === item.id }"
-                    @click="selectedModuleId = item.id"
-                  >
-                    {{ item.name || "未命名模块" }}
-                  </button>
-                </nav>
-                <div v-if="module" class="project-module-form">
-                  <div class="project-fields">
-                    <label>
-                      模块名称
-                      <input v-model="module.name" maxlength="60" placeholder="例如：后端服务" />
-                    </label>
-                    <label>
-                      代码仓库
-                      <select v-model="module.repositoryId">
-                        <option value="">稍后选择</option>
-                        <option v-for="repository in draft.repositories" :key="repository.id" :value="repository.id">
-                          {{ repository.name || "未命名仓库" }}
-                        </option>
-                      </select>
-                    </label>
-                    <label>
-                      源码目录
-                      <input v-model="module.directory" placeholder="backend 或 ." />
-                    </label>
-                    <label>
-                      构建方式
-                      <select v-model="module.build.kind">
-                        <option v-for="(label, kind) in buildKinds" :key="kind" :value="kind">{{ label }}</option>
-                      </select>
-                    </label>
-                    <label>
-                      运行方式
-                      <select v-model="module.runtime.kind" @change="runtimeKindChanged">
-                        <option v-for="(label, kind) in runtimeKinds" :key="kind" :value="kind">{{ label }}</option>
-                      </select>
-                    </label>
-                  </div>
-                  <details class="project-advanced" :open="module.build.kind !== 'DOCKERFILE'">
-                    <summary>构建配置与命令</summary>
-                    <div class="project-fields">
-                      <label>
-                        构建主机
-                        <select v-model="module.build.hostId" @change="module.build.softwareId = ''">
-                          <option value="">稍后选择</option>
-                          <option v-for="host in hosts" :key="host.id" :value="host.id">{{ host.name }}</option>
-                        </select>
-                      </label>
-                      <label>
-                        执行账号
-                        <input v-model="module.build.account" placeholder="例如：ubuntu" />
-                      </label>
-                      <label>
-                        构建环境
-                        <select v-model="module.build.softwareId" :disabled="!module.build.hostId">
-                          <option value="">自定义或稍后选择</option>
-                          <option v-for="item in softwareChoices(module.build.hostId)" :key="item.id" :value="item.id">
-                            {{ item.name }}
-                            ·
-                            {{ softwareVersionText(item.softwareVersion) }}
-                          </option>
-                        </select>
-                      </label>
-                      <label>
-                        工具链说明
-                        <input v-model="module.build.toolchain" placeholder="例如：JDK 8 + Maven" />
-                      </label>
-                      <label class="project-full">
-                        产物路径
-                        <input v-model="module.build.outputPath" placeholder="例如：target/app.jar 或 dist" />
-                      </label>
-                    </div>
-                    <div v-if="module.build.kind === 'DOCKERFILE'" class="project-fields project-form-section">
-                      <label>
-                        构建上下文
-                        <input v-model="module.build.context" placeholder="仓库内目录，例如 ." />
-                      </label>
-                      <label>
-                        Dockerfile 路径
-                        <input v-model="module.build.dockerfile" placeholder="例如：deploy/Dockerfile" />
-                      </label>
-                    </div>
-                    <div class="project-section-heading project-form-section">
-                      <h4>构建步骤</h4>
-                      <button
-                        type="button"
-                        class="quiet"
-                        @click="module.build.steps.push({ name: '', command: '', workdir: '.', timeoutSeconds: 600, privilege: 'ACCOUNT' })"
-                      >
-                        添加步骤
-                      </button>
-                    </div>
-                    <section v-for="(step, index) in module.build.steps" :key="index" class="project-step">
-                      <div class="project-step-title">
-                        <span>{{ index + 1 }}</span>
-                        <input v-model="step.name" :aria-label="`步骤${index + 1}名称`" placeholder="例如：编译并检查产物" />
-                        <button
-                          type="button"
-                          class="quiet"
-                          :disabled="index === 0"
-                          aria-label="上移步骤"
-                          @click="module.build.steps.splice(index - 1, 0, module.build.steps.splice(index, 1)[0])"
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          class="quiet"
-                          :disabled="index === module.build.steps.length - 1"
-                          aria-label="下移步骤"
-                          @click="module.build.steps.splice(index + 1, 0, module.build.steps.splice(index, 1)[0])"
-                        >
-                          ↓
-                        </button>
-                        <button type="button" class="quiet danger" @click="module.build.steps.splice(index, 1)">移除</button>
-                      </div>
-                      <label class="project-command">
-                        执行命令
-                        <textarea v-model="step.command" rows="4" spellcheck="false" placeholder="mvn clean package" />
-                      </label>
-                      <div class="project-fields project-three">
-                        <label>
-                          工作目录
-                          <input v-model="step.workdir" placeholder="." />
-                        </label>
-                        <label>
-                          超时（秒）
-                          <input v-model.number="step.timeoutSeconds" type="number" min="1" max="7200" />
-                        </label>
-                        <label>
-                          执行权限
-                          <select v-model="step.privilege">
-                            <option value="ACCOUNT">执行账号</option>
-                            <option value="ROOT">管理员</option>
-                          </select>
-                        </label>
-                      </div>
-                    </section>
-                  </details>
-                  <details class="project-advanced">
-                    <summary>运行参数与就绪检查</summary>
-                    <div class="project-fields">
-                      <label class="project-full">
-                        启动命令或参数
-                        <input v-model="module.runtime.command" placeholder="Docker 留空沿用镜像默认；原生服务填写启动命令" />
-                      </label>
-                      <label>
-                        就绪检查
-                        <select v-model="module.runtime.health.kind">
-                          <option v-for="(label, kind) in healthKinds" :key="kind" :value="kind">{{ label }}</option>
-                        </select>
-                      </label>
-                      <label v-if="module.runtime.health.kind !== 'NONE'">
-                        检查超时（秒）
-                        <input v-model.number="module.runtime.health.timeoutSeconds" type="number" min="1" max="600" />
-                      </label>
-                      <label v-if="module.runtime.health.kind === 'HTTP'">
-                        检查路径
-                        <input v-model="module.runtime.health.path" placeholder="/health" />
-                      </label>
-                      <label v-if="['HTTP', 'TCP'].includes(module.runtime.health.kind)">
-                        服务端口
-                        <input v-model.number="module.runtime.health.port" type="number" min="0" max="65535" />
-                      </label>
-                      <label v-if="module.runtime.health.kind === 'COMMAND'" class="project-full">
-                        验证命令
-                        <input v-model="module.runtime.health.command" placeholder="填写验证命令" />
-                      </label>
-                    </div>
-                  </details>
-                  <div class="project-remove">
-                    <button type="button" class="quiet danger" @click="removeModule">移除此模块</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
-          <section v-show="activeStep === 'environments'" class="project-step-panel" data-project-section="environments" aria-label="部署环境">
-            <div class="project-section-body">
-              <div class="project-section-heading">
-                <button type="button" class="secondary" @click="addEnvironment">添加环境</button>
-              </div>
-              <template v-if="draft.environments.length">
-                <nav class="project-environment-nav" aria-label="环境列表">
-                  <button
-                    v-for="item in draft.environments"
-                    :key="item.id"
-                    type="button"
-                    :class="{ active: selectedEnvironmentId === item.id }"
-                    @click="selectEnvironment(item.id)"
-                  >
-                    {{ item.name || "未命名环境" }}
-                  </button>
-                </nav>
-                <template v-if="environment">
-                  <div class="project-section-heading">
-                    <label class="environment-name">
-                      环境名称
-                      <input v-model="environment.name" maxlength="60" placeholder="例如：test" />
-                    </label>
-                    <button type="button" class="quiet danger" @click="removeEnvironment">移除环境</button>
-                  </div>
-                  <div class="project-section-heading project-form-section">
-                    <h4>模块部署配置</h4>
-                    <select
-                      class="add-deployment"
-                      aria-label="添加模块部署配置"
-                      :value="''"
-                      @change="
-                        addDeployment(($event.target as HTMLSelectElement).value);
-                        ($event.target as HTMLSelectElement).value = '';
-                      "
-                    >
-                      <option value="">添加模块…</option>
-                      <option v-for="item in availableModules" :key="item.id" :value="item.id">{{ item.name || "未命名模块" }}</option>
-                    </select>
-                  </div>
-                  <div v-if="!environment.deployments.length" class="project-blank">选择要部署到此环境的模块。</div>
-                  <div v-else class="project-split">
-                    <nav class="project-item-nav" aria-label="环境模块列表">
-                      <button
-                        v-for="item in environment.deployments"
-                        :key="item.id"
-                        type="button"
-                        :class="{ active: selectedDeploymentId === item.id }"
-                        @click="selectedDeploymentId = item.id"
-                      >
-                        {{ moduleName(item.moduleId) }}
-                      </button>
-                    </nav>
-                    <div v-if="deployment" class="project-module-form">
-                      <div class="project-fields">
-                        <label>
-                          部署主机
-                          <select v-model="deployment.hostId" @change="deployment.runtimeSoftwareId = ''">
-                            <option value="">稍后选择</option>
-                            <option v-for="host in hosts" :key="host.id" :value="host.id">{{ host.name }}</option>
-                          </select>
-                        </label>
-                        <label>
-                          运行环境
-                          <select v-model="deployment.runtimeSoftwareId" :disabled="!deployment.hostId">
-                            <option value="">自定义或稍后选择</option>
-                            <option v-for="item in softwareChoices(deployment.hostId)" :key="item.id" :value="item.id">
-                              {{ item.name }}
-                              ·
-                              {{ softwareVersionText(item.softwareVersion) }}
-                            </option>
-                          </select>
-                        </label>
-                        <label>
-                          监听地址
-                          <input v-model="deployment.bindAddress" placeholder="例如：0.0.0.0" />
-                        </label>
-                        <label>
-                          内存上限（MiB）
-                          <input v-model.number="deployment.memoryMiB" type="number" min="0" max="1048576" placeholder="0 表示未设置" />
-                        </label>
-                      </div>
-                      <RuntimePolicyFields v-if="deploymentRuntime !== 'STATIC'" v-model="deployment.runtimePolicy" :kind="deploymentRuntime === 'DOCKER' ? 'DOCKER' : 'SYSTEMD'" :disabled="saving" optional inherit-label="沿用运行环境默认值" />
-                      <div class="project-section-heading project-form-section">
-                        <h4>端口</h4>
-                        <button
-                          type="button"
-                          class="quiet"
-                          @click="deployment.ports.push({ hostPort: 0, containerPort: 0, protocol: 'TCP' })"
-                        >
-                          添加端口
-                        </button>
-                      </div>
-                      <div v-for="(port, index) in deployment.ports" :key="index" class="project-fields project-port">
-                        <label>
-                          主机端口
-                          <input v-model.number="port.hostPort" type="number" min="1" max="65535" />
-                        </label>
-                        <label>
-                          服务端口
-                          <input v-model.number="port.containerPort" type="number" min="1" max="65535" />
-                        </label>
-                        <label>
-                          协议
-                          <select v-model="port.protocol">
-                            <option>TCP</option>
-                            <option>UDP</option>
-                          </select>
-                        </label>
-                        <button type="button" class="quiet danger row-remove" @click="deployment.ports.splice(index, 1)">移除</button>
-                      </div>
-                      <details
-                        class="project-advanced"
-                        :open="variableSections.has(deployment.id)"
-                        @toggle="
-                          ($event.target as HTMLDetailsElement).open
-                            ? variableSections.add(deployment.id)
-                            : variableSections.delete(deployment.id)
-                        "
-                      >
-                        <summary>目录挂载与环境变量</summary>
-                        <div class="project-section-heading">
-                          <h4>目录挂载</h4>
-                          <button type="button" class="quiet" @click="deployment.mounts.push({ source: '', target: '', readOnly: false })">
-                            添加目录
-                          </button>
-                        </div>
-                        <div v-for="(mount, index) in deployment.mounts" :key="index" class="project-fields project-mount">
-                          <label>
-                            主机目录
-                            <input v-model="mount.source" placeholder="/srv/project/data" />
-                          </label>
-                          <label>
-                            运行目录
-                            <input v-model="mount.target" placeholder="/app/data" />
-                          </label>
-                          <label>
-                            权限
-                            <select
-                              :value="String(mount.readOnly)"
-                              @change="mount.readOnly = ($event.target as HTMLSelectElement).value === 'true'"
-                            >
-                              <option value="false">读写</option>
-                              <option value="true">只读</option>
-                            </select>
-                          </label>
-                          <button type="button" class="quiet danger row-remove" @click="deployment.mounts.splice(index, 1)">移除</button>
-                        </div>
-                        <div class="project-section-heading project-form-section">
-                          <h4>环境变量</h4>
-                          <button type="button" class="quiet" @click="addVariable(deployment)">添加变量</button>
-                        </div>
-                        <div v-for="(variable, index) in deployment.variables" :key="index" class="project-variable">
-                          <input v-model="variable.name" aria-label="变量名称" placeholder="变量名称" />
-                          <select
-                            :value="usesCredential(variable) ? 'CREDENTIAL' : 'VALUE'"
-                            aria-label="变量来源"
-                            @change="changeVariableMode(variable, ($event.target as HTMLSelectElement).value as 'VALUE' | 'CREDENTIAL')"
-                          >
-                            <option value="VALUE">普通配置</option>
-                            <option value="CREDENTIAL">连接凭据</option>
-                          </select>
-                          <select
-                            v-if="usesCredential(variable)"
-                            :value="variable.credentialId"
-                            aria-label="选择凭据"
-                            @change="setVariableCredential(variable, ($event.target as HTMLSelectElement).value)"
-                          >
-                            <option value="">选择凭据</option>
-                            <option v-for="credential in credentials" :key="credential.id" :value="credential.id">
-                              {{ credential.name }}
-                            </option>
-                          </select>
-                          <input v-else v-model="variable.value" aria-label="变量值" placeholder="普通值；密码和 Token 请使用连接凭据" />
-                          <button type="button" class="quiet danger" @click="deployment.variables.splice(index, 1)">移除</button>
-                        </div>
-                      </details>
-                      <details class="project-advanced">
-                        <summary>日志来源与保留配置</summary>
-                        <div class="project-fields">
-                          <label>
-                            日志来源
-                            <select v-model="deployment.logs.kind">
-                              <option v-for="(label, kind) in logKinds" :key="kind" :value="kind">{{ label }}</option>
-                            </select>
-                          </label>
-                          <template v-if="deployment.logs.kind === 'FILE'">
-                            <label>
-                              日志目录
-                              <input v-model="deployment.logs.directory" placeholder="/srv/project/logs" />
-                            </label>
-                            <label>
-                              文件规则
-                              <input v-model="deployment.logs.pattern" placeholder="*.log" />
-                            </label>
-                            <label>
-                              保留天数
-                              <input
-                                v-model.number="deployment.logs.retentionDays"
-                                type="number"
-                                min="0"
-                                max="3650"
-                                placeholder="0 表示未设置"
-                              />
-                            </label>
-                            <label>
-                              容量上限（MiB）
-                              <input
-                                v-model.number="deployment.logs.maxMiB"
-                                type="number"
-                                min="0"
-                                max="1048576"
-                                placeholder="0 表示未设置"
-                              />
-                            </label>
-                          </template>
-                        </div>
-                      </details>
-                      <div class="project-remove">
-                        <button type="button" class="quiet danger" @click="removeDeployment">移除此部署配置</button>
-                      </div>
-                    </div>
-                  </div>
-                </template>
-              </template>
-            </div>
-          </section>
-        </fieldset>
-      </div>
-      <template #footer>
-        <div class="project-dialog-footer">
-          <p v-if="editorError" class="project-error" role="alert">{{ editorError }}</p>
           <div class="project-actions">
-            <button class="quiet" @click="closeEditor(() => (editorOpen = false))">关闭</button>
-            <button v-if="stepIndex > 0" class="secondary" :disabled="saving" @click="previousStep">上一步</button>
-            <button v-if="stepIndex < steps.length - 1" class="secondary" :disabled="saving" @click="saveProject">{{ saving ? "保存中…" : "保存并关闭" }}</button>
-            <button v-if="stepIndex < steps.length - 1" class="primary" :disabled="saving" @click="nextStep">下一步</button>
-            <button v-else class="primary" :disabled="saving" @click="saveProject">{{ saving ? "保存中…" : draft.id ? "保存配置" : "创建项目" }}</button>
+            <button type="button" class="secondary" :disabled="loading" @click="load">刷新</button>
+            <button type="button" class="primary" :disabled="opening || saving" @click="editProject">新建项目</button>
+          </div>
+        </header>
+        <div class="project-list-body">
+          <table class="project-table" aria-label="项目列表">
+            <thead><tr><th scope="col">项目</th><th scope="col">模块</th><th scope="col">更新时间</th><th scope="col">操作</th></tr></thead>
+            <tbody>
+              <tr v-for="record in records" :key="record.id" class="project-row">
+                <th class="project-identity" scope="row">
+                  <div class="project-row-title">
+                    <button type="button" class="project-name" :disabled="opening || saving" @click="openProject(record)">{{ record.name }}</button>
+                    <small v-if="record.archived" class="project-state">已归档</small>
+                  </div>
+                  <p v-if="record.description">{{ record.description }}</p>
+                </th>
+                <td class="project-meta">{{ record.modules.length }} 个模块</td>
+                <td class="project-meta"><time :datetime="record.updatedAt">{{ hostTime(record.updatedAt) }}</time></td>
+                <td>
+                  <div v-if="archiveTarget === record.id" class="project-actions row-actions">
+                    <button type="button" class="quiet" :disabled="saving" @click="archiveTarget = ''">取消</button>
+                    <button type="button" class="quiet" :disabled="saving" @click="setArchived(record, true)">确认归档</button>
+                  </div>
+                  <div v-else class="project-actions row-actions">
+                    <a v-if="jenkinsLink(record.jenkinsUrl)" class="project-link" :href="jenkinsLink(record.jenkinsUrl)" target="_blank" rel="noopener noreferrer">打开 Jenkins ↗</a>
+                    <button type="button" class="quiet" :disabled="opening || saving" @click="openProject(record)">详情</button>
+                    <button v-if="record.archived" type="button" class="quiet" :disabled="saving" @click="setArchived(record, false)">恢复使用</button>
+                    <button v-else type="button" class="quiet" :disabled="saving" @click="archiveTarget = record.id">归档</button>
+                    <button type="button" class="quiet danger" :disabled="opening || saving" @click="confirmProjectDeletion(record)">删除</button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-if="!records.length" class="project-empty" role="status">{{ loading ? "正在读取项目…" : query || archived === "true" ? "没有符合条件的项目" : "暂无项目" }}</p>
+        </div>
+        <footer class="project-pagination"><OpsPagination v-model:page="page" v-model:page-size="pageSize" :total="total" :disabled="loading" label="项目分页" /></footer>
+      </section>
+    </template>
+
+    <template v-else>
+      <button type="button" class="quiet back-link" @click="backToProjects">‹ 返回项目</button>
+      <header class="project-summary panel-card">
+        <div class="project-toolbar">
+          <h2>{{ project.name }}<small v-if="project.archived" class="project-state">已归档</small></h2>
+          <div class="project-actions">
+            <button type="button" class="secondary" @click="editProject">编辑项目</button>
+            <a v-if="jenkinsLink(project.jenkinsUrl)" class="primary project-link" :href="jenkinsLink(project.jenkinsUrl)" target="_blank" rel="noopener noreferrer">打开 Jenkins ↗</a>
+            <button v-else type="button" class="quiet" @click="emit('install-jenkins')">安装 Jenkins</button>
           </div>
         </div>
-      </template>
-    </ElDialog>
+        <p v-if="project.description" class="project-description">{{ project.description }}</p>
+        <dl v-if="primaryRepository" class="project-facts">
+          <div><dt>主仓库</dt><dd><code>{{ primaryRepository.url }}</code></dd></div>
+          <div v-if="primaryRepository.branch"><dt>分支</dt><dd><code>{{ primaryRepository.branch }}</code></dd></div>
+        </dl>
+      </header>
+
+      <section class="module-section panel-card" aria-label="项目模块">
+        <div class="project-toolbar module-top">
+          <h3>项目模块 <span>{{ project.modules.length }}</span></h3>
+          <div class="project-actions">
+            <button type="button" class="secondary" @click="openInspection()">识别模块</button>
+            <button type="button" class="primary" @click="editModule()">添加模块</button>
+          </div>
+        </div>
+        <p v-if="!selectedModule" class="project-empty">可以从源码识别模块，也可以手动填写。</p>
+        <div v-else class="module-workspace">
+          <div class="module-list">
+            <table class="module-table" aria-label="模块列表">
+              <thead><tr><th scope="col">模块</th><th scope="col">源码目录</th><th scope="col">运行方式</th></tr></thead>
+              <tbody>
+                <tr v-for="item in project.modules" :key="item.id" :class="{ 'current-module': item.id === selectedModule.id }" @click="selectedModuleId = item.id">
+                  <th scope="row">
+                    <button type="button" class="module-name" :aria-current="item.id === selectedModule.id ? 'true' : undefined" @click.stop="selectedModuleId = item.id">{{ item.name }}</button>
+                    <small>{{ item.catalog?.kind ? (moduleKinds[item.catalog.kind] || "其他") : "待分类" }}</small>
+                  </th>
+                  <td><code>{{ item.directory || "." }}</code></td>
+                  <td>{{ item.catalog?.runtimeMode || "待确认" }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <article class="module-detail" aria-label="模块详情">
+            <div class="project-toolbar">
+              <h4>{{ selectedModule.name }}</h4>
+              <div class="project-actions">
+                <button type="button" class="quiet" @click="openInspection(selectedModule)">识别此模块</button>
+                <button type="button" class="secondary" @click="editModule(selectedModule)">编辑模块</button>
+              </div>
+            </div>
+            <dl class="module-facts">
+              <div><dt>源码目录</dt><dd><code>{{ selectedModule.directory || "." }}</code></dd></div>
+              <div><dt>线上运行方式</dt><dd>{{ selectedModule.catalog?.runtimeMode || "待确认" }}</dd></div>
+              <div v-if="selectedRepository" class="full-fact"><dt>代码仓库</dt><dd><code>{{ selectedRepository.url }}</code></dd></div>
+              <div class="full-fact"><dt>开发环境</dt><dd>{{ selectedModule.catalog?.environment || "待填写" }}</dd></div>
+            </dl>
+            <div v-if="selectedRegistrations.length" class="project-actions bound-environments">
+              <strong>环境绑定</strong>
+              <button v-for="row in selectedRegistrations" :key="row.registration.id" class="secondary" type="button"
+                :aria-label="'编辑环境 ' + row.environment.name"
+                @click="environmentBinding = { moduleId: selectedModule.id, ...row }">{{ row.environment.name }}</button>
+            </div>
+            <footer class="project-actions module-actions">
+              <button type="button" class="primary" :disabled="saving" @click="emit('view-instances', project.id, selectedModule.id)">打开实例工作台</button>
+              <button v-if="!project.archived" type="button" class="secondary" :disabled="saving" @click="environmentBinding = { moduleId: selectedModule.id }">绑定环境</button>
+              <button type="button" class="quiet danger" :disabled="saving" @click="confirmModuleDeletion(selectedModule)">删除模块</button>
+            </footer>
+          </article>
+        </div>
+      </section>
+
+      <ProjectJenkinsBuild
+        v-if="jenkinsLink(project.jenkinsUrl)"
+        :key="`${project.id}:${project.jenkinsUrl}`"
+        :project-id="project.id"
+        :job-url="jenkinsLink(project.jenkinsUrl)"
+        @error="emit('error', $event)"
+      />
+    </template>
   </section>
+
+  <ElDialog v-model="projectEditorOpen" :title="project ? '编辑项目' : '新建项目'" width="min(540px, 94vw)" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving">
+    <form class="project-form" @submit.prevent="saveProject">
+      <label>项目名称 <input v-model="projectDraft.name" required maxlength="60" /></label>
+      <label>项目简介 <textarea v-model="projectDraft.description" rows="2" maxlength="1000" placeholder="选填" /></label>
+      <label>主仓库地址 <input v-model="projectDraft.repositoryUrl" :required="!!primaryRepository" placeholder="例如 https://git.example.com/team/project.git" /></label>
+      <label>Jenkins 作业链接 <input v-model="projectDraft.jenkinsUrl" type="url" placeholder="例如 https://jenkins.example.com/job/project/" /></label>
+      <p v-if="formError" class="project-error" role="alert">{{ formError }}</p>
+      <div class="project-actions form-actions">
+        <button type="button" class="secondary" :disabled="saving" @click="projectEditorOpen = false">取消</button>
+        <button type="submit" class="primary" :disabled="saving || !projectDraft.name.trim()">{{ saving ? "正在保存…" : "保存项目" }}</button>
+      </div>
+    </form>
+  </ElDialog>
+
+  <ProjectEnvironmentBinding v-if="environmentBinding && project" :project="project" :module-id="environmentBinding.moduleId"
+    :environment="environmentBinding.environment" :registration="environmentBinding.registration"
+    @saved="showProject($event, selectedModuleId)" @close="environmentBinding = undefined" @error="emit('error', $event)" />
+
+  <ElDialog v-model="projectDeleteOpen" title="删除项目" width="min(440px, 94vw)" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving">
+    <div class="project-form">
+      <p>删除「{{ projectDeleteTarget?.name }}」的项目档案及其配置后，无法恢复。</p>
+      <p v-if="formError" class="project-error" role="alert">{{ formError }}</p>
+      <div class="project-actions form-actions">
+        <button type="button" class="secondary" :disabled="saving" @click="projectDeleteOpen = false">取消</button>
+        <button type="button" class="secondary danger" :disabled="saving" @click="deleteProject">{{ saving ? "正在删除…" : "确认删除" }}</button>
+      </div>
+    </div>
+  </ElDialog>
+
+  <ElDialog v-model="moduleDeleteOpen" title="删除模块" width="min(460px, 94vw)" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving">
+    <div class="project-form">
+      <p>删除「{{ moduleDeleteTarget?.name }}」的模块记录后，无法恢复。</p>
+      <p v-if="formError" class="project-error" role="alert">{{ formError }}</p>
+      <div class="project-actions form-actions">
+        <button v-if="project && moduleDeleteTarget && formError.includes('APPLICATION_MODULE_IN_USE')" type="button" class="secondary" :disabled="saving" @click="emit('view-instances', project.id, moduleDeleteTarget.id)">查看关联实例</button>
+        <button type="button" class="secondary" :disabled="saving" @click="moduleDeleteOpen = false">取消</button>
+        <button type="button" class="secondary danger" :disabled="saving" @click="deleteModule">{{ saving ? "正在删除…" : "确认删除" }}</button>
+      </div>
+    </div>
+  </ElDialog>
+
+  <ElDialog v-model="moduleEditorOpen" :title="moduleDraft.id ? '编辑模块' : '添加模块'" width="min(620px, 94vw)" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving">
+    <form class="project-form" @submit.prevent="saveModule">
+      <div class="form-pair">
+        <label>模块名称 <input v-model="moduleDraft.name" required maxlength="60" /></label>
+        <label>模块类别
+          <select v-model="moduleDraft.kind">
+            <option v-for="(label, kind) in moduleKinds" :key="kind" :value="kind">{{ label }}</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-pair">
+        <label>代码仓库
+          <select v-model="moduleDraft.repositoryId">
+            <option value="">未登记仓库</option>
+            <option v-for="(repository, index) in project?.repositories" :key="repository.id" :value="repository.id">{{ index === 0 ? '主仓库' : repository.name }}</option>
+            <option :value="separateRepository">登记其他仓库</option>
+          </select>
+        </label>
+        <label>源码目录 <input v-model="moduleDraft.directory" placeholder="例如 platform-api，根目录填 ." /></label>
+      </div>
+      <label v-if="moduleDraft.repositoryId === separateRepository">仓库地址 <input v-model="moduleDraft.repositoryUrl" required /></label>
+      <label>开发环境 <input v-model="moduleDraft.environment" placeholder="例如 Java 21、Spring Boot、Maven Wrapper" /></label>
+      <label>开发启动命令 <textarea v-model="moduleDraft.startCommand" class="command-input" rows="3" spellcheck="false" placeholder="在模块目录中执行的命令" /></label>
+      <label>线上运行方式 <input v-model="moduleDraft.runtimeMode" placeholder="待确认，例如 JAR、容器、静态站点" /></label>
+      <p v-if="formError" class="project-error" role="alert">{{ formError }}</p>
+      <div class="project-actions form-actions">
+        <button type="button" class="secondary" :disabled="saving" @click="moduleEditorOpen = false">取消</button>
+        <button type="submit" class="primary" :disabled="saving || !moduleDraft.name.trim()">{{ saving ? "正在保存…" : "保存模块" }}</button>
+      </div>
+    </form>
+  </ElDialog>
+
+  <ElDialog v-model="inspectionOpen" :title="inspectionModuleId ? '识别模块环境' : '识别源码模块'" width="min(700px, 94vw)" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving" @close="closeInspection">
+    <div class="project-form">
+      <p v-if="sourcesLoading" role="status">正在读取识别来源…</p>
+      <p v-else-if="!inspectionSources.length && !formError">控制器还没有登记可识别的源码目录，可以手动添加模块。</p>
+      <form v-else-if="inspectionSources.length" class="source-picker" @submit.prevent="inspect">
+        <label>源码来源
+          <select v-model="sourceId" required :disabled="inspecting || saving" @change="resetInspectionResults">
+            <option value="" disabled>选择控制器上的源码</option>
+            <option v-for="source in inspectionSources" :key="source.id" :value="source.id">{{ source.name }}</option>
+          </select>
+        </label>
+        <button type="submit" class="secondary" :disabled="!sourceId || inspecting || saving">{{ inspecting ? "正在识别…" : "开始识别" }}</button>
+      </form>
+      <p v-if="formError" class="project-error" role="alert">{{ formError }}</p>
+      <p v-if="inspected && !inspectionResults.length" role="status">没有找到支持的源码清单，可以手动填写环境和启动命令。</p>
+      <label v-if="inspectionResults.length && !inspectionModuleId && project?.repositories.length">登记到仓库
+        <select v-model="inspectionRepository" :disabled="saving" @change="selectNewDirectories">
+          <option value="">未登记仓库</option>
+          <option v-for="(repository, index) in project.repositories" :key="repository.id" :value="repository.id">{{ index === 0 ? '主仓库' : repository.name }}</option>
+        </select>
+      </label>
+      <article v-for="item in inspectionResults" :key="item.directory" class="inspection-result">
+        <div class="project-toolbar">
+          <label v-if="!matchingModule(item.directory)" class="result-choice">
+            <input v-model="selectedDirectories" type="checkbox" :value="item.directory" :disabled="saving" />
+            {{ item.name }}
+          </label>
+          <strong v-else>{{ item.name }}</strong>
+          <button v-if="matchingModule(item.directory)" type="button" class="quiet" :disabled="saving" @click="reviewSuggestion(item)">填入空项</button>
+        </div>
+        <small>{{ moduleKinds[item.kind] }} · <code>{{ item.directory }}</code></small>
+        <p>{{ item.environment }}</p>
+        <TerminalCommandEntry v-if="item.startCommand" label="开发启动" :command="item.startCommand" />
+        <small v-if="item.evidence.length">识别依据 {{ item.evidence.join('、') }}</small>
+      </article>
+      <div class="project-actions form-actions">
+        <button type="button" class="secondary" :disabled="saving" @click="inspectionOpen = false">关闭</button>
+        <button v-if="selectedDirectories.length" type="button" class="primary" :disabled="saving" @click="addSuggestions">{{ saving ? "正在登记…" : '登记所选模块' }}</button>
+      </div>
+    </div>
+  </ElDialog>
 </template>
 
 <style scoped>
-.application-projects { min-width: 0; }
-:global(.application-project-dialog.el-dialog) {
-  display: flex;
-  flex-direction: column;
-  height: min(720px, calc(100dvh - var(--ops-page-gutter, 24px) - var(--ops-page-gutter, 24px)));
-  overflow: hidden;
+.application-projects { display: grid; gap: 16px; min-width: 0; container: project-content / inline-size; }
+.application-projects :deep(.ops-pagination) { margin-top: 0; }
+.project-toolbar, .project-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.project-toolbar { justify-content: space-between; }
+.project-toolbar input, .project-toolbar select { width: auto; margin: 0; }
+.project-list { padding: 0; overflow: hidden; }
+.directory-toolbar { padding: 12px 18px; border-bottom: 1px solid var(--border); }
+.project-filters input { min-width: 13rem; }
+.project-list-body { max-height: max(160px, calc(100dvh - 220px)); overflow: auto; }
+.project-table, .module-table { width: 100%; min-width: 0; border-collapse: separate; border-spacing: 0; text-align: left; }
+.project-table { table-layout: fixed; }
+.project-table thead th, .module-table thead th { position: sticky; top: 0; z-index: 1; padding-block: 11px; color: #475569; background: #f8fafc; font-size: 12px; font-weight: 600; }
+.project-table th, .project-table td { padding: 10px 18px; border-bottom: 1px solid var(--border-subtle); }
+.project-table tbody tr:last-child > * { border-bottom: 0; }
+.project-table thead th:nth-child(2) { width: 88px; }
+.project-table thead th:nth-child(3) { width: 148px; }
+.project-table thead th:last-child { width: 264px; text-align: right; }
+.project-table th:nth-child(2), .project-table th:nth-child(3), .project-meta { white-space: nowrap; }
+.project-table tbody th, .module-table tbody th { background: transparent; color: inherit; white-space: normal; }
+.project-table tbody tr:hover { background: #f8fafc; }
+.project-pagination { padding: 9px 18px; border-top: 1px solid var(--border); }
+.project-identity { min-width: 0; font-weight: 400; }
+.project-toolbar h2, .project-toolbar h3, .project-toolbar h4 { margin: 0; overflow-wrap: anywhere; }
+.project-row-title { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.project-identity p, .project-meta, .project-state { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.project-identity p { margin: 3px 0 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.project-name, .module-name { padding: 0; border: 0; background: transparent; color: inherit; font-size: 14px; font-weight: 600; line-height: 1.5; text-align: left; overflow-wrap: anywhere; }
+.project-name:hover, .module-name:hover, .project-link { color: var(--accent); }
+.project-link { font-size: 13px; font-weight: 500; text-decoration: none; white-space: nowrap; }
+.project-link:hover { text-decoration: underline; }
+.project-link.primary { display: inline-flex; align-items: center; color: white; }
+.row-actions { justify-content: flex-end; gap: 2px 6px; }
+.row-actions button { margin: 0; padding-inline: 6px; white-space: nowrap; }
+.project-empty { margin: 0; padding: 36px 16px; text-align: center; color: var(--muted); }
+.project-error { margin: 0; padding: 9px 12px; border: 1px solid #fecaca; border-radius: var(--control-radius); color: #991b1b; background: #fef2f2; overflow-wrap: anywhere; }
+.back-link { justify-self: start; padding-left: 0; }
+.project-summary { padding: 18px 22px; }
+.project-summary h2 { font-size: 22px; line-height: 1.4; }
+.project-summary .project-state { margin-left: 8px; }
+.project-state { border: 1px solid var(--border); border-radius: 20px; padding: 2px 8px; background: #f8fafc; font-weight: 400; }
+.project-description { margin: 8px 0 0; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-facts { display: flex; gap: 10px 22px; flex-wrap: wrap; margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.project-facts > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
+.project-facts dt { color: var(--muted); font-size: 12px; }
+.project-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.module-section { padding: 0; overflow: hidden; }
+.module-top { padding: 14px 20px; border-bottom: 1px solid var(--border); }
+.module-top h3 { font-size: 16px; }
+.module-top h3 span { margin-left: 6px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.module-workspace { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(270px, 1fr); }
+.module-list { max-height: clamp(280px, 55dvh, 520px); min-width: 0; overflow: auto; border-right: 1px solid var(--border); }
+.module-table { table-layout: fixed; }
+.module-table th, .module-table td { padding: 9px 12px; overflow-wrap: anywhere; border-bottom: 1px solid var(--border-subtle); }
+.module-table th:first-child { width: 40%; padding-left: 19px; }
+.module-table td { color: #475569; font-size: 12px; white-space: normal; }
+.module-table tbody th { font-weight: 400; }
+.module-table small { display: block; margin-top: 2px; font-size: 11px; }
+.module-table tbody tr { cursor: pointer; }
+.module-table tbody tr:hover, .module-table tbody tr:focus-within { background: #f8fafc; }
+.module-table tbody tr.current-module { background: var(--accent-soft); }
+.current-module th { box-shadow: inset 3px 0 var(--accent); }
+.module-name[aria-current] { color: var(--accent); }
+.module-table small, .module-facts dt { color: var(--muted); }
+.module-detail { min-width: 0; padding: 16px 20px; }
+.module-detail h4 { font-size: 16px; }
+.module-detail .project-actions { gap: 4px 6px; }
+.module-actions { justify-content: space-between; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.module-actions .danger { margin-left: auto; }
+.bound-environments { margin-top: 14px; }
+.bound-environments strong { font-size: 13px; }
+.module-facts { display: grid; gap: 14px 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 14px 0; padding: 14px 0; border-top: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
+.module-facts .full-fact { grid-column: 1 / -1; }
+.module-facts dt { font-size: 12px; }
+.module-facts dd { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-form { display: grid; gap: 14px; min-width: 0; }
+.project-form label { display: grid; gap: 6px; color: #334155; font-size: 13px; }
+.project-form input:not([type="checkbox"]), .project-form select, .project-form textarea { width: 100%; min-width: 0; margin: 0; }
+.project-form textarea { resize: vertical; }
+.project-form .command-input { font-family: var(--mono); }
+.project-form p { margin: 0; }
+.form-actions { justify-content: flex-end; margin-top: 4px; }
+.form-pair { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.source-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+.inspection-result { display: grid; gap: 8px; min-width: 0; border: 1px solid var(--border); border-radius: var(--control-radius); padding: 12px; }
+.inspection-result small { color: var(--muted); overflow-wrap: anywhere; }
+.inspection-result .result-choice { display: flex; align-items: center; font-weight: 600; }
+.result-choice input[type="checkbox"] { width: 15px; min-height: 0; height: 15px; margin: 0; padding: 0; }
+
+@container project-content (max-width: 730px) {
+  .project-list-body { max-height: max(160px, calc(100dvh - 270px)); }
+  .project-table, .project-table tbody { display: block; }
+  .project-table thead { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; }
+  .project-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; padding: 12px 16px; }
+  .project-row + .project-row { border-top: 1px solid var(--border); }
+  .project-row th, .project-row td { padding: 0; border: 0; }
+  .project-row .project-identity, .project-row td:last-child { grid-column: 1 / -1; }
+  .project-identity { width: auto; }
+  .project-meta { white-space: normal; }
+  .row-actions { justify-content: flex-start; }
+  .module-workspace { grid-template-columns: minmax(0, 1fr); }
+  .module-list { max-height: 282px; border-right: 0; border-bottom: 1px solid var(--border); }
 }
-:global(.application-project-dialog > .el-dialog__header),
-:global(.application-project-dialog > .el-dialog__footer) { flex-shrink: 0; }
-:global(.application-project-dialog > .el-dialog__header) { margin-bottom: 16px; }
-:global(.application-project-dialog > .el-dialog__body) { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden; }
-:global(.application-project-dialog > .el-dialog__footer) { padding-top: 16px; }
-.project-toolbar, .project-filters, .project-actions, .project-section-heading, .project-card-title, .project-card footer, .project-step-title { display: flex; align-items: center; gap: 12px; }
-.project-toolbar, .project-section-heading, .project-card footer { justify-content: space-between; }
-.project-toolbar { margin-bottom: var(--ops-page-gap, 16px); flex-wrap: wrap; }
-.project-filters { flex: 1; flex-wrap: wrap; }
-.project-filters input, .project-filters select { margin: 0; width: auto; }
-.project-filters input { width: 260px; }
-.project-filters select { width: 160px; }
-.project-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: var(--ops-page-gap, 16px); }
-.project-card { min-width: 0; border: 1px solid var(--border); border-radius: var(--card-radius); background: var(--surface); }
-.project-card-title { align-items: flex-start; padding: 22px 22px 14px; }
-.project-card-title > div { min-width: 0; flex: 1; }
-.project-symbol { display: grid; place-items: center; flex: 0 0 42px; height: 42px; border-radius: 10px; color: var(--accent); background: var(--accent-soft); font-size: 20px; font-weight: 600; }
-.project-card h2 { margin: 1px 0 5px; font-size: 17px; overflow-wrap: anywhere; }
-.project-code { display: block; color: #475569; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.project-card p { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--muted); margin: 6px 0 0; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
-.project-state { white-space: nowrap; padding: 3px 7px; color: #15803d; background: #f0fdf4; border-radius: 4px; font-size: 11px; }
-.project-state.archived { color: var(--muted); background: #f1f5f9; }
-.project-card-summary { display: flex; gap: 20px; padding: 6px 22px 20px; font-size: 12px; color: var(--muted); }
-.project-card footer { border-top: 1px solid var(--border-subtle); padding: 12px 18px; gap: 8px; flex-wrap: wrap; font-size: 11px; color: var(--muted); background: #fbfcfe; }
-.project-card footer .project-actions { gap: 6px; margin-left: auto; }
-.project-empty { grid-column: 1 / -1; text-align: center; padding: 48px 20px; border: 1px dashed var(--border); background: var(--surface); border-radius: var(--card-radius); color: var(--muted); }
-.project-empty h2 { color: var(--text); font-size: 18px; font-weight: 500; }
-.project-empty p { font-size: 12px; color: var(--muted); line-height: 1.6; }
-.project-error { margin: 0; padding: 10px 12px; background: #fef2f2; border-radius: 5px; color: #b91c1c; line-height: 1.6; font-size: 13px; overflow-wrap: anywhere; }
-.application-projects > .project-error { margin-bottom: 16px; }
-.project-wizard-steps { flex-shrink: 0; margin-bottom: 24px; padding: 4px 0 20px; border-bottom: 1px solid var(--border); }
-.project-wizard-steps :deep(.el-step) { cursor: pointer; }
-.project-wizard-steps button { padding: 4px; border: 0; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
-.project-wizard-steps :deep(.el-step__head.is-process) { color: var(--accent); border-color: var(--accent); }
-.project-wizard-steps button[aria-current] { color: var(--accent); font-weight: 600; }
-.project-dialog-footer .project-actions { flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.project-editor { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 8px; }
-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
-.project-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.project-fields label { min-width: 0; }
-.project-section-body { padding: 0 2px 8px; }
-.project-section-body > .project-section-heading:first-child { justify-content: flex-end; margin-bottom: 12px; }
-.project-section-body > .project-config-block:last-child { margin-bottom: 0; }
-.project-advanced { border-top: 1px solid var(--border-subtle); margin-top: 16px; }
-.project-advanced > summary { padding: 12px 0; margin: 0; }
-.project-advanced[open] > summary { margin-bottom: 4px; }
-.project-environment-nav { display: flex; gap: 6px; overflow-x: auto; }
-.project-section-heading { margin-bottom: 16px; }
-.project-section-heading button { flex-shrink: 0; white-space: nowrap; }
-.project-section-heading h3, .project-section-heading h4 { margin: 0; font-size: 14px; }
-.project-config-block, .project-step { border: 1px solid var(--border); border-radius: 7px; padding: 16px; margin-bottom: 16px; }
-.project-config-block .project-section-heading { margin-bottom: 12px; }
-.project-blank { padding: 32px 20px; border: 1px dashed var(--border); border-radius: 6px; text-align: center; color: var(--muted); font-size: 13px; }
-.project-split { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 24px; }
-.project-item-nav { display: flex; flex-direction: column; gap: 5px; align-self: start; }
-.project-item-nav button, .project-environment-nav button { border: 1px solid transparent; background: #f8fafc; color: #475569; padding: 10px 12px; border-radius: 5px; font-size: 12px; text-align: left; overflow-wrap: anywhere; }
-.project-item-nav button.active, .project-environment-nav button.active { border-color: #bfdbfe; background: var(--accent-soft); color: var(--accent); }
-.project-module-form { min-width: 0; }
-.project-form-section { margin-top: 20px; }
-.project-full { grid-column: 1 / -1; }
-.project-three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.project-step { padding: 14px; background: #fbfcfe; }
-.project-step-title { gap: 6px; margin-bottom: 14px; }
-.project-step-title > span { display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; border-radius: 50%; background: #dbeafe; color: var(--accent); font-size: 12px; }
-.project-step-title input { margin: 0; min-width: 0; }
-.project-step-title .quiet { flex-shrink: 0; padding: 4px; }
-.project-command { display: block; margin-bottom: 14px; }
-.project-command textarea { font-family: var(--mono); font-size: 12px; line-height: 1.6; min-height: 100px; resize: vertical; }
-.project-remove { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
-.danger { color: var(--error); }
-.project-environment-nav { margin-bottom: 18px; flex-wrap: wrap; }
-.environment-name { width: min(100%, 360px); }
-.add-deployment { margin: 0; width: 200px; }
-.project-port, .project-mount { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 100px auto; align-items: end; gap: 12px; margin-bottom: 14px; }
-.row-remove { min-height: 38px; }
-.project-variable { display: grid; grid-template-columns: minmax(0, 1fr) 110px minmax(0, 1.3fr) auto; align-items: center; gap: 10px; margin-bottom: 12px; }
-.project-variable input, .project-variable select { margin: 0; }
-details summary { cursor: pointer; font-size: 13px; color: #475569; margin-bottom: 16px; }
-.project-dialog-footer { display: flex; justify-content: flex-end; align-items: center; gap: 14px; }
-.project-dialog-footer .project-error { flex: 1; text-align: left; max-height: min(96px, 20dvh); overflow-y: auto; }
-.project-dialog-footer .project-actions { flex-shrink: 0; }
-@media (max-width: 760px) {
-  .project-wizard-steps { margin-bottom: 16px; }
-  .project-wizard-steps :deep(.el-step__title) { font-size: 12px; line-height: 1.5; }
-  .project-split { grid-template-columns: minmax(0, 1fr); gap: 18px; }
-  .project-item-nav { flex-direction: row; flex-wrap: wrap; }
-  .project-fields, .project-three { grid-template-columns: minmax(0, 1fr); gap: 14px; }
-  .project-full { grid-column: auto; }
-  .project-port, .project-mount { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .project-variable { grid-template-columns: minmax(0, 1fr) 100px; }
-  .project-variable > :nth-child(3) { grid-column: 1; }
-  .project-filters { width: 100%; flex-basis: 100%; }
-  .project-filters input { width: 100%; }
-  .project-card-summary { gap: 14px; }
-  .project-dialog-footer { align-items: stretch; flex-direction: column; }
-  .project-dialog-footer .project-actions { justify-content: flex-end; }
-}
-@media (max-height: 560px) {
-  .project-wizard-steps { margin-bottom: 12px; padding-bottom: 10px; }
-  :global(.application-project-dialog.el-dialog) { --el-dialog-padding-primary: 16px; }
-  :global(.application-project-dialog > .el-dialog__header) { margin-bottom: 12px; padding-bottom: 10px; }
-  :global(.application-project-dialog > .el-dialog__footer) { padding-top: 12px; }
+@media (max-width: 540px) {
+  .directory-toolbar, .module-top, .project-summary, .module-detail, .project-pagination { padding-inline: 12px; }
+  .project-summary h2 { font-size: 19px; }
+  .project-filters, .project-toolbar input[type="search"] { min-width: 0; width: 100%; }
+  .directory-toolbar .project-filters { display: contents; }
+  .directory-toolbar input[type="search"] { flex-basis: 100%; }
+  .module-table th, .module-table td { padding-inline: 8px; }
+  .module-table th:first-child { padding-left: 12px; }
+  .form-pair { grid-template-columns: minmax(0, 1fr); }
 }
 </style>

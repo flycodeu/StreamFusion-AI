@@ -11,9 +11,14 @@ const props = withDefaults(defineProps<{
   hasNext?: boolean;
   disabled?: boolean;
   label?: string;
+  sizeOptions?: number[];
 }>(), { page: 1, pageSize: 10, disabled: false, label: "列表分页" });
 const emit = defineEmits<{ "update:page": [value: number]; "update:pageSize": [value: number] }>();
 const canPrevious = computed(() => props.page > 1);
+const availableSizes = computed(() => props.sizeOptions ?? pageSizes);
+const numberedLayout = computed(() => (props.total ?? 0) > props.pageSize
+  ? "total, sizes, ->, prev, pager, next"
+  : "total, sizes");
 function changePage(value: number) {
   if (props.disabled || value === props.page) return;
   if (props.total === undefined && (value < props.page ? !canPrevious.value : !props.hasNext)) return;
@@ -22,7 +27,7 @@ function changePage(value: number) {
   if (next !== props.page) emit("update:page", next);
 }
 function changeSize(value: number) {
-  if (!props.disabled && value !== props.pageSize && pageSizes.includes(value)) emit("update:pageSize", value);
+  if (!props.disabled && value !== props.pageSize && availableSizes.value.includes(value)) emit("update:pageSize", value);
 }
 </script>
 
@@ -33,11 +38,11 @@ function changeSize(value: number) {
         v-if="total !== undefined"
         :current-page="page"
         :page-size="pageSize"
-        :page-sizes="pageSizes"
+        :page-sizes="availableSizes"
         :total="total"
         :disabled="disabled"
         :pager-count="5"
-        layout="total, sizes, prev, pager, next"
+        :layout="numberedLayout"
         size="small"
         background
         @update:current-page="changePage"
@@ -45,7 +50,7 @@ function changeSize(value: number) {
       />
       <div v-else class="cursor-pagination">
         <ElSelect :model-value="pageSize" :disabled="disabled" :aria-label="`${label}每页条数`" @update:model-value="changeSize">
-          <ElOption v-for="size in pageSizes" :key="size" :label="`${size} 条/页`" :value="size" />
+          <ElOption v-for="size in availableSizes" :key="size" :label="`${size} 条/页`" :value="size" />
         </ElSelect>
         <span>第 {{ page }} 页</span>
         <ElButton :disabled="disabled || !canPrevious" @click="changePage(page - 1)">上一页</ElButton>
@@ -57,9 +62,11 @@ function changeSize(value: number) {
 
 <style scoped>
 .ops-pagination {
+  container: ops-pager / inline-size;
   display: flex;
   justify-content: flex-end;
-  max-width: 100%;
+  width: 100%;
+  min-width: 0;
   margin-top: 18px;
   color: var(--muted);
   font-size: 12px;
@@ -67,9 +74,15 @@ function changeSize(value: number) {
   --el-pagination-button-height: 30px;
   --el-component-size-small: 30px;
 }
-.ops-pagination :deep(.el-pagination) { flex-wrap: wrap; justify-content: flex-end; gap: 8px 0; }
+.ops-pagination :deep(.el-pagination) { min-width: 0; flex-wrap: wrap; justify-content: flex-end; gap: 8px 0; }
 .ops-pagination :deep(.el-pagination__total), .ops-pagination :deep(.el-select), .cursor-pagination { font-size: 12px; }
 .cursor-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .cursor-pagination .el-select { width: 106px; }
 .cursor-pagination .el-button { height: 30px; margin-left: 0; padding: 0 10px; font-size: 12px; }
+@container ops-pager (max-width: 420px) {
+  .ops-pagination :deep(.el-pagination) { --el-pagination-item-gap: 4px; }
+  .ops-pagination :deep(.el-pagination__sizes .el-select), .cursor-pagination .el-select { width: 88px; }
+  .cursor-pagination { gap: 4px; }
+  .cursor-pagination .el-button { padding-inline: 8px; }
+}
 </style>

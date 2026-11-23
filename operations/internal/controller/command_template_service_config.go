@@ -21,7 +21,8 @@ func serviceConfigurationSeeds() []serviceinstall.Definition {
 
 func previousServiceConfigurationMatches(key string, definition serviceinstall.Definition) bool {
 	hash := annotationConfigurationHash(definition)
-	return previousServiceConfiguration[key] == hash || previousMysqlSocketConfiguration[key] == hash
+	return previousServiceConfiguration[key] == hash || previousMysqlSocketConfiguration[key] == hash ||
+		previousJenkinsRuntimeConfiguration[key] == hash || previousRegistryDockerConfiguration[key] == hash
 }
 
 // Upgrade only exact shipped definitions. Existing installation and job snapshots

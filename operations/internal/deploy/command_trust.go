@@ -111,7 +111,9 @@ func SignCommandRequest(req *Request, key ed25519.PrivateKey) error {
 			return err
 		}
 	}
-	if (req.Action == "SOFTWARE_INSTALL_CHECK" || req.Action == "NODE_ENVIRONMENT_CHECK" || req.Action == "SOFTWARE_OPERATION_CHECK") && req.DeadlineAt == "" {
+	if req.Action == JenkinsUnlockReadAction && req.DeadlineAt == "" {
+		req.DeadlineAt = time.Now().UTC().Add(time.Minute).Format(time.RFC3339)
+	} else if (req.Action == "SOFTWARE_INSTALL_CHECK" || req.Action == "NODE_ENVIRONMENT_CHECK" || req.Action == "SOFTWARE_OPERATION_CHECK") && req.DeadlineAt == "" {
 		// Leave room below the target's five-minute ceiling for clock skew and
 		// RFC3339 second precision during read-only checks.
 		req.DeadlineAt = time.Now().UTC().Add(4 * time.Minute).Format(time.RFC3339)
@@ -187,6 +189,13 @@ func (x *executor) verifyCommandRequest(req Request) error {
 	if req.Action == "SOFTWARE_INSTALL_CHECK" || req.Action == "NODE_ENVIRONMENT_CHECK" || req.Action == "SOFTWARE_OPERATION_CHECK" {
 		if err := verifyCommandCheckDeadline(req.DeadlineAt, time.Now()); err != nil {
 			return err
+		}
+	}
+	if req.Action == JenkinsUnlockReadAction {
+		now := time.Now()
+		deadline, err := time.Parse(time.RFC3339, req.DeadlineAt)
+		if err != nil || !deadline.After(now) || deadline.Sub(now) > 90*time.Second {
+			return errors.New("DEADLINE_EXCEEDED")
 		}
 	}
 	return verifyCommandSignature(req, trust.PublicKey)

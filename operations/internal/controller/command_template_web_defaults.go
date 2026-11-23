@@ -104,7 +104,7 @@ func repairSeededWebDefaults(tx *sql.Tx) error {
 }
 
 func previousWebDefaultDefinition(seed serviceinstall.Definition) serviceinstall.Definition {
-	previous := serviceinstall.NormalizeCommandScripts(seed)
+	previous := previousRegistryDockerDefinition(seed)
 	previous.DefaultBindAddress, previous.Web = "", nil
 	if seed.CatalogKey == "label-studio" || seed.CatalogKey == "ytlabel" {
 		previous.DefaultBindAddress, previous.Web = "127.0.0.1", seed.Web
@@ -115,6 +115,9 @@ func previousWebDefaultDefinition(seed serviceinstall.Definition) serviceinstall
 	}
 	for i := range previous.Commands.Steps {
 		step := &previous.Commands.Steps[i]
+		if seed.CatalogKey == "jenkins" {
+			step.Script = previousJenkinsRuntimeCommand(step.Script)
+		}
 		if strings.HasPrefix(seed.Key, "custom-prometheus-native-") {
 			step.Script = strings.ReplaceAll(step.Script, "self_address=$OPS_BIND_ADDRESS\n[[ \"$self_address\" != 0.0.0.0 ]] || self_address=127.0.0.1\n", "")
 			step.Script = strings.ReplaceAll(step.Script, "- targets: ['$self_address:$OPS_HOST_PORT']", "- targets: ['$OPS_BIND_ADDRESS:$OPS_HOST_PORT']")

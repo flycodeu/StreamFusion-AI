@@ -1,5 +1,11 @@
 package controller
 
+import (
+	"strings"
+
+	"github.com/streamfusion-ai/operations/internal/serviceinstall"
+)
+
 // Exact Config-20 stock hashes; administrator edits are never replaced.
 var previousServiceConfiguration = map[string]string{
 	"builtin/mysql/8.4.11":                  "bf774d94c3a6a27409800f618bce6fdbb18268e74bc01c921dcb8781c72fb040",
@@ -36,4 +42,42 @@ var previousServiceConfiguration = map[string]string{
 var previousMysqlSocketConfiguration = map[string]string{
 	"builtin/mysql/8.4.11":                 "c63ad2dc27f7ce93f395672533c377cfb2cf4749f52cb582d1e4d26bb363de6c",
 	"builtin/mysql/ubuntu24.04-repository": "9f5a38cd1d888cd9c7d072318dccab6a8ab29c5ce7078e4ed4bfd118f5ff3ffd",
+}
+
+// Shipped Jenkins 2.580.2 templates before the official JVM mitigation from
+// https://www.jenkins.io/blog/2026/11/18/mitigating-java4shell/.
+var previousJenkinsRuntimeConfiguration = map[string]string{
+	"custom-jenkins-docker-online":  "ec87b939a5028d2e492d89a568c9b5a1fcf67b600df48dccc61f1fbd1a66eccb",
+	"custom-jenkins-docker-offline": "33f62313aaed99be4cbdaca0d86adae9bc26f01469d7bcc62f4f76aa8510d0d3",
+	"custom-jenkins-native-online":  "7ccf0349a20977479ba2262d84dfa292d129318619f36756baffb0f5d15da8f1",
+	"custom-jenkins-native-offline": "1f7ddabe46626ed9fcf29721e293622d057a03a8603f657447df1e7184782c32",
+}
+
+func previousJenkinsRuntimeCommand(script string) string {
+	return strings.NewReplacer(" -e JAVA_OPTS="+jenkinsJVMMitigation, "", " "+jenkinsJVMMitigation, "").Replace(script)
+}
+
+// Shipped online Docker definitions before registry references replaced the
+// use of bare image config digests as runtime references.
+var previousRegistryDockerConfiguration = map[string]string{
+	"custom-jenkins-docker-online":    "721e4cba46df1fd9999f1d5cae721248ceeba194cdd0f2230b019f1a4f4551fd",
+	"custom-postgresql-docker-online": "b8aecf8688ceef3e313c78547d555271cb0a7e01d7e150c975a738ad7a5d8b88",
+	"custom-gitlab-docker-online":     "8cbd7e574ee861d1a18401b2eb8fb09c32b5334ad96699dd7afe5bb0ab70100e",
+	"custom-prometheus-docker-online": "3f9c9c7cc566fee032acfd9b0e4bf971b7668f1517e0412d0ee7600794af8ecb",
+	"custom-nacos-docker-online":      "e2382799e24b47d74b838ce5a01194cb506a58522df870616705f26b00357a40",
+}
+
+func previousRegistryDockerDefinition(seed serviceinstall.Definition) serviceinstall.Definition {
+	previous := serviceinstall.NormalizeCommandScripts(seed)
+	if _, affected := previousRegistryDockerConfiguration[seed.Key]; !affected {
+		return previous
+	}
+	for _, app := range additionalSoftwareCatalog {
+		if app.key == seed.CatalogKey {
+			previous.Commands.Steps[0].Script = additionalContextScript(app, "docker-material")
+			previous.Commands.Steps[1].Script = additionalContextScript(app, "docker-create")
+			break
+		}
+	}
+	return previous
 }

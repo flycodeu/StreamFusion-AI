@@ -4,7 +4,7 @@ import { ElMessage } from "element-plus";
 import { request } from "./api";
 import { requestAllPages } from "./listPages";
 import OpsPagination from "./OpsPagination.vue";
-import { usePagination } from "./pagination";
+import { useCompactListPagination } from "./pagination";
 import { hostTime, type Host } from "./hosts";
 import {
   softwareIsHistoryOnly, softwareRuntimeLabels, softwareState, softwareTypeLabel,
@@ -60,7 +60,7 @@ const records = computed(() => rows.value.map((item) => {
 const visible = computed(() => records.value.filter(({ item, search }) =>
   (!hostId.value || item.hostId === hostId.value) && search.includes(query.value.trim().toLocaleLowerCase()),
 ));
-const { page, pageSize, total, pageItems } = usePagination(() => visible.value, [query, hostId]);
+const { page, pageSize, total, pageItems, pageSizeOptions } = useCompactListPagination(() => visible.value, [query, hostId]);
 
 async function refresh() {
   if (loading.value) return;
@@ -142,7 +142,7 @@ onUnmounted(() => abort.abort());
         </tbody>
       </table>
     </div>
-    <OpsPagination v-if="total" v-model:page="page" v-model:page-size="pageSize" :total="total" label="软件目录分页" />
+    <OpsPagination v-if="total" v-model:page="page" v-model:page-size="pageSize" :size-options="pageSizeOptions" :total="total" label="软件目录分页" />
   </section>
 </template>
 

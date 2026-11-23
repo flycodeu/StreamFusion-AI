@@ -3,10 +3,11 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { ElDialog, ElDropdown, ElDropdownMenu, ElDropdownItem, ElMessage, ElMessageBox } from "element-plus";
 import { request } from "./api";
 import OpsPagination from "./OpsPagination.vue";
-import { usePagination } from "./pagination";
+import { useGridPagination, usePagination } from "./pagination";
 import { requestAllPages } from "./listPages";
 import { findErrorReference } from "./errorReference";
 import SoftwareIcon from "./SoftwareIcon.vue";
+import SoftwareWebAccess from "./SoftwareWebAccess.vue";
 import ServiceInstallDialog from "./ServiceInstallDialog.vue";
 import {
   serviceDescriptions,
@@ -18,6 +19,7 @@ import {
 import { hostObservationExpired, type Host } from "./hosts";
 import { softwareHasInstallationRecord, softwareIsDockerEngine, softwareState, type SoftwareInstance } from "./software";
 import { catalogDefaultRecipe, catalogInstances, catalogInstallState, catalogPending, catalogPendingRecords, catalogVersionMatches, installedPythonPaths } from "./softwareCatalog";
+import { softwareWebAccess } from "./webAccess";
 import "./software-recipes.css";
 
 interface Installation {
@@ -44,7 +46,7 @@ interface Job {
   targetAckPending: boolean;
 }
 
-const props = defineProps<{ hostId: string; initialRecipeKey?: string }>();
+const props = defineProps<{ hostId: string; initialRecipeKey?: string; initialSearch?: string }>();
 const emit = defineEmits<{ error: [unknown]; preparation: [string]; openInstance: [string]; register: [hostId: string, softwareType: string]; node: [hostId: string]; git: [hostId: string]; logs: [jobId: string] }>();
 const targets = ref<Host[]>([]);
 const serviceDefinitions = ref<ServiceRecipe[]>([]);
@@ -101,7 +103,7 @@ function showJobLogs(jobId: string) {
   serviceRecord.value = undefined;
   emit("logs", jobId);
 }
-const search = ref("");
+const search = ref(props.initialSearch ?? "");
 const category = ref("ALL");
 const selectedVersions = ref<Record<string, string>>({});
 const categories = [
@@ -179,11 +181,18 @@ const catalogItems = computed(() => [
   ...(showNode.value ? [{ kind: "node" as const }] : []),
   ...catalogEntries.value.map(entry => ({ kind: "recipe" as const, entry })),
 ]);
-const { page, pageSize, total, pageItems: pagedCatalog } = usePagination(
+const { grid: catalogGrid, page, pageSize, total, pageSizeOptions: catalogPageSizes, pageItems: pagedCatalog } = useGridPagination(
   () => catalogItems.value, [search, category, targetId],
 );
 const nodeOnPage = computed(() => pagedCatalog.value.some(item => item.kind === "node"));
-const pagedCatalogEntries = computed(() => pagedCatalog.value.flatMap(item => item.kind === "recipe" ? [item.entry] : []));
+const pagedCatalogEntries = computed(() => pagedCatalog.value.flatMap(item => {
+  if (item.kind !== "recipe") return [];
+  const entry = item.entry;
+  const state = installState(entry.definition);
+  const installed = entry.key === "jenkins" && state.matching.length === 1 ? state.matching[0] : undefined;
+  const webInstance = installed && softwareWebAccess(installed, currentTarget.value)?.url ? installed : undefined;
+  return [{ ...entry, state, webInstance }];
+}));
 const legacyInstallations = computed(() =>
   installations.value.filter((item) => item.targetId === targetId.value),
 );
@@ -506,7 +515,7 @@ onUnmounted(() => {
     <div v-if="!catalogEntries.length && !showNode && !loading" class="empty">
       没有匹配的软件
     </div>
-    <div v-else class="plugin-grid">
+    <div v-else ref="catalogGrid" class="plugin-grid">
       <article v-if="nodeOnPage" class="plugin-card node-catalog-card">
         <div class="plugin-heading"><SoftwareIcon type="NODE" /><div class="plugin-title"><h3>Node.js</h3><span>多版本运行环境</span></div><span v-if="nodeInstances.length" class="state-tag success catalog-installed">已安装{{ nodeVersionCount ? ` · ${nodeVersionCount} 个版本` : '' }}</span></div>
         <p class="plugin-description">安装 Node.js，管理 npm、pnpm 和默认版本。</p>
@@ -514,7 +523,7 @@ onUnmounted(() => {
         <footer><span class="recipe-kind">nvm · 多版本</span><button class="primary" :disabled="!currentTarget" @click="emit('node', targetId)">{{ nodeInstances.length ? '版本管理' : '安装与管理' }}</button></footer>
       </article>
       <article
-        v-for="{ key, name, definition, versions, versionChoices } in pagedCatalogEntries"
+        v-for="{ key, name, definition, versions, versionChoices, state, webInstance } in pagedCatalogEntries"
         :key="key"
         class="plugin-card"
       >
@@ -524,7 +533,7 @@ onUnmounted(() => {
             <h3>{{ name }}</h3>
             <span>{{ recipeSubtitle(definition) }}</span>
           </div>
-          <span v-if="installState(definition).label" class="state-tag catalog-installed" :class="installState(definition).tone">{{ installState(definition).label }}</span>
+          <span v-if="state.label" class="state-tag catalog-installed" :class="state.tone">{{ state.label }}</span>
         </div>
         <p v-if="serviceDescriptions[key]" class="plugin-description">
           {{ serviceDescriptions[key] }}
@@ -548,7 +557,8 @@ onUnmounted(() => {
               <button class="quiet">查看进度<span v-if="pendingRecords(key).length > 1">（{{ pendingRecords(key).length }}）</span></button>
               <template #dropdown><ElDropdownMenu><ElDropdownItem v-for="record in pendingRecords(key)" :key="record.id" :command="record.id">{{ record.installation!.definition!.version }} · {{ record.runtimeKind === 'DOCKER' ? 'Docker' : '原生' }} · {{ record.installationStatus === 'UNKNOWN' ? '结果待确认' : '安装中' }}</ElDropdownItem></ElDropdownMenu></template>
             </ElDropdown>
-            <button v-if="installState(definition).instances.length && definition.key !== 'git'" class="quiet" @click="manageDefinition(definition)">管理</button>
+            <SoftwareWebAccess v-if="webInstance" :item="webInstance" :host="currentTarget" compact />
+            <button v-if="state.instances.length && definition.key !== 'git'" class="quiet" @click="manageDefinition(definition)">管理</button>
             <button v-if="recipeRecord(definition)" class="quiet" @click="openInstallationHistory(recipeRecord(definition))">{{ recipeRecord(definition)?.installationStatus === 'FAILED' ? '处理失败安装' : '安装日志' }}</button>
             <button v-if="definition.key === 'git'" class="secondary" :disabled="!currentTarget" @click="emit('git', targetId)">账号配置</button>
             <a
@@ -569,7 +579,7 @@ onUnmounted(() => {
         </footer>
       </article>
     </div>
-    <OpsPagination v-model:page="page" v-model:page-size="pageSize" :total="total" label="软件安装分页" />
+    <OpsPagination v-model:page="page" v-model:page-size="pageSize" :size-options="catalogPageSizes" :total="total" label="软件安装分页" />
     <details v-if="legacyInstallations.length" class="legacy-installations">
       <summary>已有工具镜像（{{ legacyInstallations.length }}）</summary>
       <div

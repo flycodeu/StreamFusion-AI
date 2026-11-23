@@ -9,7 +9,12 @@ import GitManagementPanel from "./GitManagementPanel.vue";
 import SoftwareManagementPanel from "./SoftwareManagementPanel.vue";
 import NginxConfigFilesPanel from "./NginxConfigFilesPanel.vue";
 import SoftwareWebAccess from "./SoftwareWebAccess.vue";
+import JenkinsPluginsPanel from "./JenkinsPluginsPanel.vue";
+import { jenkinsPluginManagerAccess } from "./webAccess";
+import SoftwareLoginAccount from "./SoftwareLoginAccount.vue";
 import SoftwareConnectionCommands from "./SoftwareConnectionCommands.vue";
+import JenkinsUnlockPassword from "./JenkinsUnlockPassword.vue";
+import { canCopyJenkinsUnlockPassword } from "./jenkinsUnlock";
 import SoftwareRuntimePolicyPanel from "./SoftwareRuntimePolicyPanel.vue";
 import { runtimePolicyStopConfirmed } from "./runtimePolicy";
 import { softwareConfigurationAvailable } from "./softwareManagement";
@@ -65,6 +70,7 @@ const emit = defineEmits<{
 const detailTab = ref("overview");
 const summaryVersion = computed(() => props.detail ? softwareVersionSummary(props.detail) : undefined);
 const installedVersion = computed(() => softwareVersionWithoutDigest(props.detail?.installationEvidence?.observedVersion));
+const jenkinsPlugins = computed(() => props.detail && jenkinsPluginManagerAccess(props.detail, props.host));
 const active = (item: SoftwareInstance) => item.managementMode !== "RELEASED";
 const configCloseState = ref({ blocked: false, dirty: false });
 const accessCloseBlocked = ref(false);
@@ -72,6 +78,7 @@ const gitCloseState = ref({ blocked: false, dirty: false });
 const managementCloseState = ref({ blocked: false, dirty: false });
 const nginxCloseState = ref({ blocked: false, dirty: false });
 const policyCloseState = ref({ blocked: false, dirty: false });
+const accountCloseState = ref({ blocked: false, dirty: false });
 watch(
   () => props.detail?.id,
   () => {
@@ -82,9 +89,10 @@ watch(
     managementCloseState.value = { blocked: false, dirty: false };
     nginxCloseState.value = { blocked: false, dirty: false };
     policyCloseState.value = { blocked: false, dirty: false };
+    accountCloseState.value = { blocked: false, dirty: false };
   },
 );
-const configurationBlocked = computed(() => configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked || managementCloseState.value.blocked || nginxCloseState.value.blocked || policyCloseState.value.blocked);
+const configurationBlocked = computed(() => configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked || managementCloseState.value.blocked || nginxCloseState.value.blocked || policyCloseState.value.blocked || accountCloseState.value.blocked);
 const editingBlocked = computed(() => props.busy || configurationBlocked.value);
 const closeBlocked = computed(() => (props.busy && !props.observing) || configurationBlocked.value);
 const heldConfirmed = computed(() => !!props.detail && props.detail.freshness === "FRESH" && runtimePolicyStopConfirmed(props.detail.observation?.runtimePolicy, props.detail.actualState === "STOPPED", props.detail.runtimeKind === "DOCKER" ? "DOCKER" : "SYSTEMD"));
@@ -94,10 +102,21 @@ async function close(done: () => void) {
   if (await confirmDiscard()) done();
 }
 async function confirmDiscard() {
-  if (configCloseState.value.dirty || gitCloseState.value.dirty || managementCloseState.value.dirty || nginxCloseState.value.dirty || policyCloseState.value.dirty) {
+  if (configCloseState.value.dirty || gitCloseState.value.dirty || managementCloseState.value.dirty || nginxCloseState.value.dirty || policyCloseState.value.dirty || accountCloseState.value.dirty) {
     try { await ElMessageBox.confirm("放弃未保存的软件配置？", "关闭详情", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); } catch { return false; }
   }
   return true;
+}
+async function leaveDetailTab() {
+  if (detailTab.value !== "login-account") return true;
+  if (accountCloseState.value.blocked) return false;
+  if (!accountCloseState.value.dirty) return true;
+  try {
+    await ElMessageBox.confirm("放弃未保存的登录账号修改？", "离开登录账号", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 async function loadLogs(source: "software" | "job") {
   if (editingBlocked.value || !(await confirmDiscard())) return;
@@ -147,8 +166,11 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
           {{ busy ? "处理中…" : "检查状态" }}
         </button>
       </div>
-      <ElTabs v-model="detailTab">
+      <ElTabs v-model="detailTab" :before-leave="leaveDetailTab">
         <ElTabPane label="软件概览" name="overview">
+          <div v-if="detailTab === 'overview' && canCopyJenkinsUnlockPassword(detail)" class="jenkins-unlock-entry">
+            <JenkinsUnlockPassword :key="detail.id" :instance="detail" :instance-id="detail.id" />
+          </div>
           <SoftwareConnectionCommands :key="detail.id" :detail="detail" :host="host" />
           <dl class="software-facts">
             <dt>所在主机</dt>
@@ -264,6 +286,12 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
           </dl>
         </ElTabPane>
         <ElTabPane v-if="detail.installation?.definition?.web && detail.installation.config" label="访问界面" name="web-access"><SoftwareWebAccess :item="detail" :host="host" :active="detailTab === 'web-access'" /></ElTabPane>
+        <ElTabPane v-if="jenkinsPlugins && active(detail) && detail.installationStatus === 'READY'" label="插件" name="jenkins-plugins">
+          <JenkinsPluginsPanel :access="jenkinsPlugins" />
+        </ElTabPane>
+        <ElTabPane v-if="active(detail) && detail.runtimeKind !== 'TOOL' && detail.actualState !== 'REMOVED' && detail.installationStatus !== 'UNINSTALLED'" label="登录账号" name="login-account">
+          <SoftwareLoginAccount v-if="detailTab === 'login-account'" :key="detail.id" :instance-id="detail.id" @close-state="accountCloseState = $event" />
+        </ElTabPane>
         <ElTabPane :label="service(detail) ? '配置与运行' : '安装详情'" name="configuration"
           ><SoftwareRuntimePolicyPanel v-if="service(detail)" :key="detail.id" :detail="detail" :active="detailTab === 'configuration'" :disabled="busy || pendingJob || !!host?.maintenance" @observe="emit('observe', detail)" @preparation="operationPreparation" @submitted="receipt => receipt.jobId && emit('configurationSubmitted', { softwareInstanceId: receipt.softwareInstanceId, jobId: receipt.jobId })" @close-state="policyCloseState = $event" />
           <ServiceConfigurationPanel @close-state="configCloseState = $event"
@@ -421,6 +449,7 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
 </template>
 
 <style scoped>
+.jenkins-unlock-entry { margin-bottom: 16px; }
 .software-detail {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

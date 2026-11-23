@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import type { Host } from "./hosts";
 import type { SoftwareInstance } from "./software";
-import { installationWebAccess, softwareWebAccess } from "./webAccess";
+import { installationWebAccess, isPresetJenkins, softwareWebAccess } from "./webAccess";
 
 const props = withDefaults(defineProps<{ item: SoftwareInstance; host?: Host; compact?: boolean; active?: boolean }>(), { active: true });
 const access = computed(() => softwareWebAccess(props.item, props.host));
@@ -11,6 +11,10 @@ const previewURL = ref("");
 const configuredURL = computed(() => props.item.installation?.definition && props.item.installation.config
   ? installationWebAccess(props.item.installation.definition, props.item.installation.config, props.host)?.url : "");
 const mixedContent = computed(() => typeof location !== "undefined" && location.protocol === "https:" && access.value?.url.startsWith("http:"));
+const jenkins = computed(() => {
+  const recipe = props.item.installation?.definition;
+  return recipe && isPresetJenkins(recipe) && props.item.managementMode === "MANAGED";
+});
 function closePreview() { preview.value = false; previewURL.value = ""; }
 function togglePreview() {
   if (preview.value) closePreview();
@@ -32,6 +36,7 @@ watch([() => props.active, () => props.item.id, configuredURL], closePreview);
     </div>
     <p v-if="access.reason" class="access-reason">{{ access.reason }}</p>
     <p v-else-if="access.embed && mixedContent" class="access-reason">当前页面使用 HTTPS，请在新窗口打开此 HTTP 系统。</p>
+    <p v-if="access.url && jenkins" class="access-reason">如果页面显示 Unlock Jenkins，请在「软件概览」复制首次解锁密码。</p>
     <iframe v-if="preview && active && previewURL" :src="previewURL" :title="item.name + '预览'" referrerpolicy="no-referrer" sandbox="allow-scripts allow-forms allow-same-origin allow-downloads allow-popups allow-modals" />
   </section>
 </template>

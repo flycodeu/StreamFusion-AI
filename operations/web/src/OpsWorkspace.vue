@@ -2,20 +2,29 @@
 import { ref, onMounted, onUnmounted, watch, computed } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, request, upload } from "./api";
-import { jobKindLabels as softwareJobKindLabels, type PageResult } from "./jobs";
+import { jobKindLabels as softwareJobKindLabels, type LogSelection, type PageResult } from "./jobs";
 import OpsPagination from "./OpsPagination.vue";
 import { requestAllPages } from "./listPages";
 import { previewDefaults, type PreviewConfig } from "./preview";
 import { zlmDefaults, type ZLMConfig } from "./zlm";
 import type { Host } from "./hosts";
+import type { ApplicationProject, ProjectInstanceSource, ProjectReleaseSource } from "./applicationProjects";
 import { runtimePolicyError, type RuntimePolicy, type RuntimePolicyState } from "./runtimePolicy";
 import { softwareJobPhaseLabels } from "./software";
 import OpsExternalBindingsSection from "./OpsExternalBindingsSection.vue";
 import OpsJobsSection from "./OpsJobsSection.vue";
 import OpsWorkspaceDialogs from "./OpsWorkspaceDialogs.vue";
+import ProjectServiceInstances from "./ProjectServiceInstances.vue";
 import "./ops-workspace.css";
-const props = defineProps<{ page: string }>();
-const emit = defineEmits<{ error: [unknown] }>();
+const props = defineProps<{
+  page: string;
+  applicationSource?: ProjectInstanceSource;
+}>();
+const emit = defineEmits<{ error: [unknown]; "application-source-used": []; logs: [LogSelection] }>();
+const instanceView = ref<"project" | "managed">("project");
+watch(() => props.applicationSource, (source) => {
+  if (source) instanceView.value = "project";
+});
 const instanceHealthLabel = (health?: string) => ({ APPLICATION_READY: "应用就绪", APPLICATION_STOPPED: "已停止", STOPPED: "已停止", RUNNING: "运行中", UNKNOWN: "状态未确认" }[health || ""] || "状态未确认");
 interface Artifact {
   recipe: string;
@@ -224,6 +233,9 @@ const busy = ref(false),
   logs = ref(""),
   artifactChoice = ref("");
 const artifactList = useListPage<Artifact>(() => "/artifacts");
+const projectRelease = ref<ProjectReleaseSource>();
+const releaseTargets = ref<Instance[]>([]);
+const releaseTargetError = ref("");
 const instanceList = useListPage<Instance>(() => "/instances");
 const bindingList = useListPage<Binding>(() => "/bindings");
 const releaseList = useListPage<Release>(() => `/instances/${selected.value?.id}/releases`);
@@ -553,11 +565,18 @@ watch(dialog, (value) => {
   detailController = undefined;
   optionsController?.abort();
   optionsLoading.value = false;
-  if (!["instance", "binding", "import", "candidate"].includes(value)) return;
+  if (!["project-release", "candidate", "plan"].includes(value)) projectRelease.value = undefined;
+  if (!["instance", "binding", "import", "candidate", "project-release"].includes(value)) return;
   const current = new AbortController();
   optionsController = current;
   optionsLoading.value = true;
   void (async () => {
+    if (value === "project-release" && projectRelease.value) {
+      const source = projectRelease.value;
+      const list = await requestAllPages<Instance>("/instances", current.signal);
+      if (!current.signal.aborted) releaseTargets.value = list.filter(i => i.targetId === source.hostId && i.config.environment === source.environmentName);
+      return;
+    }
     const [c, b, environments, a] = await Promise.all([
       value === "instance" || value === "binding" ? request<Credential[]>("/credentials", "GET", undefined, current.signal) : undefined,
       value === "instance" ? requestAllPages<Binding>("/bindings", current.signal) : undefined,
@@ -570,9 +589,13 @@ watch(dialog, (value) => {
     if (environments) runtimeInstallations.value = environments;
     if (a) {
       artifactOptions.value = a;
-      if (!eligibleArtifacts.value.some(item => item.id === artifactChoice.value)) artifactChoice.value = eligibleArtifacts.value[0]?.id || "";
+      if (!eligibleArtifacts.value.some(item => item.id === artifactChoice.value)) artifactChoice.value = projectRelease.value ? "" : eligibleArtifacts.value[0]?.id || "";
     }
-  })().catch(error => { if (!current.signal.aborted) emit("error", error); })
+  })().catch(error => {
+    if (current.signal.aborted) return;
+    if (value === "project-release") releaseTargetError.value = "读取受管实例失败，请关闭后重试。";
+    emit("error", error);
+  })
     .finally(() => { if (optionsController === current) optionsLoading.value = false; });
 });
 watch([jobStatusFilter, jobKindFilter], () => {
@@ -707,6 +730,27 @@ async function importArtifact() {
     uploadPhase.value = "";
   });
 }
+function openProjectRelease(source: ProjectReleaseSource) {
+  projectRelease.value = source;
+  releaseTargets.value = [];
+  releaseTargetError.value = "";
+  dialog.value = "project-release";
+}
+function newProjectTarget() {
+  const source = projectRelease.value;
+  if (!source) return;
+  openInstance();
+  instanceDraft.value.name = source.moduleName;
+  instanceDraft.value.targetId = source.hostId;
+  instanceDraft.value.config.environment = source.environmentName;
+}
+async function verifyProjectTarget(source: ProjectReleaseSource, target: Instance) {
+  const project = await request<ApplicationProject>(`/application-projects/${source.projectId}`);
+  const environment = project.environments?.find(item => item.id === source.environmentId && item.name === source.environmentName);
+  const binding = environment?.deployments.find(item => item.id === source.serviceInstanceId && item.moduleId === source.moduleId);
+  if (project.archived || !binding || binding.hostId !== target.targetId || target.config.environment !== environment?.name)
+    throw new Error("项目环境绑定已变更，请刷新模块列表后重新选择上线目标。");
+}
 function choosePublish(i: Instance, kind = "PUBLISH") {
   planInstance.value = i;
   planKind.value = kind;
@@ -718,6 +762,7 @@ function choosePublish(i: Instance, kind = "PUBLISH") {
 async function preview(kind = planKind.value) {
   await act(async () => {
     if (!planInstance.value) return;
+    if (projectRelease.value) await verifyProjectTarget(projectRelease.value, planInstance.value);
     plan.value = await request<Plan>(
       `/instances/${planInstance.value.id}/plans`,
       "POST",
@@ -733,6 +778,7 @@ async function preview(kind = planKind.value) {
 async function submit() {
   await act(async () => {
     if (!plan.value) return;
+    if (projectRelease.value && planInstance.value) await verifyProjectTarget(projectRelease.value, planInstance.value);
     await request(`/plans/${plan.value.id}/submit`, "POST", {
       idempotencyKey: crypto.randomUUID(),
     });
@@ -839,8 +885,12 @@ async function reconcile(j: Job, recover = false) {
     </template>
     <template v-else-if="page === 'instances'">
       <div class="section-head">
-        <h2>服务实例</h2>
+        <nav class="instance-views" aria-label="实例视图">
+          <button type="button" :aria-pressed="instanceView === 'project'" @click="instanceView = 'project'">项目实例</button>
+          <button type="button" :aria-pressed="instanceView === 'managed'" @click="instanceView = 'managed'">Ops 受管实例</button>
+        </nav>
         <button
+          v-if="instanceView === 'managed'"
           class="secondary"
           :disabled="busy || !targets.length"
           @click="openInstance()"
@@ -848,6 +898,16 @@ async function reconcile(j: Job, recover = false) {
           新增实例
         </button>
       </div>
+      <ProjectServiceInstances
+        v-if="instanceView === 'project'"
+        :hosts="targets"
+        :source="applicationSource"
+        @source-used="emit('application-source-used')"
+        @logs="emit('logs', $event)"
+        @release="openProjectRelease"
+        @error="emit('error', $event)"
+      />
+      <template v-else>
       <div v-if="!instances.length" class="empty">尚未创建实例</div>
       <div v-else class="table-scroll">
         <table>
@@ -976,6 +1036,7 @@ async function reconcile(j: Job, recover = false) {
         @change-page="bindingList.changePage"
         @change-size="bindingList.changeSize"
       />
+      </template>
     </template>
     <OpsJobsSection
       v-else
@@ -1030,6 +1091,9 @@ async function reconcile(j: Job, recover = false) {
     :artifact-choice="artifactChoice"
     :eligible-artifacts="eligibleArtifacts"
     :plan-instance="planInstance"
+    :project-release="projectRelease"
+    :release-targets="releaseTargets"
+    :release-target-error="releaseTargetError"
     :maintenance-permit="maintenancePermit"
     :plan="plan"
     :artifact-options="artifactOptions"
@@ -1065,6 +1129,8 @@ async function reconcile(j: Job, recover = false) {
     @open-runtime-policy="openRuntimePolicy"
     @instance-action="instanceAction"
     @preview="preview()"
+    @select-release-target="choosePublish($event)"
+    @create-release-target="newProjectTarget"
     @submit="submit"
     @change-release-page="releaseList.changePage"
     @change-release-size="releaseList.changeSize"

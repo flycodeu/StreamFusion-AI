@@ -121,6 +121,14 @@ func TestApplicationProjectProtectsGitAccountWithoutRepositoryBinding(t *testing
 	remote.mu.Lock()
 	before, accountCalls := remote.calls, remote.accountCalls
 	remote.mu.Unlock()
+	catalogPath := "/application-projects/" + project.ID + "/catalog"
+	repository := applicationCatalogRepository{ID: repositoryID, Name: "重命名仓库", URL: project.Repositories[0].URL, Branch: "develop"}
+	project = applicationResponse(t, b.call("PATCH", catalogPath, map[string]any{"version": project.Version, "repositories": []applicationCatalogRepository{repository}}, 200))
+	if project.Repositories[0].GitAccountID != account["id"] || project.Repositories[0].Branch != "develop" {
+		t.Fatal("catalog repository update lost legacy account", project.Repositories[0])
+	}
+	repository.URL = "git@other.example:team/repo.git"
+	b.call("PATCH", catalogPath, map[string]any{"version": project.Version, "repositories": []applicationCatalogRepository{repository}}, 400)
 	hostRecord, err := s.readTarget(host)
 	if err != nil {
 		t.Fatal(err)

@@ -60,6 +60,7 @@ export interface SoftwareInstance {
   actualState:
     "UNKNOWN" | "RUNNING" | "STOPPED" | "INSTALLED" | "MISSING" | "FAILED" | "REMOVED" | "PAUSED";
   observation?: SoftwareMetadata & {
+    locator?: string;
     runtimePolicy?: RuntimePolicyState;
     state: SoftwareInstance["actualState"];
     identityHash: string;

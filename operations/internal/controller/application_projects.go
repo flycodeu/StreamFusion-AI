@@ -13,6 +13,18 @@ import (
 )
 
 func (h *HTTP) applicationProjectsRoute(w http.ResponseWriter, r *http.Request, s *session, route string) bool {
+	if route == "/application-projects/inspection-sources" && r.Method == http.MethodGet {
+		h.listApplicationProjectSources(w, r)
+		return true
+	}
+	if route == "/application-projects/inspect" && r.Method == http.MethodPost {
+		h.inspectApplicationProject(w, r)
+		return true
+	}
+	if route == "/application-projects/catalog" && r.Method == http.MethodPost {
+		h.saveApplicationCatalog(w, r, s, "")
+		return true
+	}
 	if route == "/application-projects" {
 		switch r.Method {
 		case "GET":
@@ -28,8 +40,30 @@ func (h *HTTP) applicationProjectsRoute(w http.ResponseWriter, r *http.Request, 
 	if len(p) < 2 || p[0] != "application-projects" || !deploy.ID.MatchString(p[1]) {
 		return false
 	}
+	if len(p) >= 3 && (p[2] == "jenkins-monitor" || p[2] == "jenkins-build") {
+		return h.jenkinsProjectRoute(w, r, s, jenkinsScope{project: p[1]}, p[2:])
+	}
+	if len(p) >= 5 && p[2] == "service-instances" && deploy.ID.MatchString(p[3]) {
+		return h.jenkinsProjectRoute(w, r, s, jenkinsScope{project: p[1], instance: p[3]}, p[4:])
+	}
 	if len(p) == 3 && p[2] == "archive" && r.Method == "POST" {
 		h.saveApplicationProject(w, r, s, p[1], true)
+		return true
+	}
+	if len(p) == 3 && p[2] == "catalog" && r.Method == http.MethodPatch {
+		h.saveApplicationCatalog(w, r, s, p[1])
+		return true
+	}
+	if len(p) == 4 && p[2] == "modules" && deploy.ID.MatchString(p[3]) && r.Method == http.MethodDelete {
+		h.deleteApplicationModule(w, r, s, p[1], p[3])
+		return true
+	}
+	if len(p) == 3 && p[2] == "service-instances" && r.Method == http.MethodPost {
+		h.changeApplicationServiceInstance(w, r, s, p[1], "")
+		return true
+	}
+	if len(p) == 4 && p[2] == "service-instances" && deploy.ID.MatchString(p[3]) && r.Method == http.MethodDelete {
+		h.changeApplicationServiceInstance(w, r, s, p[1], p[3])
 		return true
 	}
 	if len(p) != 2 {
@@ -51,10 +85,60 @@ func (h *HTTP) applicationProjectsRoute(w http.ResponseWriter, r *http.Request, 
 		}
 	case "PATCH":
 		h.saveApplicationProject(w, r, s, p[1], false)
+	case "DELETE":
+		h.deleteApplicationProject(w, r, s, p[1])
 	default:
 		return false
 	}
 	return true
+}
+
+func (h *HTTP) deleteApplicationProject(w http.ResponseWriter, r *http.Request, s *session, id string) {
+	var in struct {
+		Version string `json:"version"`
+	}
+	if decode(w, r, &in) != nil || in.Version == "" {
+		h.fail(w, r, 400, "INVALID_INPUT", "请携带当前项目版本")
+		return
+	}
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+	tx, err := h.beginAuthorized(s)
+	if err != nil {
+		h.internal(w, r, err)
+		return
+	}
+	defer tx.Rollback()
+	var version string
+	err = tx.QueryRow("SELECT CAST(version AS TEXT) FROM application_projects WHERE id=?", id).Scan(&version)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		h.fail(w, r, 404, "NOT_FOUND", "项目不存在")
+		return
+	case err != nil:
+		h.internal(w, r, err)
+		return
+	case version != in.Version:
+		h.fail(w, r, 409, "VERSION_CONFLICT", "项目已被修改，请刷新后重试")
+		return
+	}
+	for _, table := range []string{"application_deployments", "application_environments", "application_modules", "application_repositories"} {
+		if _, err = tx.Exec("DELETE FROM "+table+" WHERE project_id=?", id); err != nil {
+			h.internal(w, r, err)
+			return
+		}
+	}
+	if _, err = tx.Exec("DELETE FROM application_projects WHERE id=?", id); err == nil {
+		err = auditTx(tx, s.Username, "APPLICATION_PROJECT_DELETED", id, "SUCCESS", r.Context().Value(traceKey{}).(string))
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		h.internal(w, r, err)
+		return
+	}
+	h.success(w, r, map[string]string{"id": id})
 }
 
 type applicationReader interface {
@@ -64,7 +148,7 @@ type applicationReader interface {
 
 func readApplicationProject(q applicationReader, id string) (applicationProject, error) {
 	p := applicationProject{Repositories: []applicationRepository{}, Modules: []applicationModule{}, Environments: []applicationEnvironment{}}
-	err := q.QueryRow("SELECT id,code,name,description,CAST(version AS TEXT),archived,created_at,updated_at FROM application_projects WHERE id=?", id).Scan(&p.ID, &p.Code, &p.Name, &p.Description, &p.Version, &p.Archived, &p.CreatedAt, &p.UpdatedAt)
+	err := q.QueryRow("SELECT id,code,name,description,jenkins_url,CAST(version AS TEXT),archived,created_at,updated_at FROM application_projects WHERE id=?", id).Scan(&p.ID, &p.Code, &p.Name, &p.Description, &p.JenkinsURL, &p.Version, &p.Archived, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return p, err
 	}
@@ -261,7 +345,7 @@ func (h *HTTP) saveApplicationProject(w http.ResponseWriter, r *http.Request, s 
 		in.ID = id
 		in.Version = "1"
 		in.CreatedAt = now
-		_, err = tx.Exec("INSERT INTO application_projects(id,code,name,description,archived,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", id, in.Code, in.Name, in.Description, in.Archived, now, now)
+		_, err = tx.Exec("INSERT INTO application_projects(id,code,name,description,jenkins_url,archived,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", id, in.Code, in.Name, in.Description, in.JenkinsURL, in.Archived, now, now)
 	} else {
 		var old applicationProject
 		old, err = readApplicationProject(tx, id)
@@ -281,13 +365,15 @@ func (h *HTTP) saveApplicationProject(w http.ResponseWriter, r *http.Request, s 
 			in = old
 			in.Archived = true
 			action = "APPLICATION_PROJECT_ARCHIVED"
+		} else {
+			preserveApplicationCatalog(&in, old)
 		}
 		in.ID = id
 		in.CreatedAt = old.CreatedAt
 		var revision int
 		revision, _ = strconv.Atoi(old.Version)
 		in.Version = strconv.Itoa(revision + 1)
-		_, err = tx.Exec("UPDATE application_projects SET code=?,name=?,description=?,archived=?,version=version+1,updated_at=? WHERE id=?", in.Code, in.Name, in.Description, in.Archived, now, id)
+		_, err = tx.Exec("UPDATE application_projects SET code=?,name=?,description=?,jenkins_url=?,archived=?,version=version+1,updated_at=? WHERE id=?", in.Code, in.Name, in.Description, in.JenkinsURL, in.Archived, now, id)
 	}
 	if err == nil && !archive {
 		err = validateApplicationReferences(tx, in)
@@ -302,15 +388,7 @@ func (h *HTTP) saveApplicationProject(w http.ResponseWriter, r *http.Request, s 
 		err = tx.Commit()
 	}
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed: application_projects.code") {
-			h.fail(w, r, 409, "APPLICATION_CODE_DUPLICATED", "项目代码已存在，请更换后重试")
-		} else if strings.Contains(err.Error(), "UNIQUE") {
-			h.fail(w, r, 409, "APPLICATION_DUPLICATED", "项目名称或配置条目已存在，请调整后重试")
-		} else if applicationConfigError(err) {
-			h.fail(w, r, 400, "APPLICATION_CONFIG_INVALID", err.Error())
-		} else {
-			h.internal(w, r, err)
-		}
+		h.applicationSaveError(w, r, err)
 		return
 	}
 	in.UpdatedAt = now
@@ -324,6 +402,19 @@ func (h *HTTP) saveApplicationProject(w http.ResponseWriter, r *http.Request, s 
 		in.Environments = []applicationEnvironment{}
 	}
 	h.success(w, r, in)
+}
+
+func (h *HTTP) applicationSaveError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case strings.Contains(err.Error(), "UNIQUE constraint failed: application_projects.code"):
+		h.fail(w, r, 409, "APPLICATION_CODE_DUPLICATED", "项目代码已存在，请更换后重试")
+	case strings.Contains(err.Error(), "UNIQUE"):
+		h.fail(w, r, 409, "APPLICATION_DUPLICATED", "项目名称或配置条目已存在，请调整后重试")
+	case applicationConfigError(err):
+		h.fail(w, r, 400, "APPLICATION_CONFIG_INVALID", err.Error())
+	default:
+		h.internal(w, r, err)
+	}
 }
 
 type applicationInvalid string

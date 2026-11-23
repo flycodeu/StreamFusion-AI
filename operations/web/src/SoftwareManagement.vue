@@ -3,7 +3,7 @@ import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watc
 import { ElDrawer, ElMessage, ElMessageBox } from "element-plus";
 import { request } from "./api";
 import OpsPagination from "./OpsPagination.vue";
-import { usePagination } from "./pagination";
+import { useGridPagination } from "./pagination";
 import { requestAllPages } from "./listPages";
 import type { Host } from "./hosts";
 import ObservationBatchPanel from "./ObservationBatchPanel.vue";
@@ -46,7 +46,7 @@ const emit = defineEmits<{
   logs: [target: { jobId?: string; softwareId?: string }];
   selectionOpened: [string];
 }>();
-const props = withDefaults(defineProps<{ view?: "manage" | "install"; dockerHostId?: string; selectedSoftwareId?: string }>(), {
+const props = withDefaults(defineProps<{ view?: "manage" | "install"; dockerHostId?: string; selectedSoftwareId?: string; installSearch?: string }>(), {
   view: "manage",
 });
 const rows = ref<SoftwareInstance[]>([]);
@@ -172,7 +172,7 @@ const visible = computed(() => {
           .includes(term)),
   );
 });
-const { page, pageSize, total, pageItems: pagedSoftware } = usePagination(
+const { grid: softwareGrid, page, pageSize, total, pageSizeOptions, pageItems: pagedSoftware } = useGridPagination(
   () => visible.value, [query, hostId, mode],
 );
 const softwareCards = computed(() =>
@@ -555,6 +555,7 @@ onUnmounted(() => {
       v-if="isActive && view === 'install'"
       :host-id="hostId"
       :initial-recipe-key="dockerHostId ? 'docker' : undefined"
+      :initial-search="installSearch"
       @open-instance="(id) => openInstance(id).catch((error) => emit('error', error))"
       @logs="(jobId) => emit('logs', { jobId })"
       @error="emit('error', $event)"
@@ -649,7 +650,7 @@ onUnmounted(() => {
         </div>
       </div>
       <div v-else-if="!visible.length" class="empty">没有匹配的软件</div>
-      <div v-else class="software-cards">
+      <div v-else ref="softwareGrid" class="software-cards">
         <article
           v-for="{ item, version } in softwareCards"
           :key="item.id"
@@ -715,7 +716,7 @@ onUnmounted(() => {
           </footer>
         </article>
       </div>
-      <OpsPagination v-if="rows.length" v-model:page="page" v-model:page-size="pageSize" :total="total" label="软件管理分页" />
+      <OpsPagination v-if="total" v-model:page="page" v-model:page-size="pageSize" :size-options="pageSizeOptions" :total="total" label="软件管理分页" />
     </div>
   </section>
   <ElDrawer v-model="nodeOpen" title="Node.js" size="min(1080px, 100vw)" append-to-body :destroy-on-close="false" :close-on-click-modal="!nodeCloseState.blocked" :close-on-press-escape="!nodeCloseState.blocked" :show-close="!nodeCloseState.blocked" :before-close="closeNode">

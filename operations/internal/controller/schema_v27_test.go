@@ -102,7 +102,7 @@ func TestSchemaTwentySevenPreservesPendingJobsAndManagementReferences(t *testing
 			if err = db.QueryRow("SELECT count(*) FROM pragma_foreign_key_check").Scan(&invalid); err != nil {
 				t.Fatal(err)
 			}
-			want := 27
+			want := SchemaVersion
 			if fail {
 				want = 26
 			}

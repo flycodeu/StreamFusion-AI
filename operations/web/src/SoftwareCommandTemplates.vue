@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from "vue";
-import { ElDialog, ElDropdown, ElDropdownItem, ElDropdownMenu, ElMessageBox } from "element-plus";
+import { ElDialog, ElDropdown, ElDropdownItem, ElDropdownMenu, ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, request } from "./api";
 import OpsPagination from "./OpsPagination.vue";
-import { usePagination } from "./pagination";
+import { useGridPagination } from "./pagination";
 import { hostTime } from "./hosts";
 import { recipeCatalogKey, type ServiceRecipe } from "./serviceInstallation";
 import SoftwareIcon from "./SoftwareIcon.vue";
@@ -59,6 +59,7 @@ const preview = ref(false);
 const feedback = ref("");
 const error = ref<{ message: string; code?: string; traceId?: string; at?: string }>();
 const selected = computed(() => records.value.find(item => item.id === selectedId.value));
+const deletable = computed(() => selected.value?.draft.key.startsWith("custom-") && !selected.value.draft.commands?.builtin);
 const commands = computed(() => draft.value?.commands);
 const builtin = computed(() => !!commands.value?.builtin);
 const kindChoices = computed(() => Object.entries(kinds).filter(([key]) => builtin.value || key !== "SERVICE"));
@@ -87,10 +88,9 @@ const softwareGroups = computed(() => {
   return Array.from(groups.values()).sort((a, b) => a.name.localeCompare(b.name, "zh-CN", { numeric: true }));
 });
 const selectedGroupKey = computed(() => draft.value ? recipeCatalogKey(draft.value) : "");
-const { page, pageSize, total, pageItems: pagedSoftwareGroups } = usePagination(
+const { grid: libraryGrid, page, pageSize, total, pageSizeOptions, pageItems: pagedSoftwareGroups } = useGridPagination(
   () => softwareGroups.value, [search, statusFilter],
 );
-pageSize.value = 50;
 const selectedGroupName = computed(() => softwareNames[selectedGroupKey.value] || draft.value?.name || "新建软件");
 const groupRecords = computed(() => records.value.filter(record => recipeCatalogKey(record.draft) === selectedGroupKey.value));
 const versionChoices = computed(() => Array.from(new Set(groupRecords.value.map(item => item.draft.version))));
@@ -378,8 +378,30 @@ async function withdraw() {
     emit("changed");
   });
 }
+async function removeTemplate() {
+  const current = selected.value;
+  if (!current || !deletable.value || busy.value) return;
+  const expectedVersion = editingVersion.value;
+  await act(async () => {
+    try {
+      await ElMessageBox.confirm(`永久删除“${current.draft.name}”的安装方案？如已发布，它也会从软件目录移除。`, "删除方案", {
+        confirmButtonText: "删除", cancelButtonText: "取消", type: "warning",
+      });
+    } catch { return; }
+    await request(`/command-templates/${current.id}/definition`, "DELETE", { expectedVersion });
+    records.value = records.value.filter(item => item.id !== current.id);
+    catalog.value = catalog.value.filter(item => item.key !== current.draft.key);
+    selectedId.value = "";
+    editingVersion.value = "";
+    draft.value = undefined;
+    editorOpen.value = false;
+    ElMessage.success("安装方案已删除");
+    emit("changed");
+  });
+}
 function extraAction(command: string) {
   if (command === "withdraw") void withdraw();
+  if (command === "delete") void removeTemplate();
   if (command === "demo") void edit(undefined, true);
   if (command === "reload") void reloadSelected();
 }
@@ -407,7 +429,7 @@ onMounted(refresh);
         <button class="primary" aria-label="新增软件" :disabled="busy" @click="edit()">新增软件</button>
       </div>
     </div>
-    <div class="library-list" aria-label="软件配置列表">
+    <div ref="libraryGrid" class="library-list" aria-label="软件配置列表">
       <button v-for="group in pagedSoftwareGroups" :key="group.key" class="software-option" :disabled="busy" @click="selectGroup(group.key)">
         <SoftwareIcon :type="group.key" />
         <span><strong>{{ group.name }}</strong><small>{{ group.records.length }} 个安装方案</small></span>
@@ -416,7 +438,7 @@ onMounted(refresh);
       </button>
       <p v-if="!softwareGroups.length" class="library-empty">{{ busy ? '正在加载配置…' : search ? '没有匹配的软件' : '暂无软件配置' }}</p>
     </div>
-    <OpsPagination v-model:page="page" v-model:page-size="pageSize" :total="total" label="软件配置分页" />
+    <OpsPagination v-if="total" v-model:page="page" v-model:page-size="pageSize" :size-options="pageSizeOptions" :total="total" label="软件配置分页" />
 
     <ElDialog
       v-if="active"
@@ -546,6 +568,7 @@ onMounted(refresh);
                     <ElDropdownItem command="reload" :disabled="busy || !selected">重新载入</ElDropdownItem>
                     <ElDropdownItem command="demo" :disabled="busy">创建演示工具</ElDropdownItem>
                     <ElDropdownItem v-if="selected?.published" command="withdraw" divided :disabled="busy">下架方案</ElDropdownItem>
+                    <ElDropdownItem v-if="deletable" command="delete" divided :disabled="busy">删除方案</ElDropdownItem>
                   </ElDropdownMenu>
                 </template>
               </ElDropdown>

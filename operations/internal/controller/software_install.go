@@ -268,7 +268,7 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		h.fail(w, r, 400, "INVALID_INPUT", err.Error())
 		return
 	}
-	d, err := h.store.findInstallRecipe(in.Key, in.Version)
+	d, templateID, err := findInstallRecipeRecord(h.store.DB, in.Key, in.Version)
 	if in.Key == "nvm" || in.Key == "npm" || in.Key == "pnpm" {
 		h.nodeError(w, r, errors.New("NODE_ENVIRONMENT_ACTION_REQUIRED"))
 		return
@@ -399,6 +399,17 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	defer tx.Rollback()
+	if strings.HasPrefix(d.Key, "custom-") {
+		var exists bool
+		if err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM command_templates WHERE id=?)", templateID).Scan(&exists); err != nil {
+			h.internal(w, r, err)
+			return
+		}
+		if !exists {
+			h.fail(w, r, 409, "INSTALL_RECIPE_INVALID", "预检期间安装方案已删除，请重新选择")
+			return
+		}
+	}
 	current, err := scanHost(tx.QueryRow("SELECT "+hostColumns+" FROM targets WHERE id=?", t.ID))
 	if err != nil {
 		h.opsError(w, r, err)

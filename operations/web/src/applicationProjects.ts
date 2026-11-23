@@ -1,19 +1,26 @@
-import type { RuntimePolicy } from "./runtimePolicy";
+import type { SoftwareInstance } from "./software";
+
+export const moduleKinds = {
+  FRONTEND: "前端",
+  BACKEND: "后端",
+  ALGORITHM: "算法",
+  OTHER: "其他",
+} as const;
+
+export type ModuleKind = keyof typeof moduleKinds;
 
 export interface ProjectRepository {
   id: string;
   name: string;
   url: string;
-  gitAccountId: string;
   branch: string;
 }
 
-export interface ProjectStep {
-  name: string;
-  command: string;
-  workdir: string;
-  timeoutSeconds: number;
-  privilege: "ACCOUNT" | "ROOT";
+export interface ModuleCatalog {
+  kind: ModuleKind;
+  environment: string;
+  startCommand: string;
+  runtimeMode: string;
 }
 
 export interface ProjectModule {
@@ -21,49 +28,39 @@ export interface ProjectModule {
   name: string;
   repositoryId: string;
   directory: string;
-  build: {
-    kind: "DOCKERFILE" | "COMMAND" | "STATIC";
-    hostId: string;
-    account: string;
-    softwareId: string;
-    context: string;
-    dockerfile: string;
-    outputPath: string;
-    toolchain: string;
-    steps: ProjectStep[];
-  };
-  runtime: {
-    kind: "DOCKER" | "NATIVE" | "STATIC";
-    command: string;
-    health: { kind: "HTTP" | "TCP" | "COMMAND" | "NONE"; path: string; port: number; command: string; timeoutSeconds: number };
-  };
+  catalog?: ModuleCatalog;
 }
 
-export interface ProjectVariable {
-  name: string;
-  value: string;
-  credentialId: string;
-  credentialRevision: string;
-}
-
-export interface ProjectDeployment {
-  runtimePolicy?: RuntimePolicy;
+export interface ProjectServiceRegistration {
   id: string;
   moduleId: string;
   hostId: string;
-  runtimeSoftwareId: string;
-  bindAddress: string;
-  memoryMiB: number;
-  ports: { hostPort: number; containerPort: number; protocol: "TCP" | "UDP" }[];
-  mounts: { source: string; target: string; readOnly: boolean }[];
-  variables: ProjectVariable[];
-  logs: { kind: "FILE" | "DOCKER" | "JOURNAL"; directory: string; pattern: string; retentionDays: number; maxMiB: number };
+  runtimeSoftwareId?: string;
+  recordedVersion?: string;
 }
 
 export interface ProjectEnvironment {
   id: string;
   name: string;
-  deployments: ProjectDeployment[];
+  deployments: ProjectServiceRegistration[];
+}
+
+export interface ProjectInstanceSource {
+  projectId: string;
+  moduleId: string;
+}
+
+export interface ProjectReleaseSource extends ProjectInstanceSource {
+  serviceInstanceId: string;
+  environmentId: string;
+  environmentName: string;
+  moduleName: string;
+  hostId: string;
+}
+
+export function isProjectBuildService(moduleName: string, software: SoftwareInstance) {
+  return moduleName.trim().toLowerCase() !== "jenkins" &&
+    (software.softwareType === "JENKINS" || software.installation?.definition?.catalogKey === "jenkins");
 }
 
 export interface ApplicationProject {
@@ -71,107 +68,96 @@ export interface ApplicationProject {
   code: string;
   name: string;
   description: string;
+  jenkinsUrl?: string;
   version: string;
   archived: boolean;
-  createdAt: string;
   updatedAt: string;
   repositories: ProjectRepository[];
   modules: ProjectModule[];
-  environments: ProjectEnvironment[];
+  environments?: ProjectEnvironment[];
 }
 
 export interface ApplicationProjectPage {
   items: ApplicationProject[];
   total: number;
-  page: number;
-  pageSize: number;
 }
 
-export interface ProjectCredential {
+export interface ModuleDraft extends ModuleCatalog {
   id: string;
   name: string;
-  kind: string;
-  revision: string;
-  revokedAt: string;
+  directory: string;
+  repositoryId: string;
+  repositoryUrl: string;
 }
 
-export function latestProjectCredentials(items: ProjectCredential[]): ProjectCredential[] {
-  const selected = new Map<string, ProjectCredential>();
-  for (const item of items) {
-    if (item.revokedAt || !["PASSWORD", "TOKEN"].includes(item.kind) || !/^[1-9][0-9]*$/.test(item.revision)) continue;
-    const previous = selected.get(item.id);
-    if (!previous || BigInt(item.revision) > BigInt(previous.revision)) selected.set(item.id, item);
-  }
-  return [...selected.values()];
+export interface InspectedModule {
+  directory: string;
+  name: string;
+  kind: ModuleKind;
+  environment: string;
+  startCommand: string;
+  evidence: string[];
 }
 
-export function newApplicationProject(): ApplicationProject {
-  return { id: "", code: "", name: "", description: "", version: "", archived: false, createdAt: "", updatedAt: "", repositories: [], modules: [], environments: [] };
+export interface InspectionSource {
+  id: string;
+  name: string;
 }
 
-export function newProjectRepository(): ProjectRepository {
-  return { id: crypto.randomUUID(), name: "", url: "", gitAccountId: "", branch: "" };
-}
-
-export function newProjectModule(repositoryId = ""): ProjectModule {
-  return {
-    id: crypto.randomUUID(), name: "", repositoryId, directory: ".",
-    build: { kind: "DOCKERFILE", hostId: "", account: "", softwareId: "", context: ".", dockerfile: "Dockerfile", outputPath: "", toolchain: "", steps: [] },
-    runtime: { kind: "DOCKER", command: "", health: { kind: "NONE", path: "", port: 0, command: "", timeoutSeconds: 30 } },
-  };
-}
-
-export function newProjectEnvironment(): ProjectEnvironment {
-  return { id: crypto.randomUUID(), name: "", deployments: [] };
-}
-
-export function newProjectDeployment(moduleId: string, kind: ProjectModule["runtime"]["kind"] = "DOCKER"): ProjectDeployment {
-  return {
-    id: crypto.randomUUID(), moduleId, hostId: "", runtimeSoftwareId: "", bindAddress: "", memoryMiB: 0, ports: [], mounts: [], variables: [],
-    logs: { kind: kind === "DOCKER" ? "DOCKER" : kind === "STATIC" ? "FILE" : "JOURNAL", directory: "", pattern: "", retentionDays: 0, maxMiB: 0 },
-  };
-}
-
-// A detached draft keeps edits and failed saves from mutating the list snapshot.
-export function copyApplicationProject(project: ApplicationProject): ApplicationProject {
-  return JSON.parse(JSON.stringify(project));
-}
-
-export function projectListPath(page: number, pageSize: number, query = "", archived = "false") {
+export function projectListPath(page: number, pageSize: number, query: string, archived: string) {
   const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), archived });
   if (query.trim()) params.set("q", query.trim());
   return `/application-projects?${params}`;
 }
 
-export function projectRepositoryUsage(project: ApplicationProject, repositoryId: string): string[] {
-  return project.modules.filter(module => module.repositoryId === repositoryId).map(module => module.name || "未命名模块");
+export function jenkinsLink(value?: string) {
+  if (!value || !/^https?:\/\//.test(value) || /[\s\\?#]/.test(value)) return "";
+  try {
+    const url = new URL(value);
+    if (["http:", "https:"].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash) return url.href;
+  } catch { /* Await a complete URL. */ }
+  return "";
 }
 
-export function projectModuleUsage(project: ApplicationProject, moduleId: string): string[] {
-  return project.environments.filter(environment => environment.deployments.some(deployment => deployment.moduleId === moduleId)).map(environment => environment.name || "未命名环境");
+export function newModuleDraft(repositoryId = "", module?: ProjectModule): ModuleDraft {
+  return {
+    id: module?.id ?? "",
+    name: module?.name ?? "",
+    directory: module?.directory ?? ".",
+    repositoryId: module?.repositoryId ?? repositoryId,
+    repositoryUrl: "",
+    kind: module?.catalog?.kind ?? "OTHER",
+    environment: module?.catalog?.environment ?? "",
+    startCommand: module?.catalog?.startCommand ?? "",
+    runtimeMode: module?.catalog?.runtimeMode ?? "",
+  };
 }
 
-export function projectVariableMode(variable: ProjectVariable, mode: "VALUE" | "CREDENTIAL") {
-  if (mode === "VALUE") { variable.credentialId = ""; variable.credentialRevision = ""; }
-  else variable.value = "";
+export function moduleEdit(draft: ModuleDraft, repositoryId = draft.repositoryId) {
+  return {
+    id: draft.id || undefined,
+    name: draft.name.trim(),
+    directory: moduleDirectory(draft.directory),
+    repositoryId,
+    catalog: {
+      kind: draft.kind,
+      environment: draft.environment.trim(),
+      startCommand: draft.startCommand.trim(),
+      runtimeMode: draft.runtimeMode.trim(),
+    },
+  };
 }
 
-export type ProjectSection = "basics" | "repositories" | "modules" | "environments";
+export function moduleDirectory(value: string) {
+  const directory = value.trim();
+  if (directory.startsWith("/")) return directory;
+  return directory.split("/").filter(part => part && part !== ".").join("/") || ".";
+}
 
-export function projectValidationError(project: ApplicationProject, section?: ProjectSection): { section: ProjectSection; message: string; itemId?: string } | undefined {
-  if (!section || section === "basics") {
-    if (!project.name.trim()) return { section: "basics", message: "请填写项目名称" };
-    if (!project.code.trim()) return { section: "basics", message: "请填写项目代码" };
-    if (Array.from(project.code.trim()).length > 60) return { section: "basics", message: "项目代码最多60个字符" };
-  }
-  for (const [itemSection, label, items] of [["repositories", "仓库", project.repositories], ["modules", "模块", project.modules], ["environments", "环境", project.environments]] as const) {
-    if (section && section !== itemSection) continue;
-    const names = new Set<string>();
-    for (const item of items) {
-      const name = item.name.trim().toLocaleLowerCase();
-      if (!name) return { section: itemSection, message: `请填写${label}名称`, itemId: item.id };
-      if (names.has(name)) return { section: itemSection, message: `${label}名称重复，请调整后保存`, itemId: item.id };
-      names.add(name);
-    }
-  }
+export function repositoryId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = bytes[6] & 0x0f | 0x40;
+  bytes[8] = bytes[8] & 0x3f | 0x80;
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, "0")).join("");
+  return hex.replace(/^(........)(....)(....)(....)(............)$/, "$1-$2-$3-$4-$5");
 }

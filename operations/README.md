@@ -60,6 +60,16 @@ go build -trimpath -o streamfusion-ops.exe ./cmd/streamfusion-ops
 
 ## 端口和发布
 
+### 从项目实例执行 QA 和上线
+
+在「应用实例 → 项目实例」左侧选择项目，右侧每行对应一个模块和环境。首次操作先点击模块的「绑定环境」，选择环境和目标主机。
+
+1. **准备 QA 作业**。在 Jenkins 创建流水线作业（Pipeline），定义选择 “Pipeline script from SCM”。选择项目的 Git 仓库和待验证分支。对于本仓库的 `platform-api`，脚本路径填 `operations/jenkins/platform-api.Jenkinsfile`。执行节点使用 `linux-jdk21` 标签，安装 Git、JDK 21 和 `sha256sum`。Jenkins 需要 Git 和 Pipeline 插件。其他模块选用各自的构建脚本。
+2. **运行 QA**。在模块环境行点击「QA」，首次配置选择 Jenkins 实例，填写该模块的作业地址、账号和 API Token。账号需要 Jenkins 的 Overall/Read，以及目标作业的 Job/Read 和 Job/Build 权限。保存后点击「运行 QA」。Java 流水线检出对应提交、检查环境、运行 Maven 验证并归档可执行 JAR。点击该行的「构建日志」查看本次构建的控制台输出。
+3. **上线**。将验证通过的 JAR 或镜像归档导入「版本制品」。在模块环境行点击「上线」，选择同主机、同环境的受管实例和目标制品。核对预检计划中的实例、制品和端口，再确认发布。首次发布可以在选择上线目标时创建受管实例。
+
+需要服务日志时，在环境绑定里选择实际运行模块的容器或 systemd 服务。Jenkins 插件安装、更新和初始化日志可在「软件管理」的 Jenkins 实例里查看。
+
 - **端口管理**。在已有 UFW 的 Ubuntu 主机上查看监听与规则，按来源和 TCP/UDP 维护 Ops 创建的规则。
 - **Java 应用发布**。在「版本制品」上传符合配方的 Docker save 归档，或上传可执行 JAR 并选择受支持的 Java 21 环境。在「应用实例」完成预检并发布。可回退上一成功版本，业务数据按自身备份恢复。应用 Compose 发布需要 Docker Engine 和 Compose。
 - **预览节点**。单独扩容时，按节点手册部署、在平台引入并启用。[预览节点操作手册](https://github.com/flycodeu/StreamFusion-AI/blob/main/operations/preview-nodes.md)

@@ -13,6 +13,8 @@ import (
 //go:embed scripts/additional-software/*.sh
 var additionalSoftwareScripts embed.FS
 
+const jenkinsJVMMitigation = "-XX:-UseBASE64Intrinsics"
+
 type additionalSoftware struct {
 	key, name, version, category, official, image, digest, imageID string
 	url, sha256                                                    string
@@ -35,8 +37,27 @@ func additionalScript(name string) string {
 	return serviceinstall.NormalizeScript(string(b))
 }
 
+func (app additionalSoftware) registryReference() string {
+	repository := app.image
+	if tag := strings.LastIndex(repository, ":"); tag > strings.LastIndex(repository, "/") {
+		repository = repository[:tag]
+	}
+	return repository + "@" + app.digest
+}
+
 func (app additionalSoftware) script(name string) string {
-	replace := strings.NewReplacer("@@APP@@", app.key, "@@VERSION@@", app.version, "@@URL@@", app.url, "@@SHA256@@", app.sha256, "@@IMAGE@@", app.image, "@@DIGEST@@", app.digest, "@@IMAGE_ID@@", app.imageID, "@@MEMORY@@", fmt.Sprint(app.memory))
+	jenkinsOptions := ""
+	if app.key == "jenkins" {
+		jenkinsOptions = " -e JAVA_OPTS=" + jenkinsJVMMitigation
+	}
+	runImage, runOptions := app.imageID, ""
+	if name == "docker-create-registry" {
+		name, runImage, runOptions = "docker-create", app.registryReference(), " --pull=never --platform linux/amd64"
+	}
+	replace := strings.NewReplacer("@@APP@@", app.key, "@@VERSION@@", app.version, "@@URL@@", app.url, "@@SHA256@@", app.sha256,
+		"@@IMAGE@@", app.image, "@@DIGEST@@", app.digest, "@@IMAGE_ID@@", app.imageID, "@@MEMORY@@", fmt.Sprint(app.memory),
+		"@@JENKINS_JAVA_OPTIONS@@", jenkinsOptions, "@@JENKINS_JVM_FLAG@@", jenkinsJVMMitigation,
+		"@@REGISTRY_REF@@", app.registryReference(), "@@RUN_IMAGE@@", runImage, "@@RUN_OPTIONS@@", runOptions)
 	helpers := ""
 	if name == "native-material" {
 		helpers += additionalScript("download")
@@ -84,7 +105,11 @@ func additionalSoftwareDefinitions() []serviceinstall.Definition {
 				if mode == "DOCKER" {
 					d.Image, d.Digest, d.ImageID = app.image, app.digest, app.imageID
 					d.Commands.Kind, d.Commands.Locator = "DOCKER", "sfops-${OPS_SOFTWARE_ID}"
-					d.Commands.Steps = []serviceinstall.CommandStep{additionalStep(app, "INSTALL", "获取并核验官方镜像", "docker-material", 1800), additionalStep(app, "INSTALL", "创建独立配置并启动容器", "docker-create", 1800), additionalStep(app, "VERIFY", "验证服务可用", "verify", 1200), additionalStep(app, "UNINSTALL", "移除本次容器并保留数据", "docker-uninstall", 180), additionalStep(app, "DELETE_DATA", "删除本次数据与配置", "delete-data", 120)}
+					materialScript, createScript := "docker-registry-material", "docker-create-registry"
+					if offline {
+						materialScript, createScript = "docker-material", "docker-create"
+					}
+					d.Commands.Steps = []serviceinstall.CommandStep{additionalStep(app, "INSTALL", "获取并核验官方镜像", materialScript, 1800), additionalStep(app, "INSTALL", "创建独立配置并启动容器", createScript, 1800), additionalStep(app, "VERIFY", "验证服务可用", "verify", 1200), additionalStep(app, "UNINSTALL", "移除本次容器并保留数据", "docker-uninstall", 180), additionalStep(app, "DELETE_DATA", "删除本次数据与配置", "delete-data", 120)}
 				} else {
 					d.Commands.BinaryPath = "${OPS_INSTALL_ROOT}/bin/run"
 					if app.key == "gitlab" {

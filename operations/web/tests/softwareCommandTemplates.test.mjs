@@ -29,8 +29,8 @@ test("official uninstall steps use receipt-owned paths and never show system roo
 class ApiError extends Error {
   constructor(message, code) { super(message); this.code = code; }
 }
-function harness() {
-  const calls = [], events = [];
+function harness({ cancelDelete = false, refuseDelete = false } = {}) {
+  const calls = [], events = [], confirmations = [];
   let stored;
   const request = async (path, method = "GET", data) => {
     calls.push({ path, method, data: data && copy(data) });
@@ -39,6 +39,12 @@ function harness() {
       stored = { id: "template-a", version: "1", revision: 0, draft: copy(data.definition), updatedAt: "2026-11-06" };
     } else {
       if (data.expectedVersion !== stored.version) throw new ApiError("配置已变化，请刷新后重试", "VERSION_CONFLICT");
+      if (path.endsWith("/definition") && method === "DELETE") {
+        if (refuseDelete) throw new ApiError("已有安装记录", "COMMAND_TEMPLATE_IN_USE");
+        const { id } = stored;
+        stored = undefined;
+        return { id };
+      }
       stored.version = String(Number(stored.version) + 1);
       if (method === "PUT") stored.draft = copy(data.definition);
       else if (method === "DELETE") delete stored.published;
@@ -48,7 +54,7 @@ function harness() {
     return copy(stored);
   };
   const module = { exports: {} }, scope = vue.effectScope();
-  const compiled = ts.transpileModule(source + "\nexport { draft, commands, records, examples, selectedExample, createFromExample, selectedId, editingVersion, dirty, preview, error, loadDraft, refresh, reloadSelected, save, publish, previewPublish, withdraw, changeKind, changeSource, validate, templateStatus, softwareGroups, selectedGroupKey, groupRecords, activePhase, selectPhase, phaseSteps, visibleSteps, viewingRuntime, viewingSource, selectVariant, activeStep, addStep, removeStep, moveStep, canMoveStep };", {
+  const compiled = ts.transpileModule(source + "\nexport { draft, commands, records, examples, selectedExample, createFromExample, selectedId, editingVersion, editorOpen, deletable, dirty, preview, error, loadDraft, refresh, reloadSelected, save, publish, previewPublish, withdraw, removeTemplate, changeKind, changeSource, validate, templateStatus, softwareGroups, selectedGroupKey, groupRecords, activePhase, selectPhase, phaseSteps, visibleSteps, viewingRuntime, viewingSource, selectVariant, activeStep, addStep, removeStep, moveStep, canMoveStep, page, pageSizeOptions, pagedSoftwareGroups, search };", {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
   }).outputText;
   scope.run(() => new Function("require", "module", "exports", "defineEmits", "defineProps", compiled)(name => {
@@ -56,10 +62,10 @@ function harness() {
     if (name === "./api") return { request, ApiError };
     if (name === "./serviceInstallation") return installation;
     if (name === "./pagination") return pagination;
-    if (name === "element-plus") return { ElMessageBox: { confirm: async () => {} } };
+    if (name === "element-plus") return { ElMessage: { success: () => {} }, ElMessageBox: { confirm: async (message, title) => { confirmations.push(title); if (cancelDelete && title === "删除方案") throw new Error("cancel"); } } };
     return {};
   }, module, module.exports, () => (...args) => events.push(args), () => ({ active: true })));
-  return { form: module.exports, calls, events, get stored() { return stored; }, dispose: () => scope.stop() };
+  return { form: module.exports, calls, events, confirmations, get stored() { return stored; }, dispose: () => scope.stop() };
 }
 
 test("blank templates cannot be saved, and runtime selection produces one consistent source", async () => {
@@ -147,6 +153,38 @@ test("withdraw only removes catalog publication and keeps an unsaved editor draf
   h.dispose();
 });
 
+test("deleting a custom template requires confirmation and removes the editor entry on success", async () => {
+  const h = harness();
+  h.form.loadDraft(undefined, true);
+  await h.form.save();
+  h.form.editorOpen.value = true;
+  await h.form.removeTemplate();
+  assert.deepEqual(h.confirmations, ["删除方案"]);
+  assert.deepEqual(h.calls.at(-1), { path: "/command-templates/template-a/definition", method: "DELETE", data: { expectedVersion: "1" } });
+  assert.equal(h.form.records.value.length, 0);
+  assert.equal(h.form.editorOpen.value, false);
+  assert.deepEqual(h.events, [["changed"]]);
+  h.dispose();
+});
+
+test("cancelled and refused deletion leave the current draft and editor intact", async () => {
+  for (const options of [{ cancelDelete: true }, { refuseDelete: true }]) {
+    const h = harness(options);
+    h.form.loadDraft(undefined, true);
+    await h.form.save();
+    h.form.editorOpen.value = true;
+    h.form.draft.value.name = "仍在编辑";
+    await h.form.removeTemplate();
+    assert.equal(h.form.draft.value.name, "仍在编辑");
+    assert.equal(h.form.records.value.length, 1);
+    assert.equal(h.form.editorOpen.value, true);
+    assert.deepEqual(h.events, []);
+    assert.equal(h.calls.length, options.refuseDelete ? 2 : 1);
+    if (options.refuseDelete) assert.equal(h.form.error.value.code, "COMMAND_TEMPLATE_IN_USE");
+    h.dispose();
+  }
+});
+
 test("creating from a recipe copies its fixed commands and proposes a new key instead of overwriting", async () => {
   const h = harness();
   h.form.loadDraft(undefined, true);
@@ -202,6 +240,23 @@ test("built-in software groups versions and switches command views without chang
   h.dispose();
 });
 
+
+test("software configuration pages count each software group once and reset after searching", () => {
+  const h = harness();
+  h.form.records.value = Array.from({ length: 7 }, (_, index) => ({
+    id: `recipe-${index}`, draft: { key: `custom-app-${index}`, name: `App ${index}`, version: "1" },
+  }));
+  h.form.records.value.push({ id: "recipe-alternate", draft: { key: "custom-app-0", name: "App 0", version: "2" } });
+  assert.deepEqual(h.form.pageSizeOptions.value, [2, 3, 5]);
+  assert.equal(h.form.softwareGroups.value.length, 7);
+  assert.equal(h.form.pagedSoftwareGroups.value[0].records.length, 2);
+  h.form.page.value = 2;
+  assert.deepEqual(h.form.pagedSoftwareGroups.value.map(group => group.name), ["App 3", "App 4", "App 5"]);
+  h.form.search.value = "App 6";
+  assert.equal(h.form.page.value, 1);
+  assert.deepEqual(h.form.pagedSoftwareGroups.value.map(group => group.name), ["App 6"]);
+  h.dispose();
+});
 
 test("ordered installation steps keep checks in place and allow adding, moving and removing scoped commands", () => {
   const h = harness();

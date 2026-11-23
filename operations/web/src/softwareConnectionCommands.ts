@@ -12,6 +12,37 @@ const text = (value?: string) => value && !/[\u0000-\u001f\u007f]/.test(value) ?
 const absolute = (value?: string) => text(value).startsWith("/") ? value! : "";
 const cmd = (...args: string[]) => args.map(shellArgument).join(" ");
 
+function terminalCommandsAvailable(detail: SoftwareInstance) {
+  return detail.managementMode !== "RELEASED" && detail.actualState !== "REMOVED" && detail.actualState !== "MISSING" &&
+    (!detail.installationStatus || detail.installationStatus === "READY");
+}
+
+function dockerContainerRef(detail: SoftwareInstance) {
+  if (detail.runtimeKind !== "DOCKER") return "";
+  // Match the executor's locator choice for read-only registrations.
+  const observedLocator = detail.observation?.locator;
+  const locators = detail.managementMode === "OBSERVE" ? [observedLocator, detail.locator] : [detail.locator, observedLocator];
+  const id = [...locators, detail.installationEvidence?.containerId]
+    .find(value => value && /^[a-f0-9]{64}$/.test(value));
+  if (id) return id;
+  return [detail.locator, detail.observation?.containerName]
+    .find(value => value && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(value)) || "";
+}
+
+export function softwareDockerCommands(detail: SoftwareInstance): ConnectionCommand[] {
+  if (!terminalCommandsAvailable(detail)) return [];
+  const container = dockerContainerRef(detail);
+  if (!container) return [];
+  const rows: ConnectionCommand[] = [
+    { label: "查看容器状态", command: cmd("docker", "container", "inspect", "--format", "{{.State.Status}}", container) },
+    { label: "查看容器日志", command: cmd("docker", "container", "logs", "--tail", "100", container) },
+    { label: "查看容器发布端口", command: cmd("docker", "container", "port", container) },
+  ];
+  if (detail.actualState === "RUNNING")
+    rows.push({ label: "进入容器", command: cmd("docker", "container", "exec", "-it", container, "/bin/sh"), note: "镜像需包含 /bin/sh。" });
+  return rows;
+}
+
 function endpoint(address: string, port: number) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) return;
   const ip = address.replace(/^\[([^\]]+)\]$/, "$1");
@@ -136,10 +167,8 @@ const toolCommands: Record<string, [string, string]> = {
 };
 
 export function softwareConnectionCommands(detail: SoftwareInstance): ConnectionCommand[] {
-  if (detail.managementMode === "RELEASED" || detail.actualState === "REMOVED" || detail.actualState === "MISSING" ||
-      detail.installationStatus && detail.installationStatus !== "READY") return [];
-  const container = [detail.locator, detail.observation?.containerName, detail.installationEvidence?.containerId]
-    .find(value => value && /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(value)) || "";
+  if (!terminalCommandsAvailable(detail)) return [];
+  const container = dockerContainerRef(detail);
   if (detail.softwareType === "MYSQL" || detail.softwareType === "REDIS") {
     const rows = databaseCommands(detail, container);
     if (rows.length) return rows;
@@ -161,11 +190,6 @@ export function softwareConnectionCommands(detail: SoftwareInstance): Connection
   }
   if (detail.runtimeKind === "SYSTEMD" && /^[a-zA-Z0-9][a-zA-Z0-9@_.:-]*\.service$/.test(detail.locator))
     return [{ label: "查看服务状态", command: cmd("systemctl", "is-active", "--", detail.locator) }];
-  if (detail.runtimeKind === "DOCKER" && container)
-    return [
-      { label: "查看容器状态", command: cmd("docker", "container", "inspect", "--format", "{{.State.Status}}", container) },
-      { label: "查看容器发布端口", command: cmd("sf-docker", "ports", container) },
-    ];
   if (detail.runtimeKind === "TOOL" && /^image:sha256:[a-f0-9]{64}$/.test(detail.locator))
     return [{ label: "查看工具镜像", command: cmd("docker", "image", "inspect", "--format", "{{.Id}}", detail.locator.slice(6)),
       note: "使用 sf-docker run 镜像 程序 参数 可在此镜像中执行命令。" }];

@@ -82,6 +82,23 @@ func (h *HTTP) takeAttempt() bool {
 	h.attempts++
 	return h.attempts <= 60
 }
+
+func recordAdminPasswordFailure(tx *sql.Tx, id string, attempts int, locked int64, now time.Time) error {
+	if locked > now.Unix() {
+		return nil
+	}
+	if locked > 0 {
+		attempts = 0
+	}
+	attempts++
+	locked = 0
+	if attempts >= 5 {
+		locked = now.Add(15 * time.Minute).Unix()
+	}
+	_, err := tx.Exec("UPDATE admins SET failed_attempts=?,locked_until=? WHERE id=?", attempts, locked, id)
+	return err
+}
+
 func (h *HTTP) login(w http.ResponseWriter, r *http.Request, anonymous *session) {
 	var input struct {
 		Username string `json:"username"`
@@ -138,16 +155,8 @@ func (h *HTTP) login(w http.ResponseWriter, r *http.Request, anonymous *session)
 	}
 	match := bcrypt.CompareHashAndPassword(hash, []byte(input.Password)) == nil
 	if !match || id == "" || locked > time.Now().Unix() {
-		if id != "" && locked <= time.Now().Unix() {
-			if locked > 0 {
-				attempts = 0
-			}
-			attempts++
-			locked = 0
-			if attempts >= 5 {
-				locked = time.Now().Add(15 * time.Minute).Unix()
-			}
-			if _, err = tx.Exec("UPDATE admins SET failed_attempts=?,locked_until=? WHERE id=?", attempts, locked, id); err != nil {
+		if id != "" {
+			if err = recordAdminPasswordFailure(tx, id, attempts, locked, time.Now()); err != nil {
 				h.internal(w, r, err)
 				return
 			}

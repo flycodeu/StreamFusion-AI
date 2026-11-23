@@ -19,7 +19,7 @@ func (s *Store) commandPublicKey() string {
 	return base64.StdEncoding.EncodeToString(s.commandSigningKey().Public().(ed25519.PublicKey))
 }
 func commandRequest(req deploy.Request) bool {
-	return req.Management != nil ||
+	return req.Action == deploy.JenkinsUnlockReadAction || req.Management != nil ||
 		req.Installation != nil && (req.Installation.Definition.Commands != nil || req.Installation.PrepareHostTerminal) ||
 		req.Uninstallation != nil && req.Uninstallation.Installation.Definition.Commands != nil ||
 		req.NodeEnvironment != nil && req.NodeEnvironment.Definition != nil && req.NodeEnvironment.Definition.Commands != nil

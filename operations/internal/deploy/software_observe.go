@@ -318,13 +318,23 @@ func ReadSoftwareLogs(ctx context.Context, s SoftwareRequest, run SoftwareComman
 	if err != nil {
 		return nil, errors.New("SOFTWARE_LOG_READ_DENIED")
 	}
-	actual.Log, actual.Truncated = RedactSoftwareLogs(string(data)), true
+	actual.Log, actual.Truncated = RedactSoftwareInstanceLogs(string(data), s.SoftwareKey), true
 	return actual, nil
 }
 
 var softwareSensitiveAssignment = regexp.MustCompile(`(?i)((?:password|passwd|pwd|secret|token|api[_-]?key|authorization|credential)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)`)
 var softwareURLCredentials = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^\s/@:]+:[^\s/@]+@`)
 var softwareBearer = regexp.MustCompile(`(?i)\b(Bearer|Basic)\s+[a-zA-Z0-9+/_.=:-]+`)
+var jenkinsSetupPasswordLine = regexp.MustCompile(`(?m)^((?:\d{4}-\d{2}-\d{2}T[^\s]+[ \t]+(?:[^\r\n]*?:[ \t]+)?)?[ \t]*)[0-9a-fA-F]{32}([ \t]*\r?)$`)
+
+// Jenkins prints the setup password on its own line. Match the value even when
+// the bounded Docker or journal tail no longer includes the wizard banner.
+func RedactSoftwareInstanceLogs(value, softwareKey string) string {
+	if softwareKey == "JENKINS" || strings.HasPrefix(softwareKey, "CUSTOM-JENKINS-") {
+		value = jenkinsSetupPasswordLine.ReplaceAllString(value, "${1}[REDACTED]${2}")
+	}
+	return RedactSoftwareLogs(value)
+}
 
 func RedactSoftwareLogs(value string) string {
 	value = softwareURLCredentials.ReplaceAllString(value, "${1}[REDACTED]@")

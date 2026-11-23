@@ -4,6 +4,7 @@ import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
 import { ApiError, prepare, request, send, setCSRF } from "./api";
 import OpsWorkspace from "./OpsWorkspace.vue";
 import ApplicationProjects from "./ApplicationProjects.vue";
+import type { ProjectInstanceSource } from "./applicationProjects";
 import SoftwareManagement from "./SoftwareManagement.vue";
 import SoftwareCommandTemplates from "./SoftwareCommandTemplates.vue";
 import SoftwareDirectory from "./SoftwareDirectory.vue";
@@ -123,12 +124,18 @@ function readHashPage(): string | undefined {
   return validNavIds.has(id) ? id : undefined;
 }
 const active = ref(readHashPage() || "overview");
+const instanceRegistrationSource = ref<ProjectInstanceSource>();
+function openProjectInstances(projectId: string, moduleId: string) {
+  instanceRegistrationSource.value = { projectId, moduleId };
+  active.value = "instances";
+}
 const commandsVisited = ref(active.value === "commands");
 function onHashChange() {
   const id = readHashPage();
   if (id && active.value !== id) active.value = id;
 }
 watch(active, (page) => {
+  if (page !== "instances") instanceRegistrationSource.value = undefined;
   if (page === "commands") commandsVisited.value = true;
   if (
     typeof globalThis.history?.replaceState === "function" &&
@@ -147,8 +154,14 @@ watch(active, (page) => {
 const preparationHostId = ref("");
 const dockerHostId = ref("");
 const selectedSoftwareId = ref("");
+const softwareInstallSearch = ref("");
 watch(active, (page) => { if (!["software", "software-install"].includes(page)) dockerHostId.value = ""; });
 watch(active, (page) => { if (page !== "software") selectedSoftwareId.value = ""; });
+watch(active, (page) => { if (page !== "software-install") softwareInstallSearch.value = ""; });
+function showJenkinsInstallation() {
+  softwareInstallSearch.value = "Jenkins";
+  active.value = "software-install";
+}
 function showHostPreparation(hostId: string) {
   preparationHostId.value = hostId;
   active.value = "hosts";
@@ -322,6 +335,14 @@ const actionLabels: Record<string, string> = {
   NODE_ENVIRONMENT_CHANGE_RESULT: "Node 操作结果",
   APPLICATION_PROJECT_SAVED: "保存项目配置",
   APPLICATION_PROJECT_ARCHIVED: "归档项目",
+  APPLICATION_PROJECT_DELETED: "删除项目",
+  APPLICATION_MODULE_DELETED: "删除项目模块",
+  APPLICATION_SERVICE_INSTANCE_SAVED: "保存实例登记",
+  APPLICATION_SERVICE_INSTANCE_DELETED: "移除实例登记",
+  JENKINS_UNLOCK_READ: "读取 Jenkins 首次解锁密码",
+  SOFTWARE_LOGIN_SAVED: "保存软件登录账号",
+  SOFTWARE_LOGIN_READ: "读取软件登录密码",
+  COMMAND_TEMPLATE_DELETED: "删除安装方案",
   GIT_ACCOUNT_SAVED: "保存 Git 账号",
   GIT_ACCOUNT_DELETED: "删除 Git 账号",
   GIT_REPOSITORY_PLAN_CREATED: "预检仓库账号配置",
@@ -354,7 +375,7 @@ function auditResult(action: string, result: string) {
       ? { label: "部分未确认", tone: "state-muted" }
       : { label: "成功", tone: "state-success" };
   }
-  if (["FAILED", "AUTH_FAILED"].includes(result)) return { label: "失败", tone: "state-error" };
+  if (["FAILED", "AUTH_FAILED", "SOFTWARE_LOGIN_REAUTH_FAILED"].includes(result)) return { label: "失败", tone: "state-error" };
   const labels: Record<string, string> = { UNKNOWN: "待确认", QUEUED: "排队中", RUNNING: "执行中", CANCELLED: "已取消" };
   return { label: labels[result] || "待核对", tone: "state-muted" };
 }
@@ -715,6 +736,7 @@ onUnmounted(() => {
             v-if="active === 'software' || active === 'software-install'"
             :view="active === 'software-install' ? 'install' : 'manage'"
             :docker-host-id="dockerHostId"
+            :install-search="softwareInstallSearch"
             :selected-software-id="selectedSoftwareId"
             @selection-opened="(id) => { if (selectedSoftwareId === id) selectedSoftwareId = ''; }"
             @error="report"
@@ -739,12 +761,17 @@ onUnmounted(() => {
         <OpsWorkspace
           v-else-if="['instances', 'artifacts', 'jobs'].includes(active)"
           :page="active"
+          :application-source="instanceRegistrationSource"
+          @application-source-used="instanceRegistrationSource = undefined"
+          @logs="openLogs"
           @error="report"
         />
         <ApplicationProjects
           class="content"
           v-else-if="active === 'application-projects'"
           @error="report"
+          @install-jenkins="showJenkinsInstallation"
+          @view-instances="openProjectInstances"
         />
         <HostOverview
           v-else-if="active === 'overview'"
@@ -776,6 +803,9 @@ onUnmounted(() => {
               </button>
             </div>
           </div>
+          <p class="install-note">
+            要找回 MySQL 或 Redis 的安装密码，请在<a href="#software">软件管理</a>中打开对应实例，进入「登录账号」并选择「复制密码」。
+          </p>
           <div v-if="credentials.length" class="table-scroll">
             <table>
               <thead>

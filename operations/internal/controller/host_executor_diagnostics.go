@@ -20,7 +20,7 @@ func executorFailureCode(err error) string {
 	if _, known := commandErrorMessages[code]; known {
 		return code
 	}
-	if _, known := executorFailureMessages[code]; known {
+	if _, known := executorFailureMessages[code]; known || jenkinsUnlockMessages[code] != "" {
 		return code
 	}
 	if code == "LINUX_TARGET_REQUIRED" || code == "TARGET_PATH_INVALID" || code == "CREDENTIAL_UNAVAILABLE" {
@@ -50,6 +50,8 @@ var executorFailureMessages = map[string]string{
 	"SOFTWARE_IDENTITY_DRIFT":          "服务身份与登记记录不一致，请重新检测并核对服务，不读取其他服务的日志",
 	"SOFTWARE_OWNERSHIP_MISMATCH":      "服务受管归属与安装记录不一致，请核对原安装记录和实际服务",
 	"SOFTWARE_LOG_READ_DENIED":         "服务身份已核对，但日志命令未成功，请检查日志读取条件与服务状态",
+	"SOFTWARE_INPUT_INVALID":           "接入组件未识别此软件操作",
+	"SOFTWARE_JOB_IDENTITY_INVALID":    "接入组件未识别此软件任务",
 	"EXECUTOR_MISSING":                 "受管执行器尚未安装，请在安装准备中下载材料并初始化",
 	"EXECUTOR_NOT_EXECUTABLE":          "受管执行器不可执行，请核对文件权限及Linux架构",
 	"EXECUTOR_INITIALIZATION_REQUIRED": "执行器尚未完成受管初始化，请核对安装准备；不要覆盖已有目录",
@@ -94,7 +96,8 @@ func classifyExecutorInvocation(err error, stderr string) error {
 	text := strings.ToLower(stderr)
 	// Account checks return fixed classifications only. A diagnostic containing
 	// another line (including command output or secrets) must not pass through.
-	if fixed := strings.TrimSpace(stderr); dockerAccessMessages[fixed] != "" {
+	if fixed := strings.TrimSpace(stderr); dockerAccessMessages[fixed] != "" || jenkinsUnlockMessages[fixed] != "" ||
+		fixed == "SOFTWARE_INPUT_INVALID" || fixed == "SOFTWARE_JOB_IDENTITY_INVALID" {
 		return errors.New(fixed)
 	}
 	if fixed := strings.TrimSpace(stderr); strings.HasPrefix(fixed, "GIT_") && gitMessages[fixed] != "" {

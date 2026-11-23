@@ -1,11 +1,11 @@
 record_owner
 need curl
-args=(run --detach --name "$container" --label "streamfusion.ops.software-id=$OPS_SOFTWARE_ID" --restart unless-stopped --memory "${OPS_MEMORY_MIB}m")
+args=(run@@RUN_OPTIONS@@ --detach --name "$container" --label "streamfusion.ops.software-id=$OPS_SOFTWARE_ID" --restart unless-stopped --memory "${OPS_MEMORY_MIB}m")
 case "$app" in
   jenkins)
     chown 1000:1000 "$root/data"
     chmod 750 "$root/data"
-    docker "${args[@]}" -p "$OPS_BIND_ADDRESS:$OPS_HOST_PORT:8080" -v "$root/data:/var/jenkins_home" '@@IMAGE_ID@@'
+    docker "${args[@]}"@@JENKINS_JAVA_OPTIONS@@ -p "$OPS_BIND_ADDRESS:$OPS_HOST_PORT:8080" -v "$root/data:/var/jenkins_home" '@@RUN_IMAGE@@'
     printf '%s\n' '首次打开 Jenkins 后按官方设置向导创建管理员；初始密码保存在本次数据目录 secrets/initialAdminPassword'
     ;;
   postgresql)
@@ -13,7 +13,7 @@ case "$app" in
     password="$(read_secret "$OPS_SECRET_DB_PASSWORD_FILE")"
     printf '%s\n' "$password" > "$root/config/db-password"
     chmod 600 "$root/config/db-password"
-    docker "${args[@]}" -p "$OPS_BIND_ADDRESS:$OPS_HOST_PORT:5432" -e "POSTGRES_USER=$OPS_PARAM_DB_USER" -e "POSTGRES_DB=$OPS_PARAM_DB_NAME" -e POSTGRES_PASSWORD_FILE=/run/secrets/db-password -e PGDATA=/var/lib/postgresql/18/docker -v "$root/config/db-password:/run/secrets/db-password:ro" -v "$root/data:/var/lib/postgresql" '@@IMAGE_ID@@'
+    docker "${args[@]}" -p "$OPS_BIND_ADDRESS:$OPS_HOST_PORT:5432" -e "POSTGRES_USER=$OPS_PARAM_DB_USER" -e "POSTGRES_DB=$OPS_PARAM_DB_NAME" -e POSTGRES_PASSWORD_FILE=/run/secrets/db-password -e PGDATA=/var/lib/postgresql/18/docker -v "$root/config/db-password:/run/secrets/db-password:ro" -v "$root/data:/var/lib/postgresql" '@@RUN_IMAGE@@'
     unset password
     ;;
   gitlab)
@@ -33,7 +33,7 @@ gitlab_rails['initial_root_password'] = File.read('/etc/gitlab/ops-initial-passw
 letsencrypt['enable'] = false
 EOF
     chmod 600 "$root/data/gitlab-config/"*
-    docker "${args[@]}" --shm-size 256m -p "$OPS_BIND_ADDRESS:$OPS_HOST_PORT:80" -p "$OPS_BIND_ADDRESS:$OPS_PORT_SSH:22" -v "$root/data/gitlab-config:/etc/gitlab" -v "$root/data/gitlab-data:/var/opt/gitlab" -v "$root/logs/gitlab:/var/log/gitlab" '@@IMAGE_ID@@'
+    docker "${args[@]}" --shm-size 256m -p "$OPS_BIND_ADDRESS:$OPS_HOST_PORT:80" -p "$OPS_BIND_ADDRESS:$OPS_PORT_SSH:22" -v "$root/data/gitlab-config:/etc/gitlab" -v "$root/data/gitlab-data:/var/opt/gitlab" -v "$root/logs/gitlab:/var/log/gitlab" '@@RUN_IMAGE@@'
     unset password
     ;;
   prometheus)
@@ -49,7 +49,7 @@ EOF
     chmod 644 "$root/config/prometheus.yml"
     chown 65534:65534 "$root/data"
     chmod 750 "$root/data"
-    docker "${args[@]}" -p "$OPS_BIND_ADDRESS:$OPS_HOST_PORT:9090" -v "$root/config/prometheus.yml:/etc/prometheus/prometheus.yml:ro" -v "$root/data:/prometheus" '@@IMAGE_ID@@' --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --storage.tsdb.retention.time="$OPS_PARAM_RETENTION" --web.listen-address=0.0.0.0:9090
+    docker "${args[@]}" -p "$OPS_BIND_ADDRESS:$OPS_HOST_PORT:9090" -v "$root/config/prometheus.yml:/etc/prometheus/prometheus.yml:ro" -v "$root/data:/prometheus" '@@RUN_IMAGE@@' --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --storage.tsdb.retention.time="$OPS_PARAM_RETENTION" --web.listen-address=0.0.0.0:9090
     ;;
   nacos)
     [[ "$OPS_PORT_GRPC" -eq $((OPS_HOST_PORT+1000)) && "$OPS_PORT_CLUSTER_GRPC" -eq $((OPS_HOST_PORT+1001)) ]] || fail 'Nacos gRPC 端口须分别为主端口 +1000、+1001'
@@ -58,7 +58,7 @@ EOF
     printf 'NACOS_AUTH_TOKEN=%s\nNACOS_AUTH_IDENTITY_KEY=ops-server\nNACOS_AUTH_IDENTITY_VALUE=%s\n' "$token" "$identity" > "$root/config/nacos.env"
     chmod 600 "$root/config/nacos.env"
     chown 1000:1000 "$root/data" "$root/logs"
-    docker "${args[@]}" --env-file "$root/config/nacos.env" -e MODE=standalone -e NACOS_AUTH_ENABLE=true -e NACOS_AUTH_ADMIN_ENABLE=true -e NACOS_AUTH_CONSOLE_ENABLE=true -e JVM_XMS=256m -e "JVM_XMX=$((OPS_MEMORY_MIB*3/4))m" -p "$OPS_BIND_ADDRESS:$OPS_HOST_PORT:8848" -p "$OPS_BIND_ADDRESS:$OPS_PORT_CONSOLE:8080" -p "$OPS_BIND_ADDRESS:$OPS_PORT_GRPC:9848" -p "$OPS_BIND_ADDRESS:$OPS_PORT_CLUSTER_GRPC:9849" -v "$root/data:/home/nacos/data" -v "$root/logs:/home/nacos/logs" '@@IMAGE_ID@@'
+    docker "${args[@]}" --env-file "$root/config/nacos.env" -e MODE=standalone -e NACOS_AUTH_ENABLE=true -e NACOS_AUTH_ADMIN_ENABLE=true -e NACOS_AUTH_CONSOLE_ENABLE=true -e JVM_XMS=256m -e "JVM_XMX=$((OPS_MEMORY_MIB*3/4))m" -p "$OPS_BIND_ADDRESS:$OPS_HOST_PORT:8848" -p "$OPS_BIND_ADDRESS:$OPS_PORT_CONSOLE:8080" -p "$OPS_BIND_ADDRESS:$OPS_PORT_GRPC:9848" -p "$OPS_BIND_ADDRESS:$OPS_PORT_CLUSTER_GRPC:9849" -v "$root/data:/home/nacos/data" -v "$root/logs:/home/nacos/logs" '@@RUN_IMAGE@@'
     unset token identity
     ;;
 esac

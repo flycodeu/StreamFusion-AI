@@ -9,9 +9,11 @@ import (
 	"testing"
 )
 
-// Old-schema tests remove only the additive application tables before replaying
-// their historical migration. Real upgrade coverage below builds schema 24.
-const dropApplicationFixtureTables = `DROP TABLE IF EXISTS application_deployments;
+// Old-schema fixtures remove additive Ops tables before replaying their historical migration.
+// Real upgrade coverage below builds schema 24.
+const dropApplicationFixtureTables = `DROP TABLE IF EXISTS application_qa_requests; DROP TABLE IF EXISTS application_qa_monitors; DROP TABLE IF EXISTS application_jenkins_monitors;
+DROP TABLE IF EXISTS software_login_accounts;
+DROP TABLE IF EXISTS application_deployments;
 DROP TABLE IF EXISTS application_environments;
 DROP TABLE IF EXISTS application_modules;
 DROP TABLE IF EXISTS application_repositories;
@@ -99,7 +101,8 @@ func TestSchemaTwentyFivePreservesHistoricalRowsAndRollsBackAtomically(t *testin
 			if err = db.QueryRow("SELECT count(*) FROM pragma_foreign_key_check").Scan(&invalid); err != nil {
 				t.Fatal(err)
 			}
-			if err = db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name LIKE 'application_%'").Scan(&applicationTables); err != nil {
+			if err = db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('application_projects',
+				'application_repositories','application_modules','application_environments','application_deployments')`).Scan(&applicationTables); err != nil {
 				t.Fatal(err)
 			}
 			wantVersion, wantTables := SchemaVersion, 5

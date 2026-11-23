@@ -978,21 +978,55 @@ test("catalog only offers Docker installation for fresh evidence that Docker is 
   scope.stop();
 });
 
-test("catalog pagination counts Node as one software and retains version choices across pages", () => {
+test("the Jenkins catalog shortcut targets exactly one installed instance on the selected host", () => {
+  const module = { exports: {} }, scope = vue.effectScope();
+  const imports = {
+    vue: { ...vue, onMounted() {}, onUnmounted() {} }, "./pagination": pagination,
+    "./serviceInstallation": installation, "./softwareCatalog": softwareCatalog, "./webAccess": webAccess,
+  };
+  scope.run(() => new Function("require", "module", "exports", "defineProps", "defineEmits", compile(
+    catalogScript + "\nexport { serviceDefinitions, targets, targetId, softwareInstances, search, pagedCatalogEntries };",
+  ))(name => imports[name] || {}, module, module.exports, () => ({ hostId: "host-a" }), () => () => {}));
+  try {
+    const flow = module.exports;
+    const definition = { ...recipe, key: "custom-jenkins-docker-online", catalogKey: "jenkins", name: "Jenkins",
+      kind: "SERVICE", version: "2.580.2", port: 8080, web: { scheme: "http", portKey: "main", path: "/" } };
+    const running = { id: "jenkins-running", hostId: "host-a", managementMode: "MANAGED", installationStatus: "READY",
+      actualState: "RUNNING", installation: { definition, config: { bindAddress: "0.0.0.0", hostPort: 8080 } } };
+    const failed = { ...running, id: "old-job", installationStatus: "FAILED", actualState: "UNKNOWN", managementMode: "OBSERVE" };
+    flow.serviceDefinitions.value = [definition];
+    flow.search.value = "Jenkins";
+    flow.targets.value = [{ id: "host-a", kind: "SSH", address: "192.0.2.20" }];
+    flow.targetId.value = "host-a";
+    const shortcut = () => flow.pagedCatalogEntries.value[0].webInstance?.id;
+    flow.softwareInstances.value = [failed, running, { ...running, id: "another-host", hostId: "host-b" }];
+    assert.equal(shortcut(), "jenkins-running");
+    flow.softwareInstances.value = [running, { ...running, id: "second-instance" }];
+    assert.equal(shortcut(), undefined);
+    flow.softwareInstances.value = [{ ...running, actualState: "STOPPED" }];
+    assert.equal(shortcut(), undefined);
+    flow.softwareInstances.value = [{ ...running, installation: { ...running.installation, config: { bindAddress: "127.0.0.1", hostPort: 8080 } } }];
+    assert.equal(shortcut(), undefined);
+  } finally { scope.stop(); }
+});
+
+test("catalog pagination counts Node as one card and retains filters and version choices", () => {
   const module = { exports: {} }, scope = vue.effectScope();
   scope.run(() => new Function("require", "module", "exports", "defineProps", "defineEmits", compile(
-    catalogScript + "\nexport { serviceDefinitions, selectedVersions, search, category, page, pageSize, total, pagedCatalog, nodeOnPage, pagedCatalogEntries };",
+    catalogScript + "\nexport { serviceDefinitions, selectedVersions, search, page, pageSize, total, pagedCatalog, nodeOnPage, pagedCatalogEntries };",
   ))(name => name === "vue" ? { ...vue, onMounted() {}, onUnmounted() {} } : name === "./pagination" ? pagination : name === "./serviceInstallation" ? installation : name === "./softwareCatalog" ? softwareCatalog : {}, module, module.exports,
     () => ({ hostId: "" }), () => () => {}));
   const flow = module.exports;
   flow.serviceDefinitions.value = Array.from({ length: 14 }, (_, i) => ({ ...recipe, key: `tool-${i}`, name: `Tool ${i}` }));
   flow.selectedVersions.value["tool-1"] = "21";
+  flow.pageSize.value = 12;
   assert.equal(flow.total.value, 15);
   assert.equal(flow.nodeOnPage.value, true);
-  assert.equal(flow.pagedCatalogEntries.value.length, 9);
+  assert.equal(flow.pagedCatalog.value.length, 12);
+  assert.equal(flow.pagedCatalogEntries.value.length, 11);
   flow.page.value = 2;
   assert.equal(flow.nodeOnPage.value, false);
-  assert.equal(flow.pagedCatalogEntries.value.length, 5);
+  assert.equal(flow.pagedCatalogEntries.value.length, 3);
   assert.equal(flow.selectedVersions.value["tool-1"], "21");
   flow.search.value = "Tool 13";
   assert.equal(flow.page.value, 1);
@@ -1004,14 +1038,15 @@ test("software pagination keeps checks and details across pages while protecting
   const module = { exports: {} }, scope = vue.effectScope(), messages = [], calls = [], lifecycle = {}, timers = new Map();
   let nextTimer = 0;
   scope.run(() => new Function("require", "module", "exports", "defineProps", "withDefaults", "defineEmits", "setTimeout", "clearTimeout", compile(
-    managementScript + "\nexport { rows, query, page, pageSize, pagedSoftware, detectionCount, detailId, detail, openNode, nodeHostId, nodeCloseState, nodeOpen, gitOpen, isActive };",
+    managementScript + "\nexport { rows, query, page, pageSize, pageSizeOptions, pagedSoftware, detectionCount, detailId, detail, openNode, nodeHostId, nodeCloseState, nodeOpen, gitOpen, isActive };",
   ))(name => name === "vue" ? { ...vue, onMounted() {}, onActivated: fn => lifecycle.activate = fn, onDeactivated: fn => lifecycle.deactivate = fn, onUnmounted() {} } : name === "./pagination" ? pagination : name === "./software" ? software : name === "./listPages" ? { requestAllPages: async () => [] } : name === "./api" ? { request: async path => { calls.push(path); return []; } } : name === "element-plus" ? { ElMessage: { info: message => messages.push(message) } } : {}, module, module.exports,
     () => ({ view: "manage" }), value => value, () => () => {}, callback => { const id = ++nextTimer; timers.set(id, callback); return id; }, id => timers.delete(id)));
   const flow = module.exports;
   flow.rows.value = Array.from({ length: 23 }, (_, index) => ({ id: `app-${index}`, name: `App ${index}`, softwareType: "JAVA", runtimeKind: "TOOL", managementMode: "MANAGED", installationStatus: "READY", locator: `/opt/app-${index}` }));
   flow.detailId.value = "app-0";
+  assert.deepEqual(flow.pageSizeOptions.value, [2, 3, 5]);
   flow.page.value = 2;
-  assert.equal(flow.pagedSoftware.value.length, 10);
+  assert.deepEqual(flow.pagedSoftware.value.map(item => item.id), ["app-3", "app-4", "app-5"]);
   assert.equal(flow.detectionCount.value, 23);
   assert.equal(flow.detail.value.id, "app-0");
   flow.query.value = "App 22";

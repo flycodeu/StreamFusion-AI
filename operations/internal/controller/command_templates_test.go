@@ -1,8 +1,12 @@
 package controller
 
 import (
+	"database/sql"
+	"encoding/json"
+	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/streamfusion-ai/operations/internal/deploy"
@@ -59,6 +63,74 @@ func TestCommandTemplateDraftPublishAndWithdrawAreSeparate(t *testing.T) {
 	}
 	if original.Commands.Steps[0].Script != "printf install" {
 		t.Fatal("frozen definition changed")
+	}
+}
+
+func TestCommandTemplateDeleteRemovesUnusedDefinitionOnly(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	builtIn, err := scanCommandTemplate(s.DB.QueryRow("SELECT " + commandTemplateColumns + " FROM command_templates WHERE builtin=1 LIMIT 1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	protected := b.call("DELETE", "/command-templates/"+builtIn.ID+"/definition", map[string]string{"expectedVersion": builtIn.Version}, 409)
+	if !strings.Contains(protected.Body.String(), "COMMAND_TEMPLATE_BUILTIN") {
+		t.Fatal(protected.Body.String())
+	}
+	d := testCommandDefinition()
+	draft := dataOf(t, b.call("POST", "/command-templates", map[string]any{"definition": d}, 200))
+	id := draft["id"].(string)
+	endpoint := "/command-templates/" + id
+	published := dataOf(t, b.call("POST", endpoint+"/publish", map[string]any{"expectedVersion": draft["version"]}, 200))
+	b.call("DELETE", endpoint+"/definition", map[string]any{"expectedVersion": draft["version"]}, 409)
+	removed := dataOf(t, b.call("DELETE", endpoint+"/definition", map[string]any{"expectedVersion": published["version"]}, 200))
+	if removed["id"] != id {
+		t.Fatal(removed)
+	}
+	if _, err = s.findInstallRecipe(d.Key, d.Version); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("deleted definition remains in the software catalog", err)
+	}
+	if got := b.call("GET", "/command-templates", nil, 200); strings.Contains(got.Body.String(), id) {
+		t.Fatal("deleted definition remains in the editor")
+	}
+	var auditCount int
+	if err = s.DB.QueryRow("SELECT count(*) FROM audit WHERE object_id=? AND action='COMMAND_TEMPLATE_DELETED'", id).Scan(&auditCount); err != nil || auditCount != 1 {
+		t.Fatal(auditCount, err)
+	}
+	b.call("DELETE", endpoint+"/definition", map[string]any{"expectedVersion": published["version"]}, 404)
+	if replacement := dataOf(t, b.call("POST", "/command-templates", map[string]any{"definition": d}, 200)); replacement["id"] == id {
+		t.Fatal("recreated definition reused deleted identity", replacement)
+	}
+}
+
+func TestCommandTemplateDeletionWinsAgainstUnfinishedPreflight(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	d := testCommandDefinition()
+	d.Commands.Steps[1].RunAs = "ROOT"
+	saved := dataOf(t, b.call("POST", "/command-templates", map[string]any{"definition": d}, 200))
+	endpoint := "/command-templates/" + saved["id"].(string)
+	published := dataOf(t, b.call("POST", endpoint+"/publish", map[string]any{"expectedVersion": saved["version"]}, 200))
+	deleting := *b
+	host, _ := installSSHFixture(t, s, b, func(req deploy.Request) ([]byte, bool) {
+		if req.Action != "SOFTWARE_INSTALL_CHECK" {
+			return nil, false
+		}
+		deleting.call("DELETE", endpoint+"/definition", map[string]any{"expectedVersion": published["version"]}, 200)
+		replacement := dataOf(t, deleting.call("POST", "/command-templates", map[string]any{"definition": d}, 200))
+		deleting.call("POST", "/command-templates/"+replacement["id"].(string)+"/publish", map[string]any{"expectedVersion": replacement["version"]}, 200)
+		plan := req.Installation
+		root := serviceinstall.InstallRoot("/opt/plugin-test", plan.SoftwareID, plan.Config)
+		raw, _ := json.Marshal(installPreflightFixture(*plan, root, true))
+		return raw, true
+	})
+	res := b.call("POST", "/hosts/"+host+"/software-install-plans", map[string]any{"expectedHostVersion": "1", "recipeKey": d.Key, "recipeVersion": d.Version, "recipeRevision": "1", "config": serviceinstall.Config{Name: "demo", RuntimeMode: "NATIVE", MemoryMiB: 512}, "source": map[string]string{"type": "ONLINE"}}, 409)
+	if !strings.Contains(res.Body.String(), "INSTALL_RECIPE_INVALID") {
+		t.Fatal(res.Body.String())
+	}
+	var count int
+	if err := s.DB.QueryRow("SELECT count(*) FROM software_install_plans").Scan(&count); err != nil || count != 0 {
+		t.Fatal("deleted definition produced an install plan", count, err)
 	}
 }
 

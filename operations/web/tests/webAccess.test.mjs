@@ -118,3 +118,33 @@ test("declared Web software uses the target host and the selected HTTP port", ()
     assert.equal(access.installationWebAccess(definition, { ...config, bindAddress: "0.0.0.0", hostPort: portKey === "main" ? port : 8848, ports: { CONSOLE: port } }, host).url, `http://192.0.2.20${port === 80 ? "" : `:${port}`}/`);
   }
 });
+
+test("the shipped Jenkins root leads directly to sign-in and preserves explicit entry paths and URLs", () => {
+  const definition = { ...recipe, web: { scheme: "http", portKey: "main", path: "/" } };
+  for (const runtime of ["docker", "native"]) {
+    for (const source of ["online", "offline"]) {
+      const saved = { ...definition, key: `custom-jenkins-${runtime}-${source}` };
+      const instance = { ...item(), installation: { definition: saved, config } };
+      assert.equal(access.softwareWebAccess(instance, host).url, "http://192.0.2.20:18080/login");
+      assert.equal(saved.web.path, "/");
+    }
+  }
+  const custom = { ...definition, key: "custom-jenkins-docker-online", web: { ...definition.web, path: "/jenkins/login" } };
+  assert.equal(access.installationWebAccess(custom, config, host).url, "http://192.0.2.20:18080/jenkins/login");
+  const explicit = { ...custom, web: { ...recipe.web } };
+  assert.equal(access.installationWebAccess(explicit, { ...config, parameters: { PUBLIC_URL: "https://ci.example.com/" } }, host).url, "https://ci.example.com/");
+  assert.equal(access.installationWebAccess({ ...definition, key: "custom-jenkins-like" }, config, host).url, "http://192.0.2.20:18080/");
+});
+
+test("Jenkins plugins open the installed instance and preserve its URL prefix", () => {
+  const definition = { ...recipe, key: "custom-jenkins-docker-online", web: { scheme: "http", path: "/", portKey: "main" } };
+  const instance = { ...item(), installation: { definition, config } };
+  assert.equal(access.jenkinsPluginManagerAccess(instance, host).url, "http://192.0.2.20:18080/pluginManager/available");
+  const prefixed = { ...instance, installation: { ...instance.installation, definition: { ...definition, web: { ...definition.web, path: "/ci/login" } } } };
+  assert.equal(access.jenkinsPluginManagerAccess(prefixed, host).url, "http://192.0.2.20:18080/ci/pluginManager/available");
+  const explicit = { ...instance, installation: { definition: { ...definition, web: recipe.web },
+    config: { ...config, parameters: { PUBLIC_URL: "https://ci.example.com/jenkins/" } } } };
+  assert.equal(access.jenkinsPluginManagerAccess(explicit, host).url, "https://ci.example.com/jenkins/pluginManager/available");
+  assert.equal(access.jenkinsPluginManagerAccess({ ...instance, actualState: "STOPPED" }, host).url, "");
+  assert.equal(access.jenkinsPluginManagerAccess(item(), host), undefined);
+});

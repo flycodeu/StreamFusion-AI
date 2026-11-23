@@ -119,6 +119,12 @@ func (s *Store) artifactPath(id string) string { return filepath.Join(s.Dir, "pa
 func (s *Store) uploadPath(id string) string   { return filepath.Join(s.Dir, "packages", id+".partial") }
 
 func (h *HTTP) operationsRoute(w http.ResponseWriter, r *http.Request, s *session, path string) bool {
+	if h.softwareLoginAccountRoute(w, r, s, path) {
+		return true
+	}
+	if h.jenkinsUnlockRoute(w, r, s, path) {
+		return true
+	}
 	if h.applicationProjectsRoute(w, r, s, path) {
 		return true
 	}
