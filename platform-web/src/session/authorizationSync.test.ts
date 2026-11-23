@@ -131,6 +131,28 @@ describe('authorization synchronization after a business refusal', () => {
     expect(routing.replace).toHaveBeenCalledTimes(1)
   })
 
+  it('reruns the guard when a safety alert viewer loses super administrator access', async () => {
+    const audit = {
+      ...camera,
+      path: '/monitor/Audit',
+      componentKey: '/monitor/Audit',
+      routeName: 'audit',
+      moduleKey: 'audit',
+    }
+    const admin = { ...identity(), routes: [audit], modules: ['audit'], isSuperAdmin: true }
+    const path = '/monitor/security-alerts'
+    routing.currentRoute.value.path = path
+    setIdentity(admin)
+    auth.getMe.mockResolvedValue({ ...admin, isSuperAdmin: false })
+    await synchronizeAuthorization(sessionState.epoch)
+    expect(routing.replace).toHaveBeenCalledExactlyOnceWith({
+      path,
+      query: { page: '2' },
+      hash: '#details',
+      force: true,
+    })
+  })
+
   it('refreshes fixed-page navigation without requiring PAGE grants', async () => {
     routing.currentRoute.value.path = '/profile'
     auth.getMe.mockResolvedValue({ ...identity(), modules: [], routes: [] })

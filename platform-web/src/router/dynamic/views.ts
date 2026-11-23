@@ -1,8 +1,9 @@
 import type { Component } from 'vue'
 
 export type PageLoader = () => Promise<{ default: Component }>
+export const securityAlertsComponentPath = '/monitor/SecurityAlerts'
 
-// Only backend-menu business pages live under views/<module>/.
+// Business pages registered by menu navigation live under views/<module>/.
 // Fixed application pages belong in pages/; shared widgets belong in components/.
 const files = import.meta.glob<{ default: Component }>('../../views/*/**/*.vue')
 
@@ -29,5 +30,5 @@ export const resolvePage = createPageResolver(files)
 
 export const availablePagePaths = Object.keys(files)
   .map((file) => file.slice(file.indexOf('/views/') + '/views'.length, -'.vue'.length))
-  .filter((path) => normalizeViewPath(path) === path)
+  .filter((path) => normalizeViewPath(path) === path && path !== securityAlertsComponentPath)
   .sort()

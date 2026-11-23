@@ -11,7 +11,10 @@ import { systemConfig } from '../../config/system'
 defineProps<{ collapsed: boolean }>()
 const route = inject(routeLocationKey, null)
 const navigation = computed(
-  () => buildMenuRoutes(sessionState.me?.routes ?? [], sessionState.me?.modules ?? []).navigation,
+  () =>
+    buildMenuRoutes(sessionState.me?.routes ?? [], sessionState.me?.modules ?? [], {
+      isSuperAdmin: sessionState.me?.isSuperAdmin ?? false,
+    }).navigation,
 )
 </script>
 

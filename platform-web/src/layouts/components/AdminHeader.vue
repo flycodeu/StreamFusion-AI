@@ -13,7 +13,6 @@ import {
 import { signOut } from '../../session/session'
 import { sessionState } from '../../session/state'
 import UserAvatar from '../../components/avatar/UserAvatar.vue'
-import SecurityAlertBell from '../../features/security/SecurityAlertBell.vue'
 
 defineProps<{ collapsed: boolean; displayName?: string }>()
 const emit = defineEmits<{ 'toggle-sidebar': [] }>()
@@ -68,7 +67,6 @@ async function command(value: string): Promise<void> {
         item
       }}</ElBreadcrumbItem>
     </ElBreadcrumb>
-    <SecurityAlertBell />
     <ElDropdown class="account" trigger="click" @command="command">
       <button class="account-trigger" type="button" aria-label="账户菜单">
         <UserAvatar

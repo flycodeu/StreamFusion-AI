@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MenuRoute } from '../../api/auth/types'
-import { buildMenuRoutes, fixedPaths, validMenuPath } from './routes'
+import { buildMenuRoutes, fixedPaths, isSecurityAlertsPage, validMenuPath } from './routes'
 import { createPageResolver } from './views'
 import type { PageLoader } from './views'
 
@@ -57,7 +57,7 @@ describe('backend menu route assembly', () => {
         ]),
       ],
       ['camera'],
-      resolver,
+      { resolve: resolver },
     )
     expect(result.records).toHaveLength(2)
     expect(result.records[1]).toMatchObject({
@@ -78,11 +78,15 @@ describe('backend menu route assembly', () => {
       routeName: 'CameraGroups',
       componentKey: '/camera-group/Manage',
     })
-    const both = buildMenuRoutes([directory([camera, groups])], ['camera'], () => cameraPage)
+    const both = buildMenuRoutes([directory([camera, groups])], ['camera'], {
+      resolve: () => cameraPage,
+    })
     expect(both.navigation[0]?.children).toHaveLength(1)
     expect(both.records).toHaveLength(2)
     expect(both.records[1]?.redirect).toEqual({ name: 'page:camera:manage' })
-    const onlyGroup = buildMenuRoutes([directory([groups])], ['camera'], () => cameraPage)
+    const onlyGroup = buildMenuRoutes([directory([groups])], ['camera'], {
+      resolve: () => cameraPage,
+    })
     expect(onlyGroup.navigation[0]?.children[0]).toMatchObject({
       title: '相机管理',
       path: '/camera/groups',
@@ -91,7 +95,7 @@ describe('backend menu route assembly', () => {
     const hiddenCamera = buildMenuRoutes(
       [directory([{ ...camera, visible: false }, groups])],
       ['camera'],
-      () => cameraPage,
+      { resolve: () => cameraPage },
     )
     expect(hiddenCamera.navigation[0]?.children[0]?.path).toBe('/camera/groups')
   })
@@ -111,12 +115,9 @@ describe('backend menu route assembly', () => {
         name: '运行面板',
       }),
     ]
-    expect(buildMenuRoutes(menus, ['camera'], resolve).navigation.map((item) => item.id)).toEqual([
-      '1100',
-      '200',
-      '300',
-      '400',
-    ])
+    expect(
+      buildMenuRoutes(menus, ['camera'], { resolve }).navigation.map((item) => item.id),
+    ).toEqual(['1100', '200', '300', '400'])
   })
 
   it.each(['/public', '/Public/file', '/node_modules', '/NODE_MODULES/vue'])(
@@ -126,7 +127,7 @@ describe('backend menu route assembly', () => {
     },
   )
   it('creates a new module route from its path and key with no frontend registration', () => {
-    const result = buildMenuRoutes([directory([page()])], ['camera'], resolve)
+    const result = buildMenuRoutes([directory([page()])], ['camera'], { resolve })
     expect(result.records).toHaveLength(1)
     expect(result.records[0]).toMatchObject({
       path: '/camera/manage',
@@ -167,7 +168,7 @@ describe('backend menu route assembly', () => {
         }),
       ],
       ['departments'],
-      departmentResolve,
+      { resolve: departmentResolve },
     )
     expect(result.records[0]).toMatchObject({
       path: '/system/departments',
@@ -201,14 +202,14 @@ describe('backend menu route assembly', () => {
     `/camera/${'a'.repeat(201)}`,
   ])('cannot replace a fixed route or register an unsafe path: %s', (path) => {
     expect(validMenuPath(path)).toBe(false)
-    expect(buildMenuRoutes([page({ path })], ['camera'], resolve)).toEqual({
+    expect(buildMenuRoutes([page({ path })], ['camera'], { resolve })).toEqual({
       records: [],
       navigation: [],
     })
   })
 
   it('retains authorized hidden page routes while excluding their navigation entries', () => {
-    const result = buildMenuRoutes([page({ visible: false })], ['camera'], resolve)
+    const result = buildMenuRoutes([page({ visible: false })], ['camera'], { resolve })
     expect(result.records).toHaveLength(1)
     expect(result.navigation).toEqual([])
   })
@@ -217,7 +218,7 @@ describe('backend menu route assembly', () => {
     const result = buildMenuRoutes(
       [directory([directory([page()], { id: '11', name: '相机' })], { visible: false })],
       ['camera'],
-      resolve,
+      { resolve },
     )
     expect(result.records).toHaveLength(1)
     expect(result.records[0]?.meta?.breadcrumbs).toEqual(['设备管理', '相机', '相机管理'])
@@ -229,7 +230,7 @@ describe('backend menu route assembly', () => {
     (key) => {
       const resolver = vi.fn(resolve)
       expect(
-        buildMenuRoutes([directory([page({ moduleKey: key })])], ['camera'], resolver),
+        buildMenuRoutes([directory([page({ moduleKey: key })])], ['camera'], { resolve: resolver }),
       ).toEqual({
         records: [],
         navigation: [],
@@ -239,13 +240,13 @@ describe('backend menu route assembly', () => {
   )
 
   it('removes authorized-looking menu entries when the session has no module grants', () => {
-    expect(buildMenuRoutes([page()], [], resolve)).toEqual({ records: [], navigation: [] })
+    expect(buildMenuRoutes([page()], [], { resolve })).toEqual({ records: [], navigation: [] })
   })
 
   it.each([null, '', '123camera', 'camera.manage', 'camera/manage', `A${'a'.repeat(64)}`])(
     'rejects an invalid or missing unique route key: %s',
     (routeName) => {
-      expect(buildMenuRoutes([page({ routeName })], ['camera'], resolve)).toEqual({
+      expect(buildMenuRoutes([page({ routeName })], ['camera'], { resolve })).toEqual({
         records: [],
         navigation: [],
       })
@@ -256,7 +257,7 @@ describe('backend menu route assembly', () => {
     { id: '101', path: '/camera/other', routeName: 'CAMERA:MANAGE' },
     { id: '101', path: '/CAMERA/MANAGE', routeName: 'camera:other' },
   ])('keeps the first route when key or URL collides case-insensitively', (duplicate) => {
-    const result = buildMenuRoutes([page(), directory([page(duplicate)])], ['camera'], resolve)
+    const result = buildMenuRoutes([page(), directory([page(duplicate)])], ['camera'], { resolve })
     expect(result.records).toHaveLength(1)
     expect(result.records[0]?.meta?.menuId).toBe('100')
     expect(result.navigation).toHaveLength(1)
@@ -264,11 +265,9 @@ describe('backend menu route assembly', () => {
   })
 
   it('does not let an unauthorized entry reserve a legitimate key or URL', () => {
-    const result = buildMenuRoutes(
-      [page({ id: '99', moduleKey: 'users' }), page()],
-      ['camera'],
+    const result = buildMenuRoutes([page({ id: '99', moduleKey: 'users' }), page()], ['camera'], {
       resolve,
-    )
+    })
     expect(result.records).toHaveLength(1)
     expect(result.records[0]?.meta?.menuId).toBe('100')
   })
@@ -276,7 +275,7 @@ describe('backend menu route assembly', () => {
   it.each(['/camera/missing', '/camera/../private'])(
     'keeps a configured but unresolved page visible as a configuration error: %s',
     (componentKey) => {
-      const result = buildMenuRoutes([page({ componentKey })], ['camera'], resolve)
+      const result = buildMenuRoutes([page({ componentKey })], ['camera'], { resolve })
       expect(result.records).toHaveLength(1)
       expect(result.records[0]?.meta?.configurationError).toBe(true)
       expect(result.records[0]?.component).toBeTypeOf('function')
@@ -284,4 +283,91 @@ describe('backend menu route assembly', () => {
       expect(result.navigation[0]?.path).toBe('/camera/manage')
     },
   )
+})
+
+describe('security alerts navigation', () => {
+  const audit = page({
+    id: '1006',
+    name: '操作记录',
+    routeName: 'audit',
+    path: '/monitor/Audit',
+    componentKey: '/monitor/Audit',
+    moduleKey: 'audit',
+  })
+  const explicit = page({
+    id: '2010',
+    name: '安全告警',
+    routeName: 'MonitorSecurityAlerts',
+    path: '/monitor/security-alerts',
+    componentKey: '/monitor/SecurityAlerts',
+    moduleKey: 'audit',
+  })
+  const securityPage: PageLoader = async () => ({ default: { name: 'MonitorSecurityAlerts' } })
+  const options = {
+    isSuperAdmin: true,
+    resolve: createPageResolver({
+      '../../views/monitor/Audit.vue': cameraPage,
+      '../../views/monitor/SecurityAlerts.vue': securityPage,
+    }),
+  }
+
+  it('identifies the built-in path and component when a menu is typed manually', () => {
+    expect(isSecurityAlertsPage('/MONITOR/Security-Alerts', null)).toBe(true)
+    expect(isSecurityAlertsPage('/audit/custom', explicit.componentKey)).toBe(true)
+    expect(isSecurityAlertsPage(audit.path, audit.componentKey)).toBe(false)
+  })
+
+  it('adds the alert route beside the authorized audit page without changing the server menu', () => {
+    const dirs = [directory([audit, page()], { name: '监控面板' })]
+    const result = buildMenuRoutes(dirs, ['audit', 'camera'], options)
+    expect(result.navigation[0]?.children.map((item) => item.path)).toEqual([
+      '/monitor/Audit',
+      '/monitor/security-alerts',
+      '/camera/manage',
+    ])
+    expect(result.records.find((record) => record.path === explicit.path)).toMatchObject({
+      name: 'page:MonitorSecurityAlerts',
+      component: securityPage,
+      meta: { moduleKey: 'audit', breadcrumbs: ['监控面板', '安全告警'] },
+    })
+    expect(dirs[0]?.children).toHaveLength(2)
+  })
+
+  it('requires a super administrator and the effective audit page', () => {
+    const menus = [directory([audit])]
+    expect(
+      buildMenuRoutes(menus, ['audit'], { ...options, isSuperAdmin: false }).records,
+    ).toHaveLength(1)
+    expect(buildMenuRoutes(menus, [], options).records).toHaveLength(0)
+    expect(buildMenuRoutes([], ['audit'], options).records).toHaveLength(0)
+    expect(buildMenuRoutes([explicit], ['audit'], { ...options, isSuperAdmin: false })).toEqual({
+      records: [],
+      navigation: [],
+    })
+  })
+
+  it('keeps the authorized route usable when its menu entry or directory is hidden', () => {
+    const hiddenPage = directory([{ ...audit, visible: false }])
+    const hiddenDirectory = directory([audit], { visible: false })
+    for (const menu of [hiddenPage, hiddenDirectory]) {
+      const result = buildMenuRoutes([menu], ['audit'], options)
+      expect(result.navigation).toEqual([])
+      expect(result.records.map((record) => record.path)).toContain(explicit.path)
+    }
+  })
+
+  it('avoids duplicates for an explicitly configured alert page and preserves valid route keys', () => {
+    const aliases = [
+      { ...explicit, path: '/audit/alerts', routeName: 'CustomAlerts' },
+      { ...explicit, path: '/audit/custom', componentKey: '/monitor/Diagnostics' },
+    ]
+    for (const alias of aliases) {
+      const result = buildMenuRoutes([directory([audit, alias])], ['audit'], options)
+      expect(result.navigation[0]?.children.map((item) => item.path)).toEqual([
+        audit.path,
+        alias.path,
+      ])
+      expect(result.records.map((record) => record.path)).toEqual([audit.path, alias.path])
+    }
+  })
 })

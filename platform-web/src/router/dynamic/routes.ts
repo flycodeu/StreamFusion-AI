@@ -1,9 +1,10 @@
 import type { RouteRecordRaw } from 'vue-router'
 import type { MenuRoute } from '../../api/auth/types'
-import { normalizeViewPath, resolvePage } from './views'
+import { normalizeViewPath, resolvePage, securityAlertsComponentPath } from './views'
 import { fixedPaths } from '../fixed'
 
 export { fixedPaths } from '../fixed'
+const securityAlertsPath = '/monitor/security-alerts'
 const reservedRoots = new Set([
   ...fixedPaths,
   '/api',
@@ -14,6 +15,10 @@ const reservedRoots = new Set([
   '/public',
   '/node_modules',
 ])
+
+export function isSecurityAlertsPage(path: string | null, componentPath: string | null): boolean {
+  return componentPath === securityAlertsComponentPath || path?.toLowerCase() === securityAlertsPath
+}
 
 export function validMenuPath(path: string | null): path is string {
   if (!path || path.length > 200 || !/^\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(path))
@@ -33,11 +38,18 @@ export interface MenuNavigation {
 export function buildMenuRoutes(
   menus: MenuRoute[],
   modules: string[],
-  resolve = resolvePage,
+  {
+    resolve = resolvePage,
+    isSuperAdmin = false,
+  }: {
+    resolve?: typeof resolvePage
+    isSuperAdmin?: boolean
+  } = {},
 ): { records: RouteRecordRaw[]; navigation: MenuNavigation[] } {
   const records: RouteRecordRaw[] = []
   const paths = new Set<string>()
   const keys = new Set<string>()
+  let auditEntry: { id: string; visible: boolean; ancestors: string[] } | undefined
   const visit = (nodes: MenuRoute[], ancestors: string[] = []): MenuNavigation[] =>
     nodes.flatMap((node) => {
       if (node.type === 'DIRECTORY') {
@@ -56,9 +68,17 @@ export function buildMenuRoutes(
         keys.has(node.routeName.toLowerCase())
       )
         return []
+      const componentPath = normalizeViewPath(node.componentKey || node.path)
+      if (
+        isSecurityAlertsPage(node.path, componentPath) &&
+        (!isSuperAdmin || node.moduleKey !== 'audit')
+      )
+        return []
+      if (!auditEntry && componentPath === '/monitor/Audit' && node.moduleKey === 'audit') {
+        auditEntry = { id: node.id, visible: node.visible, ancestors }
+      }
       paths.add(node.path.toLowerCase())
       keys.add(node.routeName.toLowerCase())
-      const componentPath = normalizeViewPath(node.componentKey || node.path)
       const component = resolve(componentPath)
       records.push({
         path: node.path,
@@ -79,6 +99,30 @@ export function buildMenuRoutes(
         : []
     })
   const navigation = visit(menus)
+  const anchor = auditEntry
+  // Security alerts share the authorized audit PAGE; its menu visibility applies to both entries.
+  const securityAlerts =
+    isSuperAdmin &&
+    anchor &&
+    !records.some((record) => record.meta?.componentPath === securityAlertsComponentPath)
+      ? visit(
+          [
+            {
+              id: 'builtin:security-alerts',
+              name: '安全告警',
+              type: 'PAGE',
+              routeName: 'MonitorSecurityAlerts',
+              path: securityAlertsPath,
+              componentKey: securityAlertsComponentPath,
+              moduleKey: 'audit',
+              icon: 'warning',
+              visible: anchor.visible,
+              children: [],
+            },
+          ],
+          anchor.ancestors,
+        )[0]
+      : undefined
   // Old installations may still grant the separate group PAGE. Keep its route,
   // but show only one workspace entry when the camera PAGE is also visible.
   const camera = records.find(
@@ -101,7 +145,7 @@ export function buildMenuRoutes(
         const children = merge(node.children)
         return children.length ? [{ ...node, children }] : []
       }
-      return [node]
+      return securityAlerts && node.id === anchor?.id ? [node, securityAlerts] : [node]
     })
   if (hasCamera)
     for (const record of records) {

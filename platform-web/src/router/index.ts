@@ -14,12 +14,12 @@ export const router = createRouter({
 const dynamicNames = new Set<string>()
 let routeSignature = ''
 
-function syncRoutes(routes: MenuRoute[], modules: string[]): void {
-  const signature = JSON.stringify({ routes, modules })
+function syncRoutes(routes: MenuRoute[], modules: string[], isSuperAdmin = false): void {
+  const signature = JSON.stringify({ routes, modules, isSuperAdmin })
   if (signature === routeSignature) return
   for (const name of dynamicNames) router.removeRoute(name)
   dynamicNames.clear()
-  for (const record of buildMenuRoutes(routes, modules).records) {
+  for (const record of buildMenuRoutes(routes, modules, { isSuperAdmin }).records) {
     router.addRoute(record)
     dynamicNames.add(String(record.name))
   }
@@ -64,7 +64,7 @@ router.beforeEach(async (to) => {
   }
   if (me.user.mustChangePassword && to.path !== '/change-password') return '/change-password'
   if (to.path === '/change-password') return true
-  syncRoutes(me.routes, me.modules)
+  syncRoutes(me.routes, me.modules, me.isSuperAdmin)
   const resolved = router.resolve(to.fullPath)
   if (!resolved.matched.length) return '/forbidden'
   if (to.matched.at(-1) !== resolved.matched.at(-1)) return to.fullPath

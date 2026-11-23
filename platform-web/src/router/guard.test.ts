@@ -23,6 +23,7 @@ vi.mock('../pages/auth/ChangePasswordView.vue', () => ({ default: { render: () =
 vi.mock('../pages/error/ForbiddenView.vue', () => ({ default: { render: () => null } }))
 vi.mock('../pages/error/UnavailableView.vue', () => ({ default: { render: () => null } }))
 vi.mock('../pages/error/RouteUnavailableView.vue', () => ({ default: { render: () => null } }))
+vi.mock('../views/monitor/SecurityAlerts.vue', () => ({ default: { render: () => null } }))
 
 function identity(): AuthUser {
   return {
@@ -185,5 +186,29 @@ describe('session-aware route guard', () => {
     expect(router.currentRoute.value.path).toBe('/forbidden')
     expect(router.hasRoute('page:camera')).toBe(false)
     expect(session.refresh).toHaveBeenCalledTimes(2)
+  })
+
+  it('removes the alert route on demotion while retaining the audit PAGE grant', async () => {
+    const audit = {
+      ...camera,
+      id: '1006',
+      path: '/monitor/Audit',
+      componentKey: '/monitor/Audit',
+      moduleKey: 'audit',
+      routeName: 'audit',
+    }
+    const admin = { ...identity(), modules: ['audit'], routes: [audit], isSuperAdmin: true }
+    session.state.me = admin
+    const { router } = await import('./index')
+    const path = '/monitor/security-alerts'
+    await router.push(path)
+    expect(router.currentRoute.value.path).toBe(path)
+    session.refresh.mockImplementation(async () => {
+      session.state.me = { ...admin, isSuperAdmin: false }
+    })
+    await router.replace({ path, force: true })
+    expect(router.currentRoute.value.path).toBe('/forbidden')
+    expect(router.hasRoute('page:audit')).toBe(true)
+    expect(router.hasRoute('page:MonitorSecurityAlerts')).toBe(false)
   })
 })

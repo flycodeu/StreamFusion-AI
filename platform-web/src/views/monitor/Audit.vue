@@ -33,7 +33,6 @@ import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
 import { labelOf } from '../../utils/display'
 import IpBlockPanel from '../../features/security/IpBlockPanel.vue'
-import SecurityAlertPanel from '../../features/security/SecurityAlertPanel.vue'
 import { sessionState } from '../../session/state'
 import AuditReferenceList from '../../features/audit/AuditReferenceList.vue'
 import RetentionDialog from '../../features/audit/RetentionDialog.vue'
@@ -247,13 +246,8 @@ watch(
     <ElTabs v-if="sessionState.me?.isSuperAdmin" v-model="activeTab">
       <ElTabPane label="操作记录" name="log" />
       <ElTabPane label="IP封禁" name="ip" />
-      <ElTabPane label="安全告警" name="security" />
     </ElTabs>
     <IpBlockPanel v-if="activeTab === 'ip' && sessionState.me?.isSuperAdmin" />
-    <SecurityAlertPanel
-      v-else-if="activeTab === 'security' && sessionState.me?.isSuperAdmin"
-      class="audit-tab-card"
-    />
     <template v-else>
       <RetentionDialog
         v-if="retentionOpen && sessionState.me?.isSuperAdmin"
@@ -863,13 +857,6 @@ watch(
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
-}
-.audit-tab-card {
-  padding: 16px 18px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
 }
 .audit-detail-actions :deep(.el-button) {
   height: 28px;

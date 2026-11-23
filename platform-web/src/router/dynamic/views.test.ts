@@ -43,6 +43,10 @@ describe('file-based business page resolution', () => {
     expect(resolvePage('/camera/Status')).toBeTypeOf('function')
     expect(resolvePage('/camera/status')).toBeUndefined()
   })
+  it('loads the built-in security alerts page without offering it for menu creation', () => {
+    expect(resolvePage('/monitor/SecurityAlerts')).toBeTypeOf('function')
+    expect(availablePagePaths).not.toContain('/monitor/SecurityAlerts')
+  })
   it('loads a new camera page directly from its file path without a registry entry', async () => {
     const resolve = createPageResolver({
       '../../views/camera/manage.vue': cameraPage,

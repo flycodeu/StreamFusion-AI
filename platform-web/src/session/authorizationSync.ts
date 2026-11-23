@@ -23,9 +23,9 @@ export async function synchronizeAuthorization(epoch: number): Promise<void> {
   const mustChangePassword = identity.user.mustChangePassword && route.path !== '/change-password'
   const allowed =
     fixedPaths.has(route.path) ||
-    buildMenuRoutes(identity.routes, identity.modules).records.some(
-      (record) => record.path === route.path,
-    )
+    buildMenuRoutes(identity.routes, identity.modules, {
+      isSuperAdmin: identity.isSuperAdmin,
+    }).records.some((record) => record.path === route.path)
 
   // Keeping an authorized view mounted preserves its original error and never retries its GETs.
   if (mustChangePassword || !allowed) {

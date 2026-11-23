@@ -117,18 +117,6 @@ export function securityDegraded(feed: SecurityFeed): boolean {
     feed.processingFailures > 0
   )
 }
-export async function getSecurityFeed(signal?: AbortSignal): Promise<SecurityFeed> {
-  return (
-    await request({
-      path: '/audit/security-alerts/feed',
-      method: 'GET',
-      successStatus: 200,
-      decode: parseSecurityFeed,
-      timeoutMs: 8000,
-      signal,
-    })
-  ).data
-}
 export async function getSecurityAlerts(
   query: { page: number; size: number },
   signal?: AbortSignal,
