@@ -18,7 +18,7 @@ import org.springframework.test.context.ActiveProfiles;
 @SpringBootTest(
         properties =
                 "spring.datasource.url=jdbc:h2:mem:schema_validator;MODE=MySQL;DB_CLOSE_DELAY=-1")
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class DatabaseSchemaValidatorTest {
     @Autowired DataSource source;
     @Autowired SqlSessionFactory sessions;

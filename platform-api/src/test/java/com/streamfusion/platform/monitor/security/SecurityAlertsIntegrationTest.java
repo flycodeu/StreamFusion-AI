@@ -27,7 +27,7 @@ import org.springframework.test.web.servlet.MockMvc;
             "streamfusion.work-dir=target/security-alert-test-${random.uuid}"
         })
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class SecurityAlertsIntegrationTest extends SecureLoginSupport {
     @Autowired MockMvc mvc;
     @Autowired DataSource source;
@@ -96,9 +96,15 @@ class SecurityAlertsIntegrationTest extends SecureLoginSupport {
     @Test
     void moduleGrantAloneAndSuperRoleAloneAreInsufficientAndRevocationIsImmediate()
             throws Exception {
+        jdbc.update("INSERT INTO sys_role(id,code,name) VALUES (802,'SECURITY_AUDITOR','审计员')");
+        jdbc.update("INSERT INTO sys_user_role(user_id,role_id) VALUES (801,802)");
         jdbc.update(
-                "INSERT INTO sys_user_role(user_id,role_id) SELECT 801,id FROM sys_role WHERE code='ADMIN'");
+                "INSERT INTO sys_role_menu(role_id,menu_id) SELECT 802,id FROM sys_menu WHERE route_name='audit'");
         var ordinary = login("SecurityUser");
+        mvc.perform(get("/auth/me").session(ordinary))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.modules[0]").value("audit"))
+                .andExpect(jsonPath("$.data.isSuperAdmin").value(false));
         for (String path : new String[] {"/page", "/feed"})
             mvc.perform(get("/audit/security-alerts" + path).session(ordinary))
                     .andExpect(status().isForbidden());

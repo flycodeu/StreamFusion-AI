@@ -30,6 +30,8 @@ __pycache__/
 /platform-api/config/*
 !/platform-api/config/*.example
 !/platform-api/config/README.md
+application-local-dev.y*ml
+application-local-test.y*ml
 
 # Generated caches, reports and local data
 .mypy_cache/

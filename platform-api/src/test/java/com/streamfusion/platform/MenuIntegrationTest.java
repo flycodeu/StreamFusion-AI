@@ -41,7 +41,7 @@ import org.springframework.web.bind.annotation.RestController;
             "platform.auth.initial-password=Initial1!"
         })
 @AutoConfigureMockMvc
-@ActiveProfiles({"test", "dynamic-module-test"})
+@ActiveProfiles({"it", "dynamic-module-test"})
 @Import({MenuIntegrationTest.ExampleEndpoints.class, MenuIntegrationTest.UndeclaredEndpoints.class})
 class MenuIntegrationTest extends SecureLoginSupport {
     @Autowired MockMvc mvc;

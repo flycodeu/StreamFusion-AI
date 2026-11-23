@@ -33,7 +33,7 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
             "platform.camera.network-policies.test.cidrs[0]=10.0.0.0/8"
         })
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 public abstract class CameraTestSupport extends SecureLoginSupport {
     @Autowired protected MockMvc mvc;
     @Autowired protected ObjectMapper json;

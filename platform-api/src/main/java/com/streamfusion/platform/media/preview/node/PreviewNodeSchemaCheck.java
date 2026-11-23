@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 
 /** Verifies the preview tables at startup. */
 @Component
-@Profile("!test")
+@Profile("!it")
 public final class PreviewNodeSchemaCheck implements ApplicationRunner {
     private final JdbcTemplate sql;
 

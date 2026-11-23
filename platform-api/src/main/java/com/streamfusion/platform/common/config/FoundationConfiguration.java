@@ -11,9 +11,10 @@ import org.springframework.core.env.Profiles;
 public class FoundationConfiguration {
     public FoundationConfiguration(ServerProperties server, Environment environment) {
         int port = server.getPort() == null ? 8080 : server.getPort();
-        boolean test = environment.acceptsProfiles(Profiles.of("test"));
-        if (port < (test ? 0 : 1) || port > 65535) {
-            throw new IllegalArgumentException("server.port must be 1..65535 (0 allowed in test)");
+        boolean integrationTest = environment.acceptsProfiles(Profiles.of("it"));
+        if (port < (integrationTest ? 0 : 1) || port > 65535) {
+            throw new IllegalArgumentException(
+                    "server.port must be 1..65535 (0 allowed for integration tests)");
         }
     }
 }

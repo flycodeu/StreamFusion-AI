@@ -10,7 +10,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.test.context.ActiveProfiles;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class PlatformApplicationTest {
     @org.springframework.test.context.bean.override.mockito.MockitoBean
     private com.streamfusion.platform.camera.access.service.CameraAccessWorker cameraAccessWorker;

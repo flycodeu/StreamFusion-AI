@@ -38,7 +38,7 @@ import org.springframework.test.web.servlet.MockMvc;
             "platform.auth.initial-password=Initial1!"
         })
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class SingleSessionIntegrationTest extends SecureLoginSupport {
     @Autowired MockMvc mvc;
     @Autowired DataSource source;

@@ -2,6 +2,17 @@
 
 复制 [application-local.yml.example](application-local.yml.example) 为同目录的 `application-local.yml`，填写 MySQL 与 Redis 后使用 `local` profile 启动。配置文件以 API 工作目录为准，也可用 `LOCAL_CONFIG_PATH` 指定绝对路径。首次安装使用 [快速开始](../../README.md#快速开始) 和 [完整初始化 SQL](../sql/streamfusion-mysql.sql)。
 
+## 在本机切换数据库
+
+在 IDEA 的 Spring Boot 运行配置中，把工作目录设为 `platform-api`，在 **Active profiles** 中填 `local-dev` 或 `local-test`。使用仓库根目录的 `scripts/start.ps1` 时，脚本会自动切换工作目录。未选 profile 时使用共享的 `test` 配置。
+
+| Profile | 本目录中的私有文件 | 连接目标 |
+| --- | --- | --- |
+| `local-dev` | `application-local-dev.yml` | 本机的 MySQL 和 Redis，地址固定为 `127.0.0.1` |
+| `local-test` | `application-local-test.yml` | 个人指定的测试服务器。MySQL、Redis 的地址、端口和账号在文件中维护 |
+
+两份文件都由 Git 忽略，并存放在 JAR 外。测试服务器的密码可填写在私有文件中，也可通过 `DB_PASSWORD` 和 `REDIS_PASSWORD` 提供。
+
 ## 必需部署配置
 
 相机档案需要持久 AES 密钥。设备探测、平台导入和预览取流还需要明确批准的目标网段或域名。将配置放在受保护的外部文件中。

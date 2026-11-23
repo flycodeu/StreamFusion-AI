@@ -45,7 +45,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
             "spring.session.redis.namespace=streamfusion:isolated-identity-test:session:v2",
             "platform.auth.initial-password=Initial1!"
         })
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 @EnabledIfSystemProperty(named = "sf.test.redisSession", matches = "true")
 class RedisSessionIntegrationTest {
     // Session tests initialize their own schema after context startup; job lifecycle is separate.

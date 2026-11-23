@@ -37,7 +37,7 @@ import org.springframework.test.context.ActiveProfiles;
         properties = {
             "spring.datasource.url=jdbc:h2:mem:bootstrap_context;MODE=MySQL;DB_CLOSE_DELAY=-1"
         })
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class BootstrapContextTest {
     @Autowired ApplicationContext context;
     @Autowired DataSource source;

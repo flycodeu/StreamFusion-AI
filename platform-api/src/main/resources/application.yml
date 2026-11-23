@@ -7,7 +7,10 @@ spring:
   application:
     name: streamfusion-platform-api
   profiles:
-    default: dev
+    default: test
+    group:
+      local-dev: dev
+      local-test: test
   jackson:
     time-zone: Asia/Shanghai
     deserialization:

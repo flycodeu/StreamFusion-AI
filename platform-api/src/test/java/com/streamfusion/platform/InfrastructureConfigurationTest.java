@@ -15,7 +15,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 @SpringBootTest
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class InfrastructureConfigurationTest {
     private final DataSource dataSource;
     private final SqlSessionFactory sessions;

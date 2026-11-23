@@ -22,7 +22,7 @@ import org.springframework.stereotype.Component;
 
 /** Read-only startup check; schema installation and upgrades remain explicit operations. */
 @Component
-@Profile("!test")
+@Profile("!it")
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class DatabaseSchemaValidator implements ApplicationRunner {
     private final DataSource source;

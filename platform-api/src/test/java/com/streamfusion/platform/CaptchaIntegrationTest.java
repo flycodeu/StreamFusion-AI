@@ -32,7 +32,7 @@ import org.springframework.test.web.servlet.ResultActions;
 @SpringBootTest(
         properties = "spring.datasource.url=jdbc:h2:mem:captcha;MODE=MySQL;DB_CLOSE_DELAY=-1")
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class CaptchaIntegrationTest extends SecureLoginSupport {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;

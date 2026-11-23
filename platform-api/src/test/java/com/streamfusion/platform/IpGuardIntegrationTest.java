@@ -42,7 +42,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
             "platform.ip-guard.failure-threshold=5"
         })
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class IpGuardIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;

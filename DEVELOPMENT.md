@@ -10,6 +10,9 @@
 | --- | --- |
 | 本地 API | 复制 `platform-api/config/application-local.yml.example` 为同目录的 `application-local.yml`，使用 `local` profile。可用 `LOCAL_CONFIG_PATH` 指定绝对路径 |
 | 共享开发 API | 使用 `dev` profile，设置 `DB_USERNAME`、`DB_PASSWORD`。Redis 默认回环地址、6379、库号 10 |
+| 默认测试环境 | 运行 `.\scripts\start.ps1 api`，默认使用 `test`。通用连接参数见 [application-test.yml](platform-api/src/main/resources/application-test.yml) |
+| 本机开发数据库 | 运行 `.\scripts\start.ps1 api -Profile local-dev`，连接 `127.0.0.1` 上的 MySQL 和 Redis，使用本机保存的连接资料 |
+| 本机连接测试服务器 | 运行 `.\scripts\start.ps1 api -Profile local-test`。服务器地址与账号保存在本机，配置方式见 [后端外部配置](platform-api/config/README.md) |
 | 部署 API | 使用 `prod` profile，显式设置 `DB_URL`、`DB_USERNAME`、`DB_PASSWORD`、`REDIS_HOST`、`REDIS_DATABASE`、`REDIS_PASSWORD`。默认 Redis 端口为 6379 |
 | 本地 Web | 需要修改代理目标时，将 [环境示例](platform-web/.env.example) 复制为 `platform-web/.env.local`，设置 `API_TARGET` 后重启 Vite |
 
@@ -66,7 +69,7 @@ add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 | 仓库根目录 | `./scripts/export-sql.ps1 -Check`、`uv run --project algorithm-node/node-agent --locked python -m pytest contracts/tests -q` |
 | `operations` | `go test ./...`、`pnpm --dir web test`，构建入口见 [Ops 说明](operations/README.md) |
 
-平台 API 的常规测试使用隔离 H2。要执行本机 MySQL 结构和依赖连通性只读检查，应先确认目标配置，再在 `platform-api` 运行：
+平台 API 的自动化集成测试使用 `it` profile 和 H2 内存库。要执行本机 MySQL 结构和依赖连通性只读检查，应先确认目标配置，再在 `platform-api` 运行：
 
 ```powershell
 .\mvnw.cmd "-Dtest=LocalSchemaInspectionTest,LocalInfrastructureTest" "-Dsf.test.localSchema=true" "-Dsf.test.localInfrastructure=true" test

@@ -38,7 +38,7 @@ import org.springframework.transaction.annotation.Transactional;
 @SpringBootTest(
         properties = "spring.datasource.url=jdbc:h2:mem:access_query;MODE=MySQL;DB_CLOSE_DELAY=-1")
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class AccessQueryIntegrationTest extends SecureLoginSupport {
     private static final long SUBJECT = 5010L;
     private static final long FIRST_ROLE = 6010L;

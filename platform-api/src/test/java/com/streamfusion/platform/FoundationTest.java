@@ -49,7 +49,7 @@ import org.springframework.web.bind.annotation.RestController;
 @SpringBootTest(
         classes = PlatformApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 @Import({FoundationTest.TestEndpoints.class, FoundationTest.TestOnlySecurity.class})
 class FoundationTest {
     // 基础设施夹具不依赖业务授权，替换仅作用于此测试上下文。

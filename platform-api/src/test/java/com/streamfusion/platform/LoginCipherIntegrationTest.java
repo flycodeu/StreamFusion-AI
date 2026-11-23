@@ -31,7 +31,7 @@ import org.springframework.test.web.servlet.MockMvc;
             "platform.auth.max-password-length=128"
         })
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class LoginCipherIntegrationTest extends SecureLoginSupport {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;

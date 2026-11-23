@@ -12,7 +12,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest(properties = "springdoc.api-docs.enabled=false")
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class DisabledApiDocsSecurityTest {
     private final MockMvc mvc;
 

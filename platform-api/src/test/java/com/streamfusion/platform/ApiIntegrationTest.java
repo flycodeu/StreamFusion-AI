@@ -56,7 +56,7 @@ import org.springframework.web.context.request.ServletWebRequest;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 @Import(ApiIntegrationTest.Fixtures.class)
 class ApiIntegrationTest {
     private static final String TRACE = "c".repeat(32);

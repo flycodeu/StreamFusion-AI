@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
  * Recovery follows schema validation. Tests call recovery explicitly after creating their schema.
  */
 @Component
-@Profile("!test")
+@Profile("!it")
 @Order(10)
 @RequiredArgsConstructor
 public class CameraStatusMaintenance implements ApplicationRunner {

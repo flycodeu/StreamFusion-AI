@@ -28,7 +28,7 @@ import org.springframework.test.web.servlet.MockMvc;
         properties =
                 "spring.datasource.url=jdbc:h2:mem:security_configuration;MODE=MySQL;DB_CLOSE_DELAY=-1")
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class SecurityConfigurationTest extends SecureLoginSupport {
     private final DataSource source;
     private final BootstrapService bootstrap;

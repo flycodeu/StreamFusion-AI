@@ -3,7 +3,7 @@ param(
     [ValidateSet('api', 'web', 'agent', 'runtime')]
     [string]$Project,
     [string]$JavaHome,
-    [ValidateSet('dev', 'local', 'prod')]
+    [ValidateSet('dev', 'local', 'test', 'prod', 'local-dev', 'local-test')]
     [string]$Profile
 )
 

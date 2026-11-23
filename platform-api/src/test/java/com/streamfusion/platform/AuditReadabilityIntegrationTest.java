@@ -23,7 +23,7 @@ import org.springframework.test.context.ActiveProfiles;
 @SpringBootTest(
         properties =
                 "spring.datasource.url=jdbc:h2:mem:audit_readability;MODE=MySQL;DB_CLOSE_DELAY=-1")
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class AuditReadabilityIntegrationTest {
     @Autowired DataSource source;
     @Autowired AuditService audit;

@@ -27,7 +27,7 @@ import org.springframework.test.web.servlet.MockMvc;
             "platform.auth.initial-password=Initial1!"
         })
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class VersionBoundaryIntegrationTest extends SecureLoginSupport {
     @Autowired ObjectMapper json;
     @Autowired MockMvc mvc;

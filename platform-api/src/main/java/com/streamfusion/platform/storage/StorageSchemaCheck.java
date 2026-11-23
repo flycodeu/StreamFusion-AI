@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 
 /** Verifies the database and required defaults at startup. */
 @Component
-@Profile("!test")
+@Profile("!it")
 public class StorageSchemaCheck implements ApplicationRunner {
     private final JdbcTemplate sql;
 

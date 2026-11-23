@@ -28,7 +28,10 @@ $originalLocation = (Get-Location).Path
 $maven = Join-Path $PSScriptRoot 'platform-api/mvnw.cmd'
 try {
     [IO.File]::WriteAllText($maven, "@echo off`r`necho API_START_PROBE %*`r`nexit /b 0`r`n")
-    & (Join-Path $PSScriptRoot 'scripts/start.ps1') api -JavaHome $JavaHome -Profile local
+    & (Join-Path $PSScriptRoot 'scripts/start.ps1') api -JavaHome $JavaHome
+    foreach ($profileName in 'local', 'test', 'local-dev', 'local-test') {
+        & (Join-Path $PSScriptRoot 'scripts/start.ps1') api -JavaHome $JavaHome -Profile $profileName
+    }
     if ($env:JAVA_HOME -ne 'preserve-original-java-home' -or $env:Path -ne $originalPath -or (Get-Location).Path -ne $originalLocation) {
         throw 'Successful startup did not restore its environment.'
     }
@@ -54,8 +57,13 @@ try {
     $output = & powershell.exe -NoProfile -NonInteractive -File $wrapper -JavaHome $JavaHome 2>&1
     if ($LASTEXITCODE -ne 0) { throw ($output | Out-String) }
     $text = $output | Out-String
-    if ($text -notmatch 'API_START_PROBE spring-boot:run -Dspring-boot.run.profiles=local' -or
-        $text -notmatch 'API_START_FAILURE_AND_ENVIRONMENT_PASS') {
+    $lines = $text -split '\r?\n'
+    foreach ($profileName in 'local', 'test', 'local-dev', 'local-test') {
+        if ($lines -notcontains "API_START_PROBE spring-boot:run -Dspring-boot.run.profiles=$profileName") {
+            throw "Unexpected startup probe for profile ${profileName}: $text"
+        }
+    }
+    if ($lines -notcontains 'API_START_PROBE spring-boot:run' -or $lines -notcontains 'API_START_FAILURE_AND_ENVIRONMENT_PASS') {
         throw "Unexpected startup probe result: $text"
     }
     Write-Output 'PASS Windows PowerShell API startup: JDK stderr, Maven dispatch, failed exit and environment restoration.'

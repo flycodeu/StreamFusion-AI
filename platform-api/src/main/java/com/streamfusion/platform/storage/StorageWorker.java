@@ -45,18 +45,18 @@ public class StorageWorker {
                     new ThreadPoolExecutor.AbortPolicy());
     private final Semaphore slots = new Semaphore(2);
 
-    private boolean test() {
-        return Arrays.asList(environment.getActiveProfiles()).contains("test");
+    private boolean integrationTest() {
+        return environment.matchesProfiles("it");
     }
 
     @EventListener(ApplicationReadyEvent.class)
     public void recover() {
-        if (!test()) tasks.recover();
+        if (!integrationTest()) tasks.recover();
     }
 
     @Scheduled(fixedDelay = 1000)
     public void tick() {
-        if (test() || !slots.tryAcquire()) return;
+        if (integrationTest() || !slots.tryAcquire()) return;
         StorageTask task = null;
         try {
             task = tasks.claim(owner);
@@ -132,14 +132,14 @@ public class StorageWorker {
 
     @Scheduled(fixedDelay = 60000, initialDelay = 60000)
     public void maintenance() {
-        if (test()) return;
+        if (integrationTest()) return;
         tasks.recover();
         history.prune();
     }
 
     @Scheduled(fixedDelay = 300000, initialDelay = 15000)
     public void observations() {
-        if (test()) return;
+        if (integrationTest()) return;
         for (var instance : tasks.dueInstances(instances)) {
             if (json.read(instance.getObservation()).path("checkedAt").asLong() + 300
                     > Instant.now().getEpochSecond()) continue;

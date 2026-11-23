@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 
 /** Dedicated to logs; one periodic task, no per-request queue and no probe threads. */
 @Component
-@Profile("!test")
+@Profile("!it")
 @Order(20)
 @RequiredArgsConstructor
 public class AuditMaintenanceWorker implements ApplicationRunner {

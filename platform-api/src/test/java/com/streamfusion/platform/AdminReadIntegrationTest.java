@@ -31,7 +31,7 @@ import org.springframework.test.web.servlet.MvcResult;
 @SpringBootTest(
         properties = "spring.datasource.url=jdbc:h2:mem:admin_read;MODE=MySQL;DB_CLOSE_DELAY=-1")
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles("it")
 class AdminReadIntegrationTest extends SecureLoginSupport {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper json;
