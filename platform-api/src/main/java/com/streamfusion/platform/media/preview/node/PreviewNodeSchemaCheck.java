@@ -6,7 +6,7 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
-/** Explicit, read-only upgrade gate; no automatic schema mutation. */
+/** Verifies the preview tables at startup. */
 @Component
 @Profile("!test")
 public final class PreviewNodeSchemaCheck implements ApplicationRunner {
@@ -32,8 +32,7 @@ public final class PreviewNodeSchemaCheck implements ApplicationRunner {
                     "SELECT operation_id,node_id,viewer_id,action,command_digest,deadline_at,state,reason_code FROM preview_operation WHERE 1=0");
         } catch (org.springframework.dao.DataAccessException failure) {
             throw new IllegalStateException(
-                    "预览节点表结构缺失；备份后核对五表、node_kind及preview-node目录中的Ops来源和ZLM安装路径定向升级，禁止重放初始化 SQL。",
-                    failure);
+                    "预览节点表结构缺失，请按 sql/README.md 核对完整结构。已有库须先备份并单独评估迁移。", failure);
         }
     }
 }

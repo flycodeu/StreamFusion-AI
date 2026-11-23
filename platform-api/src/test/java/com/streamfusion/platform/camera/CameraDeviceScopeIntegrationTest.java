@@ -6,15 +6,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.streamfusion.platform.support.CameraTestSupport;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
-import org.springframework.core.io.ByteArrayResource;
-import org.springframework.core.io.support.EncodedResource;
-import org.springframework.jdbc.datasource.init.ScriptUtils;
 
 /** Device grants remain independent of stream identities and preserve the pending boundary. */
 class CameraDeviceScopeIntegrationTest extends CameraTestSupport {
@@ -224,42 +218,6 @@ class CameraDeviceScopeIntegrationTest extends CameraTestSupport {
                                 .header(auth.header(), auth.token())
                                 .header("If-Match", "\"0\""))
                 .andExpect(status().isOk());
-    }
-
-    @Test
-    void upgradeBackfillsEachLegacyDeviceOnceAndPreservesEarliestProvenance() throws Exception {
-        var auth = admin();
-        var fixture = fixture(auth);
-        String user = user(auth, "UpgradeDeviceViewer");
-        jdbc.update("INSERT INTO camera_user_scope(user_id) VALUES(?)", Long.valueOf(user));
-        jdbc.update(
-                "INSERT INTO camera_user_channel_grant(user_id,channel_id,created_at,created_by) VALUES(?,?,'2026-10-01 01:00:00',123)",
-                Long.valueOf(user),
-                Long.valueOf(fixture.first()));
-        jdbc.update(
-                "INSERT INTO camera_user_channel_grant(user_id,channel_id,created_at,created_by) VALUES(?,?,'2026-10-02 01:00:00',456)",
-                Long.valueOf(user),
-                Long.valueOf(fixture.second()));
-        jdbc.execute("DROP TABLE camera_user_device_grant");
-        String upgrade =
-                Files.readString(
-                        Path.of("sql", "升级", "20261024-camera-device-grants.sql"),
-                        StandardCharsets.UTF_8);
-        try (var connection = dataSource.getConnection()) {
-            ScriptUtils.executeSqlScript(
-                    connection,
-                    new EncodedResource(
-                            new ByteArrayResource(upgrade.getBytes(StandardCharsets.UTF_8)),
-                            StandardCharsets.UTF_8));
-        }
-        assertThat(count("camera_user_device_grant", user)).isOne();
-        assertThat(count("camera_user_channel_grant", user)).isEqualTo(2);
-        assertThat(
-                        jdbc.queryForObject(
-                                "SELECT created_by FROM camera_user_device_grant WHERE user_id=?",
-                                Long.class,
-                                Long.valueOf(user)))
-                .isEqualTo(123L);
     }
 
     @Test

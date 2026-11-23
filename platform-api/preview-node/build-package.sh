@@ -16,10 +16,8 @@ docker build --network host --build-arg "ZLM_IMAGE=$zlm" --build-arg "JRE_IMAGE=
 docker run --rm --network none --entrypoint java "$image" -jar /opt/preview/preview-node.jar --help
 docker save --output "$output/preview-node-image.tar" "$image"
 cp -- "$root/compose.yaml" "$root/configure.py" "$root/preflight.sh" "$root/README.md" "$output/"
-awk '!/^DROP TABLE/ {print}' "$root/../sql/业务/预览节点表.sql" "$root/../sql/业务/预览源归属表.sql" "$root/../sql/业务/预览输出预占表.sql" "$root/../sql/业务/预览远程观看表.sql" "$root/../sql/业务/预览远程操作表.sql" > "$output/platform-upgrade.sql"
-python3 "$root/export-s2-upgrade.py" "$output/platform-s2-to-s3.sql"
 printf 'PREVIEW_IMAGE=%s\nPREVIEW_BIND_IP=127.0.0.1\nPREVIEW_CPU_LIMIT=8\nPREVIEW_MEMORY_LIMIT=8g\n' "$image" > "$output/.env"
 docker inspect --format '{{.Id}}' "$image" > "$output/image-id.txt"
 printf 'zlm=%s\njre=%s\n' "$zlm" "$jre" > "$output/upstream-images.txt"
-(cd "$output" && sha256sum preview-node-image.tar image-id.txt upstream-images.txt compose.yaml configure.py preflight.sh README.md platform-upgrade.sql platform-s2-to-s3.sql > SHA256SUMS)
+(cd "$output" && sha256sum preview-node-image.tar image-id.txt upstream-images.txt compose.yaml configure.py preflight.sh README.md > SHA256SUMS)
 echo "Created $output"

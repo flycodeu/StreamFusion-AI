@@ -1,354 +1,72 @@
 # StreamFusion AI
 
-**面向实时视频分析的 AI 平台**
+StreamFusion AI 是视频接入与运维平台。当前管理端支持用户与权限、相机档案、设备目录导入、状态巡检、ZLMediaKit WebRTC 预览和 S3 图床。Node Agent 和 Algorithm Runtime 目前提供独立的开发骨架，模型推理与自动告警尚未接入。
 
-将平台管理、节点协调和算法执行分开，逐步构建从视频接入、任务运行到事件证据的完整链路。
-
-[快速开始](#快速开始) · [系统架构](#系统架构) · [开发指南](DEVELOPMENT.md) · [公共协议](contracts/README.md) · [路线图](#路线图) · [反馈问题](https://github.com/flycodeu/StreamFusion-AI/issues)
-
-> **项目状态：早期开发。** 管理功能、相机接入、媒体环境检测与 ZLM/WebRTC 预览已有实现，本地模拟视频可播放。真实设备长期兼容、Linux 媒体环境及大规模并发仍待验证；推理与节点协同链路尚未实现。
-
-## 项目介绍
-
-StreamFusion AI 的目标是让视频分析任务可以被统一配置、在算法节点上执行，并将结果转化为可查看、可追踪的事件与证据。
-
-项目采用单仓库管理三个工程：Java 管理后端、Vue 管理前端和 Python 算法节点。算法节点内的 Agent 与 Runtime 使用独立环境和进程，便于后续分别演进。Java 平台不处理逐帧视频，视频与模型执行逻辑属于 Runtime。
-
-## 当前能力
-
-| 模块 | 当前已实现 | 尚未实现 |
-|---|---|---|
-| Platform API | 管理鉴权、审计按需保留与导出、临时详细诊断；设备/通道/Profile、加密接入、分组、账户范围、目录和平台导入；分层状态检查与有限期按组巡检；ZLM/FFmpeg 检测、短期预览租约及 WebRTC 信令 | 用户权限来源聚合、连续视频质量分析、分析任务及事件 API |
-| Platform Web | 登录与管理页面、动态路由、会话恢复；相机、分组、状态与巡检任务管理；日志保留、导出和诊断详情；账户授权树、设备辅流预览、默认 4×4 主流预览中心、15 种分屏、抓图与码率 | 用户权限来源详情、音频/PTZ/回放、分析业务页面 |
-| Node Agent | 独立环境与配置、健康接口、接口文档、请求日志 | 节点注册、心跳、任务同步、进程监督 |
-| Algorithm Runtime | 独立环境与配置、健康接口、接口文档、请求日志 | 拉流、解码、模型推理、事件与证据 |
-| StreamFusion Ops | 独立控制器、认证与备份；Linux 主机与软件管理、官方联网/平台离线安装、Node/nvm/npm/pnpm环境管理、固定 Java Compose 发布/回退 | Node应用发布、源码构建、Jenkins与生产验收 |
-| 工程基础 | 依赖锁定、环境检查、日志轮转与脱敏、质量检查、CI 工作流、协议样例校验 | 完整跨模块自动部署 |
-
-后端健康检查包含 MySQL 与 Redis 连通性；返回 `UP` 不代表业务链路已验收。Python 接口中的 `mode=skeleton` 表示当前为空壳实现。
-公共协议为设计基线，不代表节点同步链路已经运行；CI 结果以 [GitHub Actions](https://github.com/flycodeu/StreamFusion-AI/actions) 的实际记录为准。
-
-角色选择页面后获得对应模块的已实现操作。普通管理者可通过其管理 PAGE 管理普通对象、配置自己尚未持有的页面；超级管理员身份仍受单独保护。SUPER_ADMIN 的全部 PAGE 关系由初始化及新建页面维护，鉴权继续检查实际关联与启用状态。部门仅表示组织归属，不授予权限；用户可加入多个部门，无主部门。
-
-相机管理以设备展示多个通道和 Profile，分组树维护与整机移组在同一页面。海康 ISAPI、大华 CGI、ONVIF 与海康 ISC/Artemis 采用适配器；DSS/ICC 只有待适配产品预设。网段搜索仅返回获准范围的 TCP 候选；平台整批导入有分页、去重、取消和失败明细，最多 10000 个点位。实机目录成功不等于视频长期可播放。
-
-相机状态区分 RTSP 控制连接、短时媒体收帧和海康平台官方在线状态。平台区域树按需展开，相机按区域分页，可勾选导入或后台分批导入到已有视频组。巡检按分组或全量范围固定选取每台设备的一路代表通道，支持错峰轮询、有界并行、停止、原期限恢复和历史查询，登出后继续。收帧采样不代表持续稳定或画面可解码；海康平台接口已适配，真实平台联调仍待验证。
-
-操作日志清理默认关闭，可按自然月或数量保留，成功的管理员初始化记录不参与清理；启用前可预览。导出支持有界后台 CSV/JSONL 任务、取消、下载和到期文件清理。详细诊断默认关闭，按接口临时开启，最多60分钟或1000次匹配请求，只保存安全字段投影，不保存完整凭据或原始报文。已有库需按 [SQL 指南](platform-api/sql/README.md) 备份后增量升级，禁止重放初始化。
-
-媒体环境检测只读取位置、版本、配置与实际状态，安装管理由独立 [StreamFusion Ops](operations/README.md) 负责。预览按请求由 ZLM 拉取 RTSP；浏览器经 Java 交换信令，直接从 ZLM 接收 WebRTC 视频。H.264 直接协商，H.265 根据浏览器能力协商或在配置一致时尝试 FFmpeg 回退。音频当前关闭，转码回退与多路容量需专项验证。
-
-## 系统架构
-
-下图是组件职责与目标调用关系。**实线为当前已实现调用，虚线为计划接入链路。**
-
-```mermaid
-flowchart LR
-    WEB["Platform Web<br/>管理界面"] -->|"登录、权限菜单与管理 API"| API["Platform API<br/>配置与业务管理"]
-    API -->|"解析 RTSP、创建预览与交换 SDP"| ZLM["ZLM"]
-    CAMERA["视频源"] -->|"RTSP 预览"| ZLM
-    ZLM -->|"WebRTC 视频"| WEB
-    AGENT["Node Agent<br/>节点协调"] -.->|"任务同步与结果上传（规划）"| API
-    AGENT -.->|"Worker 监督（规划）"| RUNTIME["Algorithm Runtime<br/>视频与算法执行"]
-    CAMERA -.->|"算法媒体接入（规划）"| RUNTIME
-    RUNTIME -.->|"事件与证据（规划）"| AGENT
-```
-
-| 工程 | 技术栈 | 职责 |
-|---|---|---|
-| `platform-api` | Java 21 · Spring Boot 3.5 · Maven | 平台配置、业务状态与对外 API |
-| `platform-web` | Vue 3 · TypeScript · Vite · Element Plus | 管理交互和运行状态展示 |
-| `algorithm-node/node-agent` | Python 3.12 · FastAPI | 平台与算法节点之间的协调入口 |
-| `algorithm-node/runtime` | Python 3.12 · FastAPI | 视频处理与算法执行入口 |
-
-一个仓库不限制独立构建和部署。Agent 与 Runtime 不共享虚拟环境，不互相导入实现。
+[快速开始](#快速开始) · [开发指南](DEVELOPMENT.md) · [StreamFusion Ops](operations/README.md) · [问题反馈](https://github.com/flycodeu/StreamFusion-AI/issues)
 
 ## 快速开始
 
-以下步骤使用 **Windows PowerShell**。后端开发运行需要 MySQL 和 Redis；不依赖相机或 GPU。
-普通自动化测试使用测试专属 H2，不连接个人数据库或 Redis。
-
-### 1. 准备环境
-
-| 工具 | 版本要求 | 版本依据 |
-|---|---|---|
-| JDK | 21 | [pom.xml](platform-api/pom.xml)、[.java-version](platform-api/.java-version) |
-| Maven | 3.9.11，由 Wrapper 下载 | [Wrapper 配置](platform-api/.mvn/wrapper/maven-wrapper.properties) |
-| Node.js | 24.21.0 | [.nvmrc](platform-web/.nvmrc) |
-| pnpm | 10.34.5 | [package.json](platform-web/package.json) |
-| Python | 3.12 | [pyproject.toml](algorithm-node/node-agent/pyproject.toml) |
-| uv | CI 固定使用 0.7.19 | Python 依赖安装与环境管理 |
-| MySQL | 8.0.17+ | 外键、CHECK及相机外部身份的utf8mb4_0900_bin排序规则 |
-| Redis | 开发默认本机 6379、数据库 10 | [连接配置](DEVELOPMENT.md#mysqlmybatis-plusredis) |
-
-设置 `JAVA_HOME` 为 JDK 21 的安装目录，并确认 `java -version`、`node -v`、`pnpm -v`、`uv --version`。
-首次安装需能访问 Maven、npm 和 PyPI。无需安装全局 Maven。
-
-### 2. 获取代码
+以下以 Windows PowerShell 为例。运行管理端需要 Git、JDK 21、MySQL 8.0.17+、Redis、Node.js 24.21.0 和 pnpm 10.34.5。Maven 由仓库自带的 Wrapper 提供。设置 `JAVA_HOME` 指向 JDK 21。
 
 ```powershell
 git clone https://github.com/flycodeu/StreamFusion-AI.git
 cd StreamFusion-AI
 ```
 
-### 3. 安装与构建
+### 1. 初始化数据库
 
-以下命令均从仓库根目录开始：
+创建专用空库，按 [SQL 指南](platform-api/sql/README.md) 导入一次 [完整初始化 SQL](platform-api/sql/streamfusion-mysql.sql)。**初始化文件包含 `DROP TABLE`，仅用于空库。**
+
+复制本地配置，从示例填写 MySQL 账号、密码和 Redis 连接。已有本地配置时跳过复制。
 
 ```powershell
-# 后端：编译、测试、打包
-Push-Location platform-api
-.\mvnw.cmd clean verify
-Pop-Location
-
-# 前端：安装固定依赖、类型检查、构建
-Push-Location platform-web
-pnpm install --frozen-lockfile
-pnpm build
-Pop-Location
-
-# Agent 与 Runtime：分别建立虚拟环境
-Push-Location algorithm-node/node-agent
-uv sync --locked
-Pop-Location
-
-Push-Location algorithm-node/runtime
-uv sync --locked
-Pop-Location
+Copy-Item platform-api/config/application-local.yml.example platform-api/config/application-local.yml
 ```
 
-安装后可从根目录执行 `.\scripts\doctor.ps1`，检查工具链、Python 解释器、依赖与默认端口。
-该脚本只诊断，不安装软件，也不停止占用端口的进程。
+### 2. 创建管理员
 
-### 4. 初始化数据库与首位管理员
-
-先准备项目数据库和 Redis，并按 [数据库与安全配置说明](DEVELOPMENT.md#mysqlmybatis-plusredis)
-填写后端 local 配置；公共示例不会自动提供数据库凭证或创建数据库。
-首次使用只需导入一个[完整初始化 SQL](platform-api/sql/streamfusion-mysql.sql)，按 [SQL 指南](platform-api/sql/README.md)准备专用空库。应用启动不建表、不迁移。
-初始化建立30张应用表、SUPER_ADMIN、三个菜单目录、十三个 PAGE，以及示例组织“飞云科技公司 / 研发部门 / 运维部门”，不创建账号或写入固定密码哈希。示例组织可调整，普通新用户不会自动加入。脚本含 DROP，已有库禁止重复导入；保留数据的处理见 [SQL 指南](platform-api/sql/README.md#已有数据库)。
-
-SQL 指南提供空库创建、汇总文件导入与种子核对命令。普通启动及管理员引导都会检查业务表和必要列；缺少结构时直接报告缺项并停止，不自动建表。此检查不替代列类型、索引、外键及业务数据的验证。
-
-相机写入需要配置持久AES密钥，读取设备、扫描或平台导入还需要批准的目标网络策略；配置方法见[相机配置说明](platform-api/config/README.md#必需部署配置)。未配置时既有管理功能仍可运行，相机页面提示配置诊断；不要用临时随机密钥替换已经保存凭据的密钥。
-
-构建完成并配置好 local 数据源后，在仓库根目录执行一次非 Web 引导：
+从仓库根目录执行。在终端按提示输入首位管理员的账号和密码。
 
 ```powershell
 Push-Location platform-api
-try {
-    java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=local --bootstrap-admin --platform.bootstrap.default-admin=true
-} finally {
-    Pop-Location
-}
+.\mvnw.cmd -DskipTests package
+java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=local --bootstrap-admin
+Pop-Location
 ```
 
-默认账号名为 `admin`，显示名为“超级管理员”，关联示例研发部门；账号、名称和部门均可配置。首次登录必须改密后才能使用管理 API。引导仅在无用户且无成功引导记录时执行，不会覆盖已有账号。交互式强密码引导、无部门初始化和配置项见[开发指南](DEVELOPMENT.md#首位管理员初始化)。
+如需指定初始部门或使用环境变量引导，见 [管理员初始化](DEVELOPMENT.md#首位管理员初始化)。
 
-`dev` / `local` 的默认临时密码为 **`StreamFusion@123`**，用于首次显式引导，以及普通用户的新建和密码重置。`SF_AUTH_INITIAL_PASSWORD` 可替换新建/重置密码，默认引导也会使用该值；`SF_BOOTSTRAP_PASSWORD` 可单独覆盖本次管理员引导密码。已有账号的密码不会随配置变化。管理界面仅在新建或重置成功后显示当次临时密码，账号首次登录仍须改密。
+### 3. 启动管理端
 
-`prod` 不提供默认密码：管理员引导须显式提供 `SF_BOOTSTRAP_PASSWORD`，普通用户新建/重置须设置 `SF_AUTH_INITIAL_PASSWORD`。不要将生产密码写入仓库；可通过安全输入提示或部署环境注入。
+安装前端依赖。
 
-### 5. 启动服务
+```powershell
+pnpm --dir platform-web install --frozen-lockfile
+```
 
-个人开发推荐使用 `local`；使用 `dev` 时需提供 `DB_USERNAME` / `DB_PASSWORD` 等环境变量。
-
-只使用管理界面时启动 API 与 Web 即可。需要同时运行算法节点骨架时再启动 Agent 和 Runtime。在仓库根目录分别打开终端执行：
+在两个终端中分别从仓库根目录运行。
 
 ```powershell
 .\scripts\start.ps1 api -Profile local
 .\scripts\start.ps1 web
-.\scripts\start.ps1 agent
-.\scripts\start.ps1 runtime
 ```
 
-| 服务 | 本地入口 |
-|---|---|
-| Web | http://127.0.0.1:8090 |
-| API 健康检查 | http://127.0.0.1:8080/actuator/health |
-| API 接口描述（开发环境） | http://127.0.0.1:8080/v3/api-docs |
-| API Swagger UI（开发环境） | http://127.0.0.1:8080/swagger-ui.html |
-| Agent 健康检查 / 接口文档 | http://127.0.0.1:8100/health · http://127.0.0.1:8100/docs |
-| Runtime 健康检查 / 接口文档 | http://127.0.0.1:8101/health · http://127.0.0.1:8101/docs |
+打开 [管理界面](http://127.0.0.1:8090) 并使用刚创建的账号登录。API 默认监听 `127.0.0.1:8080`。查看 API 与 Web 的连通状态可从根目录执行 `.\scripts\check-health.ps1 -Services api,web`。
 
-Windows 下通过 `pnpm dev` 或 `scripts/start.ps1 web` 重复启动时，会先关闭同一项目、同一端口的旧 Vite 实例。若占用者是其他程序或无法确认归属，则保留该进程并显示 PID；可手动处理，或用 `pnpm dev --port 8091` 临时指定空闲端口。启动器支持 `--port`、`--host`、`--mode` 参数；其他系统保留 Vite 的端口冲突检查。可在 `platform-web` 目录执行 `pnpm test:dev-start` 验证重复启动及无关进程保护。
+Linux 或 macOS 可在 `platform-api` 执行 `sh mvnw -DskipTests package`，沿用上面的 Java 引导命令，再执行 `sh mvnw spring-boot:run -Dspring-boot.run.profiles=local`。在 `platform-web` 执行 `pnpm dev`。
 
-打开 Web，使用初始化账号登录；首页可以检查后端连接。只启动管理端时运行以下检查：
+## 相机与预览
 
-```powershell
-.\scripts\check-health.ps1 -Services api,web
-# 四个服务全部启动后，可省略 -Services 检查全部默认端口。
-```
+相机接入需配置持久加密密钥，并为设备探测、平台导入和取流配置获准的目标网段。预览还需部署 ZLMediaKit，确保它能访问相机 RTSP，浏览器能访问 WebRTC 媒体端口。见 [后端外部配置](platform-api/config/README.md)。
 
-各终端使用 `Ctrl+C` 停止服务。
+## 工程入口
 
-健康脚本检查服务响应与前端页面入口；页面标题由前端统一配置设置，检查不依赖系统名称。HTML通过不代表浏览器交互已验收。
+| 目录 | 用途 |
+| --- | --- |
+| `platform-api`、`platform-web` | Java/Spring Boot 管理 API 与 Vue 管理界面。见 [开发指南](DEVELOPMENT.md) |
+| `operations` | 独立的 Linux 主机、软件安装和发布控制台。见 [Ops 启动与使用](operations/README.md) |
+| `algorithm-node` | 独立的 Node Agent 和 Algorithm Runtime。见 [算法节点运行方式](algorithm-node/README.md) |
+| `camera-inspector` | 相机巡检控制服务及媒体、证据上传的实验工具。见 [Camera Inspector](camera-inspector/README.md) |
+| `contracts` | 跨组件契约、样例与校验。见 [协议说明](contracts/README.md) |
 
-视频预览还需已运行的 ZLM、可到达的相机 RTSP 和浏览器可访问的 WebRTC 媒体端口。在私有配置中通过 `spring.config.import` 引入适配后的 [媒体环境示例](platform-api/src/main/resources/media-runtime.example.yml)，分别设置 Windows/Linux 搜索目录、可执行文件与 ZLM 配置位置；也可用 `SF_MEDIA_RUNTIME_ROOTS` 提供本机搜索根。进入“服务信息”检测并选择版本，再从相机管理点击预览。H.265 回退须选定 FFmpeg 且与 ZLM 配置的路径一致；平台不启动程序或修改其配置。
-
-登录使用挑战公钥与密文接口。登录后重新获取 CSRF 令牌供写请求使用，详情见[登录与模块授权](DEVELOPMENT.md#登录与模块授权)。新建和重置普通用户使用 `SF_AUTH_INITIAL_PASSWORD`；dev/local 提供上述开发临时密码，prod 须显式配置。页面路径、接口分层和新增菜单方法见[前端开发约定](platform-web/DEVELOPMENT.md)。
-
-登录需输入5位字母数字图片验证码，忽略大小写、两分钟有效。换图会替换当前会话的旧码，登录失败后清空输入并换图；验证码答案与账号密码一起进入密文请求。普通登录错误显示简洁提示，响应和后端日志保留诊断字段。
-
-同一账号只保留一个有效会话；新登录成功后，旧会话下一次请求被拒绝。前台页面定期检查会话，显示新登录的时间和来源；隐藏或离线页面恢复后检查。用户管理的“更多 → 强制登出”可撤销受管理账号的会话，仍执行本人和超级账号保护。同一浏览器的标签共享 Cookie，并同步当前登录身份。
-
-登录来源防护默认在同一 IP 十分钟内累计二十次失败后封禁，**不会自动解除**。超级管理员从其他未封禁地址进入“监控面板 → 操作记录 → IP 封禁”手动解除。阈值、可信代理、限频及应急恢复见[IP 登录防护](DEVELOPMENT.md#ip-登录防护)。
-
-登录记录的公网地域使用可选离线数据。需要地域名称时，在仓库根目录执行 `.\scripts\install-ip-region.ps1`，安装后重启 API；文件来源、许可及校验见[离线 IP 地域数据](scripts/IP-REGION.md)。未安装时仍可登录并保存记录，无法识别的公网地域显示未知。
-
-<details>
-<summary>不使用启动脚本</summary>
-
-在各工程目录启动：API 使用 `mvnw.cmd spring-boot:run`，Web 使用 `pnpm dev`。
-Agent / Runtime 的独立命令见 [算法节点说明](algorithm-node/README.md)。
-
-Linux / macOS 可使用 `sh mvnw` 替代 `mvnw.cmd`，其他工程使用相同的 pnpm / uv 命令。
-当前启动验收基于 Windows；Linux 媒体与 GPU 运行链路尚未验证。
-
-</details>
-
-## 环境配置
-
-### 后端
-
-`application.yml` 仅保存公共项，默认使用 `dev`。每次选择一个环境，各环境配置互不导入。
-
-| 环境 | 配置位置（相对于 platform-api） | 使用方式 |
-|---|---|---|
-| dev | `src/main/resources/application-dev.yml` | 共享开发默认值 |
-| local | `src/main/resources/application-local.yml` 加载 `config/application-local.yml` | 私有配置保留在本地，不提交、不打包 |
-| prod | `src/main/resources/application-prod.yml` | 公开默认值，部署参数由环境提供 |
-| test | `src/test/resources/application-test.yml` | 测试显式激活，随机端口，不打包 |
-
-使用本地配置时，从仓库根目录执行一次复制；已有配置时跳过复制：
-
-```powershell
-Copy-Item platform-api/config/application-local.yml.example platform-api/config/application-local.yml
-# 修改复制后的文件，再启动
-.\scripts\start.ps1 api -Profile local
-```
-
-`local` 配置缺失会报错。路径相对于 API 的运行目录解析，启动脚本会自动切换目录；也可通过 `LOCAL_CONFIG_PATH` 指定绝对路径。
-
-运行打包后的应用，在 `platform-api` 目录执行：
-
-```powershell
-java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=prod
-```
-
-| 环境变量 | 用途 |
-|---|---|
-| `SPRING_PROFILES_ACTIVE` | 选择环境，例如 `prod` |
-| `SERVER_ADDRESS` | 监听地址，默认 `127.0.0.1` |
-| `SERVER_PORT` | HTTP 端口，默认 `8080` |
-| `LOCAL_CONFIG_PATH` | local 配置文件位置，仅 local 环境使用 |
-
-`prod` 默认启用 Secure Cookie、关闭接口文档；HTTPS、反向代理和生产部署仍需自行配置与验证。认证功能已实现，选择 profile 本身不代表生产部署完成。
-
-### 前端与算法节点
-
-前端需要改变后端地址时，复制 [环境变量示例](platform-web/.env.example) 为 `platform-web/.env.local`，
-修改 `API_TARGET` 后重启 Vite。默认开发请求链为浏览器 → Vite `/api` 代理 → Platform API。构建后的前端使用同源根路径 API；`pnpm preview` 只预览构建产物，完整运行需由静态服务器配置 API 反向代理，具体路径见[开发指南](DEVELOPMENT.md#前端生产访问路径)。
-
-系统名称、Logo和登录文案集中在[system.ts](platform-web/src/config/system.ts)，输入提示规则位于[validation.ts](platform-web/src/config/validation.ts)。后端仍执行最终校验，新密码强度由后端策略提供。
-
-Agent 与 Runtime 在各自目录使用 `uv run --locked python -m app` 启动。
-需要自定义时，将各自的 `.env.example` 复制为 `.env.local`，分别使用 `SF_AGENT_*` 和 `SF_RUNTIME_*` 配置；
-环境变量优先于文件，配置错误会阻止正常启动。已有文件不要覆盖。
-完整配置项、日志位置和超时边界见 [开发指南](DEVELOPMENT.md#配置入口)。
-
-## 开发与验证
-
-| 检查 | 工作目录 | 命令 |
-|---|---|---|
-| 后端格式、构建与测试 | `platform-api` | `mvnw.cmd clean verify` |
-| 前端检查与测试 | `platform-web` | `pnpm lint`、`pnpm format:check`、`pnpm test`、`pnpm build` |
-| Agent 配置与接口测试 | `algorithm-node/node-agent` | `uv run --locked python -m pytest -q` |
-| Runtime 配置与接口测试 | `algorithm-node/runtime` | `uv run --locked python -m pytest -q` |
-| 公共协议校验 | 仓库根目录 | `uv run --project algorithm-node/node-agent --locked python -m pytest contracts/tests -q` |
-| 逐表与汇总 SQL 一致性 | 仓库根目录 | `.\scripts\export-sql.ps1 -Check` |
-| 本地环境检查 | 仓库根目录 | `.\scripts\doctor.ps1` |
-| 运行中的服务检查 | 仓库根目录 | `.\scripts\check-health.ps1` |
-
-测试覆盖登录/改密/会话失效、管理操作及授权边界、审计事务、H2 建表与约束、配置与错误、管理端布局和协议样例。
-相机回归覆盖离线建档、多通道多码流、资源授权、幂等创建、协议目录夹具、后台整批导入、去重/取消/失败和有界清理；不替代真实设备测试。
-真实 MySQL 与 Redis HTTP 检查需显式启用，命令及隔离要求见[开发指南](DEVELOPMENT.md#验证命令)；普通测试不连接本机数据库。
-Python 的 Ruff、mypy 命令和格式化方法见 [开发指南](DEVELOPMENT.md#验证命令)。
-GitHub Actions 配置了 Windows / Linux 检查矩阵，不包含部署操作。
-这些检查不能替代完整浏览器链路、真实视频、推理精度或 GPU 性能验收。
-
-<details>
-<summary>常见启动问题</summary>
-
-- **Java 版本错误**：检查 `JAVA_HOME` 是否指向 JDK 21；可向启动脚本传入 `-JavaHome`。
-- **前端连接失败**：先访问 API 健康地址，再检查 `API_TARGET`，改动后重启 Vite。
-- **端口占用**：检查 8080、8090、8100、8101 的监听进程。修改端口后同时调整代理和检查地址。
-- **依赖下载失败**：检查网络、代理和包管理器镜像配置。
-- **local 文件找不到**：检查启动工作目录及 `LOCAL_CONFIG_PATH`。
-- **提示缺少业务表或字段**：全新专用空库按 SQL 指南导入完整30表；已有库先备份并核对增量适用条件，不能重放初始化文件。
-- **相机配置诊断**：核对`platform.camera`持久密钥和目标网络策略。仅手工DEVICE建档不要求网络策略，实际外呼必须配置。
-- **运行日志**：查看启动终端及各服务默认 `.run/logs/`，用响应中的 `X-Trace-Id` 定位请求；相机检查/巡检可按 checkId、planId 关联诊断日志；算法任务/事件运行链尚未实现。
-- **发布前端**：`dist/` 需要静态服务器及 API 反向代理，不能把 Vite 开发服务器作为生产部署方案。
-
-</details>
-
-## 目录结构
-
-```text
-StreamFusion-AI/
-├── .github/workflows/         # GitHub Actions 自动检查
-├── platform-api/              # Java 平台后端
-│   ├── config/                # 外部配置，仅示例提交
-│   ├── sql/
-│   │   ├── streamfusion-mysql.sql # 新安装使用的完整 SQL
-│   │   └── 业务/             # 开发用逐表维护源，生成完整 SQL
-│   └── src/
-│       ├── main/              # 应用代码与公共环境配置
-│       └── test/              # 测试与 test 环境配置
-├── platform-web/              # Vue 管理端
-├── algorithm-node/
-│   ├── node-agent/            # 节点协调进程与独立依赖
-│   └── runtime/               # 算法执行进程与独立依赖
-├── contracts/                 # 公共协议、样例及校验
-├── scripts/                   # 启动、环境诊断、健康检查与 SQL 导出
-└── DEVELOPMENT.md             # 配置、日志与开发约定
-```
-
-版本文件、依赖锁文件、Maven Wrapper 和无敏感信息的配置示例纳入版本管理。
-依赖目录、构建产物、IDE 配置、真实 `.env`、本地配置和算法运行数据不提交。
-`.github/` 是共享自动检查配置，应提交；本地工具目录 `.tools/` 和运行目录 `.run/` 不提交。
-
-## 路线图
-
-以下为开发方向，未勾选项尚未实现，不代表版本或交付时间承诺。
-
-- [x] 三工程骨架，Agent / Runtime 独立运行
-- [x] 健康检查、环境配置分离与依赖锁定
-- [x] 启动校验、环境诊断、日志与错误处理基础
-- [x] 代码质量检查、CI 工作流与公共协议样例
-- [x] MySQL / Redis 接入与 RBAC 初始化 SQL
-- [x] 管理端布局与服务状态页
-- [x] Redis Session 登录、用户/角色/部门/菜单管理后端
-- [x] PAGE 模块授权、用户路由快照与操作审计写入
-- [x] 登录与管理业务页面、按页面文件路径加载动态路由
-- [x] 审计与登录记录查询、IP 防护、服务信息及接口文档导出
-- [x] 单账号单会话、管理员强制登出与会话结束提示
-- [ ] 操作审计查询与服务资源信息页面的完整验收
-- [ ] 账号体验与 IP 登录防护的完整验收
-- [ ] 真实视频接入、解码与单路模型推理
-- [ ] 节点注册、任务同步与 Runtime 监督
-- [x] 相机档案、设备目录、平台导入、分组与资源授权（实机兼容性待验证）
-- [ ] 场景、模型和分析任务管理
-- [ ] 事件聚合、原图 / 标注图及录像证据
-- [ ] 多节点运行、恢复机制与容量验证
-
-## 参与贡献
-
-欢迎通过 [Issues](https://github.com/flycodeu/StreamFusion-AI/issues) 反馈问题或讨论需求。
-报告问题时，请提供运行环境、复现步骤、预期结果和脱敏后的日志。
-
-提交 Pull Request 前，请先运行涉及工程的检查。涉及组件职责或公共协议的变更，建议先开 Issue 讨论。
-请勿提交相机凭证、访问令牌、真实服务配置、模型制品或现场视频。
-
-## 许可证
-
-许可证尚未确定，仓库暂未附带 `LICENSE` 文件。确定后将在此处说明。
+提交变更前运行涉及模块的 [检查命令](DEVELOPMENT.md#验证命令)。报告问题时请附复现步骤、环境和脱敏日志。

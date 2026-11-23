@@ -1,31 +1,17 @@
 # 后端外部配置
 
-复制 `application-local.yml.example` 为同目录的 `application-local.yml`，填写 MySQL、Redis及需要启用的相机配置，再使用 local profile 启动。实际文件被 Git 忽略，公开示例不包含可用凭据。完整安装步骤见[快速开始](../../README.md#快速开始)；完整初始化 SQL 仅用于空库，已有库须定向升级。
-
-## 启动标识
-
-后端启动时显示项目自带的 SF / StreamFusion AI 文本标识，维护位置为 `src/main/resources/banner.txt`，不需要额外启动参数；Spring Boot 与 Java 版本由框架填入。它只影响启动输出，不影响登录页、服务名称、日志格式或健康检查。
-
-如需使用部署环境自己的文本图案，在既有外部配置中指定文件即可；文件须由服务账号可读，不要包含密钥：
-
-```yaml
-spring:
-  banner:
-    location: file:./config/banner.txt
-```
-
-去掉该覆盖即恢复项目标识。使用框架原生 `SPRING_MAIN_BANNER_MODE=off` 可关闭输出；独立 preview-node 不启动 Spring，不显示此标识。
+复制 [application-local.yml.example](application-local.yml.example) 为同目录的 `application-local.yml`，填写 MySQL 与 Redis 后使用 `local` profile 启动。配置文件以 API 工作目录为准，也可用 `LOCAL_CONFIG_PATH` 指定绝对路径。首次安装使用 [快速开始](../../README.md#快速开始) 和 [完整初始化 SQL](../sql/streamfusion-mysql.sql)。
 
 ## 必需部署配置
 
-通过既有外部 `application-local.yml` 或环境配置提供，真实密钥不入 Git：
+相机档案需要持久 AES 密钥。设备探测、平台导入和预览取流还需要明确批准的目标网段或域名。将配置放在受保护的外部文件中。
 
 ```yaml
 platform:
   camera:
     active-key-id: camera-v1
     keys:
-      camera-v1: "<安全生成的32字节随机值，Base64编码>"
+      camera-v1: "<32 字节随机值的 Base64 编码>"
     network-policies:
       factory:
         name: 工厂摄像机网段
@@ -33,48 +19,33 @@ platform:
         hosts: []
 ```
 
-示例网段必须换成实际批准目标。`hosts` 仅允许显式批准的完整域名。保存配置不执行设备探测；发现及预览定位的外呼解析并校验全部DNS结果，以已验IP建立连接，ONVIF返回地址同样受出站策略约束。ZLM拉流前同样检查解析后的RTSP地址。
-
-使用 JDK AES-256-GCM 保护账号密码及 RTSP path/query；AAD 绑定来源/凭据或 Profile，随机 nonce 每次独立。主密钥通过用途标签派生存储加密、会话绑定、创建指纹和确认签名用密钥。持久密钥是档案加密及幂等回执的前提；网络策略限制读取、扫描、导入及预览取流目标，手工DEVICE建档不要求联网策略。不自动生成临时业务密钥。
-
-轮换先加入新 keyId 并切换 active-key-id；旧密钥必须保留到所有旧密文已迁移且旧创建回执已过期。当前未提供自动批量重加密工具，因此不能删除仍有数据引用的旧密钥。数据库备份必须与密钥备份配套，只有数据库无法恢复凭据。
+将示例网段替换为实际批准范围。`hosts` 仅填写完整域名。服务会校验出站地址，包括设备返回的 RTSP 地址及域名解析结果。密钥轮换时保留旧 keyId，直到所引用的密文已经迁移且原创建回执到期。
 
 ## 预览配额与重启清理
 
-独立 ZLM 直连与原预览节点包是两种入口。Platform 可从 Ops 已发布的 ZLM 目录引入，也可在“预览节点”手工登记专用 ZLM 的内网 IP、HTTP API 端口和 secret。普通页面不要求节点 ID、控制 HTTPS 地址或证书指纹；这些是节点包高级配置。直连 ZLM 的 secret 由 Platform 写入服务账号私有目录 `~/.streamfusion/preview-zlm-secrets`，首次使用自动创建，不回显，也不依赖节点包的机器令牌目录。此目录含持久接入密钥，须备份且不要当临时日志清理。若设置 `SF_PREVIEW_NODE_CREDENTIAL_DIRECTORY`，则改用该绝对目录，目录须预先存在且允许 Platform 写入；它也供节点包高级登记和 Ops 引入使用。预检要求 ZLM `rtsp.directProxy=0`、`api.apiDebug=0`、`general.streamNoneReaderDelayMS>=20000`、有效 WebRTC 端口及媒体地址；`http.allow_ip_range` 按 Platform **实际出口 IP**设置，不能拿 ZLM 登记地址代替。Ops 配方见[独立 ZLM 安装说明](../../operations/zlm-direct/README.md)。直连首期只接 H.264 无转码流，转码预算固定 0；需转码时在清理确认后回到本机或节点包。浏览器 WebRTC 可达性需要另行试播。
+本机 ZLM 从 [媒体环境示例](../src/main/resources/media-runtime.example.yml) 配置搜索目录、可执行文件和配置文件。可用 `SF_MEDIA_RUNTIME_ROOTS` 设置搜索根。启动 ZLM 后在管理端「服务信息」检测并选择对应运行时，确认浏览器可访问 WebRTC 媒体端口。
 
-预览扩容时，Platform 可从已部署的 Ops 预览实例目录引入节点。默认关闭；本机预览不需要 Ops。启用时，在 Ops `serve` 添加 `--platform-token-file <受保护服务身份文件>`，Platform 设置 `SF_PREVIEW_OPS_BASE_URI`（Ops 地址）、`SF_PREVIEW_OPS_TOKEN_FILE`（同一服务身份文件在 Platform 上的绝对路径）和 `SF_PREVIEW_NODE_CREDENTIAL_DIRECTORY`（Platform 保存节点机器凭据的受保护绝对目录）。Ops 与 Platform 不在同一台机器时，应通过受保护通道分别提供身份文件；非回环地址必须使用受信任 HTTPS。页面只选择 Ops 已发布的预览实例，不显示服务身份或机器令牌；引入后仍需显式启用调度。节点部署步骤见[Ops 说明](../../operations/preview-nodes.md)。
+| 本机配置 | 默认 | 范围 |
+| --- | --- | --- |
+| `SF_PREVIEW_MAX_SESSIONS` | 64 | 1～64 个观看会话 |
+| `SF_PREVIEW_MAX_TRANSCODES` | 64 | 0～64 个独立转码输出，0 禁止新转码 |
 
-`SF_PREVIEW_MAX_SESSIONS` 为本机执行节点的观看会话上限，默认64，允许1～64；`SF_PREVIEW_MAX_TRANSCODES` 为本机独立转码输出预算，默认64，允许0～64，0禁止新转码。页面将连接和受控恢复按最多4路排队，取消窗口会移除待启动项；服务端也最多同时初始化4路预览，服务端等待计入18秒创建总期限，不同时启动64个拉流或转码进程。预算是准入配置，不是服务器承载保证；部署时应分别验证媒体服务、网络、编码器和浏览器解码。已有显式配置仍优先于默认值。
-
-默认使用本机 ZLM，观看会话仍由单个平台进程管理。同 Profile、连接版本及 ZLM 运行时的观看者共享摄像机侧上游；需要转码时，同上游、同编码配置共享一个转码输出。每位观看者保留独立授权出口，关闭或撤权不影响其他观看者；最后一位退出后确认转码及流均已停止才释放占位。连接或运行时配置变化时，旧源责任未清空不得创建新代次；先排空受影响节点，不修改正在播放的输出。不要通过复制 API 实例绕过此配额。
-
-预览拉流及转码责任记录保存在工作目录中。重启后根据记录清理旧流，不恢复旧会话，用户需重新打开预览。待清理、损坏或运行时无法核实时会阻止相应新建操作；不要直接删除记录来解除阻塞。保留工作目录、原运行时配置及日志，先检查原 ZLM 可达性和诊断原因码。
+同 Profile 的观看者可共享摄像机上游，同配置的转码也可复用。配额需要按服务器、媒体和网络实测设置。重启后旧流由平台按工作目录中的记录清理，用户需重新打开预览。清理未确认时，保留记录并检查原 ZLM 可达性和诊断码。
 
 ## H.265 预览转码配置
 
-本机模式使用所选 ZLM；H.264 可直通，浏览器不支持 H.265 时才占用转码预算。软件编码使用 [libx264配置片段](zlm-preview.ini.example)，NVIDIA硬件编码使用 [NVENC配置片段](zlm-preview-nvenc.ini.example)，选一份合并到实际加载的 ZLM `config.ini`，不要覆盖整份文件，也不要把它作为 Spring 配置导入。先备份，保留端口、密钥和网络绑定；`ffmpeg.bin` 必须与平台选中的 FFmpeg 是同一文件，当前网关要求路径不含空格。
+本机预览可按需将 H.265 转成 H.264。软件编码使用 [libx264 片段](zlm-preview.ini.example)，NVIDIA 硬件编码使用 [NVENC 片段](zlm-preview-nvenc.ini.example)。选择适用片段合并到 ZLM 实际加载的 `config.ini`，保留端口、密钥和网络配置。`ffmpeg.bin` 必须与平台选中的 FFmpeg 一致，当前网关要求路径不含空格。
 
-网关允许H.264编码器 `libx264`、`h264_nvenc`、`h264_qsv`、`h264_amf`，沿用相同的持久占位、超时及退出核对流程；QSV/AMF需按实际FFmpeg和驱动配置，不直接套用NVENC参数。NVENC模板使用硬件编码、软件解码，不代表GPU解码或推理能力。先用所选FFmpeg的 `-h encoder=h264_nvenc` 核对选项，并实际编码验证驱动可用。硬件初始化失败会返回诊断信息，不静默创建另一套软件转码进程。64路不同H265源需要64份编码资源，64位观看者看同一源则可共享一份，二者不能混为容量承诺。
+网关允许 `libx264`、`h264_nvenc`、`h264_qsv`、`h264_amf`。QSV 与 AMF 按实际驱动配置。应用配置后检查 FFmpeg 日志、浏览器解码和播放关闭后的资源回收。
 
-模板强制本机 RTSP 使用 TCP，去掉直播输入的 `-re`，限制软件线程，输出无 B 帧、无 lookahead 的 H.264 Baseline/yuv420p；不强制缩放或改变帧率。关键帧间隔40帧，在20fps输入时约2秒；软件模板使用CRF23、最高码率6M、VBV缓冲3M，NVENC模板使用CBR3M、VBV缓冲3M。这是常见1080p预览基线，不是任意分辨率、帧率或服务器的承载保证。`protocol.paced_sender_ms=20` 用于平滑突发帧，可能增加缓冲和CPU/内存消耗，20ms并非端到端延迟。
+## 按需增加预览节点
 
-可通过 ZLM 的 `setServerConfig` 更新已存在的 `ffmpeg.cmd` 和 `protocol.paced_sender_ms`，再用 `getServerConfig` 回读确认。运行配置是否可热更新以所用版本为准；未生效时不要自行中断现有预览。模板只作用于随后新建的转码，已打开画面需要关闭后重新打开；不要提高并发额度掩盖缺包或解码错误。注意保留 `rtp.lowLatency=0`，开启该选项可能破坏多 slice 的 H.264画面。
+默认使用本机。独立 ZLM 直连首期用于 H.264 无转码流，安装及权限要求见 [直连 ZLM 说明](../../operations/zlm-direct/README.md)。需要远程转码时使用 [独立预览节点包](../preview-node/README.md)。
 
-验收应同时查看 FFmpeg 缺包/解码日志、浏览器解码帧率和冻结统计，并确认关闭后进程/代理回收；检查已有 H.264 直通不受影响。若调整后退化，恢复备份中的两个配置值，回读确认并重新打开受影响的预览，不通过删租约记录释放资源。
+预览节点可从 Ops 已发布的实例引入。Ops 启动时配置 `--platform-token-file`，Platform 配置 `SF_PREVIEW_OPS_BASE_URI`、`SF_PREVIEW_OPS_TOKEN_FILE` 和 `SF_PREVIEW_NODE_CREDENTIAL_DIRECTORY`。非回环连接使用可信 HTTPS。引入后显式启用调度。高级登记入口可用 `SF_PREVIEW_NODE_CONNECTION_FILE` 读取受保护的连接 JSON。部署和引入步骤见 [Ops 节点说明](../../operations/preview-nodes.md)。
+
+节点凭据目录应提前创建并授权给 Platform。独立 ZLM 的默认持久密钥目录为 `~/.streamfusion/preview-zlm-secrets`，设定 `SF_PREVIEW_NODE_CREDENTIAL_DIRECTORY` 时使用指定目录。调整节点连接、证书或码率前先禁止接收新预览并确认资源清空。
 
 ## 备份与恢复
 
-数据库与持久密钥须配套备份，备份和真实配置不进入仓库。恢复前停止应用写入，在隔离环境验证结构、数据与旧密文可读性，再切换应用。回退应用版本时可保留新增的可空相机本地名称和备注列；删除字段会丢失用户编辑的资料。
-
-## 按需增加预览节点（S3）
-
-默认只启用本机，无需增加机器。每节点观看/转码配置保留64，单页仍最多64格；集群总预算按启用或尚有占用的节点汇总，本机旧环境参数继续作为本机上限。容量分源、观看、共享转码、启动中、入站和出口检查，CPU/内存仅是额外保护。
-
-按[节点部署说明](../preview-node/README.md)准备A/B。`SF_PREVIEW_NODE_CONNECTION_FILE`指向平台受保护目录的JSON，兼容单个连接对象或最多16个连接对象的数组；每项含nodeId、name、HTTPS控制地址、证书SHA256、mediaAddress及tokenFile绝对路径。机器凭据不进入数据库明文或页面；local保留给平台本机。
-
-优先通过“监控面板 → 预览节点”按 Ops 的服务器和已发布实例引入；原受保护 JSON 文件与手工登记是高级兼容入口。登记后由超级管理员设置优先级和预算并启用。默认本机priority=0、远程100，数字小的先用；新源容量不足再找其它节点。同源已有归属只复用原节点，已开始执行的请求与已有会话不跨机迁移。只停止受影响节点接收新预览、确认其资源归零后，才能更新地址/运行时/证书并重新登记。
-
-当前节点默认源/观看码率上界8192kbps、入/出口预算各655360kbps，预占按上界×1.25；这些是可调估值，不是硬件承载结论。远程平台预算不可高于节点配置，码率上界必须一致。降低数量预算不终止已有观看；修改码率上界须先清空该节点。节点持续高负载或实测码率超界仅阻止新准入。
-
-平台累计5张预览责任表，启动只读校验；新增或升级数据库按SQL说明定向执行，单机升级同样需要结构更新。远程节点无MySQL/Redis依赖；Ops 支持逐个部署、升级与回退预览实例，尚无批量部署。
+数据库、相机加密密钥和节点凭据应配套备份。恢复时先停止应用写入，在隔离环境核对结构、数据和旧密文可读性，再切换应用。真实配置与备份存放在仓库之外。

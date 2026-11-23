@@ -1,286 +1,51 @@
-# 开发基础约定
+# 开发指南
 
-本文说明工程配置、管理功能与验证方式。登录、系统管理前后端、操作记录和服务信息已有实现；视频推理、节点同步和生产部署仍待完成。
+## 本地环境
 
-## 本地环境检查
-
-从仓库根目录运行：
-
-```powershell
-.\scripts\doctor.ps1
-# 多版本环境可显式传入 -JavaHome <JDK目录> -NodePath <node.exe路径>
-```
-
-脚本只检查，不安装依赖、不修改全局环境、不停止进程。失败返回退出码 1。
-检查 JDK 21、Node 24.21.0、pnpm 10.34.5、Maven Wrapper、uv、
-前端依赖目录、两个 Python 3.12 解释器及 FastAPI 导入、Python 配置与默认端口占用。
-pnpm 检查禁用 Corepack 网络下载。端口占用为警告，可能是你已经启动的服务。
-它不是依赖完整性审计；安装锁文件、构建和启动测试仍需单独执行。
-
-IDEA 的项目 SDK、Maven 导入和运行 JDK 均选择 21。
-PyCharm 分别使用 `node-agent/.venv`、`runtime/.venv`，不要选择父目录或全局解释器。
-修改工具链后重新导入项目；终端检查通过不代表 IDE 自动选择了相同解释器。
+按 [快速开始](README.md#快速开始) 初始化并启动管理端，从根目录运行 `.\scripts\doctor.ps1` 检查工具链、依赖和默认端口。后端使用 JDK 21。Agent 和 Runtime 使用各自目录内的 Python 3.12 虚拟环境，安装与启动见 [算法节点说明](algorithm-node/README.md)。
 
 ## 配置入口
 
-### MySQL、MyBatis-Plus、Redis
+| 场景 | 配置入口 |
+| --- | --- |
+| 本地 API | 复制 `platform-api/config/application-local.yml.example` 为同目录的 `application-local.yml`，使用 `local` profile。可用 `LOCAL_CONFIG_PATH` 指定绝对路径 |
+| 共享开发 API | 使用 `dev` profile，设置 `DB_USERNAME`、`DB_PASSWORD`。Redis 默认回环地址、6379、库号 10 |
+| 部署 API | 使用 `prod` profile，显式设置 `DB_URL`、`DB_USERNAME`、`DB_PASSWORD`、`REDIS_HOST`、`REDIS_DATABASE`、`REDIS_PASSWORD`。默认 Redis 端口为 6379 |
+| 本地 Web | 需要修改代理目标时，将 [环境示例](platform-web/.env.example) 复制为 `platform-web/.env.local`，设置 `API_TARGET` 后重启 Vite |
 
-后端开发运行需要 MySQL 和 Redis。MyBatis-Plus 使用 Boot 3 专用 starter；
-MySQL 驱动、Redis/Lettuce 和 Spring Security 版本由 Spring Boot 管理。
-不重复引入 MyBatis starter；分页使用现有 MyBatis-Plus 插件，不创建无业务消费者的空 Mapper 或通用 RedisUtils。
+`SERVER_ADDRESS`、`SERVER_PORT` 默认是 `127.0.0.1:8080`。部署环境应使用已验证的数据库 TLS、最小权限数据库账号和认证 Redis，经 HTTPS 提供 API 与静态页面。prod 默认启用 `SF_AUTH_SECURE_COOKIE` 并关闭 `API_DOCS_ENABLED`。日志工作目录、会话时限和其他参数见 [公共配置](platform-api/src/main/resources/application.yml) 与 [prod 配置](platform-api/src/main/resources/application-prod.yml)。
 
-| 环境 | 连接来源 |
-|---|---|
-| dev | MySQL URL 默认本地 streamfusion，账号密码从 DB_USERNAME / DB_PASSWORD 注入；Redis 默认本机 6379、数据库 10 |
-| local | 被忽略的 platform-api/config/application-local.yml，适合个人连接配置 |
-| prod | 显式设置 DB_URL、DB_USERNAME、DB_PASSWORD、REDIS_HOST、REDIS_DATABASE、REDIS_PASSWORD；REDIS_PORT 默认 6379 |
-| test | 仅测试资源中的 H2 内存数据库；Redis 健康检查关闭，不连接个人 Redis |
+新安装执行 [完整 SQL](platform-api/sql/streamfusion-mysql.sql)。开发者修改 [逐表 SQL](platform-api/sql/业务/) 后，从仓库根目录运行 `./scripts/export-sql.ps1`，由脚本重新生成汇总。启动时只读检查必需表和字段。MySQL 业务时间使用 Asia/Shanghai，JDBC 配置保持同一时区。见 [SQL 指南](platform-api/sql/README.md)。
 
-标准覆盖入口为 Spring 配置；不使用 REDIS_URL，避免 URL 中数据库号覆盖单独的 database 配置。
-普通开发变量为上述 DB_* / REDIS_*；local 文件中可直接修改连接参数。
-表结构只维护 platform-api/sql/业务 中的30份逐表文件，platform-api/sql/streamfusion-mysql.sql 由 scripts/export-sql.ps1 自动生成，包含完整结构与种子。新安装只执行这一个文件；保留已有数据的处理见 [SQL 指南](platform-api/sql/README.md#已有数据库)。
-首次运行前，按 [SQL 指南](platform-api/sql/README.md)手动初始化专用空库；应用不自动建库、建表或升级。
-脚本先 DROP 再 CREATE，会清空目标表；已有数据的库禁止用它升级。本地已经初始化的数据库无需重导。
-SQL 仅初始化内置角色、管理 PAGE 及可调整的示例组织，不包含默认用户或固定密码哈希。首次账号由下面的非 Web 引导创建。
-
-从示例复制 local 文件并填写连接信息后，使用：
-
-```powershell
-.\scripts\start.ps1 api -Profile local
-```
-
-实际 local 文件不提交、不进入 JAR。公共示例不放真实 MySQL 账号密码。
-示例 JDBC 的关闭 TLS、公钥获取参数只供本机开发；生产使用最小权限数据库账号及经验证的 TLS。
-Redis 无密码仅适用于受控本机开发；不要将无认证 Redis 暴露到公网。
-
-会话使用 `streamfusion:<profile>:session:v2` 命名空间。升级至当前目录结构后，旧会话不再读取，用户需重新登录；无需清空 Redis，旧键按原期限过期。
-
-数据库连接池上限 10，连接等待 3 秒；Redis 连接/命令超时均 3 秒，
-MyBatis 默认语句超时 5 秒。spring.sql.init.mode=never，SQL 不打包到应用 JAR，无 Redis 启动写入。
-平台默认时区为 Asia/Shanghai（UTC+8）。Java 启动入口和 Jackson 默认时区使用 Asia/Shanghai，
-MySQL 连接池执行 SET time_zone='+08:00'，H2 测试使用等价命令。
-JDBC URL 的 connectionTimeZone 也应为 Asia/Shanghai（含生产 DB_URL），不能再覆盖为 UTC。
-这只影响本项目连接，不修改 MySQL 全局或操作系统时区。DATETIME 业务字段按北京时间存储；
-历史 UTC 数据不能只改配置，需要核查后停写转换；新库不得重复加8小时。详见 SQL 说明。
-/actuator/health 检查数据库与 Redis 连通性，失败返回 DOWN/503，且不公开连接细节。
-普通启动和管理员引导会只读检查业务表及必要列，缺项时报告名称和 SQL 指南后停止；不会执行建表、迁移或种子修复。检查不要求已运行数据库保留固定菜单或部门，也不验证列类型、索引及外键。健康检查仅报告依赖连通性，初始化种子和登录业务仍须分别核对。
-
-普通 `mvnw.cmd verify` 无需本机数据库，H2 检查管理业务、组件装配、汇总 SQL 建表/重建与约束，不证明 MySQL 排序规则、JSON 类型或并发行为完全兼容。
-真实本地连接检查需明确启用，只有 SELECT 1 与 Redis PING，不写数据：
-
-```powershell
-# 在 platform-api 目录执行，先确认 local 文件中的目标
-.\mvnw.cmd "-Dtest=LocalInfrastructureTest" "-Dsf.test.localInfrastructure=true" test
-```
-
-汇总生成、重建限制和真实 MySQL 元数据检查见 [SQL 指南](platform-api/sql/README.md)。
-其中 LocalSchemaInspectionTest 只读检查本机现有表、字段、账号唯一约束和排序规则等断言，不执行初始化或任何写操作；并非完整结构差异工具。
+相机密钥、出站网络、ZLM 预览和备份见 [后端外部配置](platform-api/config/README.md)。图床端点使用独立白名单 `SF_STORAGE_ALLOWED_ENDPOINTS`，默认允许回环 8333，服务端访问地址须由运维批准。
 
 ### 首位管理员初始化
 
-使用已构建的 JAR 和完成初始化的数据库。`--bootstrap-admin` 强制使用非 Web 模式，结束后退出；普通 API 启动不会创建账号。用户表非空或已经存在成功引导记录时拒绝再次引导。
-
-默认账号方式见 [README 的初始化命令](README.md#4-初始化数据库与首位管理员)：使用 `--platform.bootstrap.default-admin=true`。dev/local 默认账号为 `admin`、临时密码为 `StreamFusion@123`；可通过 `SF_AUTH_INITIAL_PASSWORD` 覆盖开发默认值，或用 `SF_BOOTSTRAP_PASSWORD` 单独覆盖本次引导。prod 须显式提供引导密码。创建后必须首次改密；已有账号不受默认值变更影响。真实密码不要写入 SQL、启动参数或仓库。
-
-需要自行输入账号、昵称和强密码时，在 `platform-api` 目录的交互终端执行：
+使用已初始化的数据库和构建完成的 API JAR。以下在 `platform-api` 的交互式终端执行。
 
 ```powershell
 java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=local --bootstrap-admin
 ```
 
-交互入口创建正常状态账号，密码须满足运行期规则：默认 8～64 位，同时包含大写、小写字母、数字和特殊字符，禁止空白及控制字符。它要求可读取密码的控制台，不适合无交互的管道输入。
-
-| 配置 / 环境变量 | 默认值 | 用途 |
-|---|---|---|
-| platform.bootstrap.username / SF_BOOTSTRAP_USERNAME | admin | 默认账号方式的登录名 |
-| platform.bootstrap.nickname / SF_BOOTSTRAP_NICKNAME | 超级管理员 | 默认账号方式的显示名 |
-| platform.bootstrap.department-id / SF_BOOTSTRAP_DEPARTMENT_ID | 2002 | 两种引导方式共用的初始部门 ID；默认关联示例研发部门 |
-| SF_BOOTSTRAP_PASSWORD | dev/local 缺省沿用初始密码；prod 必填 | 本次默认管理员引导密码 |
-| platform.auth.initial-password / SF_AUTH_INITIAL_PASSWORD | dev/local 为 StreamFusion@123；prod 必填 | 后续新建/重置普通用户使用，成功响应仅当次返回临时密码；首次登录须改密 |
-
-不需要初始部门时，在任一引导命令后加 `--platform.bootstrap.department-id=`，或在私有配置中将该项设为空。指定的部门不存在时引导整体失败，不留下半个账号。账号、SUPER_ADMIN 关联、全部 PAGE 关联、可选部门关联和引导审计在同一事务中保存。
-
-示例组织“飞云科技公司 / 研发部门 / 运维部门”只是 SQL 初始数据，可通过部门 API 改名、移动，解除成员和子部门引用后删除。超级管理员可以调整本人及其他超管的部门归属；普通新建用户不自动关联部门。部门仅表示组织归属，不参与授权，也没有主部门。
+引导执行一次并退出，用户表非空或已成功引导时会拒绝。用 `--platform.bootstrap.department-id=` 留空初始部门。非交互引导使用 `--platform.bootstrap.default-admin=true`，由 `SF_BOOTSTRAP_USERNAME`、`SF_BOOTSTRAP_NICKNAME`、`SF_BOOTSTRAP_DEPARTMENT_ID`、`SF_BOOTSTRAP_PASSWORD` 控制，以这种方式创建的账号首次登录需改密。普通用户新建、重置使用 `SF_AUTH_INITIAL_PASSWORD`。部署环境显式提供引导密码和普通用户初始密码。
 
 ### 登录与模块授权
 
-认证采用 Spring Security、Spring Session Redis 与 `SF_SESSION` Cookie；Cookie 带 HttpOnly、SameSite=Lax。dev/local 允许本机 HTTP，prod 默认启用 Secure Cookie，应通过 HTTPS 访问。空闲超时默认 30 分钟、绝对时长默认 8 小时；连续第 5 次登录失败锁定 15 分钟。改密、重置或封禁后，数据库会话版本使旧会话失效。
+浏览器使用 Redis 会话、Cookie 和 CSRF。集成时先取 `GET /auth/csrf`，以同一 Cookie 调用 `POST /auth/captcha` 和 `GET /auth/login/challenge`，按现有实现加密后调用 `POST /auth/login/secure`。成功后重新获取 CSRF，写请求携带新 CSRF 和 Cookie。查看接口文档需登录并拥有 `api-docs` 页面权限。见 [前端加密实现](platform-web/src/api/auth/cipher.ts)。
 
-API 客户端需按以下顺序对接：
-
-1. `GET /auth/csrf`，保存 Cookie 及响应 `data.headerName`、`data.token`。
-2. 携带 CSRF 和 Cookie 调用 `POST /auth/captcha`，得到 `captchaId`、`expiresAt`、站内 `imageUrl`；以同一 Cookie 读取 PNG 图片。验证码包含 5 位字母数字，大小写不敏感，有效期两分钟。
-3. `GET /auth/login/challenge` 获取一次性挑战，按前端 `src/api/auth/cipher.ts` 使用 ECDH P-256、HKDF-SHA256、AES-GCM 一同加密 `username`、`password`、`captchaId`、`captchaAnswer`，再 `POST /auth/login/secure` 提交密文、携带 CSRF 与 Cookie。
-4. 登录会轮换会话和 CSRF；重新请求 `/auth/csrf`，再读取 `GET /auth/me`。待改密账号只允许本人信息、改密和退出等入口。
-5. 写请求继续携带最新 CSRF 令牌和 Cookie。`PUT /auth/password` 改密成功后重新登录；`POST /auth/logout` 撤销当前会话。
-
-每个匿名会话在 Redis 中只有一个有效验证码。换图原子替换旧码；校验时原子消费，答案错误或后续账号密码错误均不能重复使用；迟到的旧码请求不能消耗新码。前端在登录失败后清空验证码输入并重新取图。图片与发行响应均禁止缓存，接口不返回文本答案；验证码错误返回 `CAPTCHA_INVALID`。生成图片和读取资源受限流保护，Redis 故障时明确失败。验证码无需新增数据库表，生产仍须使用 HTTPS。
-
-同一账号只允许一个有效登录。新登录在账号行锁中递增 `session_version`，将旧登录记录标记为 `REPLACED`；Spring Session 最终保存成功后才提交登录 SQL，保存失败不撤销旧登录。`GET /auth/session` 只读检查有效性，不刷新空闲时限；前台每次检查完成后间隔 15 秒再请求，隐藏标签暂停。
-
-旧登录返回 `SESSION_REPLACED`，管理员强退返回 `SESSION_FORCED_LOGOUT`。统一响应中的安全详情用于登录页弹窗，包含结束时间、新登录时间及来源摘要。`GET /auth/csrf` 会将撤销身份清理为匿名状态，支持首次正确重新登录。用户强退接口为 `POST /user/{id}/force-logout`，要求 user 模块权限、CSRF 和 `If-Match`，仍校验本人/超级账号保护。强退写入 `USER_FORCE_LOGOUT` 审计，不禁用账号。
-
-`GET /actuator/health`、CSRF 和登录入口公开；开启文档时 `/v3/api-docs`、`/swagger-ui.html` 可访问，prod 默认关闭。Swagger UI 不代替会话登录或 CSRF 获取。未知业务入口默认拒绝；未登录返回统一 JSON 401，缺少 CSRF 的写请求返回 403，不启用表单登录、HTTP Basic 或默认随机密码用户。
-
-管理模块使用“用户 → 有效角色 → 有效 PAGE 及祖先 → module_key”授权。普通管理者可通过其管理 PAGE 管理普通对象，授予自己尚未持有的页面；超级管理员身份授予/移除及本人敏感操作仍有对象保护。SUPER_ADMIN 默认拥有全部 PAGE 关系，新建 PAGE 在同一事务补齐它的关联；没有绕过菜单状态的角色名放行逻辑。
-
-管理 API 编辑使用单个 `version` 检查旧表单冲突，删除需要 `If-Match: "版本值"`。这是并发保护，不是业务版本历史。返回和错误沿用统一 `R` 与 `traceId`；管理审计保存对象及关系摘要，不记录密码或完整请求。管理前端与动态路由已接入，新增领域页面参见 [前端开发约定](platform-web/DEVELOPMENT.md)。
-
-### 登录记录与地域
-
-成功登录写入 `sys_login_record`，记录账号/昵称、来源地址、浏览器/系统类别，以及登录、活动和结束时间；不保存 Session ID 或会话凭据。本人可在个人中心查看，用户管理按相应用户权限查询目标账号。浏览器和系统类别来自客户端声明，不能作为设备身份的证明。
-
-公网地域使用本地 ip2region 数据。首次克隆不带二进制数据库；可从仓库根目录运行 `.\scripts\install-ip-region.ps1`，核验下载后重启 API。固定来源、许可、文件校验和离线更新方法见 [安装说明](scripts/IP-REGION.md)。不安装或文件不可读时，登录与记录继续工作，无法识别的地址显示未知地域；运行期不调用外部地域服务。
-
-| 配置 / 环境变量 | 默认值 | 用途 |
-|---|---|---|
-| platform.login-record.activity-interval / SF_LOGIN_ACTIVITY_INTERVAL | 60s | 活动时间写入节流，允许 10s～5m |
-| platform.login-record.ipv4-database / SF_IP_REGION_V4_DB | .run/ip-region/ip2region_v4.xdb | IPv4 离线数据文件，相对 API 工作目录 |
-| platform.login-record.ipv6-database / SF_IP_REGION_V6_DB | .run/ip-region/ip2region_v6.xdb | IPv6 离线数据文件，相对 API 工作目录 |
-| platform.login-record.local-networks | 空列表 | 可选内网 CIDR 和展示名称；最多 64 项，不改变来源 IP 的信任规则 |
-
-例如在私有 local 配置中可增加 `platform.login-record.local-networks: [{cidr: "10.20.0.0/16", name: "研发网络"}]`。这仅为地域展示标签，不授予权限，也不表示该网段可信代理。
+管理权限按用户、有效角色和启用的页面关系判断。并发编辑沿用 `version` 或 `If-Match`，错误通过统一响应及 `traceId` 定位。动态页面和前端接口约定见 [前端开发说明](platform-web/DEVELOPMENT.md)。
 
 ### IP 登录防护
 
-同一规范化 IP 在十分钟窗口累计二十次登录失败后写入 `sys_ip_block`。封禁无到期时间，应用或 Redis 重启不会解除。成功登录不清除同一 IP 的失败累计；原账号五次连续失败锁十五分钟的保护继续生效。封禁后拒绝登录与业务接口，已有会话同样受限；健康检查、退出及用于退出的 CSRF 获取保留。
+`SF_IP_GUARD_ENABLED` 默认启用。默认同一来源 IP 十分钟内二十次失败后封禁，由未封禁地址的超级管理员从「监控面板 → 操作记录 → IP 封禁」解除。阈值通过 `SF_IP_FAILURE_THRESHOLD` 和 `SF_IP_FAILURE_WINDOW` 配置，登录资源限频通过 `SF_IP_RESOURCE_LIMIT` 和 `SF_IP_RESOURCE_WINDOW` 配置。
 
-超级管理员须从未封禁的地址进入“监控面板 → 操作记录 → IP 封禁”，查询并确认解除。查询和解除接口同时检查 `audit` PAGE 与 SUPER_ADMIN 身份，普通操作日志查看者没有解封权限。解除使用 `If-Match` 防止旧记录覆盖，新世代使解除前的未完成登录尝试不能再次封禁。封禁与解除写入操作记录。
-
-| 环境变量 | 默认值 | 用途 |
-|---|---|---|
-| SF_IP_GUARD_ENABLED | true | 启用来源防护；普通测试显式关闭，专项测试显式开启 |
-| SF_IP_FAILURE_THRESHOLD | 20 | 同一 IP 的失败阈值 |
-| SF_IP_FAILURE_WINDOW | 10m | 失败计数窗口，修改不解除已封禁地址 |
-| SF_IP_RESOURCE_LIMIT | 120 | 同一 IP 的 CSRF、登录挑战及提交共享请求上限 |
-| SF_IP_RESOURCE_WINDOW | 1m | 请求计数窗口；超过返回 429 与 Retry-After，不单独生成永久封禁 |
-| SF_TRUSTED_PROXIES | local 为 127.0.0.1,::1；dev/prod 为空 | 逗号分隔的可信代理精确 IP，最多 32 个，不使用任意来源通配 |
-
-失败计数、资源限频及挑战一次性消费由 Redis 原子操作完成；故障返回依赖不可用，不静默放行。失败窗口为首次失败起计的固定窗口。每个挑战只允许成功领取一次，凭据从日志与审计中排除。前端已登录的密码表单从 `GET /auth/password-policy` 获取实际规则，按 Unicode 码点计数，服务器仍作最终校验。
-
-**代理配置：** 默认使用 TCP 对端 IP，只在对端命中可信代理列表时解释 `X-Forwarded-For`，从右向左寻找首个不可信来源。Vite 开发代理将客户端传入的来源链覆盖为实际 socket 地址，并删除 `Forwarded` 和 `X-Real-IP`。生产边缘代理也必须清理外部来源头，后端仅信任真实代理地址；不要将客户端网段加入代理白名单。否则会将多人错误合并到代理 IP，或允许伪造来源。IP 封禁与账号锁定只是登录防护，不表示已实现恶意软件检测或流量攻击防御。参见 [Spring Boot 代理说明](https://docs.spring.io/spring-boot/3.5/how-to/webserver.html)及 [OWASP 认证防护](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html)。
-
-**应急恢复：** 优先由另一未封禁地址的超级管理员在页面解除。所有管理员共用被封禁出口时，由有数据库权限的运维备份目标记录，核实 `source_ip`、`id` 与 `version` 后，在维护事务内定向更新该行 `status='RELEASED'`、`unblocked_at=当前北京时间`、`unblocked_by=NULL`、`version=version+1`，更新条件必须同时匹配原 id、version、BLOCKED，并确认仅一行。保留工单及前后记录；直接数据库恢复不会自动写应用审计。不删除整表、不重置其他 IP、不将关闭防护作为常规解封操作。Redis 旧计数无需清除，新版本已隔离旧世代。
-
-### 安全关联与站内告警
-
-安全监测默认开启，使用现有可信代理规则解析来源 IP，在本机滑动窗口中关联登录失败、权限拒绝、未知路径探测、CSRF 异常及同源多类异常。它只产生待核查告警，不改变既有账号锁定和 IP 封禁规则，也不检查所有请求正文或提供完整入侵检测。
-
-具有有效 `audit` 页面权限的超级管理员可从顶部“安全告警”或“操作记录 → 安全告警”查看详情、JSON 与关联请求标识。页面可见时每 20 秒检查摘要并提示新增告警，首次打开只建立基线，不重放历史通知；退出、撤权、隐藏页面时停止相应轮询。摘要接口从 Redis 只读读取会话，不延长空闲时间。
-
-| 配置项（`platform.security-monitor` 下） | 默认值 | 说明 |
-|---|---|---|
-| enabled | true | 可用 `SF_SECURITY_MONITOR_ENABLED=false` 关闭关联监测；原有登录防护仍生效 |
-| window | 5m | 滑动关联窗口，允许 1～30 分钟 |
-| cooldown | 5m | 同 IP 同规则合并时间，须不小于窗口且不超过 1 小时 |
-| login-threshold | 8 | 窗口内登录或验证码失败次数 |
-| denied-threshold | 10 | 窗口内权限拒绝次数 |
-| scan-threshold | 12 | 未知路径被拒绝次数，同时至少命中 8 个不同路径；调低阈值时路径数取二者较小值 |
-| csrf-threshold | 5 | 窗口内 CSRF 失败次数 |
-| mixed-threshold | 12 | 至少三类异常且达到总次数 |
-
-各次数阈值允许 3～100。除启用开关外，可在现有运行配置中按上述属性名覆盖，例如 `--platform.security-monitor.login-threshold=12`。应按真实出口规模调整阈值，共用 NAT 出口可能把不同用户关联在一起。
-
-告警保存在 `${streamfusion.work-dir}/security/alerts.json`，最多 1000 条、7 天，每 5 秒内合并保存一次；强制终止可能损失尚未保存的最新摘要。采用原子替换和目录写锁，`alerts.pending` 仅保留一个暂存文件。不能让多个实例共用同一 work-dir；本机文件需由运维限制访问。窗口计数与冷却状态在重启后重建，历史告警恢复；多实例之间不汇总。
-
-队列容量 1024、来源上限 2048、每来源窗口最多 128 个事件。丢弃、淘汰、截断、处理失败和保存状态在页面展示；损坏或无法读取的旧文件不会被覆盖。诊断入口为日志中的 `Security alert id=... rule=... sourceIp=... traceId=...` 以及告警 JSON。不记录密码、Cookie、Token、请求正文、查询串、原始路径或提交的账号名；来源 IP、经验证的用户 ID、事件分类和少量 traceId 仅供上述管理员查看。
-
-新增 `GET /audit/security-alerts/page?page=1&size=20` 和只读 `GET /audit/security-alerts/feed`，统一响应仍为 `R`。没有数据库迁移、外部消息发送、邮件/飞书通知或自动封禁联动。没有管理员页面在线时仍生成并保存告警，站内提示在下次查看时通过列表和计数呈现。
-
-### 服务信息与接口文档
-
-服务信息使用异步采集和有界缓存，包含 JVM、主机可见资源及明确配置的服务端口。端口可连接不等于业务健康；Agent/Runtime 的 TCP 可达也不表示视频链路已实现。GPU 数据依赖本机可执行的 `nvidia-smi`，没有 NVIDIA 环境时显示不可用。
-
-| Spring 配置 | 默认值 | 用途 |
-|---|---|---|
-| platform.server-monitor.cache-ttl | 30s | 成功采集缓存，允许 5s～5m |
-| platform.server-monitor.probe-timeout | 500ms | 单项网络端口探测等待，允许 100ms～2s |
-| platform.server-monitor.collection-timeout | 6s | 本轮采集返回期限，允许 2s～10s |
-| platform.server-monitor.web-host / web-port | 127.0.0.1 / 8090；prod 端口 0 | 可通过 SF_MONITOR_WEB_HOST / SF_MONITOR_WEB_PORT 覆盖 |
-| platform.server-monitor.agent-host / agent-port | 127.0.0.1 / 8100 | Agent 探测目标，未部署时端口可设为 0 |
-| platform.server-monitor.runtime-host / runtime-port | 127.0.0.1 / 8101 | Runtime 探测目标，未部署时端口可设为 0 |
-| platform.server-monitor.gpu-enabled | true | 是否执行本机 NVIDIA GPU 查询 |
-
-监控面板内的接口文档页面要求 `api-docs` PAGE 权限，先读取 `GET /api-docs/status`，文档与 Swagger UI 均启用时嵌入当前后端文档。页面仅用于浏览，未开放接口调试；原始 `/v3/api-docs`、`/v3/api-docs.yaml` 和 `/swagger-ui` 资源同样要求有效登录及 `api-docs` 模块权限，prod 默认关闭。
-
-### 图床管理
-
-图床页面通过后端 `/storage` 接口管理 SeaweedFS 的 S3 实例和纳管范围，要求有效 `storage` PAGE 权限。密钥沿用相机凭据加密配置，响应不返回明文。`SF_STORAGE_ALLOWED_ENDPOINTS` 是独立的服务端地址白名单，默认仅允许 `http://127.0.0.1:8333,http://localhost:8333`；其他地址须由运维显式配置，不能用相机网络策略代替。
-
-新库使用逐表源生成的完整 SQL。已有库升级须先备份并核对实际结构，按顺序评估 `sql/升级/20261022-storage-management.sql`、`20261022-storage-console.sql`、`20261022-storage-history-policy.sql`；已包含的表或列不要重复执行，禁止重放初始化脚本。应用启动只读检查结构，不自动迁移。
-
-文件上传上限 20 MiB，同名文件拒绝覆盖。手动删除使用确认时的文件身份和条件请求；结果不明时停止，不能自动重试。目录删除仅处理已确认候选，自动清理仍只提供候选预览。记录保留策略默认关闭，只清理任务等元数据，不删除 S3 文件。在线状态表示最近一次范围访问检查结果，不代表持续监控。
-
-常规 `mvnw verify` 使用隔离 H2 和 HTTP 夹具，不读取真实 S3 凭据。本机专项须先准备 `127.0.0.1:8333` 和测试用 `streamfusion-evidence` Bucket，再在 `platform-api` 目录显式执行：
-
-```powershell
-$env:SF_STORAGE_LOCAL_ACCEPTANCE = 'true'
-$env:SF_STORAGE_LOCAL_S3_CONFIG = 'C:/test-secrets/seaweedfs-s3.json'
-.\mvnw.cmd '-Dtest=StorageLocalFileAcceptanceTest,StorageLocalFolderAcceptanceTest' test
-Remove-Item Env:SF_STORAGE_LOCAL_ACCEPTANCE, Env:SF_STORAGE_LOCAL_S3_CONFIG
-```
-
-凭据文件格式使用 SeaweedFS `identities[0].credentials[0]`，仅从环境变量指定的本地文件读取，不提交仓库。专项只创建和清理带随机 UUID 的测试前缀；数据库使用隔离 H2，测试回执写入被忽略的 `.run/storage-fix-10/`。
-
-### 应用配置
-
-后端继续保留 dev / local / prod / test 隔离。公共配置对象在
-[PlatformProperties.java](platform-api/src/main/java/com/streamfusion/platform/common/config/PlatformProperties.java)，
-环境专属端口和日志级别仍在对应 profile 中；真实 local 文件不提交。
-
-| Java 配置 / 环境变量 | 默认值 | 校验或边界 |
-|---|---|---|
-| server.address / SERVER_ADDRESS | 127.0.0.1 | Spring 地址绑定解析 |
-| server.port / SERVER_PORT | 8080 | 1–65535；仅 test 允许 0 |
-| streamfusion.work-dir / SF_API_WORK_DIR | .run | 可写目录或可写的现有祖先目录 |
-| streamfusion.shutdown-grace / SF_API_SHUTDOWN_GRACE | 15s | 1–120s，停机阶段等待 |
-| API_DOCS_ENABLED | dev/local 为 true，prod 为 false | 同时控制 /v3/api-docs 与 Swagger UI |
-| SF_AUTH_IDLE_TIMEOUT / SF_AUTH_ABSOLUTE_TIMEOUT | 30m / 8h | 会话空闲与绝对超时；绝对时长不得小于空闲超时且不超过 1 天 |
-| SF_AUTH_SECURE_COOKIE | dev/local 为 false，prod 为 true | 是否仅通过 HTTPS 发送会话 Cookie |
-
-服务信息控制器异步返回，并在其采集边界设置期限。相机、预览及 S3 调用分别在各自调用边界设置超时和资源上限，不使用通用无限重试。
-Java 日志系统在配置对象绑定前初始化，启动失败也可能生成日志目录。
-
-Python 各自在 `app/settings.py` 定义配置，在 `app/__main__.py` 启动进程。
-复制各目录 `.env.example` 为 `.env.local`（已有文件勿覆盖），然后在各目录运行：
-
-```powershell
-uv sync --locked
-uv run --locked python -m app
-```
-
-环境变量优先于该工程的 `.env.local`，再使用代码默认值。
-Agent 前缀为 `SF_AGENT_`，Runtime 为 `SF_RUNTIME_`。不互相加载配置或导入代码。
-
-| 配置后缀 | 默认值 | 校验 |
-|---|---|---|
-| HOST | 127.0.0.1 | IP 地址或 localhost |
-| PORT | Agent 8100 / Runtime 8101 | 1–65535 |
-| WORK_DIR | 工程目录/.run | 可写目录或可写祖先；相对路径基于所属工程目录 |
-| HTTP_KEEPALIVE_SECONDS | 5 | 1–120，连接空闲等待，不是推理执行时限 |
-| SHUTDOWN_GRACE_SECONDS | 15 | 1–120 |
-| LOG_LEVEL | INFO | DEBUG / INFO / WARNING / ERROR |
-| LOG_MAX_BYTES | 10485760 | 1024–104857600 |
-| LOG_BACKUPS | 5 | 1–10 |
-| DOCS_ENABLED | true | 控制 /docs 与 /openapi.json |
-
-配置错误会阻止正常启动。不认识的 dotenv 配置键也会报错。
-统一使用 `python -m app`，让启动参数与应用使用同一份配置。
-`app.main` 仅提供应用工厂，不再导出全局 `app`；旧的 `uvicorn app.main:app` 命令不再适用。
-部署时关闭不需要的 Python 文档；当前不存在认证或生产加固。
-
-前端仍使用被忽略的 `platform-web/.env.local` 中的 `API_TARGET`。
-不要把私密信息放进 `VITE_*` 变量，这类变量会进入浏览器包。
+反向代理须清理客户端自行提交的来源头，再传入真实来源链。后端的 `SF_TRUSTED_PROXIES` 仅填写实际代理 IP，使用逗号分隔。登录地域数据可选，见 [离线地域数据库](scripts/IP-REGION.md)。
 
 ### 前端生产访问路径
 
-开发模式下浏览器请求 `/api/...`，Vite 去掉 `/api` 后转发给 `API_TARGET`。生产构建保持同源根路径 API 契约，例如 `/auth/me`、`/menus` 和 `/api-docs/status`，不使用 `/api` 前缀。仅设置 `API_TARGET` 不会改变已构建页面的请求地址；`pnpm preview` 用于静态预览，不能替代完整 API 反向代理。
+开发代理去掉请求的 `/api` 前缀再转发。发布 `platform-web/dist` 时，静态服务器应把实际后端入口按原路径转发，例如 `/auth/`、`/cameras`、`/preview/`、`/storage/`、`/actuator/health`。Vue 路由后备规则应排在 API 代理之后。保留 Cookie、CSRF、`X-Trace-Id`、`If-Match` 和原响应状态。
 
-静态服务器需将实际后端入口（`/auth/`、`/user/`、`/roles`、`/menus`、`/departments`、`/audit/`、`/server/`、`/security/`、`/api-docs/status`、`/actuator/health`）转发到 API，并保持 Cookie、CSRF 请求头、`X-Trace-Id`、`If-Match` 与响应状态。开启接口文档时，还需转发 `/v3/api-docs` 及其子路径、`/v3/api-docs.yaml`、`/swagger-ui.html`、`/swagger-ui/`。这些原始文档和 Swagger 静态资源均要求有效登录及 `api-docs` 模块权限；不能由代理绕过后端鉴权或通过公共缓存直接返回。
-
-API 转发应先于 Vue 路由的 `index.html` 回退；失败的 API 请求不能回退成前端 HTML。`/api-docs.html` 和 `/api-docs.js` 是前端嵌入文档页的静态文件，仍由静态服务器提供。部署前验证登录、改密、刷新业务路由、错误响应以及 Cookie 的 HTTPS 属性；仓库未提供生产部署编排。
-
-前端 HTML 响应必须包含以下响应头。Vite 开发服务器及 `pnpm preview` 已设置；`dist` 是静态文件，部署时必须在实际静态服务器上配置这些头。例如在 Nginx 提供前端页面的 `server` 或 `location` 中设置（已有 CSP 时合并指令，检查嵌套 `location` 的头部继承）：
+在静态服务器设置下列响应头。开发与本地预览已设置相同头部。
 
 ```nginx
 add_header Content-Security-Policy "frame-ancestors 'self'" always;
@@ -289,68 +54,28 @@ add_header X-Content-Type-Options "nosniff" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 ```
 
-`frame-ancestors` 不能通过 HTML 的 CSP meta 标签生效。这里允许同源文档嵌入，阻止外部站点套用登录及业务页面；对登录页、业务路由回退页、`/api-docs.html` 都要验证实际响应。生产构建关闭 source map，但发布后的 JavaScript、接口路径和浏览器收到的数据仍可被查看，不能在前端保存服务器私钥或以代码混淆替代后端权限。
-
-## 日志与请求关联
-
-Java 输出带 +08:00 的北京时间文本日志；Python 的既有 UTC JSON 日志和跨服务协议暂不改动，共用字段语义：
-时间、level、service、traceId；请求结束记录 method、路由模板、status、durationMs。
-公共 ApiError/协议中的 Instant 仍按 UTC/Z 序列化以保持兼容；数据库本地日期时间转成 Instant 时必须显式指定 Asia/Shanghai。
-前端当前状态页的检查时间固定按 Asia/Shanghai 展示，不依赖浏览器所在时区。
-请求头 `X-Trace-Id` 只接收 32 位小写十六进制，不合法则重新生成并在响应头返回。
-前端自动生成请求标识，出错时显示错误码及标识，默认请求超时 5 秒，不自动重试。
-启动和停机等非请求日志的 traceId 为 `-`。
-服务信息异步响应显式保留原请求 traceId；其余线程不自动继承 MDC。当前尚未实现跨服务调用、通用线程上下文传播或分布式追踪。
-
-日志位置：各服务工作目录的 `logs/`。
-
-- Java：单文件滚动阈值 10MB，归档保留 7 天，归档总量上限 100MB（不含当前文件）。
-- Python：默认 10MiB 当前文件和 5 个备份；单条日志可能让阈值有少量超出。
-- 消息与异常文本分别最多 16KiB；文件、缓存、个人配置不进入 Git。
-- 不记录请求正文、原始查询串；访问日志使用路由模板。
-- 抑制 Python HTTP 客户端的 DEBUG/INFO 原始 URL 日志及 Uvicorn 默认 access log。
-- 对已知 password/token/secret/key、Bearer 和 URL 用户凭证进行脱敏。
-
-脱敏是补充保护，不能保证识别任意格式的秘密。业务代码仍不得主动记录凭证；
-新增第三方组件及 DEBUG 日志必须检查是否泄露信息。日志保留在本地不等于可以公开上传。
+`VITE_*` 会编译入浏览器包。登录、改密和路由刷新应在实际发布代理上验证。
 
 ## 验证命令
 
 | 工作目录 | 命令 |
-|---|---|
-| platform-api | `mvnw.cmd verify`（Linux/macOS：`sh mvnw verify`） |
-| platform-api，主动格式化 | `mvnw.cmd spotless:apply` |
-| platform-web | `pnpm lint`、`pnpm format:check`、`pnpm test`、`pnpm build` |
-| platform-web，主动格式化 | `pnpm format` |
-| 两个 Python 工程分别执行 | `uv run --locked ruff check app tests`、`uv run --locked ruff format --check app tests`、`uv run --locked mypy`、`uv run --locked python -m pytest -q` |
-| 仓库根目录 | `uv run --project algorithm-node/node-agent --locked python -m pytest contracts/tests -q` |
-| 仓库根目录 | `./scripts/export-sql.ps1 -Check` |
-| 仓库根目录，运行中的管理端 | `./scripts/check-health.ps1 -Services api,web` |
-| platform-web，Windows 启动器回归 | `pnpm test:dev-start` |
-| 仓库根目录，Windows API 启动器回归 | `./scripts/tests/api-start.test.ps1 -JavaHome <JDK21目录>` |
+| --- | --- |
+| `platform-api` | `mvnw.cmd verify` 或 `sh mvnw verify` |
+| `platform-web` | `pnpm lint`、`pnpm format:check`、`pnpm test`、`pnpm build` |
+| `algorithm-node/node-agent`、`algorithm-node/runtime` | 各运行 `uv run --locked ruff check app tests`、`uv run --locked mypy`、`uv run --locked python -m pytest -q` |
+| 仓库根目录 | `./scripts/export-sql.ps1 -Check`、`uv run --project algorithm-node/node-agent --locked python -m pytest contracts/tests -q` |
+| `operations` | `go test ./...`、`pnpm --dir web test`，构建入口见 [Ops 说明](operations/README.md) |
 
-默认后端测试使用 H2 与模拟会话，真实基础设施用例默认跳过。以下命令在 `platform-api` 目录执行，并先确认目标和配置：
+平台 API 的常规测试使用隔离 H2。要执行本机 MySQL 结构和依赖连通性只读检查，应先确认目标配置，再在 `platform-api` 运行：
 
 ```powershell
-# 本机 MySQL 结构检查 + MySQL/Redis 连通性检查，仅执行只读查询和 PING
 .\mvnw.cmd "-Dtest=LocalSchemaInspectionTest,LocalInfrastructureTest" "-Dsf.test.localSchema=true" "-Dsf.test.localInfrastructure=true" test
-
-# 真实 HTTP + Redis 会话：使用测试 H2；需要专用本机 Redis 127.0.0.1:16379
-.\mvnw.cmd "-Dtest=RedisSessionIntegrationTest" "-Dsf.test.redisSession=true" test
 ```
 
-Redis HTTP 用例会在测试命名空间写入和删除会话，不能指向生产 Redis；它不连接业务 MySQL。MySQL 结构检查不会迁移数据库，旧结构需要先按独立增量方案升级。测试数量和运行结果以本次 Maven 报告为准，不把跳过项当作通过，也不把 H2/连通性通过当作真实数据库并发或完整业务验收。
+真实 HTTP 会话测试需专用 Redis `127.0.0.1:16379`，使用 `-Dtest=RedisSessionIntegrationTest -Dsf.test.redisSession=true`。运行中的 API 与 Web 可用 `./scripts/check-health.ps1 -Services api,web` 复查。
 
-GitHub Actions 在 push、PR 或手动触发时检查 Windows/Linux 构建、格式、类型和测试；
-只读权限、固定 action 提交、无部署步骤、不使用生产密钥。远端运行结果以实际 Actions 为准。
-CI 不执行视频、GPU、真实节点同步或生产集成验收。
+## 排查与提交
 
-公共 API 约定和协议维护方式见 [contracts](contracts/README.md)。
-新增模块先复用当前配置、日志和错误入口，不要复制控制器内的临时异常处理。
+API 与 Python 默认运行日志在各服务的 `.run/logs/`。沿响应 `X-Trace-Id` 查日志，检查任务可用 `checkId`、`planId`。确定只读健康检查、外部设备和真实媒体的验证范围后再报告结果。
 
-## 扩展原则
-
-- 新增配置、依赖和公共类时说明当前调用者，不为尚未实现的模块预留空抽象。
-- 先写清协议与边界，再在第一个实际接口中落实约束；分页等约定见 contracts。
-- 不为减少行数合并不同职责。Agent 与 Runtime 保持独立；提取公共包前评估维护、安装和发布成本。
-- 公共日志和错误规则变更时检查两个 Python 工程，避免一端更新、另一端遗漏。
+改动应沿用现有配置、日志、错误和权限边界。公共接口变更先核对 [契约](contracts/README.md)。提交应包含源代码、测试及公开配置示例。本地配置、密钥、凭据、构建物和现场数据留在本地。
