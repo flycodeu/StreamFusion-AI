@@ -84,7 +84,9 @@ onUnmounted(() => { lifetime.abort(); token.value = ""; });
         </select></label>
         <label>Jenkins 用户名<input v-model="username" required maxlength="128" autocomplete="off" :disabled="saving" /></label>
         <label>API Token<input v-model="token" type="password" :required="!reuseToken" maxlength="256" autocomplete="new-password" :disabled="saving" :placeholder="reuseToken ? '已保存，留空继续使用' : '填写该账号的 API Token'" /></label>
-        <p class="muted">Jenkins 账号需能读取、创建、配置并构建项目作业。</p>
+        <details class="token-help"><summary>如何获取 API Token？</summary>
+          <p>登录选中的 Jenkins，点击右上角用户名 → 安全 → API Token，新增并生成令牌，再复制到上方。账号需要创建作业、读取作业配置和触发构建的权限。</p>
+        </details>
       </template>
       <p v-else>暂无可用的 Jenkins 实例。<button type="button" class="quiet" @click="open = false; emit('install')">安装 Jenkins</button></p>
       <p v-if="saveError" class="setting-error" role="alert">{{ saveError }}</p>
@@ -103,6 +105,8 @@ onUnmounted(() => { lifetime.abort(); token.value = ""; });
 .jenkins-form label { display:grid; gap:6px; }
 .jenkins-form input,.jenkins-form select { width:100%; margin:0; }
 .jenkins-form p { margin:0; line-height:1.5; font-size:13px; }
+.token-help summary { cursor:pointer; color:var(--accent); font-size:13px; }
+.token-help p { margin-top:6px; color:var(--muted); }
 .jenkins-form footer { display:flex; justify-content:flex-end; gap:8px; }
 .setting-error { color:#a62c22; overflow-wrap:anywhere; }
 </style>

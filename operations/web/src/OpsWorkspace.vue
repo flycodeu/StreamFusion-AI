@@ -165,17 +165,10 @@ const recipe = ref("java-compose-v1"),
 const maintenancePermit = ref(""),
   planKind = ref("PUBLISH"),
   registration = ref<unknown>(null);
+const targetRecipe = computed(() => planInstance.value?.config.preview
+  ? "preview-node-v1" : planInstance.value?.config.zlm ? "zlm-direct-v1" : "java-compose-v1");
 const eligibleArtifacts = computed(() =>
-  artifactOptions.value.filter(
-    (a) =>
-      a.available &&
-      a.recipe ===
-        (planInstance.value?.config.preview
-          ? "preview-node-v1"
-          : planInstance.value?.config.zlm
-            ? "zlm-direct-v1"
-            : "java-compose-v1"),
-  ),
+  artifactOptions.value.filter(a => a.available && a.recipe === targetRecipe.value),
 );
 function recipeChanged() {
   instanceDraft.value.config =
@@ -331,7 +324,10 @@ const bindingDraft = ref({
 const importName = ref(""),
   importSHA = ref(""),
   file = ref<File>(),
-  uploadPhase = ref("");
+  uploadPhase = ref(""), importError = ref(""), importJobId = ref("");
+let importSession: AbortController | undefined;
+let importSubmission: { input: string; key: string } | undefined;
+let checkingImport: AbortController | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let alive = true;
 const time = (v: string) =>
@@ -517,6 +513,7 @@ async function refresh() {
     props.page === "managed-instances" && bindingsExpanded.value && !bindingsLoading.value && bindingList.load(),
     dialog.value === "history" && !releasesLoading.value && releaseList.load(),
     refreshJobDetail(),
+    dialog.value === "import" && importJobId.value && !importError.value && checkImport(),
   ]);
 }
 function poll() {
@@ -545,6 +542,7 @@ onUnmounted(() => {
   jobsController?.abort();
   detailController?.abort();
   optionsController?.abort();
+  importSession?.abort();
 });
 watch(
   () => props.page,
@@ -554,12 +552,13 @@ watch(
     void refresh().catch((e) => emit("error", e));
   },
 );
-watch(dialog, (value) => {
+watch(dialog, (value, previous) => {
   detailController?.abort();
   detailController = undefined;
   optionsController?.abort();
   optionsLoading.value = false;
-  if (!["candidate", "plan"].includes(value)) projectRelease.value = undefined;
+  if (previous === "import") importSession?.abort();
+  if (!["candidate", "plan", "import"].includes(value)) projectRelease.value = undefined;
   if (!["instance", "binding", "import", "candidate"].includes(value)) return;
   const current = new AbortController();
   optionsController = current;
@@ -568,7 +567,7 @@ watch(dialog, (value) => {
     const [c, b, environments, a] = await Promise.all([
       value === "instance" || value === "binding" ? request<Credential[]>("/credentials", "GET", undefined, current.signal) : undefined,
       value === "instance" ? requestAllPages<Binding>("/bindings", current.signal) : undefined,
-      value === "import" ? requestAllPages<RuntimeInstallation>("/plugin-installations", current.signal) : undefined,
+      value === "import" && (!projectRelease.value || targetRecipe.value === "java-compose-v1") ? requestAllPages<RuntimeInstallation>("/plugin-installations", current.signal) : undefined,
       value === "candidate" && planKind.value === "PUBLISH" ? requestAllPages<Artifact>("/artifacts", current.signal) : undefined,
     ]);
     if (current.signal.aborted) return;
@@ -680,41 +679,101 @@ function pickFile(e: Event) {
   file.value = (e.target as HTMLInputElement).files?.[0];
   if (file.value && !importName.value) importName.value = file.value.name;
 }
+function openImport() {
+  importSession?.abort();
+  importSession = new AbortController();
+  importSubmission = undefined;
+  importJobId.value = importError.value = uploadPhase.value = "";
+  importName.value = importSHA.value = importRuntime.value = "";
+  file.value = undefined;
+  runtimeInstallations.value = [];
+  importSource.value = "DOCKER_ARCHIVE";
+  importRecipe.value = projectRelease.value ? targetRecipe.value : "java-compose-v1";
+  dialog.value = "import";
+}
+function closeWorkspaceDialog() {
+  dialog.value = dialog.value === "import" && projectRelease.value ? "candidate" : "";
+}
+function showImportError(error: unknown) {
+  importError.value = error instanceof ApiError
+    ? [error.message, error.code, error.traceId].filter(Boolean).join(" · ")
+    : error instanceof Error ? error.message : "请检查与 Ops 的连接，然后重试。";
+}
+async function checkImport(resumeUpload = false) {
+  const session = importSession, id = importJobId.value;
+  if (!session || session.signal.aborted || !id || checkingImport === session) return;
+  checkingImport = session;
+  try {
+    const path = `/jobs/${id}`;
+    const job = await request<Job>(path, "GET", undefined, session.signal);
+    if (session.signal.aborted || dialog.value !== "import") return;
+    if (job.status === "SUCCEEDED") {
+      if (typeof job.result?.artifactId !== "string" || !job.result.artifactId) {
+        throw new Error(`作业 ${id} 缺少制品编号，请在作业详情核对登记结果。`);
+      }
+      if (projectRelease.value) artifactChoice.value = job.result.artifactId;
+      closeWorkspaceDialog();
+      ElMessage.success("制品校验通过");
+      return;
+    }
+    if (["FAILED", "CANCELLED", "UNKNOWN"].includes(jobStatus(job))) {
+      const hint = job.status === "UNKNOWN" ? "请核对作业结果后再查询。"
+        : job.errorCode?.includes("HASH_MISMATCH") ? "请核对文件和预期 SHA-256 后重新上传。"
+        : "请核对制品来源、格式及运行环境后重新上传。";
+      if (job.status !== "UNKNOWN") {
+        importJobId.value = "";
+        importSubmission = undefined;
+      }
+      throw new Error([`导入${statusLabels[jobStatus(job)]}。${hint}`, job.errorCode, `作业 ${id}`, time(job.updatedAt)].filter(Boolean).join(" · "));
+    }
+    if (job.phase === "WAITING_UPLOAD") {
+      if (!resumeUpload || !file.value) throw new Error("作业正在等待文件，请点击继续导入。");
+      uploadPhase.value = "正在上传文件";
+      await upload(path + "/input", file.value, session.signal);
+    }
+    if (["WAITING_UPLOAD", "UPLOADED"].includes(job.phase)) {
+      uploadPhase.value = "正在提交校验";
+      await request(path + "/input/complete", "POST", undefined, session.signal);
+    }
+    if (session.signal.aborted || dialog.value !== "import") return;
+    uploadPhase.value = job.phase === "UPLOADING" ? "正在接收文件" : "正在校验制品";
+    if (!projectRelease.value) {
+      dialog.value = "";
+      ElMessage.success("上传完成，正在校验");
+      await refresh();
+    }
+  } catch (error) {
+    if (!session.signal.aborted) showImportError(error);
+  } finally {
+    if (checkingImport === session) checkingImport = undefined;
+  }
+}
 async function importArtifact() {
+  const session = importSession;
+  if (!session || session.signal.aborted) return;
   await act(async () => {
-    if (!file.value) throw new Error("请选择镜像归档");
-    const limit =
-      importSource.value === "JAR"
-        ? 128
-        : importRecipe.value === "java-compose-v1"
-          ? 512
-          : 2048;
-    if (file.value.size > limit * 1024 * 1024)
-      throw new Error(`归档上限 ${limit} MiB`);
-    uploadPhase.value = "受理导入";
-    const accepted = await request<{ jobId: string }>(
-      "/artifact-imports",
-      "POST",
-      {
-        name: importName.value,
-        recipe: importRecipe.value,
-        sourceKind: importSource.value,
-        ...(importSource.value === "JAR"
-          ? { pluginInstallationId: importRuntime.value }
-          : {}),
-        archiveSha256: importSHA.value.trim().toLowerCase(),
-        byteSize: file.value.size,
-        idempotencyKey: crypto.randomUUID(),
-      },
-    );
-    uploadPhase.value = "上传归档";
-    await upload(`/jobs/${accepted.jobId}/input`, file.value);
-    uploadPhase.value = "提交校验";
-    await request(`/jobs/${accepted.jobId}/input/complete`, "POST");
-    dialog.value = "";
-    await refresh();
-    ElMessage.success("上传完成，正在校验");
-    uploadPhase.value = "";
+    importError.value = "";
+    try {
+      if (!importJobId.value) {
+        if (!file.value?.size) throw new Error("请选择有效的制品文件。");
+        const limit = importSource.value === "JAR" ? 128 : importRecipe.value === "java-compose-v1" ? 512 : 2048;
+        if (file.value.size > limit * 1024 * 1024) throw new Error(`文件上限 ${limit} MiB。`);
+        const input = {
+          name: importName.value, recipe: importRecipe.value, sourceKind: importSource.value,
+          ...(importSource.value === "JAR" ? { pluginInstallationId: importRuntime.value } : {}),
+          archiveSha256: importSHA.value.trim().toLowerCase(), byteSize: file.value.size,
+        };
+        const signature = JSON.stringify(input);
+        if (importSubmission?.input !== signature) importSubmission = { input: signature, key: crypto.randomUUID() };
+        uploadPhase.value = "正在受理导入";
+        const out = await request<{ jobId: string }>("/artifact-imports", "POST", { ...input, idempotencyKey: importSubmission.key }, session.signal);
+        if (session.signal.aborted || dialog.value !== "import") return;
+        importJobId.value = out.jobId;
+      }
+      await checkImport(true);
+    } catch (error) {
+      if (!session.signal.aborted) showImportError(error);
+    }
   });
 }
 async function openProjectTarget(source: ProjectReleaseSource, action: "publish" | "verify") {
@@ -821,7 +880,7 @@ async function reconcile(j: Job, recover = false) {
     <template v-if="page === 'artifacts'">
       <div class="section-head">
         <h2>不可变镜像制品</h2>
-        <button class="secondary" :disabled="busy" @click="dialog = 'import'">
+        <button class="secondary" :disabled="busy" @click="openImport">
           导入制品
         </button>
       </div>
@@ -1064,6 +1123,8 @@ async function reconcile(j: Job, recover = false) {
     :import-name="importName"
     :import-s-h-a="importSHA"
     :upload-phase="uploadPhase"
+    :import-error="importError"
+    :import-job-id="importJobId"
     :runtime-installations="runtimeInstallations"
     :plan-kind="planKind"
     :artifact-choice="artifactChoice"
@@ -1083,7 +1144,8 @@ async function reconcile(j: Job, recover = false) {
     :detail="detail"
     :status-labels="statusLabels"
     :phase-labels="phaseLabels"
-    @close="dialog = ''"
+    @close="closeWorkspaceDialog"
+    @open-import="openImport"
     @save-binding="saveBinding"
     @save-instance="saveInstance"
     @recipe-changed="recipeChanged"

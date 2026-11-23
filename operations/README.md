@@ -64,6 +64,8 @@ go build -trimpath -o streamfusion-ops.exe ./cmd/streamfusion-ops
 
 在「项目维护」选择项目，设置一次 Jenkins 实例、账号和 API Token。Jenkins 需要 Pipeline、Git 插件。账号需要 Overall/Read、Job/Create、Job/Read、Job/Build，以及读取作业配置的 Job/ExtendedRead 或 Job/Configure。构建节点须能拉取项目仓库，并提供模块需要的 Linux 构建工具。
 
+首次配置时，在所选 Jenkins 的右上角点击用户名，打开「安全 → API Token」，生成令牌并复制到 Ops 的「设置 Jenkins」。[Jenkins 账号认证说明](https://www.jenkins.io/doc/book/system-administration/authenticating-scripted-clients/)
+
 | 维护项 | 用途 |
 | --- | --- |
 | Git 仓库、分支、模块源码目录 | 指定构建的代码 |
@@ -74,7 +76,7 @@ go build -trimpath -o streamfusion-ops.exe ./cmd/streamfusion-ops
 
 - **QA**。点击后 Ops 首次自动创建对应的 Jenkins 作业，后续复用。页面显示排队、构建阶段及制品；尚未选运行服务器的模块也可做 QA。
 - **QA 日志**。打开对应构建的控制台输出，构建号来自 Jenkins。
-- **上线**。从「版本制品」导入已验证的制品后，点击模块行的「上线」，选择制品、核对预检并确认。系统使用项目维护中保存的上线目标。
+- **上线**。点击模块行的「上线」，选择已验证的制品。首次上线可以在这里导入制品，校验通过后会自动选中。核对预检中的目标、制品和端口，再确认执行。
 - **验证**。向已配置的上线目标查询当前运行状态，查看检查时间和结果。
 - **服务日志**。查看模块所配置的运行服务输出；Jenkins 自身的维护日志位于「软件管理」。
 

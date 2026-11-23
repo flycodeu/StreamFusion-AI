@@ -161,6 +161,8 @@ defineProps<{
   importName: string;
   importSHA: string;
   uploadPhase: string;
+  importError: string;
+  importJobId: string;
   runtimeInstallations: WorkspaceRuntimeInstallation[];
   planKind: string;
   artifactChoice: string;
@@ -197,6 +199,7 @@ const emit = defineEmits<{
   "update:maintenancePermit": [value: string];
   pickFile: [event: Event];
   importArtifact: [];
+  openImport: [];
   applyRuntimePolicy: [];
   editRuntimePolicy: [value?: RuntimePolicy];
   openRuntimePolicy: [instance: WorkspaceInstance];
@@ -265,7 +268,7 @@ function onImportSourceChange(e: Event, currentRecipe: string) {
     "
     width="min(640px,94vw)"
     align-center
-    @close="emit('close')"
+    :before-close="() => { if (!(dialog === 'import' && busy)) emit('close'); }"
   >
     <form
       v-if="dialog === 'binding'"
@@ -607,21 +610,23 @@ function onImportSourceChange(e: Event, currentRecipe: string) {
       class="dialog-form"
       @submit.prevent="emit('importArtifact')"
     >
+      <p v-if="projectRelease"><strong>{{ projectRelease.moduleName }}</strong> · {{ projectRelease.environmentName }} → {{ planInstance?.name }}</p>
       <label
         >来源<select
           :value="importSource"
           aria-label="来源"
+          :disabled="busy || !!importJobId"
           @change="onImportSourceChange($event, importRecipe)"
         >
           <option value="DOCKER_ARCHIVE">完整 Docker 镜像</option>
-          <option value="JAR">可执行 JAR + 已安装 Java21</option>
+          <option v-if="!projectRelease || importRecipe === 'java-compose-v1'" value="JAR">可执行 JAR + 已安装 Java21</option>
         </select></label
       >
       <label
         >配方<select
           :value="importRecipe"
           aria-label="配方"
-          :disabled="importSource === 'JAR'"
+          :disabled="!!projectRelease || importSource === 'JAR' || busy || !!importJobId"
           @change="
             emit('update:importRecipe', ($event.target as HTMLSelectElement).value)
           "
@@ -635,6 +640,7 @@ function onImportSourceChange(e: Event, currentRecipe: string) {
         >Java21 运行环境<select
           :value="importRuntime"
           aria-label="Java21 运行环境"
+          :disabled="busy || !!importJobId"
           required
           @change="
             emit(
@@ -665,6 +671,7 @@ function onImportSourceChange(e: Event, currentRecipe: string) {
       <label
         >名称<input
           :value="importName"
+          :disabled="busy || !!importJobId"
           required
           @input="
             emit('update:importName', ($event.target as HTMLInputElement).value)
@@ -673,12 +680,15 @@ function onImportSourceChange(e: Event, currentRecipe: string) {
         >{{ importSource === "JAR" ? "可执行 JAR" : "Docker save 归档"
         }}<input
           type="file"
+          :key="importSource"
+          :disabled="busy || !!importJobId"
           :accept="importSource === 'JAR' ? '.jar' : '.tar'"
           required
           @change="emit('pickFile', $event)" /></label
       ><label
         >预期 SHA-256<input
           :value="importSHA"
+          :disabled="busy || !!importJobId"
           required
           pattern="[a-fA-F0-9]{64}"
           spellcheck="false"
@@ -694,6 +704,8 @@ function onImportSourceChange(e: Event, currentRecipe: string) {
               ? "选择 S4 节点包内 preview-node-image.tar，使用该文件的可信 SHA-256；最大 2GiB，须支持维护封闭。"
               : "单镜像 linux/amd64，标签以 sfops/ 开头，最大512MiB。"
       }}</small>
+      <p v-if="importError" class="error" role="alert">{{ importError }}</p>
+      <small v-else-if="uploadPhase" role="status">{{ uploadPhase }}<template v-if="importJobId"> · 作业 {{ importJobId }}</template></small>
       <div class="dialog-footer">
         <button
           type="button"
@@ -701,10 +713,10 @@ function onImportSourceChange(e: Event, currentRecipe: string) {
           :disabled="busy"
           @click="emit('close')"
         >
-          取消
+          {{ projectRelease ? "返回候选" : "取消" }}
         </button>
-        <button class="primary" :disabled="busy">
-          {{ uploadPhase || "上传并校验" }}
+        <button class="primary" :disabled="busy || (!!importJobId && !importError)">
+          {{ importJobId && importError ? "继续导入" : uploadPhase && !importError ? uploadPhase : "上传并校验" }}
         </button>
       </div>
     </form>
@@ -732,7 +744,10 @@ function onImportSourceChange(e: Event, currentRecipe: string) {
           </option>
         </select></label
       >
-      <p v-if="projectRelease && !optionsLoading && !eligibleArtifacts.length">请先在「版本制品」导入适用于此实例的构建制品。</p>
+      <div v-if="projectRelease && planKind === 'PUBLISH'">
+        <p v-if="!optionsLoading && !eligibleArtifacts.length">当前目标还没有可用制品。</p>
+        <button type="button" class="secondary" :disabled="busy || optionsLoading" @click="emit('openImport')">导入制品</button>
+      </div>
       <template
         v-if="planInstance?.config.preview && planInstance.currentReleaseId"
       >

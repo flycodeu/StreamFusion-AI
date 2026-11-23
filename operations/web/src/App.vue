@@ -781,7 +781,6 @@ onUnmounted(() => {
           @error="report"
         />
         <ApplicationProjects
-          class="content"
           v-else-if="active === 'application-projects'"
           :source="maintenanceSource"
           @source-used="maintenanceSource = undefined"

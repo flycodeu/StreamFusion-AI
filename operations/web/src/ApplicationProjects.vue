@@ -368,7 +368,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="application-projects" aria-label="项目维护">
+  <section class="content application-projects" aria-label="项目维护">
     <aside class="project-nav" aria-label="项目目录">
       <header><h3>项目</h3><button class="quiet" type="button" :disabled="saving" @click="editProject(null)">＋ 新建</button></header>
       <input v-model="query" type="search" placeholder="筛选项目" aria-label="搜索项目" />
@@ -568,7 +568,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.application-projects { display: grid; grid-template-columns: clamp(168px, 15vw, 236px) minmax(0,1fr); align-items: start; gap: 14px; min-width: 0; }
+.application-projects { display: grid; grid-template-columns: clamp(170px, 18%, 270px) minmax(0,1fr); align-items: stretch; gap: 12px; min-width: 0; min-height: min(62vh, 600px); }
 .project-nav, .project-content { min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--control-radius); }
 .project-nav { padding: 12px; }
 .project-nav header, .project-toolbar, .project-actions, .table-actions, .env-item, .page-controls { display:flex; align-items:center; gap:8px; }
@@ -578,9 +578,9 @@ onUnmounted(() => {
 .nav-tools { border-top:1px solid var(--border-subtle); margin-top:12px; padding-top:6px; }
 .nav-tools .quiet { font-size:12px; padding-inline:0; color:var(--muted); }
 .project-nav nav { display:grid; gap:2px; margin-top:10px; }
-.project-option { width:100%; display:block; padding:8px 10px; border:0; border-radius:3px; font:inherit; background:transparent; color:var(--text); text-align:left; overflow-wrap:anywhere; }
+.project-option { width:100%; display:block; padding:7px 10px; border:0; border-left:3px solid transparent; border-radius:0; font:inherit; background:transparent; color:var(--text); text-align:left; overflow-wrap:anywhere; }
 .project-option:hover { background:var(--bg-page); }
-.project-option[aria-current] { color:var(--accent); background:var(--accent-soft); font-weight:600; }
+.project-option[aria-current] { color:#1556a0; border-left-color:#2d76cb; background:#edf4fe; font-weight:600; }
 .page-controls { margin-top:12px; justify-content:space-between; color:var(--muted); font-size:12px; }
 .nav-note,.muted,.project-facts dt,.env-item span,.project-summary small {color:var(--muted);}
 .nav-note { font-size:12px; }
@@ -628,7 +628,7 @@ onUnmounted(() => {
 .result-choice input[type="checkbox"] { width: 15px; min-height: 0; height: 15px; margin: 0; padding: 0; }
 
 @media (max-width: 780px) {
-  .application-projects { grid-template-columns:minmax(0,1fr); gap:8px; }
+  .application-projects { grid-template-columns:minmax(0,1fr); gap:8px; min-height:0; }
   .project-nav { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px; }
   .project-nav header,.project-nav nav,.page-controls,.nav-tools { grid-column:1/-1; }
   .project-nav nav { max-height:140px; overflow:auto; margin:0; }

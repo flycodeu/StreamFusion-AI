@@ -9,11 +9,11 @@ const script = ts.transpileModule(source.split('<script setup lang="ts">')[1].sp
   .replace(/^import[\s\S]*?;\r?$/gm, ""), {
   compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
 }).outputText;
-const makeWorkspace = new Function("ref", "computed", "watch", "onMounted", "onUnmounted", "defineProps", "defineEmits", "request", "requestAllPages", "softwareJobPhaseLabels", "softwareJobKindLabels", "setTimeout", "clearTimeout", "ElMessage",
-  script + "\nreturn { refresh, loadJobs, changeJobPage, changeJobSize, jobs, jobPage, jobPageSize, jobCursors, jobStatusFilter, jobKindFilter, detail, dialog, artifactList, instanceList, bindingList, releaseList, selected, bindingOptions, credentials, openRuntimePolicy, instanceProgressLabel, reconcile, instanceDraft, saveInstance }; ");
+const makeWorkspace = new Function("ref", "computed", "watch", "onMounted", "onUnmounted", "defineProps", "defineEmits", "request", "requestAllPages", "softwareJobPhaseLabels", "softwareJobKindLabels", "setTimeout", "clearTimeout", "ElMessage", "upload", "ApiError",
+  script + "\nreturn { refresh, loadJobs, changeJobPage, changeJobSize, jobs, jobPage, jobPageSize, jobCursors, jobStatusFilter, jobKindFilter, detail, dialog, artifactList, instanceList, bindingList, releaseList, selected, bindingOptions, credentials, openRuntimePolicy, instanceProgressLabel, reconcile, instanceDraft, saveInstance, choosePublish, planInstance, projectRelease, artifactChoice, openImport, closeWorkspaceDialog, importArtifact, importRecipe, importSHA, importJobId, importError, pickFile }; ");
 const flush = async () => { for (let i = 0; i < 15; i++) await vue.nextTick(); };
 
-function harness(page = "jobs") {
+function harness(page = "jobs", overrides = {}) {
   const props = vue.reactive({ page }), calls = [], writes = [], errors = [], unmounts = [];
   const jobs = Array.from({ length: 130 }, (_, i) => ({ id: `job-${i}`, status: i % 2 ? "FAILED" : "SUCCEEDED", kind: i % 3 ? "PUBLISH" : "ROLLBACK", phase: "TEST", createdAt: "2026-11-10", updatedAt: "2026-11-10" }));
   const lists = Object.fromEntries(["artifacts", "instances", "bindings", "releases"].map(path => [path, Array.from({ length: 127 }, (_, i) => ({ id: `${path}-${i}`, name: `${path}-${i}` }))]));
@@ -21,6 +21,8 @@ function harness(page = "jobs") {
   const request = async (path, _method, _body, signal) => {
     calls.push(path);
     if (_method && _method !== "GET") writes.push({ path, method: _method, body: _body && JSON.parse(JSON.stringify(_body)) });
+    const custom = overrides.request?.(path, _method, _body, signal);
+    if (custom !== undefined) return custom;
     const url = new URL(path, "http://fixture"), query = url.searchParams;
     if (url.pathname === "/hosts") return [{ id: "host-a", name: "服务器" }];
     if (url.pathname === "/credentials") return [{ id: "credential-a", revision: "1" }, { id: "credential-a", revision: "2" }];
@@ -45,7 +47,7 @@ function harness(page = "jobs") {
   };
   const requestAllPages = async path => (await request(`${path}?page=1&pageSize=100`)).items;
   const scope = vue.effectScope();
-  const panel = scope.run(() => makeWorkspace(vue.ref, vue.computed, vue.watch, callback => { mounted = callback; }, callback => unmounts.push(callback), () => props, () => (_event, error) => errors.push(error), request, requestAllPages, {}, {}, () => 1, () => {}, { success() {} }));
+  const panel = scope.run(() => makeWorkspace(vue.ref, vue.computed, vue.watch, callback => { mounted = callback; }, callback => unmounts.push(callback), () => props, () => (_event, error) => errors.push(error), request, requestAllPages, {}, {}, () => 1, () => {}, { success() {} }, overrides.upload, class ApiError extends Error {}));
   return { panel, props, calls, writes, errors, lists, start: () => mounted(), fail() { failNext = true; }, hold() { holdNext = true; }, release() { release(); }, close() { unmounts.forEach(callback => callback()); scope.stop(); } };
 }
 
@@ -166,4 +168,81 @@ test("dialog choices load when opened and preserve every credential revision", a
   fixture.panel.selected.value = { id: "instance-a" };
   fixture.panel.releaseList.changePage(13); await flush();
   assert.equal(fixture.panel.releaseList.items.value[0].id, "releases-120");
+});
+
+function importFixture(page = "instances", config = {}, upload = async () => {}) {
+  const id = "import-42";
+  let job = { id, phase: "WAITING_UPLOAD", status: "QUEUED" };
+  const fixture = harness(page, {
+    upload,
+    request(path) {
+      if (path === "/artifact-imports") return { jobId: id };
+      if (path === `/jobs/${id}`) return job;
+      if (path === `/jobs/${id}/input/complete`) {
+        job = { id, status: "RUNNING", phase: "VERIFY" };
+        return { jobId: id };
+      }
+    },
+  });
+  const { panel } = fixture;
+  fixture.lists.artifacts.length = 0;
+  if (page === "instances") {
+    panel.projectRelease.value = { moduleName: "api", environmentName: "test" };
+    panel.choosePublish({ id: "target", config });
+  }
+  async function open() {
+    await flush(); panel.openImport(); await flush();
+    panel.pickFile({ target: { files: [{ name: "test.tar", size: 100 }] } });
+    panel.importSHA.value = "a".repeat(64);
+  }
+  return { ...fixture, open, setJob(value) { job = value; } };
+}
+
+test("project import fixes each target recipe and selects the registered artifact from its own job", async t => {
+  for (const [config, recipe] of [[{}, "java-compose-v1"], [{ preview: {} }, "preview-node-v1"], [{ zlm: {} }, "zlm-direct-v1"]]) {
+    const fixture = importFixture("instances", config); t.after(fixture.close);
+    const { panel } = fixture;
+    await fixture.open();
+    assert.equal(panel.importRecipe.value, recipe);
+    await panel.importArtifact();
+    assert.equal(panel.dialog.value, "import");
+    assert.equal(panel.importJobId.value, "import-42");
+    assert.equal(fixture.writes.find(write => write.path === "/artifact-imports").body.recipe, recipe);
+    fixture.lists.artifacts.push(...["different", "verified"].map(id => ({ id, available: true, recipe })));
+    fixture.setJob({ status: "SUCCEEDED", result: { artifactId: "verified" } });
+    await panel.refresh(); await flush();
+    assert.equal(panel.dialog.value, "candidate");
+    assert.equal(panel.artifactChoice.value, "verified");
+    assert.equal(panel.projectRelease.value.moduleName, "api");
+    assert.equal(panel.planInstance.value.id, "target");
+    assert.equal(fixture.writes.length, 2, "only acceptance and verification were posted");
+  }
+});
+
+test("an interrupted upload resumes the original job and a closed import ignores a late success", async t => {
+  let uploads = 0;
+  const fixture = importFixture("instances", {}, async () => { if (++uploads === 1) throw new Error("上传中断"); });
+  t.after(fixture.close);
+  const { panel } = fixture;
+  await fixture.open(); await panel.importArtifact();
+  assert.match(panel.importError.value, /上传中断/);
+  await panel.importArtifact();
+  assert.equal(uploads, 2);
+  assert.equal(fixture.writes.filter(write => write.path === "/artifact-imports").length, 1);
+  let resolve;
+  fixture.setJob(new Promise(done => { resolve = done; }));
+  const pending = panel.refresh(); await flush();
+  panel.closeWorkspaceDialog(); await flush(); panel.closeWorkspaceDialog(); await flush();
+  resolve({ status: "SUCCEEDED", result: { artifactId: "stale" } });
+  await pending; await flush();
+  assert.equal(panel.dialog.value, "");
+  assert.equal(panel.artifactChoice.value, "");
+});
+
+test("standalone import returns to the artifact list after upload", async t => {
+  const fixture = importFixture("artifacts"); t.after(fixture.close);
+  await fixture.open(); await fixture.panel.importArtifact(); await flush();
+  assert.equal(fixture.panel.dialog.value, "");
+  assert.equal(fixture.panel.projectRelease.value, undefined);
+  assert.ok(fixture.calls.some(path => path.startsWith("/artifacts?")));
 });
