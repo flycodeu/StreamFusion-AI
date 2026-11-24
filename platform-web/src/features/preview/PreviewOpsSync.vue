@@ -167,13 +167,13 @@ async function check(apply = false) {
           </dd>
         </div>
         <div>
-          <dt>平台已同步 Release</dt>
+          <dt>平台登记版本</dt>
           <dd>
             <code>{{ bound?.releaseId || '尚未关联' }}</code>
           </dd>
         </div>
         <div>
-          <dt>Ops 当前 Release</dt>
+          <dt>Ops 当前发布版本</dt>
           <dd>
             <code>{{ selectedOption.releaseId }}</code>
           </dd>
@@ -230,7 +230,8 @@ async function check(apply = false) {
         </dl>
       </div>
       <p class="sync-note">
-        只同步已核实配置和来源，保留节点编号、预算、优先级及排空状态。应用时会再次预检。
+        同步后节点继续排空。<template v-if="node.kind !== 'ZLM_DIRECT'">解除维护，</template
+        >恢复参与调度后，再打开一路相机确认首帧。
       </p>
       <p v-if="node.kind === 'ZLM_DIRECT'" class="sync-note">
         独立 ZLM 仅检查当前媒体为空，没有持久维护许可；请确保其他操作者没有同时发布或拉流。

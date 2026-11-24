@@ -22,6 +22,7 @@ export interface PreviewChannel {
   groupId: string | null
   groupPath: string | null
   lifecycle: string
+  defaultPreviewProfileId?: string | null
   profiles: PreviewProfile[]
 }
 export interface PreviewLease {
@@ -109,6 +110,9 @@ export function parsePreviewCatalog(value: unknown): Page<PreviewChannel> {
       lifecycle = string(item.lifecycle)
     return {
       cameraId: string(item.cameraId),
+      ...(item.defaultPreviewProfileId !== undefined
+        ? { defaultPreviewProfileId: optionalString(item.defaultPreviewProfileId) }
+        : {}),
       name: string(item.name),
       deviceGroupKey: string(item.deviceGroupKey),
       deviceName: optionalString(item.deviceName),

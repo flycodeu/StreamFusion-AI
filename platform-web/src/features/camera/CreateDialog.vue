@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { accessJobLabel, accessMethodLabel } from '../camera-access/presentation'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import {
   ElAlert,
   ElButton,
@@ -33,10 +33,11 @@ const props = withDefaults(
     initialConnection?: { sourceId: string; sourceVersion: string; method?: string }
     targetCamera?: ExistingCameraTarget
     initialGroupId?: string | null
+    canPreview?: boolean
   }>(),
   { mode: 'device' },
 )
-const emit = defineEmits<{ close: []; saved: [cameraIds: string[]] }>()
+const emit = defineEmits<{ close: []; saved: [cameraIds: string[]]; preview: [cameraId: string] }>()
 const editingConnection = ref(false)
 const bulkMode = ref(false)
 const {
@@ -80,6 +81,11 @@ const {
   props.targetCamera,
 )
 groupId.value = props.initialGroupId ?? null
+const playableCamera = computed(() =>
+  props.mode === 'rtsp' && props.canPreview && groupId.value && result.value?.cameras.length === 1
+    ? result.value.cameras[0]?.cameraId
+    : null,
+)
 function retryBulk(value: AccessJob) {
   if (!value.sourceId || !value.sourceVersion) return
   bulkMode.value = false
@@ -316,8 +322,11 @@ function retryBulk(value: AccessJob) {
       <ElButton v-if="createFrozen && step > 0" type="primary" :loading="busy" @click="start()"
         >重试本页读取请求</ElButton
       >
-      <template v-if="result"
-        ><ElButton
+      <template v-if="result">
+        <ElButton v-if="playableCamera" :disabled="busy" @click="emit('preview', playableCamera)">
+          试播
+        </ElButton>
+        <ElButton
           type="primary"
           :disabled="busy || createFrozen"
           @click="

@@ -36,6 +36,8 @@ class PreviewCatalogIntegrationTest extends CameraTestSupport {
         assertThat(channel.path("profiles")).hasSize(2);
         assertThat(channel.path("profiles").get(0).path("usage").asText()).isEqualTo("MAIN");
         assertThat(channel.path("profiles").get(1).path("usage").asText()).isEqualTo("SUB");
+        assertThat(channel.path("defaultPreviewProfileId").asText())
+                .isEqualTo(channel.path("profiles").get(0).path("streamProfileId").asText());
         for (var profile : channel.path("profiles")) {
             assertThat(profile.path("enabled").asBoolean()).isTrue();
             assertThat(profile.path("configured").asBoolean()).isTrue();

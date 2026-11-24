@@ -5,11 +5,13 @@ import com.streamfusion.platform.camera.pojo.dto.CameraProfileCreateDto;
 import com.streamfusion.platform.camera.pojo.dto.CameraProfileUpdateDto;
 import com.streamfusion.platform.camera.pojo.dto.CameraQueryDto;
 import com.streamfusion.platform.camera.pojo.dto.CameraUpdateDto;
+import com.streamfusion.platform.camera.pojo.vo.CameraDeviceDeleteVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraDeviceGroupVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraDeviceMovePreviewVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraImpactVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraProfileVo;
 import com.streamfusion.platform.camera.pojo.vo.CameraVo;
+import com.streamfusion.platform.camera.service.CameraAssetRemovalService;
 import com.streamfusion.platform.camera.service.CameraAssetService;
 import com.streamfusion.platform.camera.service.CameraGroupService;
 import com.streamfusion.platform.common.pojo.vo.PageResultVo;
@@ -38,6 +40,7 @@ import org.springframework.web.bind.annotation.*;
 public class CameraController {
     private final CameraAssetService service;
     private final CameraGroupService groups;
+    private final CameraAssetRemovalService removal;
 
     @GetMapping("/options")
     @Operation(summary = "读取当前相机管理操作资格")
@@ -63,6 +66,26 @@ public class CameraController {
     public R<PageResultVo<CameraVo>> deviceChannels(
             @PathVariable String groupKey, @ParameterObject @ModelAttribute CameraQueryDto query) {
         return R.success(service.deviceChannels(groupKey, query));
+    }
+
+    @GetMapping("/devices/{groupKey}/delete-impact")
+    @Operation(summary = "核对整机删除的通道、连接配置及引用；仅超管")
+    public R<CameraDeviceDeleteVo> deviceDeleteImpact(
+            @PathVariable String groupKey, HttpServletResponse response) {
+        var impact = removal.previewDeviceDelete(groupKey);
+        response.setHeader(HttpHeaders.ETAG, VersionHeader.quote(impact.revision()));
+        return R.success(impact);
+    }
+
+    @DeleteMapping("/devices/{groupKey}")
+    @Operation(summary = "按已确认的影响在一个事务中删除设备及通道；仅超管")
+    public R<Map<String, Boolean>> deleteDeviceAsset(
+            @PathVariable String groupKey,
+            @RequestHeader(name = HttpHeaders.IF_MATCH, required = false) String revision,
+            HttpServletRequest request) {
+        boolean removedSource =
+                removal.deleteDeviceAsset(groupKey, revision, AuditContextDto.from(request));
+        return R.success(Map.of("removedSource", removedSource));
     }
 
     @Schema(description = "整台设备全部通道的移组请求")

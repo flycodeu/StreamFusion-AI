@@ -19,7 +19,7 @@ import type { CameraGroup } from '../../api/camera-groups/types'
 import type { PreviewChannel, PreviewStats } from '../../api/preview/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
-import { usageLabels } from '../../features/preview/model'
+import { defaultPlaybackProfile, usageLabels } from '../../features/preview/model'
 import type { PreviewMenuAction } from '../../features/preview/model'
 import type { PreviewFailure } from '../../features/preview/failure'
 import {
@@ -47,6 +47,7 @@ const channels = ref<PreviewChannel[]>([]),
   groups = ref<CameraGroup[]>([]),
   loading = ref(false),
   error = ref<unknown>(null),
+  missingTrialChannel = ref(false),
   search = ref('')
 const layout = ref<PreviewLayout>('4'),
   showStats = ref(false),
@@ -60,6 +61,13 @@ const selectedDevice = computed(() =>
     : undefined,
 )
 const deviceMode = computed(() => route.query.mode === 'device')
+const selectedCamera = computed(() =>
+  deviceMode.value &&
+  typeof route.query.camera === 'string' &&
+  /^[1-9][0-9]{0,18}$/.test(route.query.camera)
+    ? route.query.camera
+    : undefined,
+)
 const loadedDeviceCount = computed(
   () => new Set(channels.value.map((channel) => channel.deviceGroupKey)).size,
 )
@@ -334,6 +342,7 @@ async function load(append = false) {
     current = ++sequence
   loading.value = true
   error.value = null
+  missingTrialChannel.value = false
   if (deviceMode.value && !selectedDevice.value) {
     channels.value = []
     total.value = 0
@@ -361,6 +370,20 @@ async function load(append = false) {
     page.value = result.page
     total.value = result.total
     if (deviceMode.value && !append) {
+      const trial = selectedCamera.value
+      const single = trial
+        ? result.items.find((channel) => channel.cameraId === trial)
+        : result.total === 1
+          ? result.items[0]
+          : undefined
+      if (trial || single) {
+        if ((await chooseLayout('1')) && active() && current === sequence) {
+          if (single)
+            void assign(0, single, 'MAIN', defaultPlaybackProfile(single)?.streamProfileId)
+          else missingTrialChannel.value = true
+        }
+        return
+      }
       const selectedLayout = deviceLayout(result.items.length)
       if (!(await chooseLayout(selectedLayout)) || !active() || current !== sequence) return
       for (let index = 0; index < Math.min(result.items.length, MAX_PREVIEW_SLOTS); index++)
@@ -490,7 +513,7 @@ watch(search, () => {
   }, 300)
 })
 watch(
-  () => [route.query.mode, route.query.device],
+  () => [route.query.mode, route.query.device, route.query.camera],
   async () => {
     viewAbort?.abort()
     cancelSavedRetries()
@@ -615,10 +638,16 @@ onBeforeUnmount(() => {
       </header>
       <RequestError :error="error" />
       <div
-        v-if="deviceMode && !loading && !channels.length && !workspaceOccupied"
+        v-if="
+          deviceMode && !loading && (missingTrialChannel || !channels.length) && !workspaceOccupied
+        "
         class="device-empty"
       >
-        <ElEmpty description="暂无可见通道" />
+        <ElEmpty
+          :description="
+            missingTrialChannel ? '找不到要试播的通道，请返回相机列表确认' : '暂无可见通道'
+          "
+        />
       </div>
       <div v-else class="preview-canvas">
         <div
@@ -682,6 +711,28 @@ onBeforeUnmount(() => {
               }}</span>
               <div v-if="slot.state === 'ERROR'" class="tile-error-actions">
                 <ElButton
+                  v-if="
+                    slot.channel &&
+                    !slot.profile &&
+                    !slot.savedProfileId &&
+                    defaultPlaybackProfile(slot.channel)
+                  "
+                  size="small"
+                  text
+                  type="primary"
+                  :disabled="openingView"
+                  @click.stop="
+                    assign(
+                      index,
+                      slot.channel,
+                      'MAIN',
+                      defaultPlaybackProfile(slot.channel)?.streamProfileId,
+                    )
+                  "
+                  @dblclick.stop
+                  >用可用码流试播</ElButton
+                >
+                <ElButton
                   size="small"
                   text
                   type="primary"
@@ -702,7 +753,12 @@ onBeforeUnmount(() => {
                         : '重连'
                   }}</ElButton
                 >
-                <span v-else class="tile-reselect">请从相机列表重新选择，或重试打开收藏</span>
+                <span
+                  v-else-if="!slot.channel || !defaultPlaybackProfile(slot.channel)"
+                  class="tile-reselect"
+                >
+                  请从相机列表重新选择，或重试打开收藏
+                </span>
                 <ElButton
                   v-if="slot.error"
                   size="small"

@@ -66,6 +66,7 @@ public class CameraAssetService {
     private final Clock clock;
     private final CameraAssetQueries queries;
     private final CameraAssetRelations relations;
+    private final CameraAssetRemovalService removal;
 
     public Map<String, Boolean> options() {
         boolean admin = access.readActor().superAdmin();
@@ -301,30 +302,7 @@ public class CameraAssetService {
         CameraChannelEntity camera = lockedCamera(id, actor);
         requireVersion(
                 camera.getVersion(), DecimalInput.version(requestedVersion, "version"), true);
-        long grantCount = channels.directGrantCount(id);
-        if (grantCount > 0) throw referenced("DIRECT_CAMERA_GRANT", grantCount);
-        if (camera.getDeviceId() != null
-                && channels.selectCount(
-                                new LambdaQueryWrapper<CameraChannelEntity>()
-                                        .eq(CameraChannelEntity::getDeviceId, camera.getDeviceId()))
-                        == 1) {
-            long deviceGrants = scopes.deviceGrantCount(camera.getDeviceId());
-            if (deviceGrants > 0) throw referenced("DIRECT_DEVICE_GRANT", deviceGrants);
-        }
-        // Profiles and locators are owned children. Explicit cleanup preserves all external FKs.
-        if (camera.getDefaultPreviewProfileId() != null)
-            requireWrite(
-                    channels.update(
-                            null,
-                            new LambdaUpdateWrapper<CameraChannelEntity>()
-                                    .eq(CameraChannelEntity::getId, id)
-                                    .set(CameraChannelEntity::getDefaultPreviewProfileId, null)));
-        for (CameraProfileEntity profile : relations.profiles(id)) {
-            locators.delete(profile.getId());
-            requireWrite(profiles.deleteById(profile.getId()));
-        }
-        requireWrite(channels.deleteById(id));
-        record(actor, "CAMERA", id, "CAMERA_DELETE", camera.getName(), context);
+        removal.deleteChannel(camera, actor, context);
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)

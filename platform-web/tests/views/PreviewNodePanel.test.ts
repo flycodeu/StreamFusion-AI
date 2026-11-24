@@ -39,10 +39,10 @@ vi.mock('vue-router', async () => {
   const { defineComponent, h } = await import('vue')
   return {
     RouterLink: defineComponent({
-      setup:
-        (_, { slots }) =>
-        () =>
-          h('a', slots.default?.()),
+      props: ['to'],
+      setup(props, { slots }) {
+        return () => h('a', { href: props.to }, slots.default?.())
+      },
     }),
   }
 })
@@ -252,6 +252,34 @@ it('keeps the overview read-only for a super administrator', async () => {
   expect(buttons(root).map(text)).not.toContain('预算与优先级')
   expect(buttons(root).map(text)).not.toContain('参与调度')
   expect(text(root)).not.toContain('添加远程节点')
+})
+it('uses the authorized preview menu path and removes the link when access is lost', async () => {
+  const user = administrator()
+  sessionState.me = {
+    ...user,
+    modules: [...user.modules, 'camera'],
+    routes: [
+      {
+        id: '2',
+        name: '预览中心',
+        type: 'PAGE',
+        icon: null,
+        routeName: 'PreviewCenter',
+        path: '/video/live',
+        componentKey: '/preview/Center',
+        moduleKey: 'camera',
+        visible: true,
+        children: [],
+      },
+    ],
+  }
+  const root = await mount()
+  const previewLink = () =>
+    nodes(root).find((item) => item.type === 'a' && text(item) === '前往预览')
+  expect(previewLink()?.props.href).toBe('/video/live')
+  sessionState.me = user
+  await settle()
+  expect(previewLink()).toBeUndefined()
 })
 it('shows configured nodes without the setup checklist and refreshes after import', async () => {
   sessionState.me = administrator()

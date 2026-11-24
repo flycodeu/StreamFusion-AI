@@ -28,7 +28,6 @@ import {
   vLoading,
 } from 'element-plus'
 import * as api from '../../api/camera/api'
-import { deleteSource, getSource } from '../../api/camera-sources/api'
 import type { CameraDeviceGroup, Lifecycle } from '../../api/camera/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import TablePanel from '../../components/table/TablePanel.vue'
@@ -48,6 +47,7 @@ import GroupTree from '../../features/camera-groups/GroupTree.vue'
 import GroupEditor from '../../features/camera-groups/GroupEditor.vue'
 import DeviceMoveDialog from '../../features/camera/DeviceMoveDialog.vue'
 import DeviceEditor from '../../features/camera/DeviceEditor.vue'
+import DeviceDeleteDialog from '../../features/camera/DeviceDeleteDialog.vue'
 import { getGroupTree, deleteGroup } from '../../api/camera-groups/api'
 import type { CameraGroup } from '../../api/camera-groups/types'
 import './camera-manage.css'
@@ -75,8 +75,9 @@ const groups = ref<CameraGroup[]>([]),
 const pendingOnly = ref(false),
   movingDevice = ref<CameraDeviceGroup | null>(null)
 const groupEditor = ref<{ group: CameraGroup | null; parentId: string | null } | null>(null),
-  groupDeleting = ref(false),
-  deviceDeleting = ref(false)
+  groupDeleting = ref(false)
+const deleteTargets = ref<CameraDeviceGroup[]>([])
+const deviceDeleting = computed(() => deleteTargets.value.length > 0)
 const { selectedRows, setSelection, clearSelection } = useTableSelection<CameraDeviceGroup>()
 const selectedGroup = computed(() => groups.value.find((g) => g.groupId === groupId.value))
 const groupPath = computed(() => {
@@ -184,6 +185,32 @@ async function created() {
   creating.value = null
   await refresh()
 }
+async function previewChannel(cameraId: string) {
+  if (!previewPath.value) return
+  const active = captureScope()
+  try {
+    const saved = await api.getCamera(cameraId)
+    if (!active()) return
+    if (saved.lifecycle !== 'ENABLED') {
+      await created()
+      if (active()) ElMessage.info('请先启用这路通道，再试播')
+      return
+    }
+    creating.value = null
+    void router.push({
+      path: previewPath.value,
+      query: {
+        mode: 'device',
+        device: saved.deviceId ? `d${saved.deviceId}` : `c${cameraId}`,
+        camera: cameraId,
+      },
+    })
+  } catch (cause) {
+    if (!active()) return
+    await created()
+    if (active()) error.value = cause
+  }
+}
 function closeImportTasks() {
   importTasksOpen.value = false
   void refresh()
@@ -230,7 +257,7 @@ function openPreview(device: CameraDeviceGroup) {
     })
 }
 const resetAutoRefresh = useDeviceRefresh(async () => {
-  if (!loading.value && !plansOpen.value) {
+  if (!loading.value && !plansOpen.value && !deviceDeleting.value && !selectedRows.value.length) {
     await load()
     if (error.value) throw error.value
   }
@@ -277,71 +304,16 @@ async function removeGroup(group: CameraGroup) {
     if (active()) groupDeleting.value = false
   }
 }
-async function deleteSingleDeviceCascade(target: CameraDeviceGroup) {
-  let sourceId: string | null = null
-  const firstPage = await api.getDeviceChannels(target.groupKey, { page: 1, size: 100 })
-  for (const ch of firstPage.items) {
-    if (!sourceId && ch.sourceId) sourceId = ch.sourceId
-    await api.deleteCamera({ cameraId: ch.cameraId, version: ch.version })
-  }
-  if (target.identified) {
-    const deviceId = target.groupKey.slice(1)
-    try {
-      const dev = await api.getCameraDevice(deviceId)
-      if (!sourceId && dev.sourceId) sourceId = dev.sourceId
-      await api.deleteCameraDevice(dev.deviceId, dev.version)
-    } catch {
-      // Ignore if device record was already removed
-    }
-  }
-  if (sourceId) {
-    try {
-      const src = await getSource(sourceId)
-      await deleteSource(src.sourceId, src.version)
-    } catch {
-      // Ignore conflict when the connection source is still shared by other cameras
-    }
-  }
-}
-async function removeDevices(targets: CameraDeviceGroup[]) {
+function removeDevices(targets: CameraDeviceGroup[]) {
   if (!targets.length || deviceDeleting.value || !canManage.value) return
-  const active = captureScope()
-  const isBatch = targets.length > 1
-  const names = targets
-    .slice(0, 3)
-    .map((item) => `“${item.name}”`)
-    .join('、')
-  const message = isBatch
-    ? `确认批量删除已选的 ${targets.length} 台相机（${names}${targets.length > 3 ? ' 等' : ''}）？将同步删除关联通道、码流档案、状态记录及独占连接配置。`
-    : `确认删除相机“${targets[0]!.name}”？将同步删除其通道、码流档案、状态记录及独占连接配置。`
-  deviceDeleting.value = true
   error.value = null
-  try {
-    await ElMessageBox.confirm(message, isBatch ? '确认批量删除相机' : '确认删除相机', {
-      type: 'warning',
-      confirmButtonClass: 'el-button--danger',
-      confirmButtonText: '确认删除',
-      cancelButtonText: '取消',
-    })
-    if (!active()) return
-    const deletedKeys = new Set(targets.map((item) => item.groupKey))
-    for (const item of targets) {
-      await deleteSingleDeviceCascade(item)
-      if (!active()) return
-    }
-    if (selectedDevice.value && deletedKeys.has(selectedDevice.value.groupKey)) {
-      selectedDevice.value = null
-    }
-    clearSelection()
-    ElMessage.success(
-      isBatch ? `已删除 ${targets.length} 台相机及关联配置` : '相机及关联配置已删除',
-    )
-    await refresh()
-  } catch (cause) {
-    if (active() && cause !== 'cancel' && cause !== 'close') error.value = cause
-  } finally {
-    if (active()) deviceDeleting.value = false
+  deleteTargets.value = [...targets]
+}
+async function devicesRemoved(keys: string[]) {
+  if (selectedDevice.value && keys.includes(selectedDevice.value.groupKey)) {
+    selectedDevice.value = null
   }
+  await refresh()
 }
 onMounted(() => {
   if (
@@ -476,13 +448,14 @@ onMounted(() => {
               plain
               @click="groupEditor = { group: null, parentId: groupId }"
               >新建分组</ElButton
-            ><ElDropdown split-button type="primary" trigger="click" @click="creating = 'manual'">
-              添加相机
+            ><ElDropdown split-button type="primary" trigger="click" @click="creating = 'rtsp'">
+              添加 RTSP 相机
               <template #dropdown
                 ><ElDropdownMenu>
-                  <ElDropdownItem @click="creating = 'manual'">手动添加</ElDropdownItem>
-                  <ElDropdownItem @click="creating = 'scan'">网段搜索</ElDropdownItem>
-                  <ElDropdownItem @click="creating = 'platform'">平台导入</ElDropdownItem>
+                  <ElDropdownItem @click="creating = 'rtsp'">填写 RTSP 地址</ElDropdownItem>
+                  <ElDropdownItem @click="creating = 'scan'">搜索设备</ElDropdownItem>
+                  <ElDropdownItem @click="creating = 'platform'">从平台导入</ElDropdownItem>
+                  <ElDropdownItem @click="creating = 'manual'">仅登记设备档案</ElDropdownItem>
                 </ElDropdownMenu></template
               > </ElDropdown
             ><ElButton @click="importTasksOpen = true">导入任务</ElButton></template
@@ -535,8 +508,8 @@ onMounted(() => {
               <ElButton v-else-if="name || lifecycle || groupId || pendingOnly" @click="resetSearch"
                 >重置筛选</ElButton
               >
-              <ElButton v-else-if="canManage" type="primary" @click="creating = 'manual'"
-                >添加相机</ElButton
+              <ElButton v-else-if="canManage" type="primary" @click="creating = 'rtsp'"
+                >添加 RTSP 相机</ElButton
               >
             </ElEmpty>
           </template>
@@ -741,9 +714,16 @@ onMounted(() => {
     />
     <PlanDialog v-if="plansOpen" @close="plansOpen = false" @changed="refresh" />
     <ImportTasksDialog v-if="importTasksOpen" @close="closeImportTasks" />
+    <DeviceDeleteDialog
+      v-if="deleteTargets.length"
+      :targets="deleteTargets"
+      @close="deleteTargets = []"
+      @changed="devicesRemoved"
+    />
     <ManualCreateDialog
       v-if="creating === 'manual'"
       :storage-ready="storageReady"
+      :initial-group-id="groupId"
       @close="creating = null"
       @saved="created"
       @rtsp="creating = 'rtsp'"
@@ -757,8 +737,11 @@ onMounted(() => {
     <CreateDialog
       v-else-if="creating === 'platform' || creating === 'rtsp'"
       :mode="creating"
+      :initial-group-id="groupId"
+      :can-preview="Boolean(previewPath)"
       @close="creating = null"
       @saved="created"
+      @preview="previewChannel"
     />
   </div>
 </template>

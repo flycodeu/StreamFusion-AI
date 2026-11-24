@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PreviewChannel } from '../../api/preview/types'
-import { groupCatalog, selectProfile, previewReason } from './model'
+import { defaultPlaybackProfile, groupCatalog, selectProfile, previewReason } from './model'
 import { deviceLayout, layoutCount, MAX_PREVIEW_SLOTS } from './layouts'
 
 const channel = (cameraId: string, deviceGroupKey = 'd1'): PreviewChannel => ({
@@ -59,6 +59,27 @@ describe('preview catalog selection', () => {
     row.profiles[0]!.enabled = true
     row.profiles[0]!.configured = false
     expect(selectProfile(row, 'MAIN')).toBeNull()
+  })
+  it('plays the configured default in a single view while the grid still prefers sub streams', () => {
+    const row = channel('1')
+    const main = row.profiles[0]!
+    row.profiles.push(
+      { ...main, streamProfileId: '12', usage: 'SUB' },
+      { ...main, streamProfileId: '13', usage: 'CUSTOM' },
+    )
+    row.defaultPreviewProfileId = '13'
+    expect(defaultPlaybackProfile(row)?.streamProfileId).toBe('13')
+    expect(selectProfile(row, 'SUB')?.streamProfileId).toBe('12')
+  })
+  it('uses an available stream when the configured default can no longer play', () => {
+    const row = channel('1')
+    const main = row.profiles[0]!
+    row.profiles.push({ ...main, streamProfileId: '12', usage: 'SUB', enabled: false })
+    row.defaultPreviewProfileId = '12'
+    expect(defaultPlaybackProfile(row)?.streamProfileId).toBe('11')
+    expect(selectProfile(row, 'SUB')).toBeNull()
+    main.configured = false
+    expect(defaultPlaybackProfile(row)).toBeUndefined()
   })
   it('fits two channels in a 1 by 2 layout and keeps the 1 plus 5 layout to six slots', () => {
     expect(deviceLayout(2)).toBe('2')

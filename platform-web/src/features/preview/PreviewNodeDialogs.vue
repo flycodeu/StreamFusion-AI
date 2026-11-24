@@ -56,6 +56,7 @@ const emit = defineEmits<{
   closeConnection: []
   saveConnection: [draft: PreviewNodeConnectionInput]
   closeMaintaining: []
+  syncMaintaining: []
   maintain: [action?: 'PREPARE' | 'RELEASE']
   closeDiagnostic: []
   closeEditing: []
@@ -364,8 +365,15 @@ function submitEditing() {
       <ol>
         <li>停止接新预览，等待已有观看关闭及资源释放。</li>
         <li>获取维护许可，在 Ops 对应预览实例的升级或回退计划中填写许可编号。</li>
-        <li>Ops 作业完成后检查节点；配置发生变化时同步 Ops 配置，解除维护，再明确参与调度。</li>
+        <li>
+          Ops 作业确认完成后核对发布版本，<template v-if="maintaining.opsSource"
+            >同步 Ops 配置，</template
+          >再解除维护并参与调度。最后打开一路相机确认首帧。
+        </li>
       </ol>
+      <p v-if="maintaining.opsSource">
+        对应 Ops 实例：<code>{{ maintaining.opsSource.instanceId }}</code>
+      </p>
       <RequestError
         :error="error"
         advice="未决 Ops 作业须先核对或恢复。许可过期不会自动解除维护。"
@@ -384,6 +392,12 @@ function submitEditing() {
       </template>
       <div class="node-actions maintenance-actions">
         <ElButton :disabled="busy" @click="emit('maintain')">刷新维护状态</ElButton>
+        <ElButton
+          v-if="maintaining.opsSource && maintenance?.state === 'COMPLETE'"
+          :disabled="busy"
+          @click="emit('syncMaintaining')"
+          >核对 Ops 发布</ElButton
+        >
         <ElButton
           type="primary"
           plain

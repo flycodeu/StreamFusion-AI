@@ -38,6 +38,7 @@ public final class PreviewModels {
             String groupId,
             String groupPath,
             String lifecycle,
+            String defaultPreviewProfileId,
             List<Profile> profiles) {}
 
     public record CreateLease(

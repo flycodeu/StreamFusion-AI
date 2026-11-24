@@ -1,5 +1,6 @@
 import type { PreviewChannel, PreviewProfile } from '../../api/preview/types'
 import type { MenuRoute } from '../../api/auth/types'
+import { findMenuPagePath } from '../../router/menuPath'
 export { usageLabels } from '../camera/streamLabels'
 
 export type StreamUsage = 'MAIN' | 'SUB'
@@ -24,6 +25,14 @@ export function selectProfile(channel: PreviewChannel, usage: StreamUsage): Prev
       (profile) => profile.enabled && profile.configured && profile.usage === 'UNKNOWN',
     ) ??
     null
+  )
+}
+export function defaultPlaybackProfile(channel: PreviewChannel): PreviewProfile | undefined {
+  const available = channel.profiles.filter((profile) => profile.enabled && profile.configured)
+  return (
+    available.find((profile) => profile.streamProfileId === channel.defaultPreviewProfileId) ??
+    available.find((profile) => profile.usage === 'MAIN') ??
+    available[0]
   )
 }
 export function groupCatalog(channels: PreviewChannel[]): PreviewGroup[] {
@@ -53,18 +62,8 @@ export function groupCatalog(channels: PreviewChannel[]): PreviewGroup[] {
   }
   return [...groups.values()]
 }
-export function findPreviewPath(routes: MenuRoute[]): string | null {
-  for (const route of routes) {
-    if (
-      route.type === 'PAGE' &&
-      route.moduleKey === 'camera' &&
-      route.componentKey === '/preview/Center'
-    )
-      return route.path
-    const found = findPreviewPath(route.children)
-    if (found) return found
-  }
-  return null
+export function findPreviewPath(routes: readonly MenuRoute[]): string | null {
+  return findMenuPagePath(routes, '/preview/Center', 'camera')
 }
 export function previewReason(code: string | null): string {
   const reasons: Record<string, string> = {

@@ -10,6 +10,7 @@ import com.streamfusion.platform.camera.mapper.*;
 import com.streamfusion.platform.camera.pojo.dto.*;
 import com.streamfusion.platform.camera.pojo.entity.*;
 import com.streamfusion.platform.camera.pojo.vo.CameraAddressVo;
+import com.streamfusion.platform.camera.service.CameraAccessService.Actor;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.pojo.vo.PageResultVo;
@@ -425,13 +426,34 @@ public class CameraSourceService {
         checkVersion(source, DecimalInput.version(version, "version"), true);
         if (sources.channelCount(sourceId) > 0 || sources.deviceCount(sourceId) > 0)
             throw BusinessException.error(ErrorCode.CONFLICT);
+        deleteSource(source, actor, context);
+    }
+
+    CameraSourceEntity lockForAssetDelete(long sourceId) {
+        var source =
+                sources.selectOne(
+                        new LambdaQueryWrapper<CameraSourceEntity>()
+                                .eq(CameraSourceEntity::getId, sourceId)
+                                .last("FOR UPDATE"));
+        if (source == null) throw BusinessException.error(ErrorCode.NOT_FOUND);
+        return source;
+    }
+
+    boolean isExclusiveToAsset(long sourceId, long channelCount, boolean identifiedDevice) {
+        return sources.channelCount(sourceId) == channelCount
+                && sources.deviceCount(sourceId) == (identifiedDevice ? 1 : 0);
+    }
+
+    void deleteSource(CameraSourceEntity source, Actor actor, AuditContextDto context) {
+        long sourceId = source.getId();
         endpoints.delete(
                 new LambdaQueryWrapper<CameraEndpointEntity>()
                         .eq(CameraEndpointEntity::getSourceId, sourceId));
         credentials.delete(
                 new LambdaQueryWrapper<CameraCredentialEntity>()
                         .eq(CameraCredentialEntity::getSourceId, sourceId));
-        sources.deleteById(sourceId);
+        if (sources.deleteById(sourceId) != 1)
+            throw BusinessException.error(ErrorCode.VERSION_CONFLICT);
         audit.record(
                 actor.userId(),
                 "CAMERA_SOURCE",

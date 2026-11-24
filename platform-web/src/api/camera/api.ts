@@ -1,5 +1,5 @@
 import { request } from '../client'
-import { boolean, empty, id, object, page } from '../parse'
+import { boolean, empty, id, integer, object, page, string } from '../parse'
 import { parseCamera, parseProfile, parseDeviceGroup, parseDeviceInfo } from './types'
 import type {
   Camera,
@@ -148,6 +148,48 @@ export async function getDeviceChannels(groupKey: string, query: CameraSearch) {
       params: query,
       successStatus: 200,
       decode: (v) => page(v, parseCamera),
+    })
+  ).data
+}
+
+export async function getDeviceDeleteImpact(groupKey: string) {
+  if (!/^[dc][1-9][0-9]{0,18}$/.test(groupKey)) throw new Error('groupKey')
+  return (
+    await request({
+      path: `/cameras/devices/${groupKey}/delete-impact`,
+      method: 'GET',
+      successStatus: 200,
+      decode: (value) => {
+        const row = object(value)
+        const revision = string(row.revision)
+        const channelCount = integer(row.channelCount)
+        if (
+          row.groupKey !== groupKey ||
+          !/^[rk]-[a-f0-9]{64}$/.test(revision) ||
+          channelCount < 1 ||
+          channelCount > 10000
+        )
+          throw new Error('delete impact')
+        return { groupKey, revision, channelCount, removesSource: boolean(row.removesSource) }
+      },
+    })
+  ).data
+}
+
+export async function deleteCameraDeviceAsset(
+  groupKey: string,
+  revision: string,
+): Promise<boolean> {
+  if (!/^[dc][1-9][0-9]{0,18}$/.test(groupKey) || !/^[rk]-[a-f0-9]{64}$/.test(revision))
+    throw new Error('delete impact')
+  return (
+    await request({
+      path: `/cameras/devices/${groupKey}`,
+      method: 'DELETE',
+      ifMatch: `"${revision}"`,
+      timeoutMs: 30000,
+      successStatus: 200,
+      decode: (value) => boolean(object(value).removedSource),
     })
   ).data
 }

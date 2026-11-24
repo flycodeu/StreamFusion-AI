@@ -36,7 +36,7 @@ import { usePageScope } from '../../composables/usePageScope'
 import { sessionState } from '../../session/state'
 import { formatDateTime } from '../../utils/dateTime'
 import { labelOf } from '../../utils/display'
-import { previewReason } from './model'
+import { findPreviewPath, previewReason } from './model'
 import {
   defaultDirectBudget,
   nodeUsageMetrics as usageMetrics,
@@ -92,6 +92,7 @@ const diagnostic = ref<PreviewNodeStatus | null>(null),
 const connection = ref<PreviewNodeConnectionInput | null>(null)
 const administrator = computed(() => !!sessionState.me?.isSuperAdmin)
 const canManage = computed(() => props.management && administrator.value)
+const previewPath = computed(() => findPreviewPath(sessionState.me?.routes ?? []))
 const configuredConnections = computed(() =>
   (snapshot.value?.registrationOptions ?? []).map((item) => ({
     ...item,
@@ -101,6 +102,8 @@ const configuredConnections = computed(() =>
 const maintaining = ref<PreviewNodeStatus | null>(null)
 const synchronizing = ref<PreviewNodeStatus | null>(null)
 const maintenance = ref<PreviewMaintenance | null>(null)
+const syncedNodeId = ref<string | null>(null)
+const nodesById = computed(() => new Map(snapshot.value?.nodes.map((node) => [node.nodeId, node])))
 
 let controller: globalThis.AbortController | undefined
 let runtimeController: globalThis.AbortController | undefined
@@ -135,6 +138,7 @@ function clearManagementState() {
   maintaining.value = null
   maintenance.value = null
   synchronizing.value = null
+  syncedNodeId.value = null
 }
 
 onBeforeUnmount(() => {
@@ -484,7 +488,20 @@ function openMaintenance(node: PreviewNodeStatus) {
   void maintain()
 }
 
+function syncFromMaintenance() {
+  const node = maintaining.value
+  if (!node || !node.opsSource || busy.value || node.mode !== 'DRAINING') return
+  maintaining.value = null
+  synchronizing.value = node
+}
+
+function syncDirectZlm(nodeId: string) {
+  const node = nodesById.value.get(nodeId)
+  if (node?.mode === 'DRAINING') synchronizing.value = node
+}
+
 function synchronizedOps() {
+  syncedNodeId.value = synchronizing.value?.nodeId ?? null
   synchronizing.value = null
   void run()
   void loadDirectInstances()
@@ -539,7 +556,9 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           >节点配置与接入</RouterLink
         >
         <RouterLink v-if="snapshot && management" to="/monitor/Server">主机与媒体状态</RouterLink>
-        <RouterLink v-if="snapshot && !management" to="/preview/center">前往预览</RouterLink>
+        <RouterLink v-if="snapshot && !management && previewPath" :to="previewPath"
+          >前往预览</RouterLink
+        >
       </div>
     </header>
     <RequestError
@@ -567,7 +586,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           </div>
           <div class="node-status-bar" :class="{ ready: node.state === 'READY' }">
             <p class="node-state">
-              <span class="state-dot" aria-hidden="true"></span> 实际状态：{{
+              <span class="state-dot" aria-hidden="true"></span> 节点检查：{{
                 labelOf(names, node.state)
               }}<span v-if="node.observedAt"> · {{ formatDateTime(node.observedAt) }}</span>
             </p>
@@ -597,7 +616,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                 <dd>{{ node.mediaAddress || '未登记' }}</dd>
               </div>
               <div v-if="node.opsSource">
-                <dt>Ops 已同步版本</dt>
+                <dt>平台登记的 Ops 发布版本</dt>
                 <dd>
                   <code>{{ node.opsSource.releaseId }}</code> ·
                   {{ formatDateTime(node.opsSource.syncedAt) }}
@@ -674,6 +693,23 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
             <ZlmNetworkLoad v-if="node.kind === 'ZLM_DIRECT'" :load="liveZlmLoad(node)" />
             <p v-if="node.reasonCode" class="node-reason">
               {{ previewReason(node.reasonCode) }} <code>{{ node.reasonCode }}</code>
+            </p>
+            <p
+              v-if="canManage && syncedNodeId === node.nodeId && node.mode !== 'LOCAL'"
+              class="node-reason"
+              role="status"
+            >
+              <template v-if="node.mode === 'DRAINING'">
+                Ops 配置已同步。<template v-if="node.kind !== 'ZLM_DIRECT'"
+                  >在「维护许可」中核对并解除维护，再参与调度。</template
+                ><template v-else>恢复参与调度后，打开一路相机确认首帧。</template>
+              </template>
+              <template v-else-if="node.mode === 'REMOTE'">
+                已设置参与调度。<template v-if="previewPath">
+                  <RouterLink :to="previewPath">打开预览</RouterLink>，确认本节点承载的相机已出画。
+                </template>
+                <template v-else>请确认本节点承载的相机已出画。</template>
+              </template>
             </p>
             <div class="node-actions node-footer">
               <ElButton text @click="diagnostic = node">诊断 JSON</ElButton>
@@ -785,7 +821,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                 <span>媒体地址：{{ item.mediaAddress }}</span>
                 <span>安装位置：{{ item.installPath || '未登记' }}</span>
                 <span>ZLM 版本：{{ item.zlmVersion || '未检测' }}</span>
-                <span>实际状态 {{ labelOf(names, item.state) }}</span>
+                <span>节点检查：{{ labelOf(names, item.state) }}</span>
               </div>
               <div class="connection-meta">
                 <span
@@ -813,6 +849,22 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
               <p v-if="item.reasonCode" class="node-reason">
                 {{ previewReason(item.reasonCode) }} <code>{{ item.reasonCode }}</code>
               </p>
+              <p
+                v-if="syncedNodeId === item.nodeId && item.mode !== 'LOCAL'"
+                class="node-reason"
+                role="status"
+              >
+                <template v-if="item.mode === 'DRAINING'">
+                  Ops 配置已同步。恢复参与调度后，打开一路相机确认首帧。
+                </template>
+                <template v-else>
+                  已设置参与调度。<template v-if="previewPath">
+                    <RouterLink :to="previewPath">打开预览</RouterLink
+                    >，确认本节点承载的相机已出画。
+                  </template>
+                  <template v-else>请确认本节点承载的相机已出画。</template>
+                </template>
+              </p>
             </div>
             <div class="node-actions direct-actions">
               <ElButton
@@ -822,7 +874,15 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                 >参与调度</ElButton
               >
               <ElButton v-else :disabled="busy" @click="updateDirect(item, { mode: 'DRAINING' })"
-                >排空</ElButton
+                >停止接新预览</ElButton
+              >
+              <ElButton
+                v-if="item.mode === 'DRAINING' && nodesById.has(item.nodeId)"
+                :disabled="busy || !directIdle(item)"
+                @click="syncDirectZlm(item.nodeId)"
+                >{{
+                  nodesById.get(item.nodeId)?.opsSource ? '核对 Ops 发布' : '关联 Ops 实例'
+                }}</ElButton
               >
               <ElButton
                 :disabled="busy || item.mode === 'REMOTE'"
@@ -909,6 +969,7 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
       @close-connection="connection = null"
       @save-connection="saveConnection"
       @close-maintaining="maintaining = null"
+      @sync-maintaining="syncFromMaintenance"
       @maintain="maintain"
       @close-diagnostic="diagnostic = null"
       @close-editing="editing = null"

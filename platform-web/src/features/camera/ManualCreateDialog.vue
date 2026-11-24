@@ -12,12 +12,15 @@ import { formError, isRequestRejected, useCreateRequest } from './form'
 import { manualCameraError, manualCameraInput, newManualCamera } from './manual'
 import { useDeviceAdapters } from '../camera-access/useDeviceAdapters'
 
-const props = withDefaults(defineProps<{ storageReady?: boolean }>(), { storageReady: true })
+const props = withDefaults(
+  defineProps<{ storageReady?: boolean; initialGroupId?: string | null }>(),
+  { storageReady: true },
+)
 const adapters = useDeviceAdapters()
 const emit = defineEmits<{ close: []; saved: [cameraIds: string[]]; rtsp: [] }>()
 const captureScope = usePageScope(),
   form = ref(newManualCamera()),
-  groupId = ref<string | null>(null)
+  groupId = ref<string | null>(props.initialGroupId ?? null)
 const error = ref<unknown>(null),
   saving = ref(false),
   cameraId = ref<string | null>(null),

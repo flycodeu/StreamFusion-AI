@@ -49,6 +49,8 @@ const api = vi.hoisted(() => ({
   getCameraDevice: vi.fn(),
   updateCameraDevice: vi.fn(),
   deleteCameraDevice: vi.fn(),
+  getDeviceDeleteImpact: vi.fn(),
+  deleteCameraDeviceAsset: vi.fn(),
   getCamera: vi.fn(),
   createCamera: vi.fn(),
   updateCamera: vi.fn(),
@@ -1386,7 +1388,7 @@ describe('camera management interaction boundaries', () => {
     await settle()
     expect(api.previewBulkImport).toHaveBeenLastCalledWith('902', { version: '2', groupId: '30' })
   })
-  it('offers three management operations and saves an unknown device without access jobs or profiles', async () => {
+  it('opens RTSP from the main action and keeps registration available without a connection', async () => {
     api.getAccessOptions.mockResolvedValue({
       ready: false,
       methods: [],
@@ -1404,7 +1406,7 @@ describe('camera management interaction boundaries', () => {
       diagnostics: ['未配置联网策略'],
     })
     const root = await mount(CameraManage)
-    for (const label of ['手动添加', '网段搜索', '平台导入']) {
+    for (const label of ['搜索设备', '从平台导入', '仅登记设备档案']) {
       expect(
         nodes(root).find((item) => item.type === 'ElDropdownItem' && text(item) === label),
       ).toBeDefined()
@@ -1412,7 +1414,11 @@ describe('camera management interaction boundaries', () => {
     const add = nodes(root).find(
       (item) => item.type === 'ElDropdown' && item.props['split-button'] !== undefined,
     )!
-    await (add.props.onClick as () => void)()
+    expect(text(add)).toContain('添加 RTSP 相机')
+    const register = nodes(root).find(
+      (item) => item.type === 'ElDropdownItem' && text(item) === '仅登记设备档案',
+    )!
+    await (register.props.onClick as () => void)()
     await nextTick()
     await setField(
       nodes(root).find((item) => item.type === 'ElDialog')!,
@@ -3651,15 +3657,27 @@ describe('camera management interaction boundaries', () => {
     await click(root, '保存配置')
     expect(api.updateSource).toHaveBeenCalledWith('1', { version: '4', name: '设备新标签' })
   })
-  it('supports single and batch camera deletion with cascade cleanup of channels, device and source', async () => {
+  it('shows the exact deletion impact and reports each confirmed or failed device separately', async () => {
     const secondDevice = { ...device, groupKey: 'd200', name: '设备二' }
     api.getCameraDevices.mockResolvedValue({ items: [device, secondDevice], total: 2 })
-    api.getDeviceChannels.mockResolvedValue({
-      items: [{ ...camera, sourceId: '1' }],
-      total: 1,
-      page: 1,
-      size: 100,
-    })
+    api.getDeviceDeleteImpact
+      .mockResolvedValueOnce({
+        groupKey: 'd100',
+        channelCount: 101,
+        removesSource: true,
+        revision: 'r-abc',
+      })
+      .mockResolvedValueOnce({
+        groupKey: 'd200',
+        channelCount: 2,
+        removesSource: false,
+        revision: 'k-abc',
+      })
+    api.deleteCameraDeviceAsset
+      .mockResolvedValueOnce(true)
+      .mockRejectedValueOnce(
+        new ApiRequestError('PRECONDITION_FAILED', '设备资料已变化', { status: 412 }),
+      )
     const root = await mount(CameraManage)
     const table = nodes(root).find((item) => item.type === 'ElTable')!
     expect(button(root, '批量删除').props.disabled).toBe(true)
@@ -3668,9 +3686,19 @@ describe('camera management interaction boundaries', () => {
     expect(button(root, '批量删除 (2)').props.disabled).toBe(false)
     await click(root, '批量删除 (2)')
     await settle()
-    expect(api.deleteCamera).toHaveBeenCalledWith({ cameraId: '10', version: '3' })
-    expect(api.deleteCameraDevice).toHaveBeenCalledWith('100', '4')
-    expect(api.deleteSource).toHaveBeenCalledWith('1', '4')
+    expect(text(root)).toContain('101 个通道')
+    expect(text(root)).toContain('保留连接配置')
+    expect(api.deleteCameraDeviceAsset).not.toHaveBeenCalled()
+    await click(root, '确认删除 2 台')
+    await settle()
+    expect(api.deleteCameraDeviceAsset.mock.calls).toEqual([
+      ['d100', 'r-abc'],
+      ['d200', 'k-abc'],
+    ])
+    expect(text(root)).toContain('已确认删除 1 台')
+    expect(text(root)).toContain('设备资料已变化')
+    expect(api.getDeviceChannels).not.toHaveBeenCalled()
+    expect(api.deleteCamera).not.toHaveBeenCalled()
   })
   it('distinguishes group-focused entry from standard camera management workspace', async () => {
     const root = await mount(CameraGroupManage)

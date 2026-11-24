@@ -160,10 +160,10 @@ async function loadChannels() {
   }
 }
 watch(
-  () => route?.query.name,
-  (value) => {
+  () => [route?.query.name, route?.query.observation] as const,
+  ([value, result]) => {
     name.value = typeof value === 'string' ? value : ''
-    observation.value = null
+    observation.value = result === 'FAILED' ? 'FAILED' : null
     search()
   },
   { immediate: true },

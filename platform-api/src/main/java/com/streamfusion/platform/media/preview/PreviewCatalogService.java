@@ -149,6 +149,9 @@ public class PreviewCatalogService {
                                                     ? null
                                                     : paths.get(row.getGroupId()),
                                             row.getLifecycle(),
+                                            row.getDefaultPreviewProfileId() == null
+                                                    ? null
+                                                    : row.getDefaultPreviewProfileId().toString(),
                                             profileMap.getOrDefault(row.getId(), List.of()).stream()
                                                     .map(
                                                             p ->

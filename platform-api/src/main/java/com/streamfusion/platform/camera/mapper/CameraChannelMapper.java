@@ -63,4 +63,9 @@ public interface CameraChannelMapper extends BaseMapper<CameraChannelEntity> {
 
     @Select("SELECT COUNT(*) FROM camera_user_channel_grant WHERE channel_id=#{id}")
     long directGrantCount(@Param("id") long id);
+
+    @Select(
+            "SELECT COUNT(*) FROM camera_user_channel_grant g JOIN camera_channel c"
+                    + " ON c.id=g.channel_id WHERE c.device_id=#{deviceId}")
+    long directDeviceChannelGrantCount(@Param("deviceId") long deviceId);
 }
