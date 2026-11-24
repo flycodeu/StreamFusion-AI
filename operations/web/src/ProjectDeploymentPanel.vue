@@ -54,10 +54,10 @@ const lastJobError = computed(() => projectDeploymentErrorText(lastJob.value?.er
 const pending = computed(() => jobPending(lastJob.value));
 const needsCheck = computed(() => lastJob.value?.status === "UNKNOWN");
 const supported = computed(() => status.value?.kind === "JAVA" || status.value?.kind === "STATIC");
-const available = computed(() => supported.value && !pending.value && !busy.value);
+const available = computed(() => !pending.value && !busy.value);
 const hasCheckTarget = computed(() => !!status.value?.current || needsCheck.value);
 const canCheck = computed(() => available.value && hasCheckTarget.value);
-const canDeploy = computed(() => available.value && !props.archived && !needsCheck.value);
+const canDeploy = computed(() => supported.value && available.value && !props.archived && !needsCheck.value);
 const siteConfigPath = computed(() => status.value?.kind === "STATIC" && status.value.current
   ? `/etc/nginx/conf.d/sfops-project-${props.deploymentId}.conf` : "");
 const qualifies = computed(() =>

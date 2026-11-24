@@ -4,9 +4,9 @@
 
 ## 准备 Jenkins 和运行服务器
 
-1. 在项目详情点「设置 Jenkins」，选已登记的 Jenkins 实例，填写 Jenkins 用户名、个人 API Token 和构建节点标签。点「测试连接」，核对实际认证账号和在线节点，再保存。标签默认 `sfops-build`；至少一个匹配的 Linux Agent 须在线且有执行器。Jenkins 需要 Pipeline、Git 插件；Ops 账号需要读取 Jenkins、创建和读取作业、触发构建及读取作业配置的权限。
-2. 在「模块与配置」核对仓库、分支、模块目录和类型。私有仓库填写 Jenkins 用于拉取仓库的凭据 ID。项目连接的 API Token 用于 Ops 调用 Jenkins，仓库凭据用于 Agent 拉代码。
-3. 在「主机管理」接入运行服务器，检查 SSH、受管执行器和变更权限。页面提示执行器版本过低时，先在「安装准备」更新接入组件。
+1. 在项目详情点「设置 Jenkins」，选已登记的 Jenkins 实例，填写 Jenkins 用户名、个人 API Token 和构建节点标签。API Token 在 Jenkins 的「用户 → 安全 → API Token」生成。点「测试连接」，核对实际认证账号和在线节点，再保存。标签默认 `sfops-build`；至少一个匹配的 Linux Agent 须在线且有空闲执行器才能开始构建。Jenkins 需要 Pipeline、Git 插件；Ops 账号需要 `Overall/Read`、`Job/Create`、`Job/Read`、`Job/Build`，以及读取作业配置的 `Job/ExtendedRead` 或 `Job/Configure`。
+2. 在「模块与配置」核对仓库、分支、模块目录和类型。构建 Agent 需要 Git 和访问仓库的权限；私有仓库填写 Jenkins 已保存的仓库凭据 ID。项目连接的 API Token 用于 Ops 调用 Jenkins，仓库凭据用于 Agent 拉代码。
+3. 在「主机管理」接入运行服务器，检查 SSH、受管执行器和变更权限。运行服务器需要版本 2 的项目发布能力；页面提示能力版本过低时，先在「安装准备」更新接入组件。
 
 | 模块 | Jenkins Agent | 运行服务器 |
 | --- | --- | --- |
@@ -26,7 +26,7 @@
 1. 点模块行的「QA」，或在「发布与运行」点「构建」。首次运行会创建模块级 Jenkins 作业；后续查看同一作业的构建号和「QA 日志」。QA 成功不会自动发布。
 2. 打开「发布与运行」，填成功的 QA 构建号并点「核对构建」，也可点「读取最近构建」。点「部署预检」，核对目标服务器、环境、构建号、Git 提交、端口和健康检查。Ops 根据 Jenkins 归档的 `sfops-release.txt` 核对提交、文件名、大小和 SHA-256。
 3. 点「确认发布」。预检单有效期为 5 分钟；主机、草稿、当前发布版本或制品发生变化时，重新预检。目标健康检查通过后，Ops 更新「当前版本」。Java 检查实际 JAR 进程和 HTTP 健康接口；Nginx 检查首页及站点版本标记。
-4. 只改 Nginx 配置时，可在「发布与运行」打开「编辑站点配置」。保存草稿后点「用当前构建预检」，再确认发布。目标生成 `/etc/nginx/conf.d/sfops-project-<部署ID>.conf`，通过 `nginx -t` 后重载。
+4. 只改 Nginx 配置时，可在「发布与运行」打开「编辑站点配置」。保存草稿后点「用当前构建预检」，再确认发布。Jenkins 仍保留当前版本的归档时，可以沿用该构建。目标生成 `/etc/nginx/conf.d/sfops-project-<部署ID>.conf`，通过 `nginx -t` 后重载。
 
 ## StreamFusion 站点路由
 

@@ -104,6 +104,17 @@ test("an unresolved first deployment allows verification and notes the exact job
   ]);
 });
 
+test("an existing release can be checked after its module is no longer eligible for new deployments", async t => {
+  const current = { releaseId: "release-7", buildNumber: 7, commit: "aaaa" };
+  const { calls, flow } = panel(t, { health: "UNKNOWN", current });
+  await flow.refresh();
+  await flow.openQa();
+  await flow.submit("verify");
+  assert.deepEqual(calls.filter(call => call.path !== target), [
+    { path: `${target}/verify`, method: "POST", body: {} },
+  ]);
+});
+
 test("rollback uses the version shown at confirmation even if a refresh finds a newer one", async t => {
   const previous = { releaseId: "release-7", buildNumber: 7, commit: "aaaa" };
   const { calls, flow, setStatus } = panel(t, { kind: "STATIC", health: "READY", previous });
