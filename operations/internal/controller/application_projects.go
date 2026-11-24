@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -40,14 +41,28 @@ func (h *HTTP) applicationProjectsRoute(w http.ResponseWriter, r *http.Request, 
 	if len(p) < 2 || p[0] != "application-projects" || !deploy.ID.MatchString(p[1]) {
 		return false
 	}
+	if len(p) >= 4 && p[2] == "deployments" && deploy.ID.MatchString(p[3]) {
+		return h.projectDeploymentRoute(w, r, s, p[1], p[3], p[4:])
+	}
 	if len(p) == 3 && p[2] == "jenkins-connection" {
 		return h.jenkinsProjectRoute(w, r, s, jenkinsScope{project: p[1], connection: true}, []string{"jenkins-monitor"})
+	}
+	if len(p) == 4 && p[2] == "jenkins-connection" && p[3] == "test" && r.Method == http.MethodPost {
+		h.testJenkinsConnection(w, r, s, p[1])
+		return true
 	}
 	if len(p) >= 3 && (p[2] == "jenkins-monitor" || p[2] == "jenkins-build") {
 		return h.jenkinsProjectRoute(w, r, s, jenkinsScope{project: p[1]}, p[2:])
 	}
 	if len(p) >= 5 && p[2] == "service-instances" && deploy.ID.MatchString(p[3]) {
 		return h.jenkinsProjectRoute(w, r, s, jenkinsScope{project: p[1], instance: p[3]}, p[4:])
+	}
+	if len(p) == 5 && p[2] == "modules" && deploy.ID.MatchString(p[3]) && p[4] == "config-templates" && r.Method == http.MethodPost {
+		h.pullApplicationModuleConfigTemplates(w, r, p[1], p[3])
+		return true
+	}
+	if (len(p) == 5 || len(p) == 6) && p[2] == "modules" && deploy.ID.MatchString(p[3]) && p[4] == "config-files" {
+		return h.applicationModuleConfigFilesRoute(w, r, s, p[1], p[3], p[5:])
 	}
 	if len(p) >= 5 && p[2] == "modules" && deploy.ID.MatchString(p[3]) {
 		return h.jenkinsProjectRoute(w, r, s, jenkinsScope{project: p[1], module: p[3]}, p[4:])
@@ -130,7 +145,7 @@ func (h *HTTP) deleteApplicationProject(w http.ResponseWriter, r *http.Request, 
 	}
 	for _, table := range []string{"application_deployments", "application_environments", "application_modules", "application_repositories"} {
 		if _, err = tx.Exec("DELETE FROM "+table+" WHERE project_id=?", id); err != nil {
-			h.internal(w, r, err)
+			h.applicationSaveError(w, r, err)
 			return
 		}
 	}
@@ -158,13 +173,13 @@ func readApplicationProject(q applicationReader, id string) (applicationProject,
 	if err != nil {
 		return p, err
 	}
-	rows, err := q.Query("SELECT id,name,url,coalesce(git_account_id,''),branch FROM application_repositories WHERE project_id=? ORDER BY position,id", id)
+	rows, err := q.Query("SELECT id,name,url,coalesce(git_account_id,''),branch,jenkins_credential_id FROM application_repositories WHERE project_id=? ORDER BY position,id", id)
 	if err != nil {
 		return p, err
 	}
 	for rows.Next() {
 		var item applicationRepository
-		if err = rows.Scan(&item.ID, &item.Name, &item.URL, &item.GitAccountID, &item.Branch); err != nil {
+		if err = rows.Scan(&item.ID, &item.Name, &item.URL, &item.GitAccountID, &item.Branch, &item.JenkinsCredentialID); err != nil {
 			break
 		}
 		p.Repositories = append(p.Repositories, item)
@@ -242,7 +257,83 @@ func readApplicationProject(q applicationReader, id string) (applicationProject,
 		err = rows.Err()
 	}
 	rows.Close()
+	if err == nil {
+		populateDeploymentAccessURLs(q, &p)
+	}
 	return p, err
+}
+
+func formatHTTPOrigin(host string, port int) string {
+	host = strings.TrimSpace(host)
+	if host == "" || port < 1 || port > 65535 {
+		return ""
+	}
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
+	if port == 80 {
+		return "http://" + host
+	}
+	return fmt.Sprintf("http://%s:%d", host, port)
+}
+
+func computeDeploymentAccessURL(hostAddr string, d applicationDeployment) string {
+	if d.DeployMode == "STATIC" && d.Nginx != nil {
+		host := hostAddr
+		serverName := strings.TrimSpace(d.Nginx.ServerName)
+		if serverName != "" && serverName != "_" && !strings.Contains(serverName, "*") {
+			host = serverName
+		}
+		port := d.Nginx.ListenPort
+		if port == 0 {
+			port = d.ServicePort
+		}
+		if port == 0 && d.HostID != "" {
+			port = 80
+		}
+		return formatHTTPOrigin(host, port)
+	}
+	port := d.ServicePort
+	if port == 0 && len(d.Ports) > 0 {
+		port = d.Ports[0].HostPort
+	}
+	return formatHTTPOrigin(hostAddr, port)
+}
+
+func populateDeploymentAccessURLs(q applicationReader, p *applicationProject) {
+	needHosts := false
+	for _, env := range p.Environments {
+		for _, dep := range env.Deployments {
+			if dep.HostID != "" {
+				needHosts = true
+				break
+			}
+		}
+		if needHosts {
+			break
+		}
+	}
+	if !needHosts {
+		return
+	}
+	hostAddrs := map[string]string{}
+	rows, err := q.Query("SELECT id,address FROM targets")
+	if err != nil {
+		return
+	}
+	for rows.Next() {
+		var tid, addr string
+		if rows.Scan(&tid, &addr) == nil {
+			hostAddrs[tid] = addr
+		}
+	}
+	rows.Close()
+	for ei := range p.Environments {
+		for di := range p.Environments[ei].Deployments {
+			dep := &p.Environments[ei].Deployments[di]
+			dep.ComputedAccessURL = computeDeploymentAccessURL(hostAddrs[dep.HostID], *dep)
+		}
+	}
 }
 
 func (h *HTTP) listApplicationProjects(w http.ResponseWriter, r *http.Request) {
@@ -388,6 +479,7 @@ func (h *HTTP) saveApplicationProject(w http.ResponseWriter, r *http.Request, s 
 		err = saveApplicationChildren(tx, in)
 	}
 	if err == nil {
+		populateDeploymentAccessURLs(tx, &in)
 		err = auditTx(tx, s.Username, action, id, "SUCCESS", r.Context().Value(traceKey{}).(string))
 	}
 	if err == nil {
@@ -412,6 +504,8 @@ func (h *HTTP) saveApplicationProject(w http.ResponseWriter, r *http.Request, s 
 
 func (h *HTTP) applicationSaveError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
+	case strings.Contains(err.Error(), "PROJECT_DEPLOYMENT_IN_USE"):
+		h.fail(w, r, 409, "PROJECT_DEPLOYMENT_IN_USE", "部署已有运行版本或未完成的作业，请先在交付与运行中核对")
 	case strings.Contains(err.Error(), "UNIQUE constraint failed: application_projects.code"):
 		h.fail(w, r, 409, "APPLICATION_CODE_DUPLICATED", "项目代码已存在，请更换后重试")
 	case strings.Contains(err.Error(), "UNIQUE"):
@@ -471,7 +565,10 @@ func saveApplicationChildren(tx *sql.Tx, p applicationProject) error {
 		if err := claim("application_repositories", r.ID); err != nil {
 			return err
 		}
-		_, err := tx.Exec("INSERT INTO application_repositories(id,project_id,name,url,git_account_id,branch,position) VALUES(?,?,?,?,nullif(?,''),?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,url=excluded.url,git_account_id=excluded.git_account_id,branch=excluded.branch,position=excluded.position", r.ID, p.ID, r.Name, r.URL, r.GitAccountID, r.Branch, index)
+		_, err := tx.Exec(`INSERT INTO application_repositories(id,project_id,name,url,git_account_id,branch,position,jenkins_credential_id)
+			VALUES(?,?,?,?,nullif(?,''),?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,url=excluded.url,
+			git_account_id=excluded.git_account_id,branch=excluded.branch,position=excluded.position,jenkins_credential_id=excluded.jenkins_credential_id`,
+			r.ID, p.ID, r.Name, r.URL, r.GitAccountID, r.Branch, index, r.JenkinsCredentialID)
 		if err != nil {
 			return err
 		}

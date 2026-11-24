@@ -45,6 +45,11 @@ mount_directory() {
     printf 'type=bind,"source=%s","target=%s"' "$source" "$dest"
 }
 
+mount_file_ro() {
+    local source=${1//\"/\"\"} dest=${2//\"/\"\"}
+    printf 'type=bind,"source=%s","target=%s",readonly' "$source" "$dest"
+}
+
 run_image() {
     local image=$1 program=$2 maven_cache=$3 work mount
     shift 3
@@ -55,7 +60,14 @@ run_image() {
     if [[ $maven_cache == yes ]]; then
         [[ ${HOME:-} == /* ]] || fail "无法确定当前账号的 Maven 缓存目录。"
         mkdir -p -- "$HOME/.m2"
-        options+=(--mount "$(mount_directory "$HOME/.m2" /tmp/.m2)" --env MAVEN_CONFIG=/tmp/.m2 --env MAVEN_OPTS=-Duser.home=/tmp)
+        options+=(--mount "$(mount_directory "$HOME/.m2" /tmp/.m2)" --env MAVEN_CONFIG=/tmp/.m2 --env "MAVEN_OPTS=-Duser.home=/tmp -Djansi.graceful=true")
+        local managed_settings="${SF_MAVEN_SETTINGS:-}"
+        if [[ -z $managed_settings && -r /opt/streamfusion-ops-target/config/maven-settings.xml ]]; then
+            managed_settings=/opt/streamfusion-ops-target/config/maven-settings.xml
+        fi
+        if [[ -n $managed_settings && -r $managed_settings ]]; then
+            options+=(--mount "$(mount_file_ro "$managed_settings" /usr/share/maven/conf/settings.xml)")
+        fi
     fi
     exec "${docker[@]}" run "${options[@]}" --entrypoint "$program" "$image" "$@"
 }

@@ -17,6 +17,38 @@ import (
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 )
 
+type officialDistroSpec struct {
+	osID      string
+	versionID string
+	codename  string
+	planOS    string
+}
+
+var (
+	ubuntu2404OfficialDistro = officialDistroSpec{osID: "ubuntu", versionID: "24.04", codename: "noble", planOS: "ubuntu24.04"}
+	ubuntu2204OfficialDistro = officialDistroSpec{osID: "ubuntu", versionID: "22.04", codename: "jammy", planOS: "ubuntu22.04"}
+)
+
+func detectOfficialDistro(osRelease []byte, d serviceinstall.Definition) (officialDistroSpec, bool) {
+	id, versionID := parseOSRelease(osRelease)
+	if id != "ubuntu" {
+		return officialDistroSpec{}, false
+	}
+	var spec officialDistroSpec
+	switch versionID {
+	case "24.04":
+		spec = ubuntu2404OfficialDistro
+	case "22.04":
+		spec = ubuntu2204OfficialDistro
+	default:
+		return officialDistroSpec{}, false
+	}
+	if !serviceinstall.OfficialSupportsOS(d, spec.planOS) {
+		return officialDistroSpec{}, false
+	}
+	return spec, true
+}
+
 // Official preparation only reads host files and asks apt to simulate. It does
 // not refresh indexes, download packages, create data or change repositories.
 func (x *executor) officialInstallPreflight(i serviceinstall.Request) serviceinstall.Preflight {
@@ -42,11 +74,12 @@ func (x *executor) officialInstallPreflight(i serviceinstall.Request) serviceins
 		p.Endpoint = "unix:///var/run/docker.sock"
 	}
 	release, err := os.ReadFile("/etc/os-release")
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || os.Geteuid() != 0 || err != nil || !strings.Contains(string(release), "ID=ubuntu\n") || !strings.Contains(string(release), `VERSION_ID="24.04"`) {
-		check("PLATFORM", "OFFICIAL_PLATFORM_UNSUPPORTED", "官方安装要求 Ubuntu 24.04 amd64 和受控 root 执行器")
+	distro, distroOK := detectOfficialDistro(release, i.Definition)
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || os.Geteuid() != 0 || err != nil || !distroOK {
+		check("PLATFORM", "OFFICIAL_PLATFORM_UNSUPPORTED", "官方仓库安装支持 Ubuntu 22.04 / 24.04 amd64（Docker/Python3.12 需 24.04）和受控 root 执行器")
 		return p
 	}
-	check("PLATFORM", "", "Ubuntu 24.04 amd64 系统安装")
+	check("PLATFORM", "", distro.planOS+" amd64 系统安装")
 	for _, command := range append([]string{"/usr/bin/apt-get", "/usr/bin/apt-cache", "/usr/bin/dpkg-query", "/usr/bin/dpkg", "/usr/bin/systemctl"}, i.Definition.Native.RequiredTools...) {
 		resolved, resolveErr := filepath.EvalSymlinks(command)
 		if resolveErr != nil || secureAncestors(resolved) != nil {
@@ -82,7 +115,7 @@ func (x *executor) officialInstallPreflight(i serviceinstall.Request) serviceins
 			return p
 		}
 	}
-	plan, err := x.officialCandidatePlan(ctx, i.Definition, installed)
+	plan, err := x.officialCandidatePlanForDistro(ctx, i.Definition, installed, distro)
 	if err != nil {
 		check("PLAN", err.Error(), "无法生成只新增软件包的官方安装计划；不会升级或删除已有软件，请检查软件源和本机索引")
 		return p
@@ -155,11 +188,15 @@ func protectedOfficialParent(name string) error {
 }
 
 func (x *executor) officialCandidatePlan(ctx context.Context, d serviceinstall.Definition, installed map[string]string) (*serviceinstall.OfficialPlan, error) {
+	return x.officialCandidatePlanForDistro(ctx, d, installed, ubuntu2404OfficialDistro)
+}
+
+func (x *executor) officialCandidatePlanForDistro(ctx context.Context, d serviceinstall.Definition, installed map[string]string, distro officialDistroSpec) (*serviceinstall.OfficialPlan, error) {
 	spec, err := serviceinstall.OfficialRecipeSpec(d)
 	if err != nil {
 		return nil, err
 	}
-	plan := &serviceinstall.OfficialPlan{Manager: "APT", OS: "ubuntu24.04", Architecture: "amd64", Paths: spec.Paths}
+	plan := &serviceinstall.OfficialPlan{Manager: "APT", OS: distro.planOS, Architecture: "amd64", Paths: spec.Paths}
 	if d.Key == "docker" {
 		pinned, _ := serviceinstall.Find("docker", "29.9.2-ubuntu24.04")
 		packages, err := dockerRecipePackages(pinned)
@@ -177,11 +214,11 @@ func (x *executor) officialCandidatePlan(ctx context.Context, d serviceinstall.D
 		if simulateErr != nil {
 			return nil, errors.New("OFFICIAL_APT_PLAN_UNAVAILABLE")
 		}
-		additional, parseErr := parseOfficialAptPlan(output, nil, installed)
+		additional, parseErr := parseOfficialAptPlanForDistro(output, nil, installed, distro)
 		if parseErr != nil {
 			return nil, parseErr
 		}
-		if err = x.verifyOfficialPackageOrigins(ctx, additional); err != nil {
+		if err = x.verifyOfficialPackageOriginsForDistro(ctx, additional, distro); err != nil {
 			return nil, err
 		}
 		plan.Packages = append(plan.Packages, additional...)
@@ -192,11 +229,11 @@ func (x *executor) officialCandidatePlan(ctx context.Context, d serviceinstall.D
 		if err != nil {
 			return nil, errors.New("OFFICIAL_APT_PLAN_UNAVAILABLE")
 		}
-		plan.Packages, err = parseOfficialAptPlan(out, spec.Packages, installed)
+		plan.Packages, err = parseOfficialAptPlanForDistro(out, spec.Packages, installed, distro)
 		if err != nil {
 			return nil, err
 		}
-		if err = x.verifyOfficialPackageOrigins(ctx, plan.Packages); err != nil {
+		if err = x.verifyOfficialPackageOriginsForDistro(ctx, plan.Packages, distro); err != nil {
 			return nil, err
 		}
 	}
@@ -205,6 +242,10 @@ func (x *executor) officialCandidatePlan(ctx context.Context, d serviceinstall.D
 }
 
 func (x *executor) verifyOfficialPackageOrigins(ctx context.Context, packages []serviceinstall.OfficialPackage) error {
+	return x.verifyOfficialPackageOriginsForDistro(ctx, packages, ubuntu2404OfficialDistro)
+}
+
+func (x *executor) verifyOfficialPackageOriginsForDistro(ctx context.Context, packages []serviceinstall.OfficialPackage, distro officialDistroSpec) error {
 	if len(packages) == 0 {
 		return nil
 	}
@@ -220,7 +261,7 @@ func (x *executor) verifyOfficialPackageOrigins(ctx context.Context, packages []
 	if err != nil {
 		return errors.New("OFFICIAL_PACKAGE_ORIGIN_UNAVAILABLE")
 	}
-	return verifyOfficialPolicy(policy, packages, indexes)
+	return verifyOfficialPolicyForDistro(policy, packages, indexes, distro)
 }
 
 func officialAptSimulateArgs(packages []string) []string {
@@ -228,9 +269,13 @@ func officialAptSimulateArgs(packages []string) []string {
 	return append(args, packages...)
 }
 
-var officialInstLine = regexp.MustCompile(`^Inst ([a-z0-9][a-z0-9+.-]*)(?::amd64)? \(([^ ]+) (Ubuntu:24\.04/[^\[\]]+?)(?: \[(?:amd64|all)\])?\)$`)
+var officialInstLine = regexp.MustCompile(`^Inst ([a-z0-9][a-z0-9+.-]*)(?::amd64)? \(([^ ]+) (Ubuntu:(?:22|24)\.04/[^\[\]]+?)(?: \[(?:amd64|all)\])?\)$`)
 
 func parseOfficialAptPlan(output []byte, direct []string, installed map[string]string) ([]serviceinstall.OfficialPackage, error) {
+	return parseOfficialAptPlanForDistro(output, direct, installed, ubuntu2404OfficialDistro)
+}
+
+func parseOfficialAptPlanForDistro(output []byte, direct []string, installed map[string]string, distro officialDistroSpec) ([]serviceinstall.OfficialPackage, error) {
 	if len(output) >= 64<<10 {
 		return nil, errors.New("OFFICIAL_PACKAGE_PLAN_TOO_LARGE")
 	}
@@ -238,6 +283,9 @@ func parseOfficialAptPlan(output []byte, direct []string, installed map[string]s
 	for _, name := range direct {
 		wanted[name] = true
 	}
+	allowedBase := "Ubuntu:" + distro.versionID + "/" + distro.codename
+	allowedUpdates := allowedBase + "-updates"
+	allowedSecurity := allowedBase + "-security"
 	packages := []serviceinstall.OfficialPackage{}
 	for _, line := range strings.Split(string(output), "\n") {
 		if strings.HasPrefix(line, "Remv ") || strings.HasPrefix(line, "Purg ") {
@@ -252,7 +300,7 @@ func parseOfficialAptPlan(output []byte, direct []string, installed map[string]s
 		}
 		origins := strings.Split(strings.TrimSpace(m[3]), ", ")
 		for _, origin := range origins {
-			if origin != "Ubuntu:24.04/noble" && origin != "Ubuntu:24.04/noble-updates" && origin != "Ubuntu:24.04/noble-security" {
+			if origin != allowedBase && origin != allowedUpdates && origin != allowedSecurity {
 				return nil, errors.New("OFFICIAL_PACKAGE_ORIGIN_UNTRUSTED")
 			}
 		}
@@ -276,10 +324,14 @@ func parseOfficialAptPlan(output []byte, direct []string, installed map[string]s
 // APT authenticates indexes/packages; the planner additionally checks the exact
 // selected repository and release instead of assuming a mirror hostname.
 func verifyOfficialPolicy(output []byte, packages []serviceinstall.OfficialPackage, indexes []byte) error {
+	return verifyOfficialPolicyForDistro(output, packages, indexes, ubuntu2404OfficialDistro)
+}
+
+func verifyOfficialPolicyForDistro(output []byte, packages []serviceinstall.OfficialPackage, indexes []byte, distro officialDistroSpec) error {
 	if len(output) >= 64<<10 {
 		return errors.New("OFFICIAL_PACKAGE_POLICY_TOO_LARGE")
 	}
-	trusted, err := officialUbuntuIndexes(indexes)
+	trusted, err := officialUbuntuIndexesForDistro(indexes, distro)
 	if err != nil {
 		return err
 	}
@@ -323,7 +375,7 @@ func verifyOfficialPolicy(output []byte, packages []serviceinstall.OfficialPacka
 			return errors.New("OFFICIAL_PACKAGE_ORIGIN_UNTRUSTED")
 		}
 		dist := strings.SplitN(fields[2], "/", 2)
-		if len(dist) != 2 || (dist[0] != "noble" && dist[0] != "noble-updates" && dist[0] != "noble-security") {
+		if len(dist) != 2 || (dist[0] != distro.codename && dist[0] != distro.codename+"-updates" && dist[0] != distro.codename+"-security") {
 			return errors.New("OFFICIAL_PACKAGE_ORIGIN_UNTRUSTED")
 		}
 		seen[current] = true
@@ -336,7 +388,7 @@ func verifyOfficialPolicy(output []byte, packages []serviceinstall.OfficialPacka
 	return nil
 }
 
-func officialUbuntuIndexes(output []byte) (map[string]bool, error) {
+func officialUbuntuIndexesForDistro(output []byte, distro officialDistroSpec) (map[string]bool, error) {
 	if len(output) >= 64<<10 {
 		return nil, errors.New("OFFICIAL_PACKAGE_POLICY_TOO_LARGE")
 	}
@@ -358,7 +410,7 @@ func officialUbuntuIndexes(output []byte) (map[string]bool, error) {
 			}
 		}
 		archive := metadata["a"]
-		trusted[current] = metadata["o"] == "Ubuntu" && metadata["l"] == "Ubuntu" && metadata["v"] == "24.04" && metadata["n"] == "noble" && (archive == "noble" || archive == "noble-updates" || archive == "noble-security") && metadata["b"] == "amd64"
+		trusted[current] = metadata["o"] == "Ubuntu" && metadata["l"] == "Ubuntu" && metadata["v"] == distro.versionID && metadata["n"] == distro.codename && (archive == distro.codename || archive == distro.codename+"-updates" || archive == distro.codename+"-security") && metadata["b"] == "amd64"
 		current = ""
 	}
 	return trusted, nil

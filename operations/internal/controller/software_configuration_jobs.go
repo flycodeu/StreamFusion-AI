@@ -153,7 +153,7 @@ func (h *HTTP) submitSoftwareConfigurationPlan(w http.ResponseWriter, r *http.Re
 		h.fail(w, r, 409, "INSTALL_PORT_RESERVED", "有效计划已预留该协议端口")
 		return
 	}
-	if err = reserveManagementResources(tx, p.TargetID, p.SoftwareID, p.ID, installationResources(host.InstallRoot, p.SoftwareID, p.Definition, p.Config)); err != nil {
+	if err = reserveManagementResources(tx, p.TargetID, p.SoftwareID, p.ID, installationResources(host.InstallRoot, p.SoftwareID, p.Previous.DirectoryName, p.Definition, p.Config)); err != nil {
 		h.fail(w, r, 409, configurationErrorCode(err), "配置资源与其他软件或待执行操作冲突，请重新检查")
 		return
 	}

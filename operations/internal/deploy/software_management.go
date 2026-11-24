@@ -44,7 +44,7 @@ func (x *executor) managementRoot(s SoftwareRequest) string {
 		var intent Request
 		if readJSON(filepath.Join(x.root, "jobs", binding.JobID, "intent.json"), &intent) == nil {
 			if installation := frozenManagementInstallation(intent); installation != nil && installation.SoftwareID == s.ID {
-				return serviceinstall.InstallRoot(x.root, s.ID, installation.Config)
+				return serviceinstall.InstallRootFor(x.root, s.ID, installation.DirectoryName, installation.Config)
 			}
 		}
 	}

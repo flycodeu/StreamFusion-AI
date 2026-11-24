@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ElAlert, ElButton, ElPopover } from "element-plus";
 import type { ApiError } from "./api";
 import ErrorHelpLink from "./ErrorHelpLink.vue";
 import { findErrorReference } from "./errorReference";
@@ -21,73 +22,62 @@ const displayTime = (value?: string) =>
 </script>
 
 <template>
-  <div v-if="diagnostic" class="error diagnostic" role="alert">
-    <div class="diagnostic-heading">
-      <span>{{ diagnostic.message }}</span>
-      <button
-        type="button"
-        class="diagnostic-close"
-        aria-label="关闭错误提示"
-        @click.stop="emit('close')"
+  <ElAlert
+    v-if="diagnostic"
+    class="ops-banner-alert"
+    type="error"
+    show-icon
+    @close="emit('close')"
+  >
+    <div class="ops-alert-row">
+      <div class="ops-alert-copy">
+        <span class="ops-alert-title">{{ diagnostic.message }}</span>
+        <span
+          v-if="diagnostic.code && findErrorReference(diagnostic.code)?.steps?.[0]"
+          class="ops-alert-desc"
+        >
+          建议：{{ findErrorReference(diagnostic.code)!.steps[0] }}
+        </span>
+      </div>
+      <div
+        v-if="diagnostic.code || diagnostic.traceId || diagnostic.timestamp"
+        class="ops-alert-actions"
       >
-        ×
-      </button>
+        <ElPopover trigger="click" :width="400" placement="bottom-end">
+          <template #reference>
+            <ElButton link type="danger" size="small">查看诊断信息</ElButton>
+          </template>
+          <div class="ops-diag-popover">
+            <div class="ops-diag-popover-head">
+              <span>诊断详情</span>
+              <ErrorHelpLink
+                v-if="diagnostic.code && findErrorReference(diagnostic.code)"
+                :code="diagnostic.code"
+              />
+            </div>
+            <dl class="ops-diag-dl">
+              <template v-if="diagnostic.code">
+                <dt>错误码</dt>
+                <dd><code>{{ diagnostic.code }}</code></dd>
+              </template>
+              <template v-if="diagnostic.timestamp">
+                <dt>发生时间</dt>
+                <dd>{{ displayTime(diagnostic.timestamp) }}</dd>
+              </template>
+              <template v-if="diagnostic.traceId">
+                <dt>请求标识</dt>
+                <dd><code>{{ diagnostic.traceId }}</code></dd>
+              </template>
+            </dl>
+          </div>
+        </ElPopover>
+      </div>
     </div>
-    <div
-      v-if="diagnostic.code || diagnostic.traceId || diagnostic.timestamp"
-      class="diagnostic-meta"
-    >
-      <details class="diagnostic-details">
-        <summary>查看诊断信息</summary>
-        <dl class="diagnostic-dl">
-          <template v-if="diagnostic.code">
-            <dt>错误码</dt>
-            <dd><code>{{ diagnostic.code }}</code></dd>
-          </template>
-          <template v-if="diagnostic.timestamp">
-            <dt>时间</dt>
-            <dd>{{ displayTime(diagnostic.timestamp) }}</dd>
-          </template>
-          <template v-if="diagnostic.traceId">
-            <dt>请求标识</dt>
-            <dd><code>{{ diagnostic.traceId }}</code></dd>
-          </template>
-        </dl>
-      </details>
-      <ErrorHelpLink
-        v-if="diagnostic.code && findErrorReference(diagnostic.code)"
-        :code="diagnostic.code"
-      />
-    </div>
-  </div>
+  </ElAlert>
 </template>
 
 <style scoped>
-.diagnostic-meta {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  margin-top: 6px;
-  font-size: 12px;
-}
-.diagnostic-details summary {
-  cursor: pointer;
-  user-select: none;
-  opacity: 0.9;
-}
-.diagnostic-dl {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 4px 10px;
-  margin: 6px 0 0;
-}
-.diagnostic-dl dt {
-  opacity: 0.8;
-}
-.diagnostic-dl dd {
-  margin: 0;
-  overflow-wrap: anywhere;
+.ops-banner-alert {
+  margin-bottom: 14px;
 }
 </style>

@@ -13,6 +13,14 @@ export function installedPythonPaths(items: SoftwareInstance[], hostId: string):
     .map(item => item.observation?.executablePath).filter((path): path is string => !!path && path.startsWith("/") && path !== "/"))).sort();
 }
 
+export function installedJavaPaths(items: SoftwareInstance[], hostId: string): string[] {
+  return Array.from(new Set(items.filter(item => item.hostId === hostId && item.softwareType === "JAVA" &&
+    item.runtimeKind === "TOOL" && item.managementMode !== "RELEASED" &&
+    (item.observation?.state || item.actualState) === "INSTALLED")
+    .map(item => item.observation?.executablePath || item.installationEvidence?.binaryPath || item.locator)
+    .filter((path): path is string => !!path && path.startsWith("/") && path !== "/"))).sort();
+}
+
 export function softwareCatalogKey(item: SoftwareInstance): string {
   const definition = item.installation?.definition;
   if (definition) return definition.catalogKey || definition.key;

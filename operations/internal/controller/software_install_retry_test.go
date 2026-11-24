@@ -36,7 +36,7 @@ func TestFailedCommandInstallCanCreateFreshPlanOnlyAfterObjectCheck(t *testing.T
 				switch req.Action {
 				case "SOFTWARE_INSTALL_CHECK":
 					i := *req.Installation
-					root := serviceinstall.InstallRoot("/opt/plugin-test", i.SoftwareID, i.Config)
+					root := i.InstallRoot("/opt/plugin-test")
 					checked := installPreflightFixture(i, root, true)
 					checked.BinaryDirectory = root + "/bin"
 					checked.Checks = []serviceinstall.Check{{Key: "EXISTING", Status: "PASS", Code: "COMMAND_OBJECT_ABSENT"}, {Key: "PORT_main", Status: "PASS", Code: "SERVICE_PORT_AVAILABLE"}}
@@ -156,7 +156,7 @@ func TestFailedCommandInstallCanCreateFreshPlanOnlyAfterObjectCheck(t *testing.T
 					t.Fatal(err)
 				}
 				defer tx.Rollback()
-				oldRoot := serviceinstall.InstallRoot("/opt/plugin-test", oldID, config)
+				oldRoot := original.Installation.InstallRoot("/opt/plugin-test")
 				proof := resourceClaimExemptions{AbsentInstallations: map[string]string{oldID: original.Version}}
 				if err = reserveManagementResources(tx, host, newID, nextPlan, []serviceinstall.ResolvedResource{{Type: "PATH_WRITE", Value: oldRoot}}, proof); err == nil {
 					t.Fatal("failed directory lost protection")
@@ -200,7 +200,7 @@ func TestFailedDockerInstallCanRetryOnlyAfterOriginalResourcesAreConfirmedFree(t
 				switch req.Action {
 				case "SOFTWARE_INSTALL_CHECK":
 					i := *req.Installation
-					checked := installPreflightFixture(i, serviceinstall.InstallRoot("/opt/plugin-test", i.SoftwareID, i.Config), true)
+					checked := installPreflightFixture(i, i.InstallRoot("/opt/plugin-test"), true)
 					checked.Checks = []serviceinstall.Check{{Key: "DOCKER", Status: "PASS"}, {Key: "CONTAINER", Status: "PASS"}}
 					for _, port := range checked.PortMappings {
 						checked.Checks = append(checked.Checks, serviceinstall.Check{Key: "PORT_" + port.Key, Status: "PASS"})
@@ -268,7 +268,7 @@ func TestFailedDockerInstallCanRetryOnlyAfterOriginalResourcesAreConfirmedFree(t
 					}
 					defer tx.Rollback()
 					proof := resourceClaimExemptions{AbsentInstallations: map[string]string{oldID: original.Version}}
-					oldPath := serviceinstall.ResolvedResource{Type: "PATH_WRITE", Value: serviceinstall.InstallRoot("/opt/plugin-test", oldID, config)}
+					oldPath := serviceinstall.ResolvedResource{Type: "PATH_WRITE", Value: original.Installation.InstallRoot("/opt/plugin-test")}
 					if err := reserveManagementResources(tx, host, accepted["softwareInstanceId"].(string), nextPlan, []serviceinstall.ResolvedResource{oldPath}, proof); err == nil {
 						t.Fatal("retry released the original data directory")
 					}

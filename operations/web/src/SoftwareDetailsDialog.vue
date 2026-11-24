@@ -8,9 +8,10 @@ import DockerAccessPanel from "./DockerAccessPanel.vue";
 import GitManagementPanel from "./GitManagementPanel.vue";
 import SoftwareManagementPanel from "./SoftwareManagementPanel.vue";
 import NginxConfigFilesPanel from "./NginxConfigFilesPanel.vue";
+import MavenSettingsPanel from "./MavenSettingsPanel.vue";
 import SoftwareWebAccess from "./SoftwareWebAccess.vue";
 import JenkinsPluginsPanel from "./JenkinsPluginsPanel.vue";
-import { jenkinsPluginManagerAccess } from "./webAccess";
+import { jenkinsConsoleURL, jenkinsPluginManagerAccess, jenkinsSecurityTokenURL, softwareWebAccess } from "./webAccess";
 import SoftwareLoginAccount from "./SoftwareLoginAccount.vue";
 import SoftwareConnectionCommands from "./SoftwareConnectionCommands.vue";
 import JenkinsUnlockPassword from "./JenkinsUnlockPassword.vue";
@@ -37,12 +38,14 @@ import {
   softwareTypeLabel,
   softwareVersionWithoutDigest,
   softwareVersionSummary,
+  cleanObservedVersionText,
   type SoftwareInstance,
   type SoftwareJob,
   type SoftwareAction,
 } from "./software";
 const props = defineProps<{
   detail?: SoftwareInstance;
+  initialTab?: string;
   host?: Host;
   busy: boolean;
   observing?: boolean;
@@ -69,8 +72,11 @@ const emit = defineEmits<{
 }>();
 const detailTab = ref("overview");
 const summaryVersion = computed(() => props.detail ? softwareVersionSummary(props.detail) : undefined);
-const installedVersion = computed(() => softwareVersionWithoutDigest(props.detail?.installationEvidence?.observedVersion));
+const installedVersion = computed(() => cleanObservedVersionText(softwareVersionWithoutDigest(props.detail?.installationEvidence?.observedVersion)));
 const jenkinsPlugins = computed(() => props.detail && jenkinsPluginManagerAccess(props.detail, props.host));
+const jenkinsWeb = computed(() => props.detail?.softwareType === "JENKINS" ? softwareWebAccess(props.detail, props.host) : undefined);
+const jenkinsTokenUrl = computed(() => jenkinsSecurityTokenURL(jenkinsWeb.value?.url));
+const jenkinsConsoleUrl = computed(() => jenkinsConsoleURL(jenkinsWeb.value?.url));
 const active = (item: SoftwareInstance) => item.managementMode !== "RELEASED";
 const configCloseState = ref({ blocked: false, dirty: false });
 const accessCloseBlocked = ref(false);
@@ -79,20 +85,24 @@ const managementCloseState = ref({ blocked: false, dirty: false });
 const nginxCloseState = ref({ blocked: false, dirty: false });
 const policyCloseState = ref({ blocked: false, dirty: false });
 const accountCloseState = ref({ blocked: false, dirty: false });
+const mavenCloseState = ref({ blocked: false, dirty: false });
 watch(
-  () => props.detail?.id,
-  () => {
-    detailTab.value = "overview";
-    configCloseState.value = { blocked: false, dirty: false };
-    accessCloseBlocked.value = false;
-    gitCloseState.value = { blocked: false, dirty: false };
-    managementCloseState.value = { blocked: false, dirty: false };
-    nginxCloseState.value = { blocked: false, dirty: false };
-    policyCloseState.value = { blocked: false, dirty: false };
-    accountCloseState.value = { blocked: false, dirty: false };
+  () => [props.detail?.id, props.initialTab] as const,
+  ([id, tab], prev) => {
+    detailTab.value = tab || "overview";
+    if (id !== prev?.[0]) {
+      configCloseState.value = { blocked: false, dirty: false };
+      accessCloseBlocked.value = false;
+      gitCloseState.value = { blocked: false, dirty: false };
+      managementCloseState.value = { blocked: false, dirty: false };
+      nginxCloseState.value = { blocked: false, dirty: false };
+      policyCloseState.value = { blocked: false, dirty: false };
+      accountCloseState.value = { blocked: false, dirty: false };
+      mavenCloseState.value = { blocked: false, dirty: false };
+    }
   },
 );
-const configurationBlocked = computed(() => configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked || managementCloseState.value.blocked || nginxCloseState.value.blocked || policyCloseState.value.blocked || accountCloseState.value.blocked);
+const configurationBlocked = computed(() => configCloseState.value.blocked || accessCloseBlocked.value || gitCloseState.value.blocked || managementCloseState.value.blocked || nginxCloseState.value.blocked || policyCloseState.value.blocked || accountCloseState.value.blocked || mavenCloseState.value.blocked);
 const editingBlocked = computed(() => props.busy || configurationBlocked.value);
 const closeBlocked = computed(() => (props.busy && !props.observing) || configurationBlocked.value);
 const heldConfirmed = computed(() => !!props.detail && props.detail.freshness === "FRESH" && runtimePolicyStopConfirmed(props.detail.observation?.runtimePolicy, props.detail.actualState === "STOPPED", props.detail.runtimeKind === "DOCKER" ? "DOCKER" : "SYSTEMD"));
@@ -102,7 +112,7 @@ async function close(done: () => void) {
   if (await confirmDiscard()) done();
 }
 async function confirmDiscard() {
-  if (configCloseState.value.dirty || gitCloseState.value.dirty || managementCloseState.value.dirty || nginxCloseState.value.dirty || policyCloseState.value.dirty || accountCloseState.value.dirty) {
+  if (configCloseState.value.dirty || gitCloseState.value.dirty || managementCloseState.value.dirty || nginxCloseState.value.dirty || policyCloseState.value.dirty || accountCloseState.value.dirty || mavenCloseState.value.dirty) {
     try { await ElMessageBox.confirm("放弃未保存的软件配置？", "关闭详情", { confirmButtonText: "放弃修改", cancelButtonText: "继续编辑" }); } catch { return false; }
   }
   return true;
@@ -168,6 +178,19 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
       </div>
       <ElTabs v-model="detailTab" :before-leave="leaveDetailTab">
         <ElTabPane label="软件概览" name="overview">
+          <div v-if="detail.softwareType === 'JENKINS'" class="ops-guide-banner jenkins-quick-bar">
+            <div class="jenkins-quick-row">
+              <div>
+                <strong>Jenkins 快捷接入</strong>
+                <p style="margin: 4px 0 0">绑定项目时所需 API Token 请点击右侧「生成 API Token」进入个人 Security 页面创建。</p>
+              </div>
+              <div class="jenkins-quick-links">
+                <a v-if="jenkinsConsoleUrl" class="secondary link-btn" :href="jenkinsConsoleUrl" target="_blank" rel="noopener noreferrer">控制台 ↗</a>
+                <a v-if="jenkinsTokenUrl" class="primary link-btn" :href="jenkinsTokenUrl" target="_blank" rel="noopener noreferrer">生成 API Token ↗</a>
+                <a v-if="jenkinsPlugins?.url" class="quiet link-btn" :href="jenkinsPlugins.url" target="_blank" rel="noopener noreferrer">插件管理 ↗</a>
+              </div>
+            </div>
+          </div>
           <div v-if="detailTab === 'overview' && canCopyJenkinsUnlockPassword(detail)" class="jenkins-unlock-entry">
             <JenkinsUnlockPassword :key="detail.id" :instance="detail" :instance-id="detail.id" />
           </div>
@@ -306,6 +329,10 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
           <NginxConfigFilesPanel :key="detail.id" :detail="detail" :active="detailTab === 'nginx-files'" :disabled="busy || pendingJob || !!host?.maintenance"
             @close-state="nginxCloseState = $event" @submitted="receipt => receipt.jobId && emit('configurationSubmitted', { softwareInstanceId: receipt.softwareInstanceId, jobId: receipt.jobId })"
             @logs="operationLogs" @preparation="operationPreparation" />
+        </ElTabPane>
+        <ElTabPane v-if="detail.softwareType === 'MAVEN' && detail.managementMode === 'MANAGED' && detail.installationStatus === 'READY'" label="Maven 配置" name="maven-config">
+          <MavenSettingsPanel :key="detail.id" :instance="detail" :active="detailTab === 'maven-config'" :disabled="busy || pendingJob || !!host?.maintenance"
+            @close-state="mavenCloseState = $event" @saved="emit('changed')" />
         </ElTabPane>
         <ElTabPane v-if="managedDockerAccess(detail)" label="账号权限" name="docker-access">
           <DockerAccessPanel @close-blocked="accessCloseBlocked = $event" :detail="detail" :host="host" :active="detailTab === 'docker-access'" :disabled="busy || pendingJob || !canChange" @changed="emit('changed')" />
@@ -569,5 +596,26 @@ const service = (item: SoftwareInstance) => !softwareIsTool(item);
     flex-basis: 100%;
     height: 0;
   }
+}
+.jenkins-quick-bar {
+  margin-bottom: 16px;
+}
+.jenkins-quick-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.jenkins-quick-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.jenkins-quick-links .link-btn {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
 }
 </style>

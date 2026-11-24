@@ -508,7 +508,7 @@ func checkManagementCredentialsTx(tx *sql.Tx, m serviceinstall.ManagementRequest
 }
 
 func softwareManagementRoot(i softwareInstance, t target) string {
-	return path.Clean(serviceinstall.InstallRoot(t.InstallRoot, i.ID, i.Installation.Config))
+	return path.Clean(i.Installation.InstallRoot(t.InstallRoot))
 }
 
 func validManagementVersion(value string) bool {

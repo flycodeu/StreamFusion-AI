@@ -32,6 +32,7 @@ type SoftwareOwnership struct {
 	ControllerID        string                       `json:"controllerId"`
 	TargetID            string                       `json:"targetId"`
 	SoftwareID          string                       `json:"softwareId"`
+	DirectoryName       string                       `json:"directoryName,omitempty"`
 	JobID               string                       `json:"jobId"`
 	ConfigHash          string                       `json:"configHash"`
 	ImageID             string                       `json:"imageId"`
@@ -65,7 +66,7 @@ var protectedSoftwareUnits = map[string]bool{
 
 func (s SoftwareRequest) Validate(observation bool) error {
 	if o := s.Ownership; o != nil {
-		if o.SoftwareID != s.ID || !ID.MatchString(o.SoftwareID) || !ID.MatchString(o.ControllerID) || !ID.MatchString(o.TargetID) || !ID.MatchString(o.JobID) || !Hex.MatchString(o.ConfigHash) {
+		if o.SoftwareID != s.ID || !ID.MatchString(o.SoftwareID) || !serviceinstall.ValidDirectoryName(o.DirectoryName) || !ID.MatchString(o.ControllerID) || !ID.MatchString(o.TargetID) || !ID.MatchString(o.JobID) || !Hex.MatchString(o.ConfigHash) {
 			return errors.New("SOFTWARE_OWNERSHIP_INVALID")
 		}
 		if o.RuntimeMode == "NATIVE" {

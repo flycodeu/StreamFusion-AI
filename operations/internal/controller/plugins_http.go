@@ -377,6 +377,16 @@ func (h *HTTP) verifyPluginInstallation(w http.ResponseWriter, r *http.Request, 
 }
 
 func (h *HTTP) pluginJobLogs(w http.ResponseWriter, r *http.Request, id string) {
+	var log, updated string
+	err := h.store.DB.QueryRow("SELECT execution_log,updated_at FROM project_deployment_jobs WHERE id=?", id).Scan(&log, &updated)
+	if err == nil {
+		h.success(w, r, map[string]any{"text": log, "observedAt": updated, "source": "JOB_LOG", "limited": true})
+		return
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		h.internal(w, r, err)
+		return
+	}
 	var raw string
 	if e := h.store.DB.QueryRow("SELECT input_json FROM jobs WHERE id=? AND (kind IN ('PLUGIN_INSTALL','PLUGIN_REMOVE') OR kind LIKE 'SOFTWARE_%' OR kind='FIREWALL_CHANGE' OR kind='NODE_ENVIRONMENT_CHANGE' OR kind='GIT_REPOSITORY_CHANGE')", id).Scan(&raw); e != nil {
 		h.opsError(w, r, e)

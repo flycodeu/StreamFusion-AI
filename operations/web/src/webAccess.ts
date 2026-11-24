@@ -123,3 +123,27 @@ export function jenkinsPluginManagerAccess(item: SoftwareInstance, host?: Host):
   url.pathname = `${root}/pluginManager/available`;
   return { ...access, url: url.href };
 }
+
+export function jenkinsSecurityTokenURL(rawUrl?: string): string {
+  if (!rawUrl) return "";
+  try {
+    const url = new URL(rawUrl);
+    const root = url.pathname.replace(/\/login\/?$/, "").replace(/\/$/, "");
+    url.pathname = `${root}/me/security`;
+    return url.href;
+  } catch {
+    return "";
+  }
+}
+
+export function jenkinsConsoleURL(rawUrl?: string): string {
+  if (!rawUrl) return "";
+  try {
+    const url = new URL(rawUrl);
+    const root = url.pathname.replace(/\/login\/?$/, "").replace(/\/$/, "");
+    url.pathname = root ? `${root}/` : "/";
+    return url.href;
+  } catch {
+    return rawUrl;
+  }
+}

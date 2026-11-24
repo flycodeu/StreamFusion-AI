@@ -60,6 +60,7 @@ function harness(override = () => undefined) {
   const flow = scope.run(() => load(component + `
     export const flow = {
       project, projectEditorOpen, projectDraft, moduleEditorOpen, moduleDraft, formError, inspectionOpen,
+      inspectionMode, inspectionRepoUrl, inspectionBranch, inspectionGitAccountId,
       inspectionResults, sourceId, inspectionRepository, selectedDirectories, editProject, saveProject, openProject,
       editModule, saveModule, openInspection, inspect, closeInspection, selectNewDirectories, reviewSuggestion,
       addSuggestions, setArchived, confirmProjectDeletion, deleteProject, projectDeleteOpen, projectDeleteTarget,
@@ -292,4 +293,48 @@ test("a referenced module stays at the selected position and shows why deletion 
   assert.equal(h.flow.moduleDeleteOpen.value, true);
   assert.equal(h.flow.selectedModuleId.value, "backend");
   assert.match(h.flow.formError.value, /运行配置.*APPLICATION_MODULE_IN_USE.*request-id/);
+});
+
+test("remote Git repository auto-inspection defaults when local sources are empty and imports deep metadata", async t => {
+  const remoteDetected = [
+    {
+      directory: "platform-web",
+      name: "platform-web",
+      kind: "FRONTEND",
+      environment: "Vue、Vite、Node.js 24、pnpm",
+      startCommand: "pnpm dev",
+      evidence: ["platform-web/package.json", "platform-web/vite.config.ts"],
+      dependencies: ["Vue", "Vite", "Node.js", "pnpm", "Nginx"],
+      buildCommand: "pnpm run build",
+      testCommand: "pnpm run test",
+      artifactPath: "dist",
+      recommendedRuntimeMode: "STATIC",
+      proxyHints: [{ location: "/api", stripPrefix: true, targetPort: 8080 }],
+    },
+  ];
+  const h = harness((path) => {
+    if (path.endsWith("/inspection-sources")) return { items: [] };
+    if (path.endsWith("/inspect")) return { modules: remoteDetected };
+  });
+  t.after(h.close);
+  await h.flow.openProject(sampleProject());
+  await h.flow.openInspection();
+  assert.equal(h.flow.inspectionMode.value, "repo");
+  assert.equal(h.flow.inspectionRepoUrl.value, "https://git.example/main.git");
+  assert.equal(h.flow.inspectionBranch.value, "main");
+  await h.flow.inspect();
+  assert.deepEqual(h.calls.at(-1).body, {
+    projectId: "project",
+    repositoryId: "primary",
+    repositoryUrl: "https://git.example/main.git",
+    branch: "main",
+    gitAccountId: "profile-id",
+  });
+  await h.flow.addSuggestions();
+  const savedModule = h.calls.at(-1).body.modules[0];
+  assert.equal(savedModule.catalog.runtimeMode, "STATIC");
+  assert.equal(savedModule.catalog.buildCommand, "pnpm run build");
+  assert.equal(savedModule.catalog.artifactPath, "dist");
+  assert.deepEqual(savedModule.catalog.dependencies, ["Vue", "Vite", "Node.js", "pnpm", "Nginx"]);
+  assert.deepEqual(savedModule.catalog.proxyHints, [{ location: "/api", stripPrefix: true, targetPort: 8080 }]);
 });

@@ -18,7 +18,7 @@ import {
 } from "./serviceInstallation";
 import { hostObservationExpired, type Host } from "./hosts";
 import { softwareHasInstallationRecord, softwareIsDockerEngine, softwareState, type SoftwareInstance } from "./software";
-import { catalogDefaultRecipe, catalogInstances, catalogInstallState, catalogPending, catalogPendingRecords, catalogVersionMatches, installedPythonPaths } from "./softwareCatalog";
+import { catalogDefaultRecipe, catalogInstances, catalogInstallState, catalogPending, catalogPendingRecords, catalogVersionMatches, installedJavaPaths, installedPythonPaths } from "./softwareCatalog";
 import { softwareWebAccess } from "./webAccess";
 import "./software-recipes.css";
 
@@ -60,6 +60,7 @@ const dockerInstance = computed(() => softwareInstances.value.find((item) => ite
   item.managementMode !== "RELEASED" && softwareIsDockerEngine(item)));
 const targetId = ref("");
 const pythonPaths = computed(() => installedPythonPaths(softwareInstances.value, targetId.value));
+const javaPaths = computed(() => installedJavaPaths(softwareInstances.value, targetId.value));
 const installedGit = computed(() => softwareInstances.value.find((item) => item.hostId === targetId.value &&
   item.softwareType === "GIT" && item.managementMode !== "RELEASED" &&
   (['READY', 'INSTALLING', 'UNKNOWN'].includes(item.installationStatus || '') || item.actualState === 'INSTALLED')));
@@ -104,58 +105,81 @@ function showJobLogs(jobId: string) {
   emit("logs", jobId);
 }
 const search = ref(props.initialSearch ?? "");
+watch(() => props.initialSearch, (value) => { search.value = value || ""; });
 const category = ref("ALL");
 const selectedVersions = ref<Record<string, string>>({});
 const categories = [
   { key: "ALL", label: "全部软件" },
-  { key: "SERVICES", label: "服务软件" },
-  { key: "ANNOTATION", label: "标注平台" },
+  { key: "DATA", label: "数据库与缓存" },
+  { key: "WEB_MW", label: "Web 与中间件" },
+  { key: "CICD", label: "CI/CD 与协作" },
+  { key: "RUNTIME", label: "运行与构建" },
+  { key: "MEDIA", label: "媒体与标注" },
   { key: "ENGINE", label: "容器引擎" },
-  { key: "JAVA_RUNTIME", label: "运行环境" },
-  { key: "MAVEN_JDK_BUILD", label: "构建工具" },
-  { key: "MEDIA_TOOLS", label: "媒体工具" },
-  { key: "PROGRAMMING", label: "编程软件" },
-  { key: "CUSTOM", label: "自定义软件" },
+  { key: "CUSTOM", label: "自定义与工具" },
 ];
 function recipeSubtitle(d: ServiceRecipe) {
+  const key = recipeCatalogKey(d);
   if (d.category === "ANNOTATION") return "数据标注平台";
   if (d.commands && !d.commands.builtin) return { TOOL: "程序工具", SYSTEMD: "系统服务", DOCKER: "容器服务", SERVICE: "服务" }[d.commands.kind];
-  if (d.key === "git") return "版本控制";
-  if (d.key === "docker") return "主机容器运行引擎";
-  if (d.category === "PROGRAMMING") return "编程软件";
-  if (["java", "python"].includes(d.key)) return "应用运行环境";
-  if (d.key === "maven") return "项目构建工具";
-  if (d.key === "ffmpeg") return "媒体处理工具";
-  if (["mediamtx", "zlm"].includes(d.key)) return "多协议媒体服务";
-  if (d.key === "seaweedfs") return "S3 对象存储";
-  return d.key === "mysql"
+  if (key === "git") return "版本控制";
+  if (key === "gitlab") return "Git 代码与 CI/CD 平台";
+  if (key === "jenkins") return "持续集成与交付";
+  if (key === "nacos") return "注册与配置中心";
+  if (key === "postgresql") return "关系数据库";
+  if (key === "docker") return "主机容器运行引擎";
+  if (d.category === "PROGRAMMING") return "编程工具";
+  if (["java", "python"].includes(key)) return "应用运行环境";
+  if (key === "maven") return "项目构建工具";
+  if (key === "ffmpeg") return "媒体处理工具";
+  if (["mediamtx", "zlm"].includes(key)) return "多协议媒体服务";
+  if (key === "seaweedfs") return "S3 对象存储";
+  return key === "mysql"
     ? "关系数据库"
-    : d.key === "redis"
+    : key === "redis"
       ? "内存数据服务"
-      : d.key === "nginx" ? "Web 与反向代理" : isTool(d) ? "程序工具" : "服务软件";
+      : key === "nginx" ? "Web 与反向代理" : isTool(d) ? "程序工具" : "服务软件";
+}
+function matchesCategory(d: ServiceRecipe, cat: string) {
+  const g = recipeCatalogKey(d);
+  switch (cat) {
+    case "ALL":
+      return true;
+    case "CUSTOM":
+      return !!(d.commands && !d.commands.builtin);
+    case "DATA":
+      return ["mysql", "postgresql", "redis", "seaweedfs"].includes(g);
+    case "WEB_MW":
+      return ["nginx", "nacos"].includes(g);
+    case "CICD":
+      return ["jenkins", "gitlab", "git"].includes(g);
+    case "RUNTIME":
+      return ["java", "python", "maven"].includes(g) || d.category === "BUILD_TOOLS";
+    case "MEDIA":
+      return d.category === "ANNOTATION" || d.category === "MEDIA_TOOLS" || ["ffmpeg", "mediamtx", "zlm", "ytlabel", "label-studio"].includes(g);
+    case "ENGINE":
+      return d.key === "docker";
+    case "ANNOTATION":
+      return d.category === "ANNOTATION";
+    case "SERVICES":
+      return d.key !== "docker" && !isTool(d);
+    case "JAVA_RUNTIME":
+      return ["java", "python"].includes(d.key);
+    case "MAVEN_JDK_BUILD":
+      return ["maven", "git"].includes(d.key) || d.category === "BUILD_TOOLS";
+    case "MEDIA_TOOLS":
+    case "PROGRAMMING":
+      return d.category === cat;
+    default:
+      return true;
+  }
 }
 const catalogEntries = computed(() => {
   const term = search.value.trim().toLowerCase();
   const groups = new Map<string, ServiceRecipe[]>();
   for (const definition of serviceDefinitions.value) {
     if (definition.key === "node") continue;
-    if (category.value === "CUSTOM" && (!definition.commands || definition.commands.builtin)) continue;
-    if (category.value === "ANNOTATION" && definition.category !== "ANNOTATION") continue;
-    if (category.value === "ENGINE" && definition.key !== "docker") continue;
-    if (category.value === "SERVICES" && definition.key === "docker") continue;
-    if (category.value === "SERVICES" && isTool(definition)) continue;
-    if (
-      category.value === "JAVA_RUNTIME" &&
-      !["java", "python"].includes(definition.key)
-    )
-      continue;
-    if (category.value === "MAVEN_JDK_BUILD" && !["maven", "git"].includes(definition.key) && definition.category !== "BUILD_TOOLS")
-      continue;
-    if (
-      ["MEDIA_TOOLS", "PROGRAMMING"].includes(category.value) &&
-      definition.category !== category.value
-    )
-      continue;
+    if (!matchesCategory(definition, category.value)) continue;
     if (
       term &&
       !`${definition.name} ${definition.version} ${definition.image}`
@@ -176,7 +200,7 @@ const catalogEntries = computed(() => {
     versionChoices: Array.from(new Set(versions.map(item => item.version))),
   }));
 });
-const showNode = computed(() => ["ALL", "JAVA_RUNTIME"].includes(category.value) && (!search.value.trim() || /node|npm|pnpm|nvm|运行环境/i.test(search.value)));
+const showNode = computed(() => ["ALL", "RUNTIME", "JAVA_RUNTIME"].includes(category.value) && (!search.value.trim() || /node|npm|pnpm|nvm|运行环境/i.test(search.value)));
 const catalogItems = computed(() => [
   ...(showNode.value ? [{ kind: "node" as const }] : []),
   ...catalogEntries.value.map(entry => ({ kind: "recipe" as const, entry })),
@@ -293,7 +317,7 @@ async function refresh() {
       if (!services.some(item => recipeCatalogKey(item) === key && item.version === selectedVersions.value[key]))
         selectedVersions.value[key] = definition.version;
     }
-    if (!targetId.value && ts.length)
+    if ((!targetId.value || !ts.some(({ id }) => id === targetId.value)) && ts.length)
       targetId.value = ts.some((t) => t.id === props.hostId)
         ? props.hostId
         : ts[0]!.id;
@@ -307,6 +331,8 @@ async function refresh() {
   }
 }
 watch(() => [props.initialRecipeKey, props.hostId, serviceDefinitions.value.length], () => {
+  if (props.hostId && targets.value.some(({ id }) => id === props.hostId))
+    targetId.value = props.hostId;
   if (props.initialRecipeKey && props.hostId && !serviceRecipe.value) {
     const recipe = serviceDefinitions.value.find((item) => item.key === props.initialRecipeKey);
     if (recipe) {
@@ -315,6 +341,15 @@ watch(() => [props.initialRecipeKey, props.hostId, serviceDefinitions.value.leng
     }
   }
 }, { immediate: true });
+watch(() => props.hostId, (host) => {
+  if (host && targets.value.some(({ id }) => id === host)) {
+    targetId.value = host;
+    if (!props.initialRecipeKey) {
+      serviceRecipe.value = undefined;
+      serviceRecord.value = undefined;
+    }
+  }
+});
 async function act(fn: () => Promise<void>) {
   if (busy.value) return;
   busy.value = true;
@@ -471,17 +506,17 @@ onUnmounted(() => {
       </details>
       <button class="secondary installation-trigger" @click="showJobLogs('')">安装日志</button>
     </div>
-    <section v-if="currentTarget" class="docker-engine-bar" aria-label="主机 Docker Engine">
+    <section v-if="currentTarget" class="docker-engine-bar" aria-label="容器运行环境状态">
       <SoftwareIcon type="DOCKER" />
       <div>
-        <strong>Docker Engine <span>主机容器运行引擎</span></strong>
-        <p>{{ dockerInstance ? `已登记 · ${softwareState(dockerInstance).label}` :
-          currentDockerCapability?.status === 'AVAILABLE' ? '外部 Docker 已可用' : currentDockerCapability?.message || '当前状态待检查' }}</p>
+        <strong>容器引擎环境 · Docker Engine</strong>
+        <p>{{ dockerInstance ? `已在当前服务器登记 · ${softwareState(dockerInstance).label}` :
+          currentDockerCapability?.status === 'AVAILABLE' ? '宿主 Docker 已就绪，支持所有 Docker 模式软件安装' : currentDockerCapability?.message || '尚未确认宿主 Docker 状态（支持原生或 Docker 安装）' }}</p>
       </div>
-      <button v-if="dockerInstance" class="secondary" :disabled="busy" @click="emit('openInstance', dockerInstance.id)">管理 Docker</button>
+      <button v-if="dockerInstance" class="secondary" :disabled="busy" @click="emit('openInstance', dockerInstance.id)">管理容器引擎</button>
       <button v-else-if="dockerCanInstall" class="secondary" :disabled="busy || !dockerRecipe || currentTarget.maintenance"
-        @click="serviceRecord = undefined; serviceRecipe = dockerRecipe">安装 Docker Engine</button>
-      <button v-else-if="currentDockerCapability?.status !== 'AVAILABLE'" class="secondary" :disabled="busy" @click="probe">检查 Docker</button>
+        @click="serviceRecord = undefined; serviceRecipe = dockerRecipe">一键部署 Docker Engine</button>
+      <button v-else-if="currentDockerCapability?.status !== 'AVAILABLE'" class="secondary" :disabled="busy" @click="probe">检测 Docker 状态</button>
     </section>
     <div class="catalog-toolbar">
       <div class="catalog-categories" aria-label="软件分类">
@@ -617,6 +652,7 @@ onUnmounted(() => {
     :recipes="serviceDefinitions.filter((item) => serviceRecipe && recipeCatalogKey(item) === recipeCatalogKey(serviceRecipe))"
     :official-recipes="officialDefinitions.filter((item) => serviceRecipe && recipeCatalogKey(item) === recipeCatalogKey(serviceRecipe))"
     :known-python-paths="pythonPaths"
+    :known-java-paths="javaPaths"
     :docker-recipe="dockerRecipe"
     :docker-official-recipes="officialDefinitions.filter((item) => item.key === 'docker')"
     :host="currentTarget"

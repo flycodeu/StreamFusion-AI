@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -112,5 +114,91 @@ func TestApplicationProjectRecognitionDoesNotFollowManifestLinks(t *testing.T) {
 	got, err := inspectApplicationProjectSource(context.Background(), root, ".")
 	if err != nil || len(got) != 0 {
 		t.Fatalf("read a manifest through a symlink: %v (%v)", got, err)
+	}
+}
+
+func TestApplicationProjectDeepRecognitionSpringBootAndVite(t *testing.T) {
+	root := t.TempDir()
+	writeProjectInspectionFile(t, root, ".git/HEAD", "ref: refs/heads/main")
+	writeProjectInspectionFile(t, root, "platform-api/pom.xml", `<project><artifactId>platform-api</artifactId><parent><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-parent</artifactId><version>3.5.16</version></parent><properties><java.version>21</java.version></properties><dependencies><dependency><groupId>com.mysql</groupId><artifactId>mysql-connector-j</artifactId></dependency><dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-data-redis</artifactId></dependency><dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-actuator</artifactId></dependency></dependencies></project>`)
+	writeProjectInspectionFile(t, root, "platform-api/mvnw", "wrapper")
+	writeProjectInspectionFile(t, root, "platform-api/src/main/resources/application.yml", "spring:\n  profiles:\n    default: test\n  datasource:\n    url: ${DB_URL}\nserver:\n  port: ${SERVER_PORT:8080}\n")
+	writeProjectInspectionFile(t, root, "platform-api/src/main/resources/application-test.yml", "spring:\n  datasource:\n    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/streamfusion}\n    password: ${DB_PASSWORD:unsafe-default-should-be-redacted}\n  data:\n    redis:\n      host: ${REDIS_HOST:127.0.0.1}\n      password: ${REDIS_PASSWORD}\nserver:\n  port: ${SERVER_PORT:18080}\n")
+	writeProjectInspectionFile(t, root, "platform-api/src/main/resources/application-prod.yml", "spring:\n  datasource:\n    url: ${DB_URL}\n")
+	writeProjectInspectionFile(t, root, "platform-web/package.json", `{"packageManager":"pnpm@10.28.0","scripts":{"dev":"vite","build":"vite build","test":"vitest run"},"dependencies":{"vue":"3.5.0"},"devDependencies":{"vite":"8.0.0"}}`)
+	writeProjectInspectionFile(t, root, "platform-web/pnpm-lock.yaml", "lockfileVersion: '9.0'")
+	writeProjectInspectionFile(t, root, "platform-web/vite.config.ts", `export default { server: { proxy: { '^/api(?:/|$)': { target: env.API_TARGET || 'http://127.0.0.1:8080', rewrite: p => p.replace(/^\/api/, '') } } }, build: { outDir: 'dist' } }`)
+
+	got, err := inspectApplicationProjectSource(context.Background(), root, "")
+	if err != nil || len(got) != 2 {
+		t.Fatalf("want 2 deeply recognized modules, got %+v (%v)", got, err)
+	}
+	byDir := map[string]applicationProjectRecognition{}
+	for _, m := range got {
+		byDir[m.Directory] = m
+	}
+	api := byDir["platform-api"]
+	if api.RecommendedRuntimeMode != "NATIVE" || api.DefaultProfile != "test" || api.DefaultPort != 18080 || api.HealthPath != "/actuator/health" {
+		t.Fatalf("unexpected Spring Boot metadata: %+v", api)
+	}
+	if !slices.Equal(api.Profiles, []string{"prod", "test"}) || !slices.Contains(api.Dependencies, "MySQL") || !slices.Contains(api.Dependencies, "Redis") {
+		t.Fatalf("unexpected profiles/dependencies: %+v", api)
+	}
+	hints := map[string]applicationEnvHint{}
+	for _, h := range api.EnvHints {
+		hints[h.Name] = h
+	}
+	if !hints["DB_PASSWORD"].Sensitive || hints["DB_PASSWORD"].DefaultValue != "" {
+		t.Fatalf("sensitive env hint leaked or not flagged: %+v", hints["DB_PASSWORD"])
+	}
+	if hints["DB_URL"].DefaultValue != "jdbc:mysql://127.0.0.1:3306/streamfusion" || hints["REDIS_HOST"].DefaultValue != "127.0.0.1" {
+		t.Fatalf("expected profile defaults preserved: %+v", hints)
+	}
+	web := byDir["platform-web"]
+	if web.RecommendedRuntimeMode != "STATIC" || web.BuildCommand != "pnpm run build" || web.ArtifactPath != "dist" || !slices.Contains(web.Dependencies, "Nginx") {
+		t.Fatalf("unexpected frontend recognition: %+v", web)
+	}
+	if len(web.ProxyHints) != 1 || web.ProxyHints[0].Location != "/api" || !web.ProxyHints[0].StripPrefix || web.ProxyHints[0].TargetPort != 8080 {
+		t.Fatalf("unexpected vite proxy hints: %+v", web.ProxyHints)
+	}
+}
+
+func TestApplicationProjectInspectRemoteGitRepository(t *testing.T) {
+	_, b := setup(t)
+	b.login()
+
+	for _, bad := range []map[string]string{
+		{"repositoryUrl": "file:///etc/passwd"},
+		{"repositoryUrl": "https://user:secret@github.com/org/repo.git"},
+		{"repositoryUrl": "https://github.com/org/repo.git", "branch": "--upload-pack=bad"},
+	} {
+		raw, _ := json.Marshal(bad)
+		b.call("POST", "/application-projects/inspect", json.RawMessage(bytes.TrimSpace(raw)), http.StatusBadRequest)
+	}
+
+	prev := cloneApplicationProjectRepo
+	defer func() { cloneApplicationProjectRepo = prev }()
+	var clonedURL, clonedBranch string
+	cloneApplicationProjectRepo = func(_ context.Context, repoURL, branch, destDir string, _ *applicationGitCloneAuth) (string, string, error) {
+		clonedURL, clonedBranch = repoURL, branch
+		writeProjectInspectionFile(t, destDir, ".git/HEAD", "ref: refs/heads/main")
+		writeProjectInspectionFile(t, destDir, "web/package.json", `{"scripts":{"build":"vite build"},"dependencies":{"vue":"3.5.0"}}`)
+		return "", "", nil
+	}
+
+	project := applicationResponse(t, b.call("POST", "/application-projects/catalog", map[string]any{
+		"name":         "远程仓库识别",
+		"repositories": []applicationCatalogRepository{{Name: "主仓库", URL: "https://github.com/example/demo.git", Branch: "develop"}},
+	}, http.StatusOK))
+
+	resp := dataOf(t, b.call("POST", "/application-projects/inspect", map[string]string{
+		"projectId": project.ID,
+	}, http.StatusOK))
+	if clonedURL != "https://github.com/example/demo.git" || clonedBranch != "develop" {
+		t.Fatalf("unexpected cloned repo=%q branch=%q", clonedURL, clonedBranch)
+	}
+	modules, _ := resp["modules"].([]any)
+	if len(modules) != 1 {
+		t.Fatalf("expected 1 inspected module from remote git, got %+v", resp)
 	}
 }

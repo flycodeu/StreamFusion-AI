@@ -86,7 +86,7 @@ func (h *HTTP) checkSoftwareConfiguration(ctx context.Context, t target, i softw
 	}
 	err := h.store.callTarget(ctx, t, deploy.Request{Action: "SOFTWARE_CONFIGURE_CHECK", Software: softwareRequest(i), Reconfiguration: change}, "", &out)
 	if err == nil {
-		root := serviceinstall.InstallRoot(t.InstallRoot, i.ID, config)
+		root := serviceinstall.InstallRootFor(t.InstallRoot, i.ID, i.Installation.DirectoryName, config)
 		if out.Root != root || out.DataDirectory != root+"/data" || out.ConfigDirectory != root+"/config" {
 			err = errors.New("INSTALL_PREFLIGHT_MISMATCH")
 		}
@@ -207,7 +207,7 @@ func (h *HTTP) createSoftwareConfigurationPlan(w http.ResponseWriter, r *http.Re
 		h.fail(w, r, 409, "INSTALL_PORT_RESERVED", "其他有效计划已预留该协议端口")
 		return
 	}
-	if err = reserveManagementResources(tx, t.ID, i.ID, "", installationResources(t.InstallRoot, i.ID, p.Definition, p.Config)); err != nil {
+	if err = reserveManagementResources(tx, t.ID, i.ID, "", installationResources(t.InstallRoot, i.ID, p.Previous.DirectoryName, p.Definition, p.Config)); err != nil {
 		h.fail(w, r, 409, configurationErrorCode(err), "配置资源与其他软件或待执行操作冲突，请调整后重检")
 		return
 	}

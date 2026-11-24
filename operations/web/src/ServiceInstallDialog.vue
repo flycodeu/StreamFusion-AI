@@ -14,6 +14,7 @@ import RecipeSystemStepDetails from "./RecipeSystemStepDetails.vue";
 import SoftwareParameterFields from "./SoftwareParameterFields.vue";
 import RuntimePolicyFields from "./RuntimePolicyFields.vue";
 import JenkinsUnlockPassword from "./JenkinsUnlockPassword.vue";
+import SoftwareLogViewer from "./SoftwareLogViewer.vue";
 import { canCopyJenkinsUnlockPassword } from "./jenkinsUnlock";
 import { softwareJobErrorMessages, softwareJobPhaseLabel } from "./software";
 import { installationWebAccess, isPresetJenkins, softwareWebAccess } from "./webAccess";
@@ -45,6 +46,7 @@ const props = defineProps<ServiceInstallationProps & {
   dockerRecipe?: ServiceRecipe;
   dockerOfficialRecipes?: ServiceRecipe[];
   knownPythonPaths?: string[];
+  knownJavaPaths?: string[];
   embedded?: boolean;
 }>();
 const emit = defineEmits<{
@@ -79,6 +81,20 @@ function supportsNative(item: ServiceRecipe) {
   const cap = host.value?.capabilities;
   if (cap?.platform && cap.platform.replace(/x86_64$/, "amd64") !== item.platform) return false;
   if (item.commands && !item.commands.builtin) return !cap?.distribution || !item.commands.distributions?.length || item.commands.distributions.includes(cap.distribution);
+  const buildRecipe = item.native?.buildRecipe || "";
+  if (item.sourceModes.includes("OFFICIAL") || buildRecipe === "SYSTEM_APT") {
+    if (!cap?.distribution) return true;
+    if (cap.distribution !== "ubuntu") return false;
+    if (!cap.distributionVersion) return true;
+    if (buildRecipe === "SYSTEM_DOCKER_DEB" || item.key === "python") return cap.distributionVersion === "24.04";
+    return cap.distributionVersion === "24.04" || cap.distributionVersion === "22.04";
+  }
+  if (["DEB", "DEB_PACKAGE", "GIT_DEB", "SYSTEM_DOCKER_DEB"].includes(buildRecipe)) {
+    return !cap?.distribution || (cap.distribution === "ubuntu" && (!cap.distributionVersion || cap.distributionVersion === "24.04"));
+  }
+  if (buildRecipe || item.commands?.builtin) {
+    return true;
+  }
   return !cap?.distribution || cap.distribution === "ubuntu" && (!cap.distributionVersion || cap.distributionVersion === "24.04");
 }
 const nativeVariants = computed(() => variants.value.filter(item => item.runtimeModes.includes("NATIVE") && supportsNative(item)));
@@ -201,6 +217,14 @@ const {
   credentialName,
   credentialSecret,
   revealSecret,
+  s3PairOpen,
+  s3PairName,
+  s3PairAccess,
+  s3PairSecret,
+  s3PairReveal,
+  openS3PairEditor,
+  generateS3Pair,
+  saveS3Pair,
   selectedFile,
   archiveSHA,
   materialProgress,
@@ -307,6 +331,32 @@ watch([configuration, () => host.value?.address, () => configuration.value?.host
     (config.parameters ||= {}).EXTERNAL_URL = url;
   generatedWebURL = url;
 }, { immediate: true });
+
+let nacosDerivedBasePort: number | undefined;
+watch(
+  [configuration, () => configuration.value?.hostPort, () => recipe.value && recipeCatalogKey(recipe.value)],
+  () => {
+    const config = configuration.value, def = recipe.value;
+    if (!config || !def || recipeCatalogKey(def) !== "nacos" || existing.value || submitted.value) {
+      nacosDerivedBasePort = undefined;
+      return;
+    }
+    const base = Number(config.hostPort);
+    if (!Number.isInteger(base) || base < 1 || base > 65535 - 1001) return;
+    if (nacosDerivedBasePort === undefined) {
+      nacosDerivedBasePort = base;
+      return;
+    }
+    if (nacosDerivedBasePort === base) return;
+    if (config.ports.GRPC === nacosDerivedBasePort + 1000) {
+      config.ports.GRPC = base + 1000;
+    }
+    if (config.ports.CLUSTER_GRPC === nacosDerivedBasePort + 1001) {
+      config.ports.CLUSTER_GRPC = base + 1001;
+    }
+    nacosDerivedBasePort = base;
+  },
+);
 const webPreview = computed(() => {
   const config = plan.value?.config || configuration.value;
   return recipe.value && config ? installationWebAccess(plan.value?.definition || recipe.value, config, host.value) : undefined;
@@ -445,6 +495,15 @@ async function uploadInstallationPackage() {
         <button v-if="selfDetectionAvailable" class="primary" @click="emit('register', host.id, selfRecipe?.key.toUpperCase() || 'OTHER')">检测并登记</button>
       </section>
       <div v-if="mode && mode !== 'SELF' && step < 3 && !existing" class="settings-grid" :class="{ 'official-settings': method === 'OFFICIAL' }">
+      <div v-if="method === 'OFFICIAL'" class="ops-guide-banner">
+        <strong>官方系统仓库安装说明：</strong>采用目标系统（Ubuntu 22.04 / 24.04）官方 APT 软件源安装，端口、服务单元、配置与数据目录均沿用发行版标准路径，无需额外自定义端口或挂载目录。
+      </div>
+      <div v-else-if="recipe.native?.buildRecipe?.endsWith('_SOURCE') && configuration.runtimeMode === 'NATIVE'" class="ops-guide-banner warn">
+        <strong>源码编译原生安装提示：</strong>该版本将在目标服务器本地编译安装，请确认主机已预先准备基础编译环境与开发头文件（所需工具：<code>{{ recipe.native.requiredTools?.join(" ") }}</code>）。如希望开箱即用，可切换至 Docker 安装。
+      </div>
+      <div v-if="(recipe.defaultMemoryMiB || 0) >= 4096 || catalogKey === 'gitlab'" class="ops-guide-banner warn">
+        <strong>内存资源建议：</strong>{{ recipe.name }} 服务运行内存需求较高（推荐可用内存 ≥ {{ Math.max(recipe.defaultMemoryMiB || 0, catalogKey === 'gitlab' ? 8192 : 4096) }} MiB），请确认下方内存限额与服务器实际物理内存充足。
+      </div>
       <section v-if="method === 'OFFICIAL'" class="install-panel" aria-label="官方安装配置">
         <label>实例名称<input v-model="configuration.name" aria-label="实例名称" :disabled="busy" maxlength="120" /></label>
       </section>
@@ -501,7 +560,7 @@ async function uploadInstallationPackage() {
             maxlength="120"
         /></label>
         <label v-if="recipe.commands && !recipe.commands.builtin && recipe.commands.steps.some(command => command.runAs === 'ACCOUNT')">执行账号<input v-model="configuration.account" aria-label="执行账号" :disabled="busy" placeholder="例如 ubuntu" maxlength="32" autocomplete="username" /></label>
-        <SoftwareParameterFields v-if="recipe.parameters?.length" :key="`${host.id}:${recipe.key}:${recipe.version}`" ref="parameterFields" class="custom-install-parameters" :fields="recipe.parameters" :model-value="configuration.parameters || {}" :credential-refs="configuration.parameterCredentials" :path-options="{ PYTHON_BINARY: props.knownPythonPaths || [] }" :disabled="busy" :context-name="configuration.name" @update:model-value="configuration.parameters = $event" @update:credential-refs="configuration.parameterCredentials = $event" @busy="parameterBusy = $event" @draft="touched = true" @error="emit('error', $event)" />
+        <SoftwareParameterFields v-if="recipe.parameters?.length" :key="`${host.id}:${recipe.key}:${recipe.version}`" ref="parameterFields" class="custom-install-parameters" :fields="recipe.parameters" :model-value="configuration.parameters || {}" :credential-refs="configuration.parameterCredentials" :path-options="{ PYTHON_BINARY: props.knownPythonPaths || [], JAVA_BINARY: props.knownJavaPaths || [] }" :disabled="busy" :context-name="configuration.name" @update:model-value="configuration.parameters = $event" @update:credential-refs="configuration.parameterCredentials = $event" @busy="parameterBusy = $event" @draft="touched = true" @error="emit('error', $event)" />
         <p v-if="recipeCatalogKey(recipe) === 'ytlabel'" class="install-note">ytlabel 无登录认证，请在受限网络使用。</p>
         <div v-if="recipe.key === 'mysql'" class="form-row">
           <label
@@ -531,6 +590,81 @@ async function uploadInstallationPackage() {
             maxlength="32"
             autocomplete="username"
         /></label>
+        <div v-if="recipe.key === 'seaweedfs'" class="s3-pair-header">
+          <span>S3 密钥对（Access Key + Secret Key）</span>
+          <button
+            type="button"
+            class="quiet"
+            :disabled="busy"
+            @click="openS3PairEditor"
+          >
+            {{ s3PairOpen ? "已展开成对新建" : "成对新建密钥" }}
+          </button>
+        </div>
+        <div v-if="recipe.key === 'seaweedfs' && s3PairOpen" class="credential-editor s3-pair-editor">
+          <header>
+            <strong>成对新建 SeaweedFS S3 密钥对</strong>
+            <button
+              type="button"
+              class="quiet"
+              :disabled="busy"
+              @click="
+                s3PairOpen = false;
+                s3PairAccess = '';
+                s3PairSecret = '';
+              "
+            >
+              收起
+            </button>
+          </header>
+          <label
+            >密钥组名称<input
+              v-model="s3PairName"
+              aria-label="S3 密钥组名称"
+              maxlength="46"
+              :disabled="busy"
+          /></label>
+          <label
+            >S3 Access Key<input
+              v-model="s3PairAccess"
+              :type="s3PairReveal ? 'text' : 'password'"
+              aria-label="S3 Access Key"
+              autocomplete="off"
+              :disabled="busy"
+          /></label>
+          <label
+            >S3 Secret Key
+            <div class="secret-input">
+              <input
+                v-model="s3PairSecret"
+                :type="s3PairReveal ? 'text' : 'password'"
+                aria-label="S3 Secret Key"
+                autocomplete="new-password"
+                :disabled="busy"
+              /><button
+                type="button"
+                class="quiet"
+                :disabled="busy"
+                @click="s3PairReveal = !s3PairReveal"
+              >
+                {{ s3PairReveal ? "隐藏" : "显示" }}
+              </button>
+            </div></label
+          >
+          <div class="inline-actions">
+            <button type="button" class="secondary" :disabled="busy" @click="generateS3Pair">
+              一键生成密钥对
+            </button>
+            <button
+              type="button"
+              class="primary"
+              :disabled="busy || !s3PairAccess.trim() || !s3PairSecret.trim() || !s3PairName.trim()"
+              @click="saveS3Pair"
+            >
+              成对保存并选用
+            </button>
+          </div>
+        </div>
         <div
           v-for="role in credentialRoles"
           :key="role"
@@ -637,7 +771,7 @@ async function uploadInstallationPackage() {
           <strong>{{ planExpired ? "预检已过期" : "预检完成" }}</strong
           ><small>有效至 {{ hostTime(plan.expiresAt) }}</small>
         </div>
-        <p v-if="plan.config.runtimeMode === 'DOCKER'" class="source-summary">在 Ubuntu 24.04 上，安装时会一起检查宿主机终端工具。缺少的客户端会从主机的 APT 软件源补装。</p>
+        <p v-if="plan.config.runtimeMode === 'DOCKER'" class="source-summary">若目标主机为 Ubuntu 24.04，安装时会同步检查宿主机终端工具；其他 Linux amd64 系统仅部署容器实例。</p>
         <ul v-if="warningChecks.length" class="preflight-checks">
           <li
             v-for="check in warningChecks"
@@ -774,7 +908,15 @@ async function uploadInstallationPackage() {
           <button v-if="canRetryInstallation && retryRecipe" class="primary" @click="retryFailedInstallation()">重新安装</button>
           <a v-if="installedWeb?.url" class="primary installed-web-link" :href="installedWeb.url" target="_blank" rel="noopener noreferrer">进入系统 ↗</a>
           <JenkinsUnlockPassword v-if="unlockInstanceId" :key="unlockInstanceId" :instance-id="unlockInstanceId" :instance="existing" />
-          <button class="secondary" @click="showJobLogs()">查看日志</button>
+          <button class="secondary" @click="showJobLogs()">在完整日志页打开</button>
+        </div>
+        <div class="embedded-log-viewer">
+          <SoftwareLogViewer
+            mode="jobs"
+            :job-id="receipt.jobId"
+            :title="recipe.name"
+            :host-name="host.name"
+          />
         </div>
       </section>
       </main>
@@ -883,7 +1025,8 @@ async function uploadInstallationPackage() {
 .install-panel { gap: 16px; }
 .install-panel h3 { font-size: 13px; letter-spacing: .1px; color: #273c53; }
 .instance-panel { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
-.instance-panel > h3, .instance-panel > .form-row, .instance-panel > .credential-field, .instance-panel > .credential-editor { grid-column: 1 / -1; }
+.instance-panel > h3, .instance-panel > .form-row, .instance-panel > .credential-field, .instance-panel > .credential-editor, .instance-panel > .s3-pair-header, .instance-panel > .s3-pair-editor { grid-column: 1 / -1; }
+.s3-pair-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; color: #334155; }
 .host-readiness { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; color: #63778e; line-height: 1.6; }
 .self-install { padding: 8px 0 20px; }
 .self-install p { margin: 0; font-size: 13px; line-height: 1.9; color: var(--muted); }
@@ -913,6 +1056,12 @@ async function uploadInstallationPackage() {
 .check-details { color: var(--muted); font-size: 12px; }
 .check-details > summary { cursor: pointer; }
 .execution-panel { gap: 18px; }
+.embedded-log-viewer {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: #ffffff;
+}
 .job-result { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 16px 18px; border-radius: 6px; }
 .job-result strong { font-size: 15px; }
 

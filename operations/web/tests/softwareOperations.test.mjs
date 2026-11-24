@@ -1573,3 +1573,46 @@ test("job summaries use Chinese labels without repeating protocol codes", () => 
   );
   assert.equal(software.softwareJobDiagnostic(), "状态未提供 · 阶段未提供");
 });
+
+test("seaweedfs paired key creation stores access and secret keys together and selects both", async () => {
+  let seq = 0;
+  const seaweedRecipe = {
+    ...recipe,
+    key: "seaweedfs",
+    name: "SeaweedFS",
+    kind: "SERVICE",
+    port: 8333,
+    ports: [{ key: "main", label: "S3", defaultPort: 8333, containerPort: 8333, protocol: "TCP", required: true }],
+  };
+  const h = installationHarness([], {
+    recipe: seaweedRecipe,
+    runtimeMode: "DOCKER",
+    request: async (path, method, data) => {
+      if (path === "/credentials" && method === "GET") return [];
+      if (path === "/credentials" && method === "POST") {
+        seq++;
+        return { id: `cred-${seq}`, revision: "1" };
+      }
+      if (path.startsWith("/installation-materials?")) return [];
+      throw new Error(`Unexpected ${method} ${path}`);
+    },
+  });
+  await flush();
+  h.flow.openS3PairEditor();
+  assert.equal(h.flow.s3PairOpen.value, true);
+  h.flow.generateS3Pair();
+  assert.equal(h.flow.s3PairAccess.value.length, 20);
+  assert.equal(h.flow.s3PairSecret.value.length, 32);
+  await h.flow.saveS3Pair();
+  await flush();
+  const posts = h.calls.filter((x) => x.path === "/credentials" && x.method === "POST");
+  assert.equal(posts.length, 2);
+  assert.equal(posts[0].data.kind, "TOKEN");
+  assert.equal(posts[1].data.kind, "PASSWORD");
+  assert.equal(h.flow.configuration.value.accessKeyCredentialId, "cred-1");
+  assert.equal(h.flow.configuration.value.credentialId, "cred-2");
+  assert.equal(h.flow.s3PairAccess.value, "");
+  assert.equal(h.flow.s3PairSecret.value, "");
+  assert.equal(h.flow.s3PairOpen.value, false);
+  h.dispose();
+});

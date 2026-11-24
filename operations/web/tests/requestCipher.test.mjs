@@ -119,6 +119,7 @@ test("credential and host installation submissions use the envelope while reconc
     "/software-instances/00000000-0000-0000-0000-000000000001/login-accounts/redis-default/copy-password",
     "/application-projects/00000000-0000-0000-0000-000000000001/jenkins-monitor",
     "/application-projects/00000000-0000-0000-0000-000000000001/jenkins-connection",
+    "/application-projects/00000000-0000-0000-0000-000000000001/jenkins-connection/test",
     "/application-projects/00000000-0000-0000-0000-000000000001/service-instances/00000000-0000-0000-0000-000000000002/jenkins-monitor",
   ]) {
     assert.equal(isSensitiveRequest(path, "POST"), true);

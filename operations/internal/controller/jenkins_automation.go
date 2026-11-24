@@ -50,8 +50,10 @@ func effectiveJenkinsMonitor(q applicationReader, scope jenkinsScope) (string, j
 		}
 		return "", jenkinsMonitor{}, "请先在项目维护中选择 Jenkins。", nil
 	}
-	var kind, toolchain, directory, repository, branch, host, environment, module string
-	const moduleQuery = `SELECT coalesce(json_extract(m.config_json,'$.catalog.kind'),''),coalesce(json_extract(m.config_json,'$.catalog.environment'),''),m.directory,coalesce(r.url,''),coalesce(r.branch,'')
+	var kind, toolchain, directory, repository, branch, credential, host, environment, module string
+	var skipTests bool
+	const moduleQuery = `SELECT coalesce(json_extract(m.config_json,'$.catalog.kind'),''),coalesce(json_extract(m.config_json,'$.catalog.environment'),''),
+	    m.directory,coalesce(r.url,''),coalesce(r.branch,''),coalesce(r.jenkins_credential_id,''),coalesce(json_extract(m.config_json,'$.catalog.skipTests'),0)
 	    FROM application_modules m LEFT JOIN application_repositories r ON r.id=m.repository_id AND r.project_id=m.project_id WHERE m.project_id=? AND m.id=?`
 	module = scope.module
 	if scope.instance != "" {
@@ -60,7 +62,7 @@ func effectiveJenkinsMonitor(q applicationReader, scope jenkinsScope) (string, j
 			return "", jenkinsMonitor{}, "", err
 		}
 	}
-	err = q.QueryRow(moduleQuery, scope.project, module).Scan(&kind, &toolchain, &directory, &repository, &branch)
+	err = q.QueryRow(moduleQuery, scope.project, module).Scan(&kind, &toolchain, &directory, &repository, &branch, &credential, &skipTests)
 	if err != nil {
 		return "", jenkinsMonitor{}, "", err
 	}
@@ -80,12 +82,24 @@ func effectiveJenkinsMonitor(q applicationReader, scope jenkinsScope) (string, j
 		directory = "."
 	}
 	if _, err = applicationRepositoryEndpoint(repository); err != nil || !applicationRelative(directory) ||
+		(credential != "" && !applicationJenkinsCredentialID.MatchString(credential)) ||
 		strings.ContainsFunc(repository+branch+directory, unicode.IsControl) ||
 		strings.ContainsAny(branch, `*?[:^~\`) || strings.Contains(branch, "..") || strings.Contains(branch, "@{") {
 		return "", jenkinsMonitor{}, "请核对项目维护中的仓库、分支和模块相对目录。", nil
 	}
+	label, ok := resolveJenkinsBuildAgentLabel(nil, conn.BuildAgentLabel)
+	if !ok {
+		return "", jenkinsMonitor{}, "请在项目维护中修正 Jenkins 构建节点标签。", nil
+	}
 	var script bytes.Buffer
-	err = qaPipelineTemplate.Execute(&script, struct{ Kind, Repository, Branch, Directory string }{kind, groovyLiteral(repository), groovyLiteral(branch), groovyLiteral(directory)})
+	credentialArg := ""
+	if credential != "" {
+		credentialArg = groovyLiteral(credential)
+	}
+	err = qaPipelineTemplate.Execute(&script, struct {
+		Kind, Repository, Branch, Directory, Credential, AgentLabel string
+		SkipTests                                                   bool
+	}{kind, groovyLiteral(repository), groovyLiteral(branch), groovyLiteral(directory), credentialArg, groovyLiteral(label), skipTests})
 	if err != nil {
 		return "", jenkinsMonitor{}, "", err
 	}
@@ -127,28 +141,42 @@ type jenkinsWorkflow struct {
 	} `xml:"definition"`
 }
 
-// Only reuse a matching sandboxed workflow. Never overwrite another job.
-func (c jenkinsBuildClient) ensureWorkflow(ctx context.Context, base url.URL, auto *jenkinsAutomation) error {
+func expectedJenkinsWorkflow(auto *jenkinsAutomation) jenkinsWorkflow {
 	var expected jenkinsWorkflow
 	expected.Description = "StreamFusion Ops · " + auto.name
 	expected.Definition.Class = "org.jenkinsci.plugins.workflow.cps.CpsFlowDefinition"
 	expected.Definition.Script = auto.script
 	expected.Definition.Sandbox = true
-	inspect := func() error {
-		res, err := c.get(ctx, c.jobPath("config.xml", nil), true)
-		if err != nil {
-			return err
-		}
-		defer res.Body.Close()
-		const limit = 256 << 10
-		content, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
-		var actual jenkinsWorkflow
-		if err != nil || len(content) > limit || xml.Unmarshal(content, &actual) != nil ||
-			actual.Description != expected.Description || actual.Definition != expected.Definition {
-			return errJenkinsJobConflict
-		}
-		return nil
+	return expected
+}
+
+func parseJenkinsWorkflow(content []byte, actual *jenkinsWorkflow) error {
+	// Jenkins serializes config.xml using XML 1.1. Its workflow fields use
+	// the XML 1.0 subset, which is what encoding/xml accepts.
+	const declaration = `<?xml version="1.1" encoding="UTF-8"?>`
+	return xml.Unmarshal(bytes.TrimPrefix(content, []byte(declaration)), actual)
+}
+
+func (c jenkinsBuildClient) inspectWorkflow(ctx context.Context, expected jenkinsWorkflow) error {
+	res, err := c.getWithVersionPolicy(ctx, c.jobPath("config.xml", nil), true, true)
+	if err != nil {
+		return err
 	}
+	defer res.Body.Close()
+	const limit = 256 << 10
+	content, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
+	var actual jenkinsWorkflow
+	if err != nil || len(content) > limit || parseJenkinsWorkflow(content, &actual) != nil ||
+		actual.Description != expected.Description || actual.Definition != expected.Definition {
+		return errJenkinsJobConflict
+	}
+	return nil
+}
+
+// Only reuse a matching sandboxed workflow. Never overwrite another job.
+func (c jenkinsBuildClient) ensureWorkflow(ctx context.Context, base url.URL, auto *jenkinsAutomation) error {
+	expected := expectedJenkinsWorkflow(auto)
+	inspect := func() error { return c.inspectWorkflow(ctx, expected) }
 	if err := inspect(); !errors.Is(err, errJenkinsMissing) {
 		return err
 	}
@@ -169,21 +197,52 @@ func (c jenkinsBuildClient) ensureWorkflow(ctx context.Context, base url.URL, au
 		return errJenkinsConnection
 	}
 	defer res.Body.Close()
-	if res.Header.Get("X-Jenkins") != c.version {
+	hdr := res.Header.Get("X-Jenkins")
+	if hdr != "" && hdr != c.version {
 		return errJenkinsPeer
 	}
 	switch res.StatusCode {
 	case http.StatusOK, http.StatusCreated:
+		if hdr != c.version {
+			// Jenkins can omit its version when createItem succeeds. Only
+			// accept the result after reading back the exact managed job.
+			res.Body.Close()
+			if err := inspect(); err == nil {
+				return nil
+			}
+			return errJenkinsPeer
+		}
 		return nil
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return errJenkinsAuth
 	case http.StatusBadRequest, http.StatusConflict:
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 16<<10))
+		if jenkinsMissingPipelinePlugin(string(body)) {
+			return errJenkinsPluginMissing
+		}
 		// Jenkins may have received a concurrent identical creation request.
 		if err := inspect(); !errors.Is(err, errJenkinsMissing) {
 			return err
 		}
 		return errJenkinsResponse
-	case http.StatusForbidden, http.StatusUnauthorized:
-		return errJenkinsAuth
 	default:
+		if res.StatusCode >= 400 && res.StatusCode < 600 {
+			body, _ := io.ReadAll(io.LimitReader(res.Body, 16<<10))
+			if jenkinsMissingPipelinePlugin(string(body)) {
+				return errJenkinsPluginMissing
+			}
+		}
 		return errJenkinsResponse
 	}
+}
+
+func jenkinsMissingPipelinePlugin(body string) bool {
+	lower := strings.ToLower(body)
+	missingClass := strings.Contains(lower, "cannotresolveclassexception") ||
+		strings.Contains(lower, "classnotfoundexception") ||
+		strings.Contains(lower, "noclassdeffounderror")
+	pipelineClass := strings.Contains(lower, "flow-definition") ||
+		strings.Contains(lower, "cpsflowdefinition") ||
+		strings.Contains(lower, "workflowjob")
+	return missingClass && pipelineClass
 }

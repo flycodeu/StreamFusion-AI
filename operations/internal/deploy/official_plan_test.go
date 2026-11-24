@@ -210,3 +210,34 @@ func TestOfficialOwnershipAndToolObservationUseFrozenSystemPaths(t *testing.T) {
 		t.Fatalf("official tool probe %+v %v %v", actual, err, commands)
 	}
 }
+
+func TestOfficialAptPlanSupportsUbuntu2204JammyAndRejectsMismatch(t *testing.T) {
+	d, err := serviceinstall.FindOfficial("nginx", "ubuntu24.04-repository")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jammyRelease := []byte("ID=ubuntu\nVERSION_ID=\"22.04\"\n")
+	distro, ok := detectOfficialDistro(jammyRelease, d)
+	if !ok || distro.planOS != "ubuntu22.04" || distro.codename != "jammy" {
+		t.Fatalf("unexpected jammy detection: %+v %v", distro, ok)
+	}
+	dockerDef, _ := serviceinstall.FindOfficial("docker", "29.9.2-official-ubuntu24.04")
+	if _, ok := detectOfficialDistro(jammyRelease, dockerDef); ok {
+		t.Fatal("docker noble DEB official recipe must not be allowed on 22.04")
+	}
+
+	good := "Inst nginx-common (1.18.0-6ubuntu14.5 Ubuntu:22.04/jammy-updates [all])\nInst nginx (1.18.0-6ubuntu14.5 Ubuntu:22.04/jammy-updates [amd64])\n"
+	pkgs, err := parseOfficialAptPlanForDistro([]byte(good), []string{"nginx", "nginx-common"}, map[string]string{}, ubuntu2204OfficialDistro)
+	if err != nil || len(pkgs) != 2 {
+		t.Fatalf("valid jammy plan rejected: %+v %v", pkgs, err)
+	}
+	// Cross-distro origin (noble on jammy) must be rejected
+	if _, err := parseOfficialAptPlanForDistro([]byte(strings.ReplaceAll(good, "22.04/jammy-updates", "24.04/noble-updates")), []string{"nginx", "nginx-common"}, map[string]string{}, ubuntu2204OfficialDistro); err == nil {
+		t.Fatal("cross-distro noble origin accepted on jammy")
+	}
+	policy := "nginx:\n  Installed: (none)\n  Candidate: 1.18.0-6ubuntu14.5\n  Version table:\n     1.18.0-6ubuntu14.5 500\n        500 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 Packages\nnginx-common:\n  Installed: (none)\n  Candidate: 1.18.0-6ubuntu14.5\n  Version table:\n     1.18.0-6ubuntu14.5 500\n        500 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 Packages\n"
+	indexes := "500 http://archive.ubuntu.com/ubuntu jammy-updates/main amd64 Packages\n release v=22.04,o=Ubuntu,a=jammy-updates,n=jammy,l=Ubuntu,c=main,b=amd64\n"
+	if err := verifyOfficialPolicyForDistro([]byte(policy), pkgs, []byte(indexes), ubuntu2204OfficialDistro); err != nil {
+		t.Fatalf("valid jammy policy rejected: %v", err)
+	}
+}

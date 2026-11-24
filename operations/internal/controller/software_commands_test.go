@@ -115,7 +115,7 @@ func TestCommandSoftwareInstallAndUninstallKeepFrozenTemplate(t *testing.T) {
 					t.Error("transport signature changed frozen job hash")
 				}
 				if req.Action == "SOFTWARE_INSTALL_CHECK" {
-					return encode(installPreflightFixture(*req.Installation, serviceinstall.InstallRoot("/opt/plugin-test", req.Installation.SoftwareID, req.Installation.Config), true))
+					return encode(installPreflightFixture(*req.Installation, req.Installation.InstallRoot("/opt/plugin-test"), true))
 				}
 				if req.Action == "SOFTWARE_INSTALL_LOGS" {
 					return encode(map[string]any{"text": "command uninstall output", "limited": false})
@@ -139,7 +139,7 @@ func TestCommandSoftwareInstallAndUninstallKeepFrozenTemplate(t *testing.T) {
 						t.Error("uninstall lost original template or verified ownership")
 					}
 					target, _ := s.readTarget(req.TargetID)
-					data := serviceinstall.InstallRoot(target.InstallRoot, req.Software.ID, req.Uninstallation.Installation.Config) + "/data"
+					data := req.Uninstallation.Installation.InstallRoot(target.InstallRoot) + "/data"
 					results[req.JobID] = deploy.Result{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID, JobID: req.JobID, InputHash: req.InputHash, Status: "SUCCEEDED", Phase: "SOFTWARE_UNINSTALLED", ObservedAt: Now(), Uninstallation: &deploy.SoftwareUninstallEvidence{SoftwareID: req.Software.ID, Kind: kind, Locator: req.Software.Locator, IdentityHash: req.Software.IdentityHash, ProgramRemoved: true, DataRoot: data, ObservedAt: Now()}}
 				}
 				result := results[req.JobID]

@@ -15,6 +15,8 @@ import {
   type RuntimePolicyState,
 } from "./runtimePolicy";
 import { softwareJobDiagnostic, softwareJobErrorMessages } from "./software";
+import { isProjectJob } from "./jobs";
+import { projectDeploymentErrorText } from "./projectDeployments";
 
 export interface WorkspaceRuntimeEnvironment {
   installationId: string;
@@ -210,6 +212,7 @@ const emit = defineEmits<{
   changeReleaseSize: [size: number];
   reconcile: [job: WorkspaceJob];
   cancelJob: [job: WorkspaceJob];
+  executionLogs: [jobId: string];
 }>();
 
 const time = (v: string) =>
@@ -917,11 +920,11 @@ function onImportSourceChange(e: Event, currentRecipe: string) {
     }}</pre>
     <div v-else-if="dialog === 'job' && detail" class="dialog-form">
       <div v-if="detail.status === 'UNKNOWN'" class="error">
-        结果尚未确认，相关变更已锁定
+        {{ isProjectJob(detail.kind) ? "结果尚未确认，请在项目「交付与运行」中检查服务。" : "结果尚未确认，相关变更已锁定" }}
       </div>
       <p v-if="detail.errorCode" class="error">
         {{
-          softwareJobErrorMessages[detail.errorCode] ||
+          projectDeploymentErrorText(detail.errorCode) || softwareJobErrorMessages[detail.errorCode] ||
           "操作未完成，请核对原操作和执行日志。"
         }}
       </p>
@@ -935,8 +938,9 @@ function onImportSourceChange(e: Event, currentRecipe: string) {
         <dd>{{ time(detail.updatedAt) }}</dd>
       </dl>
       <div class="runtime-actions">
+        <button v-if="isProjectJob(detail.kind)" class="secondary" @click="emit('executionLogs', detail.id)">执行日志</button>
         <button
-          v-if="detail.status === 'UNKNOWN' || detail.targetAckPending"
+          v-if="!isProjectJob(detail.kind) && (detail.status === 'UNKNOWN' || detail.targetAckPending)"
           class="secondary"
           :disabled="busy"
           @click="emit('reconcile', detail)"
@@ -945,7 +949,7 @@ function onImportSourceChange(e: Event, currentRecipe: string) {
         </button>
         <button
           v-if="
-            detail.status === 'QUEUED' &&
+            !isProjectJob(detail.kind) && detail.status === 'QUEUED' &&
             detail.phase !== 'UPLOADING' &&
             !detail.targetAckPending
           "

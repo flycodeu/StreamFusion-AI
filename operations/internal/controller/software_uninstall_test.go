@@ -38,7 +38,7 @@ func TestSoftwareUninstallRetainsHistoryReconcilesAndPreservesDataDefault(t *tes
 		if req.Action == "SOFTWARE_UNINSTALL" {
 			uninstallCalls.Add(1)
 			target, _ := s.readTarget(req.TargetID)
-			result := deploy.Result{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID, JobID: req.JobID, InputHash: req.InputHash, Status: "SUCCEEDED", Phase: "SOFTWARE_UNINSTALLED", ObservedAt: Now(), Uninstallation: &deploy.SoftwareUninstallEvidence{SoftwareID: req.Software.ID, Kind: req.Software.Kind, Locator: req.Software.Locator, IdentityHash: req.Software.IdentityHash, ProgramRemoved: true, DeleteData: req.Uninstallation.DeleteData, DataRemoved: req.Uninstallation.DeleteData, DataRoot: serviceinstall.InstallRoot(target.InstallRoot, req.Software.ID, req.Uninstallation.Installation.Config), ObservedAt: Now()}}
+			result := deploy.Result{ProtocolVersion: 1, ExecutorVersion: deploy.Version, ControllerID: req.ControllerID, TargetID: req.TargetID, JobID: req.JobID, InputHash: req.InputHash, Status: "SUCCEEDED", Phase: "SOFTWARE_UNINSTALLED", ObservedAt: Now(), Uninstallation: &deploy.SoftwareUninstallEvidence{SoftwareID: req.Software.ID, Kind: req.Software.Kind, Locator: req.Software.Locator, IdentityHash: req.Software.IdentityHash, ProgramRemoved: true, DeleteData: req.Uninstallation.DeleteData, DataRemoved: req.Uninstallation.DeleteData, DataRoot: req.Uninstallation.Installation.InstallRoot(target.InstallRoot), ObservedAt: Now()}}
 			results[req.JobID] = result
 			if unknown.Load() {
 				result.Status = "UNKNOWN"
@@ -69,7 +69,7 @@ func TestSoftwareUninstallRetainsHistoryReconcilesAndPreservesDataDefault(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := serviceinstall.InstallRoot(target.InstallRoot, id, i.Installation.Config)
+	root := i.Installation.InstallRoot(target.InstallRoot)
 	if !ok || paths["root"] != root || paths["data"] != root+"/data" || paths["config"] != root+"/config" || paths["logs"] != root+"/logs" {
 		t.Fatal("software detail must expose exact owned uninstall paths", paths)
 	}

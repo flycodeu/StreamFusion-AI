@@ -120,7 +120,7 @@ func TestCommandTemplateDeletionWinsAgainstUnfinishedPreflight(t *testing.T) {
 		replacement := dataOf(t, deleting.call("POST", "/command-templates", map[string]any{"definition": d}, 200))
 		deleting.call("POST", "/command-templates/"+replacement["id"].(string)+"/publish", map[string]any{"expectedVersion": replacement["version"]}, 200)
 		plan := req.Installation
-		root := serviceinstall.InstallRoot("/opt/plugin-test", plan.SoftwareID, plan.Config)
+		root := plan.InstallRoot("/opt/plugin-test")
 		raw, _ := json.Marshal(installPreflightFixture(*plan, root, true))
 		return raw, true
 	})
@@ -139,6 +139,7 @@ func TestSchemaTwentyOneAddsOnlyTemplateStorage(t *testing.T) {
 	b.login()
 	dir := s.Dir
 	before := schemaSeventeenHistoricalRows(t, s.DB)
+	rewindSchema34Fixture(t, s.DB)
 	if _, err := s.DB.Exec(dropApplicationFixtureTables + "DROP TABLE software_management_credentials; DROP TABLE software_management_state; DROP TABLE command_templates; DELETE FROM schema_migrations WHERE version>=21; PRAGMA user_version=20"); err != nil {
 		t.Fatal(err)
 	}

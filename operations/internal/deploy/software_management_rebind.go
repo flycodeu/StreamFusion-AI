@@ -55,7 +55,7 @@ func (x *executor) validateManagementInstallation(req Request) error {
 	}
 	previous := *installed
 	previous.BindingRevision = i.BindingRevision
-	if !reflect.DeepEqual(previous, *i) || m.Root != serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config) {
+	if !reflect.DeepEqual(previous, *i) || m.Root != i.InstallRoot(x.root) {
 		return errors.New("MANAGEMENT_REBIND_INSTALLATION_MISMATCH")
 	}
 	if s.Kind == "DOCKER" {

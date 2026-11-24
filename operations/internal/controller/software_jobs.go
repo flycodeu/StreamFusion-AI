@@ -123,7 +123,7 @@ func (h *HTTP) commitSoftwareResult(id string, req deploy.Request, result deploy
 		if req.Uninstallation == nil || e == nil {
 			return errors.New("SOFTWARE_UNINSTALL_EVIDENCE_MISMATCH")
 		}
-		dataRoot := serviceinstall.InstallRoot(t.InstallRoot, req.Software.ID, req.Uninstallation.Installation.Config)
+		dataRoot := req.Uninstallation.Installation.InstallRoot(t.InstallRoot)
 		if req.Uninstallation.Installation.Definition.Commands != nil && !serviceinstall.IsBuiltinCommand(req.Uninstallation.Installation.Definition) {
 			dataRoot += "/data"
 		}

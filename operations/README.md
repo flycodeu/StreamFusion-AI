@@ -58,31 +58,14 @@ go build -trimpath -o streamfusion-ops.exe ./cmd/streamfusion-ops
 
 安装 Docker 软件时，同一笔作业会检查宿主机终端命令，Ubuntu 24.04 缺项时自动准备。作业因连接中断显示待确认时，先核对原作业。
 
-## 端口和发布
+## 项目和部署
 
-### 项目维护与项目发布
+在「项目管理」登记 Git 仓库、分支和模块目录，为项目设置 Jenkins 连接。Java 后端在 Jenkins 测试并归档可执行 JAR，前端按锁文件安装依赖、测试并归档 `dist`。「交付与运行」提供构建、部署预检、发布、检查服务和回退，可分别查看 Jenkins 控制台、Ops 执行日志和目标服务日志。
 
-在「项目维护」选择项目，设置一次 Jenkins 实例、账号和 API Token。Jenkins 需要 Pipeline、Git 插件。账号需要 Overall/Read、Job/Create、Job/Read、Job/Build，以及读取作业配置的 Job/ExtendedRead 或 Job/Configure。构建节点须能拉取项目仓库，并提供模块需要的 Linux 构建工具。
+Java 服务由目标机的 systemd 管理。前端首次发布时，Ops 为该站点生成独立的 Nginx 配置；后续可以修改域名、端口和反代规则，再用当前构建发布。配置步骤、权限要求、日志入口和故障处理见[项目部署手册](project-delivery.md)。
 
-首次配置时，在所选 Jenkins 的右上角点击用户名，打开「安全 → API Token」，生成令牌并复制到 Ops 的「设置 Jenkins」。[Jenkins 账号认证说明](https://www.jenkins.io/doc/book/system-administration/authenticating-scripted-clients/)
-
-| 维护项 | 用途 |
-| --- | --- |
-| Git 仓库、分支、模块源码目录 | 指定构建的代码 |
-| 模块类型 | Java 后端使用 Maven Wrapper 测试、打包 JAR。前端按锁文件使用 pnpm 或 npm 测试、构建 dist。算法和识别为 Python 的其他模块使用 uv、pytest 测试并归档源码和测试报告 |
-| 运行配置 | 为上线选择环境、运行服务器和该服务器上的受管实例。要查看服务日志，可选择实际运行该模块的容器或 systemd 服务 |
-
-在「项目发布」左侧选项目，右侧按模块操作。
-
-- **QA**。点击后 Ops 首次自动创建对应的 Jenkins 作业，后续复用。页面显示排队、构建阶段及制品；尚未选运行服务器的模块也可做 QA。
-- **QA 日志**。打开对应构建的控制台输出，构建号来自 Jenkins。
-- **上线**。点击模块行的「上线」，选择已验证的制品。首次上线可以在这里导入制品，校验通过后会自动选中。核对预检中的目标、制品和端口，再确认执行。
-- **验证**。向已配置的上线目标查询当前运行状态，查看检查时间和结果。
-- **服务日志**。查看模块所配置的运行服务输出；Jenkins 自身的维护日志位于「软件管理」。
-
-- **端口管理**。在已有 UFW 的 Ubuntu 主机上查看监听与规则，按来源和 TCP/UDP 维护 Ops 创建的规则。
-- **Java 应用发布**。在「版本制品」上传符合配方的 Docker save 归档，或上传可执行 JAR 并选择受支持的 Java 21 环境。在「项目发布」完成预检并发布。可回退上一成功版本，业务数据按自身备份恢复。应用 Compose 发布需要 Docker Engine 和 Compose。
-- **预览节点**。单独扩容时，按节点手册部署、在平台引入并启用。[预览节点操作手册](https://github.com/flycodeu/StreamFusion-AI/blob/main/operations/preview-nodes.md)
+- **端口管理**：在已有 UFW 的 Ubuntu 主机上查看监听和规则，按来源和 TCP/UDP 维护 Ops 创建的规则。
+- **预览节点**：单独扩容时，按[预览节点操作手册](preview-nodes.md)部署，再在平台引入并启用。
 
 ## 备份与故障定位
 

@@ -7,6 +7,7 @@ export interface JenkinsMonitor {
   softwareId: string;
   username: string;
   hasToken: boolean;
+  buildAgentLabel?: string;
   jobUrl?: string;
   instances: { id: string; name: string; hostName: string; url: string }[];
 }

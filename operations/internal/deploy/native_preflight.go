@@ -7,13 +7,57 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 )
 
+func parseOSRelease(content []byte) (id, versionID string) {
+	for _, raw := range strings.Split(string(content), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		val = strings.TrimSpace(val)
+		val = strings.Trim(val, `"'`)
+		switch strings.TrimSpace(key) {
+		case "ID":
+			id = strings.ToLower(val)
+		case "VERSION_ID":
+			versionID = val
+		}
+	}
+	return id, versionID
+}
+
+func nativePlatformSupported(goos, goarch string, osRelease []byte, d serviceinstall.Definition) (bool, string) {
+	if goos != "linux" || goarch != "amd64" {
+		return false, "原生配方要求 Linux amd64 主机"
+	}
+	id, versionID := parseOSRelease(osRelease)
+	if id == "" {
+		return false, "无法识别操作系统发行版 (/etc/os-release)"
+	}
+	requiresUbuntu24 := d.Key == "docker" || (d.Native != nil && (d.Native.BuildRecipe == "DEB" || d.Native.BuildRecipe == "DEB_PACKAGE" || d.Native.BuildRecipe == "GIT_DEB"))
+	if requiresUbuntu24 {
+		if id != "ubuntu" || versionID != "24.04" {
+			return false, "当前离线 Debian/Docker DEB 配方仅支持 Ubuntu 24.04 amd64"
+		}
+		return true, "Ubuntu 24.04 amd64 符合 DEB 配方要求"
+	}
+	if versionID != "" {
+		return true, "Linux amd64 系统符合原生配方 (" + id + " " + versionID + ")"
+	}
+	return true, "Linux amd64 系统符合原生配方 (" + id + ")"
+}
+
 func (x *executor) nativeInstallPreflight(i serviceinstall.Request) serviceinstall.Preflight {
-	root := serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config)
+	root := i.InstallRoot(x.root)
 	result := serviceinstall.Preflight{Ready: true, Root: root, DataDirectory: filepath.Join(root, "data"), ConfigDirectory: filepath.Join(root, "config"), BinaryDirectory: filepath.Dir(filepath.Join(root, nativeBinaryRelative(i.Definition))), LogsDirectory: filepath.Join(root, "logs"), Checks: []serviceinstall.Check{}, PortMappings: serviceinstall.PortMappings(i.Definition, i.Config)}
 	if i.Definition.Kind != "TOOL" {
 		result.Endpoint = net.JoinHostPort(i.Config.BindAddress, strconv.Itoa(i.Config.HostPort))
@@ -27,10 +71,12 @@ func (x *executor) nativeInstallPreflight(i serviceinstall.Request) serviceinsta
 		result.Checks = append(result.Checks, serviceinstall.Check{Key: key, Status: status, Code: code, Message: message})
 	}
 	osRelease, err := os.ReadFile("/etc/os-release")
-	if err != nil || !strings.Contains(string(osRelease), "ID=ubuntu\n") || !strings.Contains(string(osRelease), `VERSION_ID="24.04"`) {
-		check("PLATFORM", "NATIVE_PLATFORM_UNSUPPORTED", "原生配方要求Ubuntu24.04 amd64")
+	if err != nil {
+		check("PLATFORM", "NATIVE_PLATFORM_UNSUPPORTED", "无法读取 /etc/os-release，确认主机为 Linux amd64")
+	} else if ok, msg := nativePlatformSupported(runtime.GOOS, runtime.GOARCH, osRelease, i.Definition); !ok {
+		check("PLATFORM", "NATIVE_PLATFORM_UNSUPPORTED", msg)
 	} else {
-		check("PLATFORM", "", "系统版本符合固定原生配方")
+		check("PLATFORM", "", msg)
 	}
 	if i.Definition.Native == nil {
 		check("RECIPE", "NATIVE_RECIPE_UNAVAILABLE", "没有可信原生材料")

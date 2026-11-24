@@ -1,5 +1,5 @@
 pipeline {
-    agent any
+    agent { label {{.AgentLabel}} }
     options {
         skipDefaultCheckout()
         disableConcurrentBuilds()
@@ -11,16 +11,18 @@ pipeline {
             steps {
                 echo 'SFOPS_STAGE: 拉取源码'
                 deleteDir()
-                checkout([$class: 'GitSCM', branches: [[name: {{.Branch}}]], userRemoteConfigs: [[url: {{.Repository}}]]])
-                sh 'git rev-parse HEAD'
+                checkout([$class: 'GitSCM', branches: [[name: {{.Branch}}]], userRemoteConfigs: [[url: {{.Repository}}{{if .Credential}}, credentialsId: {{.Credential}}{{end}}]]])
+                script {
+                    env.SFOPS_CHECKOUT_COMMIT = sh(returnStdout: true, script: 'git rev-parse --verify HEAD').trim()
+                }
             }
         }
         stage('检查环境') {
             steps {
                 echo 'SFOPS_STAGE: 检查环境'
                 dir({{.Directory}}) {
-                    {{if eq .Kind "BACKEND"}}sh 'java -version && javac -version && test -f pom.xml && if test -f mvnw; then sh mvnw -version; else mvn -version; fi'
-                    {{else if eq .Kind "FRONTEND"}}sh 'node --version && test -f package.json && if test -f pnpm-lock.yaml; then pnpm --version; elif test -f package-lock.json; then npm --version; else echo "缺少 pnpm-lock.yaml 或 package-lock.json" >&2; exit 1; fi'
+                    {{if eq .Kind "BACKEND"}}sh 'java -version && javac -version && javac -version 2>&1 | grep -Eq "^javac 21([.]|$)" && command -v jar && command -v sha256sum && test -f pom.xml && if test -f mvnw; then sh mvnw -version; else mvn -version; fi'
+                    {{else if eq .Kind "FRONTEND"}}sh 'node --version && command -v tar && command -v sha256sum && test -f package.json && if test -f pnpm-lock.yaml; then pnpm --version; elif test -f package-lock.json; then npm --version; else echo "缺少 pnpm-lock.yaml 或 package-lock.json" >&2; exit 1; fi'
                     {{else}}sh 'uv --version && test -f pyproject.toml && test -f uv.lock'
                     {{end}}
                 }
@@ -30,8 +32,8 @@ pipeline {
             steps {
                 echo 'SFOPS_STAGE: 编译与测试'
                 dir({{.Directory}}) {
-                    {{if eq .Kind "BACKEND"}}sh 'if test -f mvnw; then sh mvnw -B -ntp test; else mvn -B -ntp test; fi'
-                    {{else if eq .Kind "FRONTEND"}}sh 'if test -f pnpm-lock.yaml; then pnpm install --frozen-lockfile && pnpm run test; else npm ci && npm test; fi'
+                    {{if eq .Kind "BACKEND"}}{{if .SkipTests}}echo '模块配置为跳过测试'{{else}}sh 'if test -f mvnw; then sh mvnw -B -ntp test; else mvn -B -ntp test; fi'{{end}}
+                    {{else if eq .Kind "FRONTEND"}}sh 'if test -f pnpm-lock.yaml; then pnpm install --frozen-lockfile{{if not .SkipTests}} && pnpm run --if-present test{{end}}; else npm ci{{if not .SkipTests}} && npm test --if-present{{end}}; fi'
                     {{else}}sh 'uv sync --locked && uv run --locked python -m pytest -q --junitxml=qa-tests.xml'
                     {{end}}
                 }
@@ -42,13 +44,44 @@ pipeline {
                 echo 'SFOPS_STAGE: 打包与归档'
                 dir({{.Directory}}) {
                     {{if eq .Kind "BACKEND"}}sh 'if test -f mvnw; then sh mvnw -B -ntp -DskipTests verify; else mvn -B -ntp -DskipTests verify; fi'
-                    sh 'sha256sum target/*.jar'
-                    archiveArtifacts artifacts: 'target/*.jar', excludes: '**/*-preview-node.jar,**/*-sources.jar,**/*-javadoc.jar,**/*-tests.jar', allowEmptyArchive: false, fingerprint: true, followSymlinks: false
+                    sh '''
+                        set -eu
+                        workspace=$(pwd)
+                        tmp=$(mktemp -d)
+                        trap 'rm -rf "$tmp"' EXIT
+                        selected=
+                        for candidate in target/*.jar; do
+                            test -f "$candidate" && test ! -L "$candidate" || continue
+                            case "$candidate" in
+                                *-preview-node.jar|*-sources.jar|*-javadoc.jar|*-tests.jar|target/original-*) continue ;;
+                            esac
+                            rm -f "$tmp/META-INF/MANIFEST.MF"
+                            (cd "$tmp" && jar xf "$workspace/$candidate" META-INF/MANIFEST.MF)
+                            test -f "$tmp/META-INF/MANIFEST.MF" || continue
+                            if awk '{ sub(/\\r$/, ""); if ($0=="") exit; if (tolower($0) ~ /^main-class: +[^ ]/) found=1 } END { exit !found }' "$tmp/META-INF/MANIFEST.MF"; then
+                                test -z "$selected" || { echo "发现多个可执行 JAR，请明确模块产物。" >&2; exit 1; }
+                                selected=$candidate
+                            fi
+                        done
+                        test -n "$selected" || { echo "没有找到可执行 JAR。" >&2; exit 1; }
+                        rm -f app.jar sfops-release.txt
+                        cp -- "$selected" app.jar
+                    '''
                     {{else if eq .Kind "FRONTEND"}}sh 'if test -f pnpm-lock.yaml; then pnpm run build; else npm run build; fi'
-                    sh 'tar -czf web-dist.tar.gz -C dist . && sha256sum web-dist.tar.gz'
-                    archiveArtifacts artifacts: 'web-dist.tar.gz', fingerprint: true
+                    sh 'test -f dist/index.html && rm -f web-dist.tar.gz sfops-release.txt && tar -czf web-dist.tar.gz -C dist .'
                     {{else}}sh 'git archive --format=tar.gz --output=module-source.tar.gz HEAD -- . && sha256sum module-source.tar.gz'
                     archiveArtifacts artifacts: 'module-source.tar.gz,qa-tests.xml', fingerprint: true
+                    {{end}}
+                    {{if or (eq .Kind "BACKEND") (eq .Kind "FRONTEND")}}
+                    sh '''
+                        set -eu
+                        test "$(git rev-parse --verify HEAD)" = "$SFOPS_CHECKOUT_COMMIT"
+                        file={{if eq .Kind "BACKEND"}}app.jar{{else}}web-dist.tar.gz{{end}}
+                        sha=$(sha256sum -- "$file")
+                        size=$(wc -c < "$file" | tr -d '[:space:]')
+                        printf '%s\\n' "$SFOPS_CHECKOUT_COMMIT" "$file" "${sha%% *}" "$size" > sfops-release.txt
+                    '''
+                    archiveArtifacts artifacts: '{{if eq .Kind "BACKEND"}}app.jar{{else}}web-dist.tar.gz{{end}},sfops-release.txt', allowEmptyArchive: false, fingerprint: true, followSymlinks: false
                     {{end}}
                 }
             }

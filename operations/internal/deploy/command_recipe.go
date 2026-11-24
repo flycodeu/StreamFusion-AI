@@ -113,7 +113,7 @@ func (x *executor) commandObjectAbsent(i serviceinstall.Request, root string) er
 }
 
 func (x *executor) commandPreflight(i serviceinstall.Request) serviceinstall.Preflight {
-	root := serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config)
+	root := i.InstallRoot(x.root)
 	p := serviceinstall.Preflight{Ready: true, Root: root, DataDirectory: filepath.Join(root, "data"), ConfigDirectory: filepath.Join(root, "config"), BinaryDirectory: filepath.Join(root, "bin"), LogsDirectory: filepath.Join(root, "logs"), Checks: []serviceinstall.Check{}}
 	fail := func(key, code, message string) {
 		p.Ready = false
@@ -417,7 +417,7 @@ func (x *executor) installCommands(req Request, dir string) (Result, error) {
 func (x *executor) commandSoftware(req Request) (SoftwareRequest, *SoftwareObservation, error) {
 	i := req.Installation
 	c := i.Definition.Commands
-	root := serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config)
+	root := i.InstallRoot(x.root)
 	o := x.installOwnership(req)
 	o.RuntimeMode = i.Config.Mode()
 	o.CommandTemplateHash = Digest(i.Definition)
@@ -532,7 +532,7 @@ func (x *executor) uninstallCommands(req Request, dir string) (Result, error) {
 	if actual.State == "UNKNOWN" {
 		return r, errors.New("SOFTWARE_STATE_TRANSITIONING")
 	}
-	root := serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config)
+	root := i.InstallRoot(x.root)
 	if req.Uninstallation.DataDirectory != "" {
 		return x.uninstallMigratedCommandData(req, dir, root)
 	}

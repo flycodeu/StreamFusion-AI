@@ -243,3 +243,87 @@ func TestApplicationServiceInstanceBindsObservedRuntimeAndCanDetach(t *testing.T
 		t.Fatal("binding changed software without changing the previously unbound host")
 	}
 }
+
+func TestApplicationServiceInstanceOneStopConfigAndComputedURL(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	host := uuid.NewString()
+	if _, err := s.DB.Exec("INSERT INTO targets(id,name,install_root,kind,address,created_at) VALUES(?,?,?,'SSH',?,?)", host, "业务服务器", "/opt/app-host", "10.20.30.40", Now()); err != nil {
+		t.Fatal(err)
+	}
+	nginxID := registerTestSoftware(t, b, host, "DOCKER", "nginx-web", "NGINX")["id"].(string)
+	mysqlID := registerTestSoftware(t, b, host, "DOCKER", "mysql-db", "MYSQL")["id"].(string)
+	dbPassCred := dataOf(t, b.call("POST", "/credentials", map[string]string{"name": "MySQL 密码", "kind": "PASSWORD", "secret": "db-pass-fixture-secret"}, 201))["id"].(string)
+
+	created := applicationResponse(t, b.call("POST", "/application-projects/catalog", map[string]any{
+		"name": "企业安防平台",
+		"modules": []applicationCatalogModule{
+			{Name: "platform-api", Directory: "platform-api", Catalog: &applicationModuleCatalog{Kind: "BACKEND", Environment: "JDK 21", RuntimeMode: "NATIVE"}},
+			{Name: "platform-web", Directory: "platform-web", Catalog: &applicationModuleCatalog{Kind: "FRONTEND", Environment: "Node 24", RuntimeMode: "STATIC"}},
+		},
+	}, 200))
+	apiModule := created.Modules[0]
+	webModule := created.Modules[1]
+	endpoint := "/application-projects/" + created.ID + "/service-instances"
+
+	// Reject plaintext password variable when not referencing a credential.
+	deployNative := "NATIVE"
+	profileTest := "test"
+	port18080 := 18080
+	startCmd := "java -Xms256m -jar target/platform-api.jar --spring.profiles.active=test"
+	healthPath := "/actuator/health"
+	badVars := []applicationVariable{{Name: "DB_PASSWORD", Value: "plain-secret"}}
+	b.call("POST", endpoint, applicationServiceInstanceInput{
+		Version: created.Version, ModuleID: apiModule.ID, Environment: "test", HostID: host,
+		DeployMode: &deployNative, ServicePort: &port18080, Variables: &badVars,
+	}, 400)
+
+	goodVars := []applicationVariable{
+		{Name: "DB_URL", Value: "jdbc:mysql://10.20.30.40:3306/streamfusion"},
+		{Name: "DB_PASSWORD", CredentialID: dbPassCred, CredentialRevision: "1"},
+	}
+	deps := []string{mysqlID}
+	p := applicationResponse(t, b.call("POST", endpoint, applicationServiceInstanceInput{
+		Version: created.Version, ModuleID: apiModule.ID, Environment: "test", HostID: host,
+		DeployMode: &deployNative, Profile: &profileTest, ServicePort: &port18080,
+		StartCommand: &startCmd, HealthPath: &healthPath, Variables: &goodVars, DependencyIDs: &deps,
+	}, 200))
+
+	apiDep := p.Environments[0].Deployments[0]
+	if apiDep.DeployMode != "NATIVE" || apiDep.Profile != "test" || apiDep.ServicePort != 18080 || apiDep.StartCommand != startCmd || apiDep.HealthPath != healthPath {
+		t.Fatalf("unexpected backend deployment config: %+v", apiDep)
+	}
+	if apiDep.ComputedAccessURL != "http://10.20.30.40:18080" || len(apiDep.Variables) != 2 || len(apiDep.DependencyIDs) != 1 {
+		t.Fatalf("unexpected computed URL / vars / deps: %+v", apiDep)
+	}
+
+	// Frontend Nginx static deployment with reverse proxy pointing to platform-api module.
+	deployStatic := "STATIC"
+	nginxCfg := applicationNginxDeploy{
+		NginxSoftwareID: nginxID,
+		SiteName:        "platform-web-test",
+		ServerName:      "_",
+		ListenPort:      80,
+		SPA:             true,
+		ProxyRules:      []applicationNginxProxyRule{{Location: "/api", TargetModuleID: apiModule.ID, StripPrefix: true}},
+	}
+	p = applicationResponse(t, b.call("POST", endpoint, applicationServiceInstanceInput{
+		Version: p.Version, ModuleID: webModule.ID, Environment: "test", HostID: host,
+		DeployMode: &deployStatic, Nginx: &nginxCfg,
+	}, 200))
+	webDep := p.Environments[0].Deployments[1]
+	if webDep.DeployMode != "STATIC" || webDep.Nginx == nil || webDep.Nginx.NginxSoftwareID != nginxID || len(webDep.Nginx.ProxyRules) != 1 || webDep.ComputedAccessURL != "http://10.20.30.40" {
+		t.Fatalf("unexpected frontend nginx deployment config: %+v", webDep)
+	}
+
+	// Verify custom domain overrides host IP in computed access URL cleanly.
+	nginxCfg.ServerName = "ops.example.local"
+	nginxCfg.ListenPort = 8088
+	p = applicationResponse(t, b.call("POST", endpoint, applicationServiceInstanceInput{
+		Version: p.Version, ID: webDep.ID, ModuleID: webModule.ID, Environment: "test", HostID: host,
+		DeployMode: &deployStatic, Nginx: &nginxCfg,
+	}, 200))
+	if got := p.Environments[0].Deployments[1].ComputedAccessURL; got != "http://ops.example.local:8088" {
+		t.Fatalf("expected http://ops.example.local:8088, got %q", got)
+	}
+}

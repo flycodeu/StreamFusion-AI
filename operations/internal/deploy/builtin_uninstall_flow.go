@@ -19,7 +19,7 @@ func (x *executor) uninstallBuiltinFlow(req Request, dir string) (Result, error)
 	engine := i.Definition.Key == "docker"
 	ctx, cancel := context.WithTimeout(context.Background(), nativeDeadline(req))
 	defer cancel()
-	root := serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config)
+	root := i.InstallRoot(x.root)
 	prepared, shared := false, false
 	var actual *SoftwareObservation
 	var installed officialInstallation

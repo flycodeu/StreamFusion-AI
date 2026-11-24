@@ -192,6 +192,33 @@
 .port-docker p {
   color: var(--muted);
 }
+.port-owner-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 500;
+}
+.port-host-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.port-process-cell,
+.port-job-result {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.fixed-host-caption {
+  font-size: 14px;
+  color: var(--text);
+}
 .port-docker pre,
 .port-log {
   max-height: 300px;

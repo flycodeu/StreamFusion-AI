@@ -44,7 +44,7 @@ test("project Jenkins keeps existing token only for the same account and service
   assert.equal(h.flow.valid.value, true);
   await h.flow.save();
   assert.deepEqual(calls.at(-1), ["/application-projects/app/jenkins-connection", "POST", {
-    expectedVersion: "7", softwareId: "builder", username: "automation", token: "",
+    expectedVersion: "7", softwareId: "builder", username: "automation", token: "", buildAgentLabel: "sfops-build",
   }]);
   h.flow.edit();
   h.flow.username.value = "other-name";
@@ -58,6 +58,23 @@ test("project Jenkins keeps existing token only for the same account and service
   await h.flow.save();
   assert.equal(calls.at(-1)[2].token, "sample-new-token");
   assert.equal(h.flow.token.value, "");
+});
+
+test("testing and saving Jenkins use the project build agent label", async t => {
+  const calls = [];
+  const h = mount(connections, "edit, testConnection, save, buildAgentLabel", { projectId: "app", archived: false },
+    async (path, method, data) => { calls.push([path, method, { ...data }]); return { ...monitor, buildAgentLabel: "ci-linux" }; });
+  t.after(h.close);
+  await h.startup();
+  h.flow.edit();
+  assert.equal(h.flow.buildAgentLabel.value, "ci-linux");
+  h.flow.buildAgentLabel.value = " build-jdk21 ";
+  await h.flow.testConnection();
+  assert.equal(calls.at(-1)[0], "/application-projects/app/jenkins-connection/test");
+  assert.equal(calls.at(-1)[2].buildAgentLabel, "build-jdk21");
+  await h.flow.save();
+  assert.equal(calls.at(-1)[0], "/application-projects/app/jenkins-connection");
+  assert.equal(calls.at(-1)[2].buildAgentLabel, "build-jdk21");
 });
 
 test("running configuration scopes its release targets and preserves a historical version without editing it", async t => {
@@ -95,4 +112,112 @@ test("running configuration deletes an environment only after explicit confirmat
   h.flow.removing.value = true;
   await h.flow.removeEnvironment();
   assert.deepEqual(calls, [["/application-projects/app/service-instances/test-api","DELETE"]]);
+});
+
+test("one-stop NATIVE backend configuration saves variables, credentials, start command and port", async t => {
+  const calls = [];
+  const fullProject = {
+    id: "app", version: "5", archived: false,
+    modules: [{
+      id: "api", name: "platform-api",
+      catalog: {
+        kind: "BACKEND", environment: "JDK 21", startCommand: "sh mvnw spring-boot:run",
+        runtimeMode: "NATIVE", defaultPort: 18080, healthPath: "/actuator/health", defaultProfile: "test",
+        profiles: ["test", "prod"],
+        envHints: [
+          { name: "DB_URL", defaultValue: "jdbc:mysql://127.0.0.1:3306/app", profile: "test" },
+          { name: "DB_PASSWORD", sensitive: true, profile: "test" },
+        ],
+      },
+    }],
+    environments: [],
+  };
+  const h = mount(
+    environments,
+    "hostId, deployMode, servicePort, profile, startCommand, variables, importRecognizedHints, activeSecretCredentials, save, formError",
+    { project: fullProject, moduleId: "api" },
+    async (path, method, data) => {
+      if (path === "/hosts") return [{ id: "h1", name: "App Host", address: "10.0.0.8" }];
+      if (path === "/credentials") return [{ id: "cred-1", revision: "2", name: "MySQL Pass", kind: "PASSWORD", revokedAt: "" }];
+      calls.push([path, method, data]);
+      return fullProject;
+    },
+    { "/instances": [], "/software-instances": [] },
+  );
+  t.after(h.close);
+  await h.startup();
+  assert.equal(h.flow.deployMode.value, "NATIVE");
+  assert.equal(h.flow.servicePort.value, 18080);
+  assert.equal(h.flow.profile.value, "test");
+  h.flow.importRecognizedHints();
+  assert.equal(h.flow.variables.value.length, 2);
+  // Plain sensitive or empty credential ref should be blocked before POST.
+  await h.flow.save();
+  assert.equal(calls.length, 0);
+  assert.match(h.flow.formError.value, /凭据引用/);
+  h.flow.variables.value[1].credentialRef = "cred-1:2";
+  h.flow.startCommand.value = "java -Xms256m -jar app.jar --spring.profiles.active=test";
+  await h.flow.save();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], "/application-projects/app/service-instances");
+  assert.deepEqual(calls[0][2].variables, [
+    { name: "DB_URL", value: "jdbc:mysql://127.0.0.1:3306/app" },
+    { name: "DB_PASSWORD", credentialId: "cred-1", credentialRevision: "2" },
+  ]);
+  assert.equal(calls[0][2].deployMode, "NATIVE");
+  assert.equal(calls[0][2].servicePort, 18080);
+  assert.equal(calls[0][2].profile, "test");
+  assert.equal(calls[0][2].startCommand, "java -Xms256m -jar app.jar --spring.profiles.active=test");
+});
+
+test("one-stop STATIC frontend configuration pre-fills Nginx instance and backend proxy rules", async t => {
+  const calls = [];
+  const fullProject = {
+    id: "app", version: "6", archived: false,
+    modules: [
+      { id: "api", name: "platform-api", catalog: { kind: "BACKEND", runtimeMode: "NATIVE" } },
+      {
+        id: "web", name: "platform-web",
+        catalog: {
+          kind: "FRONTEND", runtimeMode: "STATIC",
+          proxyHints: [{ location: "/api", stripPrefix: true, targetPort: 8080 }],
+        },
+      },
+    ],
+    environments: [],
+  };
+  const software = [
+    { id: "ng-docker", name: "Nginx Docker", hostId: "h1", softwareType: "NGINX", runtimeKind: "DOCKER", managementMode: "MANAGED", actualState: "RUNNING", installationStatus: "READY" },
+    { id: "ng-1", name: "Nginx", hostId: "h1", softwareType: "NGINX", runtimeKind: "SYSTEMD", managementMode: "MANAGED", actualState: "RUNNING", installationStatus: "READY" },
+  ];
+  const h = mount(
+    environments,
+    "deployMode, nginxSoftwareId, nginxListenPort, nginxProxyRules, previewAccessUrl, save",
+    { project: fullProject, moduleId: "web" },
+    async (path, method, data) => {
+      if (path === "/hosts") return [{ id: "h1", name: "Web Host", address: "100.76.165.8" }];
+      if (path === "/credentials") return [];
+      calls.push([path, method, data]);
+      return fullProject;
+    },
+    { "/instances": [], "/software-instances": software },
+  );
+  t.after(h.close);
+  await h.startup();
+  assert.equal(h.flow.deployMode.value, "STATIC");
+  assert.equal(h.flow.nginxSoftwareId.value, "ng-1");
+  assert.equal(h.flow.previewAccessUrl.value, "http://100.76.165.8");
+  assert.equal(h.flow.nginxProxyRules.value.length, 1);
+  assert.equal(h.flow.nginxProxyRules.value[0].targetModuleId, "api");
+  await h.flow.save();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][2].deployMode, "STATIC");
+  assert.deepEqual(calls[0][2].nginx, {
+    nginxSoftwareId: "ng-1",
+    siteName: "platform-web-test",
+    serverName: "_",
+    listenPort: 80,
+    spa: true,
+    proxyRules: [{ location: "/api", targetModuleId: "api", stripPrefix: true }],
+  });
 });

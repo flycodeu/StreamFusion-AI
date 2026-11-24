@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElButton, ElEmpty, ElMessage, ElMessageBox, ElTable, ElTableColumn, ElTag } from "element-plus";
 import { ApiError, request, upload } from "./api";
 import { jobKindLabels as softwareJobKindLabels, type LogSelection, type PageResult } from "./jobs";
+import { deploymentPhaseLabels } from "./projectDeployments";
 import OpsPagination from "./OpsPagination.vue";
 import { requestAllPages } from "./listPages";
 import { previewDefaults, type PreviewConfig } from "./preview";
@@ -19,8 +20,9 @@ import "./ops-workspace.css";
 const props = defineProps<{
   page: string;
   applicationSource?: ProjectInstanceSource;
+  legacyAction?: { source: ProjectReleaseSource; action: "publish" | "verify" };
 }>();
-const emit = defineEmits<{ error: [unknown]; "application-source-used": []; logs: [LogSelection]; maintain: [source?: ProjectInstanceSource] }>();
+const emit = defineEmits<{ error: [unknown]; "application-source-used": []; "legacy-action-used": []; logs: [LogSelection]; maintain: [source?: ProjectInstanceSource] }>();
 const instanceHealthLabel = (health?: string) => ({ APPLICATION_READY: "应用就绪", APPLICATION_STOPPED: "已停止", STOPPED: "已停止", RUNNING: "运行中", UNKNOWN: "状态未确认" }[health || ""] || "状态未确认");
 interface Artifact {
   recipe: string;
@@ -353,6 +355,7 @@ const jobStatus = (job: Job) => job.phase === "CANCELLED" ? "CANCELLED" : job.st
 const statusLabels: Record<string, string> = {
   QUEUED: "排队中",
   RUNNING: "执行中",
+  RECOVERING: "核对中",
   UNKNOWN: "结果未确认",
   SUCCEEDED: "成功",
   FAILED: "失败",
@@ -368,6 +371,7 @@ const jobKindLabels: Record<string, string> = {
 };
 const phaseLabels: Record<string, string> = {
   ...softwareJobPhaseLabels,
+  ...deploymentPhaseLabels,
   BASELINE_UNCHANGED: "原节点保持运行",
   PULLING: "拉取环境镜像",
   VERIFYING: "校验环境摘要",
@@ -799,6 +803,11 @@ async function openProjectTarget(source: ProjectReleaseSource, action: "publish"
     choosePublish(target);
   });
 }
+watch(() => props.page === "instances" && props.legacyAction, (intent) => {
+  if (!intent) return;
+  emit("legacy-action-used");
+  void openProjectTarget(intent.source, intent.action);
+}, { immediate: true });
 function choosePublish(i: Instance, kind = "PUBLISH") {
   planInstance.value = i;
   planKind.value = kind;
@@ -878,182 +887,192 @@ async function reconcile(j: Job, recover = false) {
 <template>
   <section class="content ops-content" :class="{ 'panel-card': page !== 'instances' }">
     <template v-if="page === 'artifacts'">
-      <div class="section-head">
-        <h2>不可变镜像制品</h2>
-        <button class="secondary" :disabled="busy" @click="openImport">
-          导入制品
-        </button>
+      <div class="ops-el-toolbar" style="margin-bottom: 14px">
+        <h2>版本制品库（不可变镜像 / JAR 制品）</h2>
+        <div class="ops-el-toolbar-group">
+          <ElButton @click="emit('maintain')">返回项目管理</ElButton>
+          <ElButton type="primary" :disabled="busy" @click="openImport">导入制品</ElButton>
+        </div>
       </div>
-      <div v-if="!artifacts.length" class="empty">尚未导入制品</div>
-      <div v-else class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>名称</th>
-              <th>镜像身份</th>
-              <th>运行环境</th>
-              <th>归档</th>
-              <th>材料</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="a in artifacts" :key="a.id">
-              <td>{{ a.name }}</td>
-              <td>
-                <code :title="a.imageId">{{ a.imageId.slice(0, 24) }}…</code>
-              </td>
-              <td>
-                <template v-if="a.runtimeEnvironment">
-                  Java {{ a.runtimeEnvironment.pluginVersion }}
-                  <code :title="a.runtimeEnvironment.imageDigest"
-                    >{{ a.runtimeEnvironment.imageDigest.slice(0, 19) }}…</code
-                  >
-                </template>
-                <span v-else>镜像自带</span>
-              </td>
-              <td>
-                {{ (a.byteSize / 1048576).toFixed(1) }} MiB
-                <code :title="a.archiveSha256">{{
-                  a.archiveSha256.slice(0, 12)
-                }}</code>
-              </td>
-              <td>
-                <span
-                  class="state-tag"
-                  :class="a.available ? 'state-success' : 'state-error'"
-                  >{{ a.available ? "可用" : "缺失" }}</span
-                >
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <OpsPagination :page="artifactPage" :page-size="artifactPageSize" :total="artifactTotal" :disabled="artifactsLoading" label="制品分页" @update:page="artifactList.changePage" @update:page-size="artifactList.changeSize" />
+      <ElTable :data="artifacts" border stripe style="width: 100%">
+        <ElTableColumn label="制品名称" prop="name" min-width="160" show-overflow-tooltip />
+        <ElTableColumn label="镜像身份" min-width="190" show-overflow-tooltip>
+          <template #default="{ row }">
+            <code :title="row.imageId">{{ row.imageId.slice(0, 24) }}…</code>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="运行环境" min-width="180" show-overflow-tooltip>
+          <template #default="{ row }">
+            <template v-if="row.runtimeEnvironment">
+              Java {{ row.runtimeEnvironment.pluginVersion }} ·
+              <code :title="row.runtimeEnvironment.imageDigest">
+                {{ row.runtimeEnvironment.imageDigest.slice(0, 19) }}…
+              </code>
+            </template>
+            <span v-else class="muted">镜像自带</span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="归档大小 / 摘要" width="180">
+          <template #default="{ row }">
+            {{ (row.byteSize / 1048576).toFixed(1) }} MiB ·
+            <code :title="row.archiveSha256">{{ row.archiveSha256.slice(0, 12) }}</code>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="材料状态" width="100" align="center">
+          <template #default="{ row }">
+            <ElTag size="small" :type="row.available ? 'success' : 'danger'">
+              {{ row.available ? "可用" : "缺失" }}
+            </ElTag>
+          </template>
+        </ElTableColumn>
+        <template #empty>
+          <ElEmpty description="尚未导入制品" />
+        </template>
+      </ElTable>
+      <OpsPagination
+        :page="artifactPage"
+        :page-size="artifactPageSize"
+        :total="artifactTotal"
+        :disabled="artifactsLoading"
+        label="制品分页"
+        @update:page="artifactList.changePage"
+        @update:page-size="artifactList.changeSize"
+      />
     </template>
-    <ProjectServiceInstances
-      v-else-if="page === 'instances'"
-      :hosts="targets"
-      :source="applicationSource"
-      @source-used="emit('application-source-used')"
-      @maintain="emit('maintain', $event)"
-      @logs="emit('logs', $event)"
-      @release="openProjectTarget($event, 'publish')"
-      @verify="openProjectTarget($event, 'verify')"
-      @error="emit('error', $event)"
-    />
+    <template v-else-if="page === 'instances'">
+      <ElButton style="margin-bottom: 12px" @click="emit('maintain')">返回项目管理</ElButton>
+      <ProjectServiceInstances
+        :hosts="targets"
+        :source="applicationSource"
+        @source-used="emit('application-source-used')"
+        @maintain="emit('maintain', $event)"
+        @logs="emit('logs', $event)"
+        @release="openProjectTarget($event, 'publish')"
+        @verify="openProjectTarget($event, 'verify')"
+        @error="emit('error', $event)"
+      />
+    </template>
     <template v-else-if="page === 'managed-instances'">
-      <div class="section-head">
-        <button class="quiet" @click="emit('maintain')">返回项目维护</button>
-        <button class="secondary" :disabled="busy || !targets.length" @click="openInstance()">新增实例</button>
+      <div class="ops-el-toolbar" style="margin-bottom: 14px">
+        <ElButton @click="emit('maintain')">← 返回项目管理</ElButton>
+        <ElButton
+          type="primary"
+          :disabled="busy || !targets.length"
+          @click="openInstance()"
+        >
+          新增上线目标
+        </ElButton>
       </div>
-      <div v-if="!instances.length" class="empty">尚未创建实例</div>
-      <div v-else class="table-scroll">
-        <table>
-          <thead>
-            <tr>
-              <th>实例 / 环境</th>
-              <th>目标 / 端口</th>
-              <th>当前 / 上一成功</th>
-              <th>实际观察</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="i in instances" :key="i.id">
-              <td>
-                {{ i.name
-                }}<small
-                  >{{ i.config.environment }} · 草稿 r{{
-                    i.draftRevision
-                  }}</small
-                >
-              </td>
-              <td>
-                {{ targets.find((t) => t.id === i.targetId)?.name
-                }}<small
-                  >{{ i.config.bindAddress }}:{{ i.config.hostPort }}</small
-                >
-              </td>
-              <td>
-                <code
-                  >{{ short(i.currentReleaseId) }} /
-                  {{ short(i.previousReleaseId) }}</code
-                ><small>已应用 {{ i.appliedGeneration }}</small>
-              </td>
-              <td>
-                <span
-                  class="state-tag"
-                  :class="
-                    fresh(i.observedAt) &&
-                    i.observation.health === 'APPLICATION_READY'
-                      ? 'state-success'
-                      : 'state-muted'
-                  "
-                  >{{
-                    fresh(i.observedAt)
-                      ? i.observation.health === "APPLICATION_READY"
-                        ? "应用就绪"
-                        : instanceHealthLabel(i.observation.health)
-                      : "待观察"
-                  }}</span
-                ><small>{{ time(i.observedAt) }}</small>
-                <small v-if="i.observation.preview"
-                  >{{
-                    i.observation.preview.state === "MAINTENANCE"
-                      ? "维护封闭中"
-                      : i.observation.preview.state
-                  }}
-                  · {{ i.observation.preview.maxSessions }}/{{
-                    i.observation.preview.maxTranscodes
-                  }}</small
-                >
-              </td>
-              <td class="actions">
-                <template v-if="!i.config.preview && !i.config.zlm">
-                  <button class="quiet" :disabled="busy || !i.currentReleaseId" @click="i.pendingJob ? showInstanceJob(i) : openRuntimePolicy(i)">{{ i.pendingJob ? instanceProgressLabel(i) : '运行管理' }}</button>
-                </template>
-                <button class="quiet" :disabled="busy" @click="openInstance(i)">
-                  配置</button
-                ><button
-                  class="quiet"
-                  :disabled="busy || !!i.pendingJob"
-                  @click="choosePublish(i)"
-                >
-                  发布</button
-                ><button
-                  class="quiet"
-                  :disabled="busy || !!i.pendingJob || !i.previousReleaseId"
-                  @click="choosePublish(i, 'ROLLBACK')"
-                >
-                  回滚</button
-                ><button
-                  class="quiet"
-                  :disabled="busy || !i.currentReleaseId"
-                  @click="observe(i)"
-                >
-                  观察</button
-                ><button class="quiet" :disabled="busy" @click="history(i)">
-                  版本</button
-                ><button
-                  class="quiet"
-                  :disabled="busy || !i.currentReleaseId"
-                  @click="showLogs(i)"
-                >
-                  日志
-                </button>
-                <button
-                  v-if="i.config.preview"
-                  class="quiet"
-                  :disabled="busy || !i.currentReleaseId"
-                  @click="showRegistration(i)"
-                >
-                  平台登记指引
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <ElTable :data="instances" border stripe style="width: 100%">
+        <ElTableColumn label="实例 / 环境" min-width="175" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div><strong>{{ row.name }}</strong></div>
+            <small class="muted">{{ row.config.environment }} · 草稿 r{{ row.draftRevision }}</small>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="目标服务器 / 端口" min-width="170" show-overflow-tooltip>
+          <template #default="{ row }">
+            <div>{{ targets.find((t) => t.id === row.targetId)?.name || "—" }}</div>
+            <small class="muted">{{ row.config.bindAddress }}:{{ row.config.hostPort }}</small>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="当前 / 上一版本" min-width="175">
+          <template #default="{ row }">
+            <div><code>{{ short(row.currentReleaseId) }} / {{ short(row.previousReleaseId) }}</code></div>
+            <small class="muted">已应用 {{ row.appliedGeneration }}</small>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="实际运行状态" min-width="155">
+          <template #default="{ row }">
+            <ElTag
+              size="small"
+              :type="fresh(row.observedAt) && row.observation.health === 'APPLICATION_READY' ? 'success' : 'info'"
+            >
+              {{
+                fresh(row.observedAt)
+                  ? row.observation.health === "APPLICATION_READY"
+                    ? "应用就绪"
+                    : instanceHealthLabel(row.observation.health)
+                  : "待观察"
+              }}
+            </ElTag>
+            <small class="muted">{{ time(row.observedAt) }}</small>
+            <small v-if="row.observation.preview" class="muted">
+              {{ row.observation.preview.state === "MAINTENANCE" ? "维护封闭中" : row.observation.preview.state }}
+              · {{ row.observation.preview.maxSessions }}/{{ row.observation.preview.maxTranscodes }}
+            </small>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="操作" width="275" fixed="right">
+          <template #default="{ row }">
+            <div class="ops-el-toolbar-group" style="gap: 8px">
+              <ElButton
+                v-if="!row.config.preview && !row.config.zlm"
+                link
+                type="primary"
+                size="small"
+                :disabled="busy || !row.currentReleaseId"
+                @click="row.pendingJob ? showInstanceJob(row as Instance) : openRuntimePolicy(row as Instance)"
+              >
+                {{ row.pendingJob ? instanceProgressLabel(row as Instance) : "运行管理" }}
+              </ElButton>
+              <ElButton link type="primary" size="small" :disabled="busy" @click="openInstance(row as Instance)">
+                配置
+              </ElButton>
+              <ElButton
+                link
+                type="success"
+                size="small"
+                :disabled="busy || !!row.pendingJob"
+                @click="choosePublish(row as Instance)"
+              >
+                发布
+              </ElButton>
+              <ElButton
+                link
+                type="warning"
+                size="small"
+                :disabled="busy || !!row.pendingJob || !row.previousReleaseId"
+                @click="choosePublish(row as Instance, 'ROLLBACK')"
+              >
+                回滚
+              </ElButton>
+              <ElButton
+                link
+                size="small"
+                :disabled="busy || !row.currentReleaseId"
+                @click="observe(row as Instance)"
+              >
+                观察
+              </ElButton>
+              <ElButton link size="small" :disabled="busy" @click="history(row as Instance)">
+                版本
+              </ElButton>
+              <ElButton
+                link
+                size="small"
+                :disabled="busy || !row.currentReleaseId"
+                @click="showLogs(row as Instance)"
+              >
+                日志
+              </ElButton>
+              <ElButton
+                v-if="row.config.preview"
+                link
+                type="primary"
+                size="small"
+                :disabled="busy || !row.currentReleaseId"
+                @click="showRegistration(row as Instance)"
+              >
+                平台指引
+              </ElButton>
+            </div>
+          </template>
+        </ElTableColumn>
+        <template #empty>
+          <ElEmpty description="尚未创建上线目标实例" />
+        </template>
+      </ElTable>
       <OpsPagination :page="instancePage" :page-size="instancePageSize" :total="instanceTotal" :disabled="instancesLoading" label="实例分页" @update:page="instanceList.changePage" @update:page-size="instanceList.changeSize" />
       <OpsExternalBindingsSection
         :busy="busy"
@@ -1145,6 +1164,7 @@ async function reconcile(j: Job, recover = false) {
     :status-labels="statusLabels"
     :phase-labels="phaseLabels"
     @close="closeWorkspaceDialog"
+    @execution-logs="emit('logs', { jobId: $event })"
     @open-import="openImport"
     @save-binding="saveBinding"
     @save-instance="saveInstance"

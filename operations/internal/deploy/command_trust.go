@@ -9,6 +9,7 @@ import (
 	"github.com/streamfusion-ai/operations/internal/serviceinstall"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -99,10 +100,36 @@ func commandSigningMessage(req Request) []byte {
 
 func SignCommandRequest(req *Request, key ed25519.PrivateKey) error {
 	d := commandDefinition(*req)
-	if len(key) != ed25519.PrivateKeySize || len(req.Secrets) != 0 && d == nil && (req.Installation == nil || !req.Installation.PrepareHostTerminal) {
+	allowSecrets := d != nil || (req.Installation != nil && req.Installation.PrepareHostTerminal) || req.MavenConfig != nil || req.AppConfig != nil || req.ProjectDeployment != nil
+	if len(key) != ed25519.PrivateKeySize || len(req.Secrets) != 0 && !allowSecrets {
 		return errors.New("COMMAND_SIGNING_INPUT_INVALID")
 	}
-	if req.Management != nil && len(req.Secrets) != 0 {
+	if req.ProjectDeployment != nil {
+		if err := validProjectDeployment(req.ProjectDeployment, req.Action); err != nil {
+			return err
+		}
+		if err := validProjectSecrets(req.ProjectDeployment, req.Action, req.Secrets); err != nil {
+			return err
+		}
+	} else if req.MavenConfig != nil {
+		if err := validateMavenConfigRequest(*req); err != nil {
+			return err
+		}
+		if len(req.Secrets) != 0 {
+			if err := validateMavenConfigSecrets(*req, req.Secrets); err != nil {
+				return err
+			}
+		}
+	} else if req.AppConfig != nil {
+		if err := validateAppConfigRequest(*req); err != nil {
+			return err
+		}
+		if len(req.Secrets) != 0 {
+			if err := validateAppConfigSecrets(*req, req.Secrets); err != nil {
+				return err
+			}
+		}
+	} else if req.Management != nil && len(req.Secrets) != 0 {
 		if err := validateManagementSecrets(*req, req.Secrets); err != nil {
 			return err
 		}
@@ -116,6 +143,10 @@ func SignCommandRequest(req *Request, key ed25519.PrivateKey) error {
 	} else if (req.Action == "SOFTWARE_INSTALL_CHECK" || req.Action == "NODE_ENVIRONMENT_CHECK" || req.Action == "SOFTWARE_OPERATION_CHECK") && req.DeadlineAt == "" {
 		// Leave room below the target's five-minute ceiling for clock skew and
 		// RFC3339 second precision during read-only checks.
+		req.DeadlineAt = time.Now().UTC().Add(4 * time.Minute).Format(time.RFC3339)
+	} else if (req.Action == MavenConfigReadAction || req.Action == MavenConfigWriteAction || strings.HasPrefix(req.Action, "APP_CONFIG_")) && req.DeadlineAt == "" {
+		req.DeadlineAt = time.Now().UTC().Add(2 * time.Minute).Format(time.RFC3339)
+	} else if req.ProjectDeployment != nil && req.DeadlineAt == "" {
 		req.DeadlineAt = time.Now().UTC().Add(4 * time.Minute).Format(time.RFC3339)
 	}
 	req.CommandSignature = base64.StdEncoding.EncodeToString(ed25519.Sign(key, commandSigningMessage(*req)))
@@ -177,7 +208,21 @@ func (x *executor) verifyCommandRequest(req Request) error {
 	if secureAncestors(file) != nil || readJSON(file, &trust) != nil || trust.ControllerID != req.ControllerID || trust.TargetID != req.TargetID {
 		return errors.New("COMMAND_TRUST_REQUIRED")
 	}
-	if req.Management != nil {
+	if req.MavenConfig != nil {
+		if err := validateMavenConfigRequest(req); err != nil {
+			return err
+		}
+		if err := validateMavenConfigSecrets(req, x.secrets); err != nil {
+			return err
+		}
+	} else if req.AppConfig != nil {
+		if err := validateAppConfigRequest(req); err != nil {
+			return err
+		}
+		if err := validateAppConfigSecrets(req, x.secrets); err != nil {
+			return err
+		}
+	} else if req.Management != nil {
 		if err := validateManagementSecrets(req, x.secrets); err != nil {
 			return err
 		}
@@ -186,7 +231,8 @@ func (x *executor) verifyCommandRequest(req Request) error {
 			return err
 		}
 	}
-	if req.Action == "SOFTWARE_INSTALL_CHECK" || req.Action == "NODE_ENVIRONMENT_CHECK" || req.Action == "SOFTWARE_OPERATION_CHECK" {
+	if req.ProjectDeployment != nil || req.Action == "SOFTWARE_INSTALL_CHECK" || req.Action == "NODE_ENVIRONMENT_CHECK" || req.Action == "SOFTWARE_OPERATION_CHECK" ||
+		req.Action == MavenConfigReadAction || req.Action == MavenConfigWriteAction || strings.HasPrefix(req.Action, "APP_CONFIG_") {
 		if err := verifyCommandCheckDeadline(req.DeadlineAt, time.Now()); err != nil {
 			return err
 		}

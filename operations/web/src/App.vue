@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, KeepAlive, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
-import { ElDialog, ElMessage, ElMessageBox } from "element-plus";
+import { ElButton, ElDialog, ElEmpty, ElMessage, ElMessageBox, ElTable, ElTableColumn, ElTag } from "element-plus";
 import { ApiError, prepare, request, send, setCSRF } from "./api";
 import OpsWorkspace from "./OpsWorkspace.vue";
 import ApplicationProjects from "./ApplicationProjects.vue";
-import type { ProjectInstanceSource } from "./applicationProjects";
+import type { ProjectInstanceSource, ProjectReleaseSource } from "./applicationProjects";
 import SoftwareManagement from "./SoftwareManagement.vue";
 import SoftwareCommandTemplates from "./SoftwareCommandTemplates.vue";
-import SoftwareDirectory from "./SoftwareDirectory.vue";
+import CredentialsCenter from "./CredentialsCenter.vue";
 import SoftwareLogs from "./SoftwareLogs.vue";
 import SoftwareLogDialog from "./SoftwareLogDialog.vue";
 import type { LogSelection } from "./jobs";
@@ -65,12 +65,12 @@ const nav = [
   },
   {
     id: "hosts",
-    label: "主机管理",
+    label: "服务器管理",
     icon: "M4 5h16v14H4z M8 9h2 M14 9h2 M8 14h8",
   },
   {
     id: "ports",
-    label: "端口管理",
+    label: "端口与防火墙",
     icon: "M4 6h16v12H4z M8 9v6 M12 9v6 M16 9v6",
   },
   {
@@ -85,28 +85,23 @@ const nav = [
   },
   {
     id: "commands",
-    label: "软件配置",
+    label: "安装模板",
     icon: "M4 4h16v16H4z M7 8l3 3-3 3 M12 15h5",
   },
-  {
-    id: "software-directory",
-    label: "软件目录",
-    icon: "M4 5h16v14H4z M8 9h8 M8 13h5 M8 17h8",
-  },
-  { id: "application-projects", label: "项目维护", icon: "M3 5h7l2 2h9v13H3z M7 11h10 M7 15h7" },
-  { id: "instances", label: "项目发布", icon: "M5 5h14v14H5z M9 9h6v6H9z" },
+  { id: "application-projects", label: "项目管理", icon: "M3 5h7l2 2h9v13H3z M7 11h10 M7 15h7" },
+  { id: "instances", label: "应用部署", icon: "M5 5h14v14H5z M9 9h6v6H9z" },
   { id: "managed-instances", label: "上线目标管理", icon: "M4 4h16v6H4z M4 14h16v6H4z" },
   { id: "artifacts", label: "版本制品", icon: "M4 7h16v13H4z M8 4h8v3H8z" },
-  { id: "jobs", label: "发布作业", icon: "M6 3h12v4H6z M6 11h12 M6 16h8" },
+  { id: "jobs", label: "任务中心", icon: "M6 3h12v4H6z M6 11h12 M6 16h8" },
 
   {
     id: "credentials",
-    label: "连接凭据",
+    label: "凭据与集成",
     icon: "M14 3a7 7 0 0 0-6.7 9L3 16v5h5v-3h3l2-2a7 7 0 1 0 1-13z M16 7h.01",
   },
   {
     id: "audit",
-    label: "日志记录",
+    label: "日志与审计",
     icon: "M7 3h10v3H7z M7 5H4v16h16V5h-3 M8 11h8 M8 16h5",
   },
   {
@@ -122,22 +117,21 @@ const validNavIds = new Set(nav.map((item) => item.id));
 function readHashPage(): string | undefined {
   if (typeof globalThis.location?.hash !== "string") return undefined;
   const id = globalThis.location.hash.replace(/^#\/?/, "");
+  if (id === "software-directory") return "software";
   return validNavIds.has(id) ? id : undefined;
 }
 const active = ref(readHashPage() || "overview");
+const projectsVisited = ref(active.value === "application-projects");
 const instanceRegistrationSource = ref<ProjectInstanceSource>();
+const legacyAction = ref<{ source: ProjectReleaseSource; action: "publish" | "verify" }>();
 const maintenanceSource = ref<ProjectInstanceSource>();
-const managedReturnSource = ref<ProjectInstanceSource>();
 function openMaintenance(source?: ProjectInstanceSource) {
   maintenanceSource.value = source;
   active.value = "application-projects";
 }
-function openManagedTargets(source?: ProjectInstanceSource) {
-  managedReturnSource.value = source;
-  active.value = "managed-instances";
-}
-function openProjectInstances(projectId: string, moduleId: string) {
-  instanceRegistrationSource.value = { projectId, moduleId };
+function openLegacyRelease(source: ProjectReleaseSource, action: "publish" | "verify") {
+  instanceRegistrationSource.value = source;
+  legacyAction.value = { source, action };
   active.value = "instances";
 }
 const commandsVisited = ref(active.value === "commands");
@@ -146,10 +140,13 @@ function onHashChange() {
   if (id && active.value !== id) active.value = id;
 }
 watch(active, (page) => {
-  if (page !== "instances") instanceRegistrationSource.value = undefined;
+  if (page !== "instances") {
+    instanceRegistrationSource.value = undefined;
+    legacyAction.value = undefined;
+  }
   if (page !== "application-projects") maintenanceSource.value = undefined;
-  if (page !== "managed-instances") managedReturnSource.value = undefined;
   if (page === "commands") commandsVisited.value = true;
+  if (page === "application-projects") projectsVisited.value = true;
   if (
     typeof globalThis.history?.replaceState === "function" &&
     typeof globalThis.location?.hash === "string"
@@ -165,27 +162,61 @@ watch(active, (page) => {
   }
 });
 const preparationHostId = ref("");
+const portHostId = ref("");
 const dockerHostId = ref("");
+const softwareInstallHostId = ref("");
+const returnToProject = ref(false);
 const selectedSoftwareId = ref("");
 const softwareInstallSearch = ref("");
 watch(active, (page) => { if (!["software", "software-install"].includes(page)) dockerHostId.value = ""; });
 watch(active, (page) => { if (page !== "software") selectedSoftwareId.value = ""; });
-watch(active, (page) => { if (page !== "software-install") softwareInstallSearch.value = ""; });
+watch(active, (page) => {
+  if (page === "software-install" || page === "hosts") return;
+  softwareInstallSearch.value = "";
+  softwareInstallHostId.value = "";
+  returnToProject.value = false;
+});
+watch(active, (page) => { if (page !== "ports") portHostId.value = ""; });
 function showJenkinsInstallation() {
-  softwareInstallSearch.value = "Jenkins";
-  active.value = "software-install";
+  showProjectSoftware({ search: "Jenkins" });
+}
+function showProjectSoftware(target: { search: string; hostId?: string }) {
+  returnToProject.value = true;
+  handleOverviewNavigate({ view: "software-install", ...target });
 }
 function showHostPreparation(hostId: string) {
   preparationHostId.value = hostId;
   active.value = "hosts";
 }
+function handleOverviewNavigate(target: { view: string; hostId?: string; softwareId?: string; search?: string }) {
+  if (target.view === "hosts" && target.hostId) {
+    preparationHostId.value = target.hostId;
+  }
+  if (target.view === "ports" && target.hostId) {
+    portHostId.value = target.hostId;
+  }
+  if (target.view === "software" && target.softwareId) {
+    selectedSoftwareId.value = target.softwareId;
+  }
+  if (target.view === "software-install" && target.search) {
+    softwareInstallSearch.value = target.search;
+  }
+  if (target.view === "software-install" && target.hostId) {
+    softwareInstallHostId.value = target.hostId;
+  }
+  if (validNavIds.has(target.view)) active.value = target.view;
+}
 const navigationOpen = ref(false);
 const navigationGroups = [
-  { label: "工作空间", ids: ["overview", "hosts", "ports"] },
-  { label: "软件中心", ids: ["software", "software-install", "commands", "software-directory"] },
-  { label: "应用交付", ids: ["application-projects", "instances", "artifacts", "jobs"] },
-  { label: "控制器", ids: ["credentials", "audit", "settings"] },
+  { label: "基础设施", ids: ["overview", "hosts", "ports"] },
+  { label: "软件中心", ids: ["software", "software-install", "commands"] },
+  { label: "应用交付", ids: ["application-projects", "jobs"] },
+  { label: "平台管理", ids: ["credentials", "audit", "settings"] },
 ].map((group) => ({ ...group, items: nav.filter((item) => group.ids.includes(item.id)) }));
+const activeGroupLabel = computed(() => {
+  const page = active.value === "managed-instances" ? "application-projects" : active.value;
+  return navigationGroups.find((g) => g.items.some((item) => item.id === page))?.label || "";
+});
 const logTab = ref<"jobs" | "runtime" | "audit">("jobs");
 const logTabs = [
   { id: "jobs", label: "执行记录" },
@@ -662,7 +693,7 @@ onUnmounted(() => {
       v-if="loggedIn"
       id="ops-navigation"
       class="sidebar"
-      :class="{ 'is-open': navigationOpen, 'delivery-navigation': ['application-projects', 'instances', 'managed-instances', 'artifacts', 'jobs'].includes(active) }"
+      :class="{ 'is-open': navigationOpen }"
     >
       <div class="brand">
         <img
@@ -716,8 +747,15 @@ onUnmounted(() => {
             <path d="M4 6h16M4 12h16M4 18h16" />
           </svg>
         </button>
-        <h1>{{ title }}</h1>
+        <div class="header-heading">
+          <span v-if="activeGroupLabel" class="header-crumb">{{ activeGroupLabel }} /</span>
+          <h1>{{ title }}</h1>
+        </div>
         <div class="account">
+          <span class="header-status-pill" :class="{ offline: !connected }" title="控制器连接状态">
+            <i aria-hidden="true"></i>
+            {{ connected ? `控制器在线 · ${uptime}` : "连接断开" }}
+          </span>
           <svg class="account-icon" viewBox="0 0 24 24" aria-hidden="true">
             <circle cx="12" cy="8" r="3" />
             <path d="M5 21v-3a7 7 0 0 1 14 0v3" />
@@ -743,12 +781,15 @@ onUnmounted(() => {
           @close="diagnostic = null"
         />
         <SoftwareCommandTemplates class="content" v-if="commandsVisited" v-show="active === 'commands'" :active="active === 'commands'" />
-        <SoftwareDirectory v-if="active === 'software-directory'" @detail="(id) => { selectedSoftwareId = id; active = 'software'; }" />
+        <div v-if="returnToProject && (active === 'software-install' || active === 'hosts')" class="content">
+          <ElButton link type="primary" @click="active = 'application-projects'">返回项目草稿</ElButton>
+        </div>
         <KeepAlive>
           <SoftwareManagement
             v-if="active === 'software' || active === 'software-install'"
             :view="active === 'software-install' ? 'install' : 'manage'"
             :docker-host-id="dockerHostId"
+            :install-host-id="softwareInstallHostId"
             :install-search="softwareInstallSearch"
             :selected-software-id="selectedSoftwareId"
             @selection-opened="(id) => { if (selectedSoftwareId === id) selectedSoftwareId = ''; }"
@@ -768,6 +809,7 @@ onUnmounted(() => {
         />
         <PortManagement
           v-else-if="active === 'ports'"
+          :initial-host-id="portHostId"
           @error="report"
           @preparation="showHostPreparation"
         />
@@ -775,103 +817,45 @@ onUnmounted(() => {
           v-else-if="['instances', 'managed-instances', 'artifacts', 'jobs'].includes(active)"
           :page="active"
           :application-source="instanceRegistrationSource"
+          :legacy-action="legacyAction"
           @application-source-used="instanceRegistrationSource = undefined"
-          @maintain="openMaintenance($event || managedReturnSource)"
+          @legacy-action-used="legacyAction = undefined"
+          @maintain="openMaintenance"
           @logs="openLogs"
           @error="report"
         />
         <ApplicationProjects
-          v-else-if="active === 'application-projects'"
+          v-if="projectsVisited"
+          v-show="active === 'application-projects'"
+          :active="active === 'application-projects'"
           :source="maintenanceSource"
           @source-used="maintenanceSource = undefined"
-          @manage-targets="openManagedTargets"
+          @install-software="showProjectSoftware"
           @error="report"
           @install-jenkins="showJenkinsInstallation"
-          @view-instances="openProjectInstances"
+          @legacy-release="openLegacyRelease"
+          @legacy-tools="active = $event"
+          @logs="openLogs"
         />
         <HostOverview
-          v-else-if="active === 'overview'"
+          v-if="active === 'overview'"
           :controller="status"
           :connected="connected"
           :uptime="uptime"
+          @navigate="handleOverviewNavigate"
           @error="report"
         />
-        <section
+        <CredentialsCenter
           v-else-if="active === 'credentials'"
-          class="content panel-card"
-        >
-          <div class="section-head">
-            <h2>凭据修订</h2>
-            <div class="section-actions">
-              <button
-                class="secondary"
-                :disabled="busy"
-                @click="execute(() => load())"
-              >
-                刷新
-              </button>
-              <button
-                class="primary"
-                :disabled="busy"
-                @click="openCredential()"
-              >
-                新增凭据
-              </button>
-            </div>
-          </div>
-          <p class="install-note">
-            要找回 MySQL 或 Redis 的安装密码，请在<a href="#software">软件管理</a>中打开对应实例，进入「登录账号」并选择「复制密码」。
-          </p>
-          <div v-if="credentials.length" class="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>名称</th>
-                  <th>类型</th>
-                  <th>修订</th>
-                  <th>创建时间</th>
-                  <th>状态</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="item in pagedCredentials" :key="item.id + item.revision">
-                  <td>{{ item.name }}</td>
-                  <td>{{ credentialKindLabels[item.kind] || item.kind }}</td>
-                  <td>r{{ item.revision }}</td>
-                  <td>{{ displayTime(item.createdAt) }}</td>
-                  <td>
-                    <span
-                      class="state-tag"
-                      :class="item.revokedAt ? 'state-muted' : 'state-success'"
-                    >
-                      {{ item.revokedAt ? "已撤销" : "可用" }}
-                    </span>
-                  </td>
-                  <td>
-                    <button
-                      v-if="!item.revokedAt && latest(item)"
-                      class="quiet"
-                      :disabled="busy"
-                      @click="openCredential(item)"
-                    >
-                      新修订</button
-                    ><button
-                      v-if="!item.revokedAt"
-                      class="quiet danger"
-                      :disabled="busy"
-                      @click="revoke(item)"
-                    >
-                      撤销
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div v-else class="empty">尚未保存凭据</div>
-          <OpsPagination v-if="credentials.length" v-model:page="credentialPage" v-model:page-size="credentialPageSize" :total="credentialTotal" label="凭据分页" />
-        </section>
+          :credentials="credentials"
+          :busy="busy"
+          @refresh="execute(() => load())"
+          @create="openCredential()"
+          @new-revision="openCredential($event)"
+          @revoke="revoke($event)"
+          @navigate="handleOverviewNavigate"
+          @error="report"
+        />
         <section v-else-if="active === 'audit'" class="content panel-card logs-panel">
           <div class="log-record-tabs" role="tablist" aria-label="日志类型">
             <button v-for="entry in logTabs"
@@ -882,48 +866,52 @@ onUnmounted(() => {
           <template v-else>
           <div class="section-head">
             <h2>操作记录</h2>
-            <button
-              class="secondary"
-              :disabled="busy || auditLoading"
+            <ElButton
+              :loading="auditLoading"
+              :disabled="busy"
               @click="execute(latestAudit)"
             >
               最新记录
-            </button>
+            </ElButton>
           </div>
-          <div v-if="audits.length" class="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>时间</th>
-                  <th>操作者</th>
-                  <th>动作</th>
-                  <th>结果</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="item in audits" :key="item.id">
-                  <td>{{ displayTime(item.createdAt) }}</td>
-                  <td>{{ item.actor }}</td>
-                  <td>{{ actionLabels[item.action] || "其他操作" }}</td>
-                  <td>
-                    <span
-                      class="state-tag"
-                      :class="auditResult(item.action, item.result).tone"
-                    >
-                      {{ auditResult(item.action, item.result).label }}
-                    </span>
-                  </td>
-                  <td>
-                    <button class="quiet" @click="auditDetail = item">
-                      详情
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div v-else class="empty">暂无操作记录</div>
+          <ElTable
+            :data="audits"
+            border
+            stripe
+            style="width: 100%"
+          >
+            <ElTableColumn label="时间" width="175">
+              <template #default="{ row }">
+                {{ displayTime(row.createdAt) }}
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="操作者" prop="actor" width="140" show-overflow-tooltip />
+            <ElTableColumn label="动作" min-width="180" show-overflow-tooltip>
+              <template #default="{ row }">
+                {{ actionLabels[row.action] || "其他操作" }}
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="结果" width="110" align="center">
+              <template #default="{ row }">
+                <ElTag
+                  size="small"
+                  :type="auditResult(row.action, row.result).tone === 'state-success' ? 'success' : auditResult(row.action, row.result).tone === 'state-error' ? 'danger' : 'info'"
+                >
+                  {{ auditResult(row.action, row.result).label }}
+                </ElTag>
+              </template>
+            </ElTableColumn>
+            <ElTableColumn label="操作" width="90" fixed="right">
+              <template #default="{ row }">
+                <ElButton link type="primary" size="small" @click="auditDetail = (row as Audit)">
+                  详情
+                </ElButton>
+              </template>
+            </ElTableColumn>
+            <template #empty>
+              <ElEmpty description="暂无操作记录" />
+            </template>
+          </ElTable>
           <OpsPagination :page="auditPage" :page-size="auditPageSize" :has-next="!!auditNextCursor" :disabled="auditLoading" label="操作记录分页" @update:page="changeAuditPage" @update:page-size="changeAuditSize" />
           </template>
         </section>

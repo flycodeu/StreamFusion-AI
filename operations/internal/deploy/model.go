@@ -120,10 +120,13 @@ func (b Binding) Validate() error {
 }
 
 type Request struct {
+	ProjectDeployment    *ProjectDeployment                `json:"projectDeployment,omitempty"`
 	ApplicationOperation string                            `json:"applicationOperation,omitempty"`
 	RuntimePolicy        *runtimepolicy.Change             `json:"runtimePolicy,omitempty"`
 	ExecutionLogVersion  int                               `json:"executionLogVersion,omitempty"`
 	Management           *serviceinstall.ManagementRequest `json:"management,omitempty"`
+	MavenConfig          *MavenConfigRequest               `json:"mavenConfig,omitempty"`
+	AppConfig            *AppConfigRequest                 `json:"appConfig,omitempty"`
 	CommandSignature     string                            `json:"commandSignature,omitempty"`
 	GitAccount           *GitAccountRequest                `json:"gitAccount,omitempty"`
 	GitRepository        *GitRepositoryRequest             `json:"gitRepository,omitempty"`

@@ -1,11 +1,31 @@
 <script setup lang="ts">
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from "vue";
-import { ElDrawer, ElMessage, ElMessageBox } from "element-plus";
+import {
+  ElButton,
+  ElDescriptions,
+  ElDescriptionsItem,
+  ElDrawer,
+  ElDropdown,
+  ElDropdownItem,
+  ElDropdownMenu,
+  ElEmpty,
+  ElInput,
+  ElMessage,
+  ElMessageBox,
+  ElOption,
+  ElPagination,
+  ElRadioButton,
+  ElRadioGroup,
+  ElSelect,
+  ElTable,
+  ElTableColumn,
+  ElTag,
+} from "element-plus";
 import { request } from "./api";
 import OpsPagination from "./OpsPagination.vue";
-import { useGridPagination } from "./pagination";
+import { useGridPagination, usePagination } from "./pagination";
 import { requestAllPages } from "./listPages";
-import type { Host } from "./hosts";
+import { hostTime, type Host } from "./hosts";
 import ObservationBatchPanel from "./ObservationBatchPanel.vue";
 import type { ObservationBatch } from "./observation";
 import SoftwareIcon from "./SoftwareIcon.vue";
@@ -32,6 +52,9 @@ import {
   softwareHasInstallationRecord,
   softwareIsHistoryOnly,
   softwareUninstallAvailable,
+  softwareVersionText,
+  softwareVersionWithoutDigest,
+  cleanObservedVersionText,
   type SoftwareInstance,
   type SoftwareJob,
   type SoftwareMutationResult,
@@ -46,7 +69,7 @@ const emit = defineEmits<{
   logs: [target: { jobId?: string; softwareId?: string }];
   selectionOpened: [string];
 }>();
-const props = withDefaults(defineProps<{ view?: "manage" | "install"; dockerHostId?: string; selectedSoftwareId?: string; installSearch?: string }>(), {
+const props = withDefaults(defineProps<{ view?: "manage" | "install"; dockerHostId?: string; installHostId?: string; selectedSoftwareId?: string; installSearch?: string }>(), {
   view: "manage",
 });
 const rows = ref<SoftwareInstance[]>([]);
@@ -137,6 +160,7 @@ function editConfiguration(item: SoftwareInstance) {
 }
 function detailClosed() { if (queuedConfiguration.value) { configurationItem.value = queuedConfiguration.value; queuedConfiguration.value = undefined; } }
 const detailId = ref("");
+const detailInitialTab = ref("overview");
 const job = ref<SoftwareJob>();
 let disposed = false;
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -149,8 +173,9 @@ function currentDetail(id: string, revision: number) {
   return !disposed && detailId.value === id && detailRevision === revision;
 }
 
-function selectDetail(id: string) {
+function selectDetail(id: string, tab = "overview") {
   detailRevision += 1;
+  detailInitialTab.value = tab;
   detailId.value = id;
   job.value = undefined;
   return detailRevision;
@@ -175,9 +200,110 @@ const visible = computed(() => {
 const { grid: softwareGrid, page, pageSize, total, pageSizeOptions, pageItems: pagedSoftware } = useGridPagination(
   () => visible.value, [query, hostId, mode],
 );
+const displayMode = ref<"table" | "card">("table");
+const expandedRowId = ref("");
+const { page: tablePage, pageSize: tablePageSize, total: tableTotal, pageItems: tableRows } = usePagination(
+  () => visible.value, [query, hostId, mode], 20,
+);
 const softwareCards = computed(() =>
   pagedSoftware.value.map((item) => ({ item, version: softwareVersionSummary(item) })),
 );
+function tableVersionText(item: SoftwareInstance): string {
+  const raw = item.observation?.version || item.softwareVersion;
+  const clean = softwareVersionText(softwareVersionWithoutDigest(raw));
+  return clean || item.installation?.definition?.version || "";
+}
+function stateTagType(tone: string): "success" | "danger" | "warning" | "info" {
+  if (tone === "state-success") return "success";
+  if (tone === "state-error") return "danger";
+  if (tone === "state-warning") return "warning";
+  return "info";
+}
+function hasMoreActions(item: SoftwareInstance): boolean {
+  return (
+    (rowCanChange(item) && (item.observation?.state || item.actualState) === "RUNNING") ||
+    (item.managementMode === "OBSERVE" && service(item)) ||
+    softwareHasInstallationRecord(item) ||
+    softwareUninstallAvailable(item)
+  );
+}
+function runBatchCommand(cmd: string | number | Record<string, unknown>) {
+  if (cmd === "detect-filtered") {
+    detectionScope.value = "FILTERED";
+    void detectAll();
+  } else if (cmd === "detect-all") {
+    detectionScope.value = "ALL";
+    void detectAll();
+  } else if (cmd === "discover") {
+    discovery.value = true;
+  }
+}
+function runRowCommand(item: SoftwareInstance, cmd: string | number | Record<string, unknown>) {
+  if (cmd === "stop") void changeState(item, "STOP");
+  else if (cmd === "adopt") void adopt(item);
+  else if (cmd === "logs") emit("logs", { jobId: item.installationJobId || item.lastJobId });
+  else if (cmd === "uninstall") {
+    uninstallItem.value = item;
+    uninstallOpen.value = true;
+  }
+}
+function rowCanChange(item: SoftwareInstance) {
+  return (
+    softwareLifecycleAvailable(item) &&
+    item.managementMode === "MANAGED" &&
+    service(item) &&
+    !hosts.value.find((host) => host.id === item.hostId)?.maintenance
+  );
+}
+function itemHost(item: SoftwareInstance) {
+  return hosts.value.find((h) => h.id === item.hostId);
+}
+function itemLocator(item: SoftwareInstance) {
+  return item.runtimeKind === "DOCKER"
+    ? item.observation?.containerName || item.locator.slice(0, 16)
+    : item.locator;
+}
+function itemPortsSummary(item: SoftwareInstance): string[] {
+  const mapped = item.observation?.portMappings || [];
+  if (mapped.length) return mapped;
+  const listening = item.observation?.listeningPorts || [];
+  if (listening.length) return listening;
+  const cfg = item.installation?.config;
+  const ports = [
+    ...(cfg?.hostPort ? [cfg.hostPort] : []),
+    ...Object.values(cfg?.ports || {}).filter((p): p is number => !!p),
+  ];
+  return Array.from(new Set(ports)).map((p) => `${p}（配置）`);
+}
+function itemPaths(item: SoftwareInstance) {
+  const saved = item.installationPaths;
+  const official = item.installation?.official?.paths;
+  const observed = item.observation;
+  const binary =
+    observed?.executablePath ||
+    item.installationEvidence?.binaryPath ||
+    official?.binary;
+  const values = [
+    { label: "安装根目录", value: saved?.root === "/" ? "" : saved?.root },
+    { label: "配置路径", value: official?.config || saved?.config },
+    { label: "数据目录", value: official?.data || saved?.data },
+    { label: "日志目录", value: official?.logs || saved?.logs },
+    { label: "程序路径", value: binary },
+    { label: "程序目录", value: binary ? "" : saved?.bin },
+    { label: "服务单元", value: observed?.serviceFile },
+    { label: "Docker Root", value: observed?.dockerRootDir },
+    { label: "服务日志", value: observed?.logPath },
+  ];
+  return values.filter((e): e is { label: string; value: string } => !!e.value);
+}
+async function copyPathValue(val: string) {
+  try {
+    await navigator.clipboard.writeText(val);
+    ElMessage.success("已复制路径");
+  } catch {
+    ElMessage.info("请手动选中复制");
+  }
+}
 const detail = computed(() =>
   rows.value.find((item) => item.id === detailId.value),
 );
@@ -266,9 +392,9 @@ function update(item: SoftwareInstance) {
     ? rows.value.map((row) => (row.id === item.id ? item : row))
     : [...rows.value, item];
 }
-async function showDetails(item: SoftwareInstance) {
+async function showDetails(item: SoftwareInstance, tab = "overview") {
   if(item.softwareType === "NODE") { await openNode(item.hostId, item.nodeEnvironmentId || ""); return; }
-  const revision = selectDetail(item.id);
+  const revision = selectDetail(item.id, tab);
   if (!item.lastJobId) return;
   try {
     const selectedJob = await request<SoftwareJob>("/jobs/" + item.lastJobId);
@@ -553,7 +679,7 @@ onUnmounted(() => {
   <section class="content software-management" :aria-label="view === 'install' ? '软件安装' : '软件管理'">
     <SoftwareRecipes
       v-if="isActive && view === 'install'"
-      :host-id="hostId"
+      :host-id="dockerHostId || installHostId || hostId"
       :initial-recipe-key="dockerHostId ? 'docker' : undefined"
       :initial-search="installSearch"
       @open-instance="(id) => openInstance(id).catch((error) => emit('error', error))"
@@ -565,92 +691,350 @@ onUnmounted(() => {
       @git="openGit"
     />
     <div v-if="view === 'manage'" class="software-instances" aria-label="已安装软件">
-      <div class="software-toolbar">
-        <div class="software-filters">
-          <input
+      <div class="ops-el-toolbar">
+        <div class="ops-el-toolbar-group">
+          <ElInput
             v-model="query"
-            type="search"
-            placeholder="搜索软件"
-            aria-label="搜索软件或服务标识"
+            clearable
+            placeholder="搜索软件名称、类型或标识"
+            style="width: 230px"
           />
-          <select v-model="hostId" aria-label="筛选软件主机">
-            <option value="">全部主机</option>
-            <option v-for="host in hosts" :key="host.id" :value="host.id">
-              {{ host.name }}
-            </option>
-          </select>
-          <select v-model="mode" aria-label="筛选管理模式">
-            <option value="ACTIVE">当前软件</option>
-            <option value="OBSERVE">只读登记</option>
-            <option value="MANAGED">已接管</option>
-            <option value="RELEASED">已解除</option>
-            <option value="ALL">全部登记</option>
-          </select>
-        </div>
-        <div class="software-toolbar-actions">
-          <select v-model="detectionScope" aria-label="检测范围">
-            <option value="FILTERED">当前筛选</option>
-            <option value="ALL">全部软件</option>
-          </select>
-          <button
-            class="secondary"
-            :disabled="busy || !detectionCount"
-            @click="detectAll"
+          <ElSelect
+            v-model="hostId"
+            clearable
+            :value-on-clear="''"
+            placeholder="全部主机"
+            style="width: 165px"
           >
-            一键检测（{{ detectionCount }}）
-          </button>
+            <ElOption label="全部主机" value="" />
+            <ElOption
+              v-for="host in hosts"
+              :key="host.id"
+              :label="host.name"
+              :value="host.id"
+            />
+          </ElSelect>
+          <ElSelect v-model="mode" style="width: 150px">
+            <ElOption label="活跃实例" value="ACTIVE" />
+            <ElOption label="平台托管" value="MANAGED" />
+            <ElOption label="主机发现（只读）" value="OBSERVE" />
+            <ElOption label="已解除" value="RELEASED" />
+            <ElOption label="全部登记" value="ALL" />
+          </ElSelect>
+        </div>
+        <div class="ops-el-toolbar-group">
+          <ElRadioGroup v-model="displayMode" size="small">
+            <ElRadioButton value="table">列表</ElRadioButton>
+            <ElRadioButton value="card">卡片</ElRadioButton>
+          </ElRadioGroup>
+          <ElDropdown trigger="click" @command="runBatchCommand">
+            <ElButton :disabled="busy || (!hosts.length && !detectionCount)">
+              批量与发现 ▾
+            </ElButton>
+            <template #dropdown>
+              <ElDropdownMenu>
+                <ElDropdownItem
+                  command="detect-filtered"
+                  :disabled="!detectionCount"
+                >
+                  一键检测当前筛选（{{ detectionCount }}）
+                </ElDropdownItem>
+                <ElDropdownItem command="detect-all" :disabled="!rows.length">
+                  一键检测全部活跃软件
+                </ElDropdownItem>
+                <ElDropdownItem
+                  command="discover"
+                  divided
+                  :disabled="!hosts.length"
+                >
+                  自动识别主机软件
+                </ElDropdownItem>
+              </ElDropdownMenu>
+            </template>
+          </ElDropdown>
           <ObservationBatchPanel
             :batch="batch"
             :busy="busy"
             @cancel="cancelDetection"
           />
-          <button
-            class="secondary"
-            :disabled="busy || !hosts.length"
-            @click="discovery = true"
-          >
-            自动识别
-          </button>
-          <button
-            class="secondary"
-            :disabled="busy || loading"
+          <ElButton
+            :loading="loading"
+            :disabled="busy"
             @click="refreshView"
           >
             刷新
-          </button>
-          <button
-            class="primary"
+          </ElButton>
+          <ElButton
+            type="primary"
             :disabled="busy || !hosts.length"
             @click="openRegistration()"
           >
             登记已有
-          </button>
+          </ElButton>
         </div>
       </div>
-      <div v-if="!rows.length" class="empty software-empty">
-        <strong>{{ loading ? "正在加载软件" : "尚未添加软件" }}</strong>
-        <span v-if="!loading">
-          {{
-            hosts.length
-              ? "登记已有服务，或安装新软件"
-              : "先在主机管理添加服务器"
-          }}
-        </span>
-        <div v-if="!loading" class="software-empty-actions">
-          <button
-            class="primary"
-            :disabled="!hosts.length"
-            @click="openRegistration()"
-          >
-            登记已有
-          </button>
-          <button class="secondary" @click="emit('navigate', 'install')">
-            安装软件
-          </button>
-        </div>
+      <div v-if="!rows.length" class="software-empty-box">
+        <ElEmpty
+          :description="
+            loading
+              ? '正在加载软件实例…'
+              : hosts.length
+                ? '尚未登记或安装任何软件'
+                : '请先在服务器管理添加目标节点'
+          "
+        >
+          <template v-if="!loading" #default>
+            <div class="ops-el-toolbar-group" style="justify-content: center">
+              <ElButton
+                type="primary"
+                :disabled="!hosts.length"
+                @click="openRegistration()"
+              >
+                登记已有
+              </ElButton>
+              <ElButton @click="emit('navigate', 'install')">安装软件</ElButton>
+            </div>
+          </template>
+        </ElEmpty>
       </div>
-      <div v-else-if="!visible.length" class="empty">没有匹配的软件</div>
-      <div v-else ref="softwareGrid" class="software-cards">
+      <template v-else-if="displayMode === 'table'">
+        <ElTable
+          :data="tableRows"
+          row-key="id"
+          border
+          stripe
+          style="width: 100%; margin-top: 16px"
+        >
+          <ElTableColumn type="expand" width="44">
+            <template #default="{ row }">
+              <div class="expand-box">
+                <ElDescriptions :column="1" border size="small" class="expand-descriptions">
+                  <ElDescriptionsItem
+                    v-if="row.observation?.version || row.softwareVersion"
+                    label="版本 / 镜像身份"
+                  >
+                    <div class="expand-value-row">
+                      <code>{{ cleanObservedVersionText(row.observation?.version || row.softwareVersion) }}</code>
+                    </div>
+                  </ElDescriptionsItem>
+                  <ElDescriptionsItem
+                    v-for="entry in itemPaths(row as SoftwareInstance)"
+                    :key="`${entry.label}:${entry.value}`"
+                    :label="entry.label"
+                  >
+                    <div class="expand-value-row">
+                      <code>{{ entry.value }}</code>
+                      <ElButton
+                        link
+                        type="primary"
+                        size="small"
+                        @click="copyPathValue(entry.value)"
+                      >
+                        复制
+                      </ElButton>
+                    </div>
+                  </ElDescriptionsItem>
+                  <ElDescriptionsItem
+                    v-if="itemPortsSummary(row as SoftwareInstance).length"
+                    label="端口与映射"
+                  >
+                    <div class="expand-value-row">
+                      <code>{{ itemPortsSummary(row as SoftwareInstance).join("，") }}</code>
+                    </div>
+                  </ElDescriptionsItem>
+                  <ElDescriptionsItem
+                    v-for="(mount, mIdx) in row.observation?.mounts"
+                    :key="mIdx"
+                    :label="mount.volume ? '容器卷' : '路径挂载'"
+                  >
+                    <div class="expand-value-row">
+                      <code>{{ mount.volume || mount.source || "—" }} → {{ mount.destination }}</code>
+                      <ElTag size="small" type="info">
+                        {{ mount.readOnly ? "只读" : "读写" }}
+                      </ElTag>
+                      <ElButton
+                        v-if="mount.source"
+                        link
+                        type="primary"
+                        size="small"
+                        @click="copyPathValue(mount.source)"
+                      >
+                        复制宿主路径
+                      </ElButton>
+                    </div>
+                  </ElDescriptionsItem>
+                </ElDescriptions>
+                <div class="expand-foot muted">
+                  <span v-if="!itemPaths(row as SoftwareInstance).length && !row.observation?.mounts?.length && !itemPortsSummary(row as SoftwareInstance).length">
+                    暂无已采集的文件路径与挂载目录，可点击「详情 → 检查状态」采集完整目录。
+                  </span>
+                  <span v-if="row.observation?.observedAt">
+                    最近检查于 {{ hostTime(row.observation.observedAt) }}
+                  </span>
+                </div>
+              </div>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="软件名称" min-width="210" show-overflow-tooltip>
+            <template #default="{ row }">
+              <div class="software-table-identity">
+                <SoftwareIcon :type="row.installation?.definition?.catalogKey || row.softwareType" />
+                <div class="software-table-name">
+                  <strong>{{ row.name }}</strong>
+                  <span class="muted">
+                    {{ softwareTypeLabel(row as SoftwareInstance) }}
+                    <template v-if="tableVersionText(row as SoftwareInstance)">
+                      · {{ tableVersionText(row as SoftwareInstance) }}
+                    </template>
+                  </span>
+                </div>
+              </div>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="所属服务器" width="160" show-overflow-tooltip>
+            <template #default="{ row }">
+              <div class="software-table-host">
+                <strong>{{ row.hostName || itemHost(row as SoftwareInstance)?.name || row.hostId }}</strong>
+                <span v-if="itemHost(row as SoftwareInstance)?.address" class="muted">{{ itemHost(row as SoftwareInstance)!.address }}</span>
+              </div>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="运行方式" width="200" show-overflow-tooltip>
+            <template #default="{ row }">
+              <div class="software-table-runtime">
+                <div class="runtime-tags">
+                  <ElTag size="small" effect="plain">{{ softwareRuntimeLabels[(row as SoftwareInstance).runtimeKind] }}</ElTag>
+                  <ElTag size="small" type="info">{{ softwareModes[(row as SoftwareInstance).managementMode] }}</ElTag>
+                </div>
+                <span class="locator-ellipsis" :title="row.observation?.containerName || row.locator">
+                  {{ itemLocator(row as SoftwareInstance) }}
+                </span>
+              </div>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="状态" width="96" align="center">
+            <template #default="{ row }">
+              <ElTag :type="stateTagType(softwareState(row as SoftwareInstance).tone)" size="small">
+                {{ softwareState(row as SoftwareInstance).label }}
+              </ElTag>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="端口 / 入口" min-width="180" show-overflow-tooltip>
+            <template #default="{ row }">
+              <div class="software-table-ports">
+                <SoftwareWebAccess :item="(row as SoftwareInstance)" :host="itemHost(row as SoftwareInstance)" compact />
+                <template v-if="itemPortsSummary(row as SoftwareInstance).length">
+                  <code class="port-chip">{{ itemPortsSummary(row as SoftwareInstance)[0] }}</code>
+                  <ElTag v-if="itemPortsSummary(row as SoftwareInstance).length > 1" size="small" type="info">
+                    +{{ itemPortsSummary(row as SoftwareInstance).length - 1 }}
+                  </ElTag>
+                </template>
+                <span v-else-if="!row.installation?.definition?.web" class="muted">
+                  {{ row.runtimeKind === "TOOL" ? "—" : "未确认" }}
+                </span>
+              </div>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="操作" width="185" fixed="right">
+            <template #default="{ row }">
+              <div class="software-op-row">
+                <ElButton
+                  link
+                  type="primary"
+                  size="small"
+                  :disabled="busy"
+                  @click="showDetails(row as SoftwareInstance)"
+                >
+                  详情
+                </ElButton>
+                <ElButton
+                  v-if="row.softwareType === 'MAVEN' && row.managementMode === 'MANAGED' && row.installationStatus === 'READY'"
+                  link
+                  type="primary"
+                  size="small"
+                  :disabled="busy || !!itemHost(row as SoftwareInstance)?.maintenance"
+                  @click="showDetails(row as SoftwareInstance, 'maven-config')"
+                >
+                  Maven 配置
+                </ElButton>
+                <ElButton
+                  v-if="rowCanChange(row as SoftwareInstance) && ['STOPPED', 'FAILED', 'MISSING'].includes(row.observation?.state || row.actualState)"
+                  link
+                  type="success"
+                  size="small"
+                  :disabled="busy || !softwareInstallationReady(row as SoftwareInstance)"
+                  @click="changeState(row as SoftwareInstance, 'START')"
+                >
+                  启动
+                </ElButton>
+                <ElButton
+                  v-else-if="rowCanChange(row as SoftwareInstance) && (row.observation?.state || row.actualState) === 'RUNNING'"
+                  link
+                  type="primary"
+                  size="small"
+                  :disabled="busy"
+                  @click="changeState(row as SoftwareInstance, 'RESTART')"
+                >
+                  重启
+                </ElButton>
+                <ElDropdown
+                  v-if="hasMoreActions(row as SoftwareInstance)"
+                  trigger="click"
+                  @command="runRowCommand(row as SoftwareInstance, $event)"
+                >
+                  <ElButton link size="small" :disabled="busy">更多 ▾</ElButton>
+                  <template #dropdown>
+                    <ElDropdownMenu>
+                      <ElDropdownItem
+                        v-if="rowCanChange(row as SoftwareInstance) && (row.observation?.state || row.actualState) === 'RUNNING'"
+                        command="stop"
+                      >
+                        停止
+                      </ElDropdownItem>
+                      <ElDropdownItem
+                        v-if="row.managementMode === 'OBSERVE' && service(row as SoftwareInstance)"
+                        command="adopt"
+                        :disabled="!canAdopt(row as SoftwareInstance)"
+                      >
+                        接管管理
+                      </ElDropdownItem>
+                      <ElDropdownItem
+                        v-if="softwareHasInstallationRecord(row as SoftwareInstance)"
+                        command="logs"
+                      >
+                        安装日志
+                      </ElDropdownItem>
+                      <ElDropdownItem
+                        v-if="softwareUninstallAvailable(row as SoftwareInstance)"
+                        command="uninstall"
+                        divided
+                        :disabled="!!itemHost(row as SoftwareInstance)?.maintenance"
+                      >
+                        卸载软件
+                      </ElDropdownItem>
+                    </ElDropdownMenu>
+                  </template>
+                </ElDropdown>
+              </div>
+            </template>
+          </ElTableColumn>
+          <template #empty>
+            <ElEmpty description="没有匹配的软件" />
+          </template>
+        </ElTable>
+        <div v-if="tableTotal" class="ops-el-pager">
+          <ElPagination
+            v-model:current-page="tablePage"
+            v-model:page-size="tablePageSize"
+            :page-sizes="[10, 20, 50]"
+            :total="tableTotal"
+            background
+            layout="total, sizes, prev, pager, next"
+          />
+        </div>
+      </template>
+      <template v-else>
+      <div ref="softwareGrid" class="software-cards">
         <article
           v-for="{ item, version } in softwareCards"
           :key="item.id"
@@ -700,6 +1084,14 @@ onUnmounted(() => {
               <button class="quiet" :disabled="busy" @click="showDetails(item)">
                 详情
               </button>
+              <button
+                v-if="item.softwareType === 'MAVEN' && item.managementMode === 'MANAGED' && item.installationStatus === 'READY'"
+                class="quiet"
+                :disabled="busy || !!hosts.find(host => host.id === item.hostId)?.maintenance"
+                @click="showDetails(item, 'maven-config')"
+              >
+                Maven 配置
+              </button>
               <SoftwareWebAccess :item="item" :host="hosts.find(host => host.id === item.hostId)" compact />
               <button v-if="softwareConfigurationAvailable(item)" class="quiet" :disabled="busy || !!hosts.find(host => host.id === item.hostId)?.maintenance" @click="editConfiguration(item)">编辑配置</button>
               <button v-if="softwareHasInstallationRecord(item)" class="quiet" :disabled="busy" @click="emit('logs', { jobId: item.installationJobId || item.lastJobId })">安装日志</button>
@@ -717,6 +1109,7 @@ onUnmounted(() => {
         </article>
       </div>
       <OpsPagination v-if="total" v-model:page="page" v-model:page-size="pageSize" :size-options="pageSizeOptions" :total="total" label="软件管理分页" />
+      </template>
     </div>
   </section>
   <ElDrawer v-model="nodeOpen" title="Node.js" size="min(1080px, 100vw)" append-to-body :destroy-on-close="false" :close-on-click-modal="!nodeCloseState.blocked" :close-on-press-escape="!nodeCloseState.blocked" :show-close="!nodeCloseState.blocked" :before-close="closeNode">
@@ -748,6 +1141,7 @@ onUnmounted(() => {
   />
   <SoftwareDetailsDialog
     :detail="detail"
+    :initial-tab="detailInitialTab"
     :host="detailHost"
     :busy="busy"
     :observing="observing"
@@ -961,27 +1355,116 @@ onUnmounted(() => {
   font-size: 12px;
   padding: 5px 7px;
 }
-@media (max-width: 1250px) {
-  .software-filters {
-    grid-template-columns: minmax(140px, 1fr) 150px 150px;
-  }
+.software-empty-box {
+  padding: 28px 0;
+}
+.expand-box {
+  padding: 12px 20px;
+  display: grid;
+  gap: 10px;
+  background: #f8fafc;
+  max-width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.expand-descriptions :deep(.el-descriptions__table) {
+  table-layout: fixed;
+  width: 100%;
+}
+.expand-descriptions :deep(td.el-descriptions__label) {
+  width: 128px;
+}
+.expand-descriptions :deep(td.el-descriptions__content) {
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.expand-value-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.expand-value-row code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+.expand-foot {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+}
+.software-table-identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.software-table-identity :deep(.software-icon) {
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+.software-table-identity :deep(svg) {
+  width: 26px;
+  height: 26px;
+}
+.software-table-name,
+.software-table-host,
+.software-table-runtime {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.software-table-name strong,
+.software-table-name span,
+.software-table-host strong,
+.software-table-host span,
+.locator-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.software-table-name span,
+.software-table-host span {
+  font-size: 12px;
+}
+.runtime-tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.locator-ellipsis {
+  font: 11px/1.4 var(--mono);
+  color: var(--muted);
+}
+.software-table-ports {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.port-chip {
+  font-size: 12px;
+  color: #334155;
+}
+.software-op-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
 }
 @media (max-width: 650px) {
   .software-management {
     padding: 16px 14px;
-  }
-  .software-filters {
-    grid-template-columns: 1fr 1fr;
-  }
-  .software-filters input {
-    grid-column: 1/-1;
-  }
-  .software-toolbar-actions {
-    gap: 8px;
-  }
-  .software-toolbar-actions button {
-    flex: 1;
-    padding-inline: 10px;
   }
 }
 </style>

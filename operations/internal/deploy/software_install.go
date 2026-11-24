@@ -61,7 +61,7 @@ func (x *executor) installOwnership(req Request, imageIDs ...string) *SoftwareOw
 	if len(imageIDs) == 1 && i.DockerImageIDMatches(imageIDs[0]) {
 		imageID = imageIDs[0]
 	}
-	return &SoftwareOwnership{ControllerID: req.ControllerID, TargetID: req.TargetID, SoftwareID: i.SoftwareID, JobID: req.JobID, ConfigHash: Digest(i.Config), ImageID: imageID}
+	return &SoftwareOwnership{ControllerID: req.ControllerID, TargetID: req.TargetID, SoftwareID: i.SoftwareID, DirectoryName: i.DirectoryName, JobID: req.JobID, ConfigHash: Digest(i.Config), ImageID: imageID}
 }
 
 func (x *executor) serviceInstallPreflight(i serviceinstall.Request) serviceinstall.Preflight {
@@ -80,7 +80,7 @@ func (x *executor) serviceInstallPreflight(i serviceinstall.Request) serviceinst
 	if i.Config.Mode() == "NATIVE" {
 		return x.nativeInstallPreflight(i)
 	}
-	root := serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config)
+	root := i.InstallRoot(x.root)
 	p := serviceinstall.Preflight{Ready: true, Root: root, DataDirectory: filepath.Join(root, "data"), ConfigDirectory: filepath.Join(root, "config"), Endpoint: net.JoinHostPort(i.Config.BindAddress, strconv.Itoa(i.Config.HostPort)), Checks: []serviceinstall.Check{}, PortMappings: serviceinstall.PortMappings(i.Definition, i.Config)}
 	p.BinaryDirectory = ""
 	p.LogsDirectory = ""

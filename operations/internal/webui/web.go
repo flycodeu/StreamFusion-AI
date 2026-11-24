@@ -30,10 +30,23 @@ func Handler() http.Handler {
 				http.NotFound(w, r)
 				return
 			}
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 			copy := r.Clone(r.Context())
 			copy.URL.Path = "/"
 			files.ServeHTTP(w, copy)
 			return
+		}
+		if strings.HasPrefix(path, "assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			if path == "index.html" && r.URL.Path != "/" {
+				// Avoid http.FileServer's 301 redirect from /index.html to ./
+				copy := r.Clone(r.Context())
+				copy.URL.Path = "/"
+				files.ServeHTTP(w, copy)
+				return
+			}
 		}
 		files.ServeHTTP(w, r)
 	})

@@ -248,7 +248,9 @@ func (h *HTTP) discoverHostFingerprint(w http.ResponseWriter, r *http.Request, s
 
 func hostBusy(q interface{ QueryRow(string, ...any) *sql.Row }, id string) (bool, error) {
 	var n int
-	e := q.QueryRow("SELECT (SELECT count(*) FROM jobs WHERE (target_id=? OR (kind='IMPORT' AND json_extract(CASE WHEN json_valid(input_json) THEN input_json ELSE '{}' END,'$.runtimeEnvironment.targetId')=?)) AND (status IN ('QUEUED','RUNNING','UNKNOWN') OR target_ack_pending=1)) + (SELECT count(*) FROM operation_locks WHERE resource_key=?)", id, id, "target:"+id).Scan(&n)
+	e := q.QueryRow(`SELECT (SELECT count(*) FROM jobs WHERE (target_id=? OR (kind='IMPORT' AND json_extract(CASE WHEN json_valid(input_json) THEN input_json ELSE '{}' END,'$.runtimeEnvironment.targetId')=?)) AND (status IN ('QUEUED','RUNNING','UNKNOWN') OR target_ack_pending=1))
+		+ (SELECT count(*) FROM operation_locks WHERE resource_key=?)
+		+ (SELECT count(*) FROM project_deployment_jobs WHERE target_id=? AND status IN ('QUEUED','RUNNING','UNKNOWN'))`, id, id, "target:"+id, id).Scan(&n)
 	return n > 0, e
 }
 
@@ -422,6 +424,10 @@ func (h *HTTP) saveHost(w http.ResponseWriter, r *http.Request, s *session, id s
 		e = tx.Commit()
 	}
 	if e != nil {
+		if strings.Contains(e.Error(), "PROJECT_DEPLOYMENT_IN_USE") {
+			h.fail(w, r, 409, "HOST_IN_USE", "此主机仍有项目部署，不能更改部署地址或执行器目录")
+			return
+		}
 		h.internal(w, r, e)
 		return
 	}

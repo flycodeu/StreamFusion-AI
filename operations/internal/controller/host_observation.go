@@ -54,6 +54,9 @@ type executorCapabilities struct {
 	SoftwareConfigureVersion   int          `json:"softwareConfigureVersion"`
 	SoftwareUninstallVersion   int          `json:"softwareUninstallVersion"`
 	ToolProbeVersion           int          `json:"toolProbeVersion"`
+	MavenConfigVersion         int          `json:"mavenConfigVersion,omitempty"`
+	AppConfigVersion           int          `json:"appConfigVersion,omitempty"`
+	ProjectDeployVersion       int          `json:"projectDeployVersion,omitempty"`
 }
 
 type hostCapabilities struct {

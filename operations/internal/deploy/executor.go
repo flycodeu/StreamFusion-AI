@@ -458,8 +458,18 @@ func Execute(input io.Reader, output io.Writer) error {
 		capabilities := inspectExecutorCapabilities(x.owner, runtime.GOOS+"/"+runtime.GOARCH, x.dockerWithin)
 		capabilities["commandRecipeVersion"] = CommandRecipeVersion
 		capabilities["configurationFileVersion"] = ConfigurationFileVersion
+		capabilities["projectDeployVersion"] = ProjectDeployVersion
 		capabilities["commandTrustFingerprint"] = x.commandTrustFingerprint()
 		return json.NewEncoder(output).Encode(capabilities)
+	}
+	if req.ProjectDeployment != nil || strings.HasPrefix(req.Action, "PROJECT_DEPLOY_") {
+		return x.executeProjectDeployment(req, output)
+	}
+	if req.MavenConfig != nil || req.Action == MavenConfigReadAction || req.Action == MavenConfigWriteAction {
+		return x.executeMavenConfig(req, output)
+	}
+	if req.AppConfig != nil || strings.HasPrefix(req.Action, "APP_CONFIG_") {
+		return x.executeAppConfig(req, output)
 	}
 	if req.Management != nil {
 		return x.executeSoftware(req, output)
@@ -484,7 +494,8 @@ func Execute(input io.Reader, output io.Writer) error {
 	}
 	if req.Action == "PROBE" {
 		osRelease, e := os.ReadFile("/etc/os-release")
-		if e != nil || !strings.Contains(string(osRelease), "ID=ubuntu\n") || !strings.Contains(string(osRelease), `VERSION_ID="24.04"`) {
+		distroID, _ := parseOSRelease(osRelease)
+		if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || e != nil || distroID == "" {
 			return errors.New("TARGET_PLATFORM_UNSUPPORTED")
 		}
 		v, e := x.docker("version", "--format", "{{.Server.Version}}")
@@ -923,6 +934,9 @@ func Execute(input io.Reader, output io.Writer) error {
 }
 
 func ExecutorRequestLimit(req Request) int {
+	if req.MavenConfig != nil || req.AppConfig != nil || req.ProjectDeployment != nil {
+		return 256 << 10
+	}
 	if req.Management != nil && req.Management.ConfigFile != nil && req.Management.ValidateConfigurationFile() == nil {
 		return 256 << 10
 	}

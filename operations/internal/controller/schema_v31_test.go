@@ -27,6 +27,7 @@ func TestSchema31MigratesHistoricalLoginCiphertext(t *testing.T) {
 			if damaged {
 				ciphertext[len(ciphertext)-1] ^= 1
 			}
+			rewindSchema34Fixture(t, s.DB)
 			if _, err = s.DB.Exec("DROP TABLE application_jenkins_connections; DROP TRIGGER application_qa_scope_changed; DROP TABLE application_qa_requests; DROP TABLE application_qa_monitors; DROP TABLE software_login_accounts;" + schemaV29 + "DELETE FROM schema_migrations WHERE version>=31; PRAGMA user_version=30;"); err != nil {
 				t.Fatal(err)
 			}

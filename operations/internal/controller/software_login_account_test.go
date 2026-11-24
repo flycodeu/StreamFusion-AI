@@ -150,6 +150,7 @@ func TestSoftwareLoginAccountV28MigrationAndMissingKey(t *testing.T) {
 	item := registerTestSoftware(t, b, host, "SYSTEMD", "old-ci.service", "JENKINS")
 	id := item["id"].(string)
 	dir := s.Dir
+	rewindSchema34Fixture(t, s.DB)
 	if _, err := s.DB.Exec("DROP TABLE application_jenkins_connections; DROP TRIGGER application_qa_scope_changed; DROP TABLE application_qa_requests; DROP TABLE application_qa_monitors; DROP TABLE application_jenkins_monitors; DROP TABLE software_login_accounts; DELETE FROM schema_migrations WHERE version>=29; PRAGMA user_version=28"); err != nil {
 		t.Fatal(err)
 	}

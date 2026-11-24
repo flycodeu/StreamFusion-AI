@@ -68,7 +68,7 @@ func (x *executor) builtinVariables(req Request) map[string]string {
 			v["OPS_PARAM_"+key] = value
 		}
 	}
-	root := serviceinstall.InstallRoot(x.root, i.SoftwareID, c)
+	root := i.InstallRoot(x.root)
 	v["OPS_INSTALL_ROOT"], v["OPS_DATA_ROOT"], v["OPS_CONFIG_ROOT"] = root, filepath.Join(root, "data"), filepath.Join(root, "config")
 	v["OPS_SOFTWARE_ID"], v["OPS_VERSION"], v["OPS_ACCOUNT"] = i.SoftwareID, d.Version, c.Account
 	v["OPS_PLATFORM"], v["OPS_IMAGE"], v["OPS_IMAGE_ID"], v["OPS_IMAGE_DIGEST"] = d.Platform, d.Image, d.ImageID, d.Digest

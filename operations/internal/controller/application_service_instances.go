@@ -2,7 +2,9 @@ package controller
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -12,14 +14,28 @@ import (
 )
 
 type applicationServiceInstanceInput struct {
-	Version           string  `json:"version"`
-	ID                string  `json:"id"`
-	ModuleID          string  `json:"moduleId"`
-	Environment       string  `json:"environment"`
-	HostID            string  `json:"hostId"`
-	RecordedVersion   string  `json:"recordedVersion"`
-	RuntimeSoftwareID *string `json:"runtimeSoftwareId,omitempty"`
-	ManagedInstanceID *string `json:"managedInstanceId,omitempty"`
+	Version           string                       `json:"version"`
+	ID                string                       `json:"id"`
+	ModuleID          string                       `json:"moduleId"`
+	Environment       string                       `json:"environment"`
+	HostID            string                       `json:"hostId"`
+	RecordedVersion   string                       `json:"recordedVersion"`
+	RuntimeSoftwareID *string                      `json:"runtimeSoftwareId,omitempty"`
+	ManagedInstanceID *string                      `json:"managedInstanceId,omitempty"`
+	DeployMode        *string                      `json:"deployMode,omitempty"`
+	Profile           *string                      `json:"profile,omitempty"`
+	BindAddress       *string                      `json:"bindAddress,omitempty"`
+	ServicePort       *int                         `json:"servicePort,omitempty"`
+	MemoryMiB         *int                         `json:"memoryMiB,omitempty"`
+	StartCommand      *string                      `json:"startCommand,omitempty"`
+	HealthPath        *string                      `json:"healthPath,omitempty"`
+	Ports             *[]applicationPort           `json:"ports,omitempty"`
+	Variables         *[]applicationVariable       `json:"variables,omitempty"`
+	Nginx             *applicationNginxDeploy      `json:"nginx,omitempty"`
+	DependencyIDs     *[]string                    `json:"dependencyIds,omitempty"`
+	ConfigDir         *string                      `json:"configDir,omitempty"`
+	ConfigFiles       *[]applicationConfigFileMeta `json:"configFiles,omitempty"`
+	ConfigDrafts      *[]deploy.ProjectConfigFile  `json:"configDrafts,omitempty"`
 }
 
 var (
@@ -204,6 +220,108 @@ func checkApplicationServiceRuntime(tx *sql.Tx, hostID, softwareID string) error
 	return nil
 }
 
+func applyDeploymentInputFields(in applicationServiceInstanceInput, dst *applicationDeployment) {
+	if in.DeployMode != nil {
+		dst.DeployMode = *in.DeployMode
+	}
+	if in.Profile != nil {
+		dst.Profile = *in.Profile
+	}
+	if in.BindAddress != nil {
+		dst.BindAddress = *in.BindAddress
+	}
+	if in.ServicePort != nil {
+		dst.ServicePort = *in.ServicePort
+	}
+	if in.MemoryMiB != nil {
+		dst.MemoryMiB = *in.MemoryMiB
+	}
+	if in.StartCommand != nil {
+		dst.StartCommand = *in.StartCommand
+	}
+	if in.HealthPath != nil {
+		dst.HealthPath = *in.HealthPath
+	}
+	if in.Ports != nil {
+		dst.Ports = *in.Ports
+	}
+	if in.Variables != nil {
+		dst.Variables = *in.Variables
+	}
+	if in.Nginx != nil {
+		copied := *in.Nginx
+		if copied.ProxyRules != nil {
+			copied.ProxyRules = append([]applicationNginxProxyRule(nil), copied.ProxyRules...)
+		}
+		dst.Nginx = &copied
+	}
+	if in.DependencyIDs != nil {
+		dst.DependencyIDs = append([]string(nil), (*in.DependencyIDs)...)
+	}
+	if in.ConfigDir != nil {
+		dst.ConfigDir = *in.ConfigDir
+	}
+	if in.ConfigFiles != nil {
+		dst.ConfigFiles = append([]applicationConfigFileMeta(nil), (*in.ConfigFiles)...)
+	}
+	if in.ConfigDrafts != nil {
+		dst.ConfigDrafts = append([]deploy.ProjectConfigFile(nil), (*in.ConfigDrafts)...)
+	}
+}
+
+func checkEnvironmentHostPortConflict(project applicationProject, envName, currentID string, candidate applicationDeployment) error {
+	if candidate.HostID == "" || candidate.DeployMode == "STATIC" {
+		return nil
+	}
+	used := map[string]bool{}
+	collectPorts := func(d applicationDeployment) []string {
+		if d.DeployMode == "STATIC" {
+			return nil
+		}
+		var keys []string
+		if d.ServicePort > 0 {
+			keys = append(keys, fmt.Sprintf("TCP:%d", d.ServicePort))
+		}
+		for _, p := range d.Ports {
+			proto := strings.ToUpper(p.Protocol)
+			if proto == "" {
+				proto = "TCP"
+			}
+			if p.HostPort > 0 {
+				keys = append(keys, fmt.Sprintf("%s:%d", proto, p.HostPort))
+			}
+		}
+		return keys
+	}
+	for _, env := range project.Environments {
+		if !strings.EqualFold(env.Name, envName) {
+			continue
+		}
+		for _, other := range env.Deployments {
+			if other.ID == currentID || other.HostID != candidate.HostID {
+				continue
+			}
+			for _, key := range collectPorts(other) {
+				used[key] = true
+			}
+		}
+	}
+	for _, key := range collectPorts(candidate) {
+		if used[key] {
+			return applicationInvalid("所选主机已有相同的端口配置，请更换主机或调整端口")
+		}
+	}
+	return nil
+}
+
+func projectModuleIDSet(project applicationProject) map[string]bool {
+	set := make(map[string]bool, len(project.Modules))
+	for _, m := range project.Modules {
+		set[m.ID] = true
+	}
+	return set
+}
+
 func insertApplicationServiceInstance(tx *sql.Tx, project applicationProject, in applicationServiceInstanceInput) error {
 	var moduleExists bool
 	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM application_modules WHERE project_id=? AND id=?)", project.ID, in.ModuleID).Scan(&moduleExists); err != nil {
@@ -238,16 +356,6 @@ func insertApplicationServiceInstance(tx *sql.Tx, project applicationProject, in
 		environmentID = environment.ID
 		break
 	}
-	if environmentID == "" {
-		if len(project.Environments) >= 20 {
-			return applicationInvalid("每项目最多20个环境")
-		}
-		environmentID = uuid.NewString()
-		if _, err := tx.Exec(`INSERT INTO application_environments(id,project_id,name,position)
-			VALUES(?,?,?,(SELECT COALESCE(MAX(position),-1)+1 FROM application_environments WHERE project_id=?))`, environmentID, project.ID, in.Environment, project.ID); err != nil {
-			return err
-		}
-	}
 	newDeployment := applicationDeployment{
 		ID: in.ID, ModuleID: in.ModuleID, HostID: in.HostID, RecordedVersion: in.RecordedVersion, RuntimeSoftwareID: softwareID,
 		Ports: []applicationPort{}, Variables: []applicationVariable{}, Mounts: []applicationMount{},
@@ -258,18 +366,38 @@ func insertApplicationServiceInstance(tx *sql.Tx, project applicationProject, in
 			return err
 		}
 	}
+	applyDeploymentInputFields(in, &newDeployment)
+	if err := normalizeApplicationDeployment(&newDeployment, projectModuleIDSet(project), in.Environment, nil); err != nil {
+		return err
+	}
+	if err := validateApplicationDeploymentRefs(tx, newDeployment); err != nil {
+		return err
+	}
+	if err := checkEnvironmentHostPortConflict(project, in.Environment, newDeployment.ID, newDeployment); err != nil {
+		return err
+	}
+	if environmentID == "" {
+		if len(project.Environments) >= 20 {
+			return applicationInvalid("每项目最多20个环境")
+		}
+		environmentID = uuid.NewString()
+		if _, err := tx.Exec(`INSERT INTO application_environments(id,project_id,name,position)
+			VALUES(?,?,?,(SELECT COALESCE(MAX(position),-1)+1 FROM application_environments WHERE project_id=?))`, environmentID, project.ID, in.Environment, project.ID); err != nil {
+			return err
+		}
+	}
 	_, err := tx.Exec(`INSERT INTO application_deployments(id,project_id,environment_id,module_id,host_id,runtime_software_id,config_json,position)
 		VALUES(?,?,?,?,?,NULLIF(?,''),?,(SELECT COALESCE(MAX(position),-1)+1 FROM application_deployments WHERE environment_id=?))`, in.ID, project.ID, environmentID, in.ModuleID, in.HostID, softwareID, jsonText(newDeployment), environmentID)
 	return err
 }
 
 func updateApplicationServiceInstance(tx *sql.Tx, project applicationProject, in applicationServiceInstanceInput, remove bool) error {
-	var environmentID, environmentName, moduleID, hostID string
+	var environmentID, environmentName, moduleID, hostID, existingRaw string
 	var bound bool
-	err := tx.QueryRow(`SELECT d.environment_id,e.name,d.module_id,COALESCE(d.host_id,''),
+	err := tx.QueryRow(`SELECT d.environment_id,e.name,d.module_id,COALESCE(d.host_id,''),d.config_json,
 		(COALESCE(d.runtime_software_id,'')<>'' OR COALESCE(json_extract(d.config_json,'$.runtimeSoftwareId'),'')<>'')
 		FROM application_deployments d JOIN application_environments e ON e.id=d.environment_id AND e.project_id=d.project_id
-		WHERE d.project_id=? AND d.id=?`, project.ID, in.ID).Scan(&environmentID, &environmentName, &moduleID, &hostID, &bound)
+		WHERE d.project_id=? AND d.id=?`, project.ID, in.ID).Scan(&environmentID, &environmentName, &moduleID, &hostID, &existingRaw, &bound)
 	if err != nil {
 		return err
 	}
@@ -283,6 +411,10 @@ func updateApplicationServiceInstance(tx *sql.Tx, project applicationProject, in
 	if moduleID != in.ModuleID || strings.ToLower(environmentName) != strings.ToLower(in.Environment) {
 		return applicationInvalid("实例的所属模块和环境不能修改，请重新登记")
 	}
+	var merged applicationDeployment
+	if err = json.Unmarshal([]byte(existingRaw), &merged); err != nil {
+		return err
+	}
 	if in.HostID != "" && in.HostID != hostID {
 		if bound {
 			return errApplicationServiceInstanceInUse
@@ -290,51 +422,131 @@ func updateApplicationServiceInstance(tx *sql.Tx, project applicationProject, in
 		if err := checkApplicationServiceInstanceHost(tx, in.HostID); err != nil {
 			return err
 		}
-		var portConflict bool
-		err := tx.QueryRow(`SELECT EXISTS(SELECT 1
-			FROM application_deployments current, json_each(current.config_json,'$.ports') port
-			JOIN application_deployments other ON other.id<>current.id AND other.environment_id=current.environment_id AND other.host_id=?
-			JOIN json_each(other.config_json,'$.ports') other_port
-			WHERE current.environment_id=? AND current.id=?
-			AND json_extract(port.value,'$.hostPort')=json_extract(other_port.value,'$.hostPort')
-			AND COALESCE(NULLIF(UPPER(json_extract(port.value,'$.protocol')),''),'TCP')=COALESCE(NULLIF(UPPER(json_extract(other_port.value,'$.protocol')),''),'TCP'))`, in.HostID, environmentID, in.ID).Scan(&portConflict)
-		if err != nil {
-			return err
-		}
-		if portConflict {
-			return applicationInvalid("所选主机已有相同的端口配置，请更换主机")
-		}
 		hostID = in.HostID
-		_, err = tx.Exec("UPDATE application_deployments SET host_id=?,config_json=json_set(config_json,'$.hostId',?) WHERE project_id=? AND id=?", hostID, hostID, project.ID, in.ID)
-		if err != nil {
-			return err
-		}
-	}
-	var managedID string
-	err = tx.QueryRow(`SELECT coalesce(json_extract(config_json,'$.managedInstanceId'),'') FROM application_deployments WHERE id=?`, in.ID).Scan(&managedID)
-	if err != nil {
-		return err
+		merged.HostID = hostID
 	}
 	if in.ManagedInstanceID != nil {
-		managedID = *in.ManagedInstanceID
+		merged.ManagedInstanceID = *in.ManagedInstanceID
 	}
-	if err = checkManagedInstance(tx, managedID, hostID, environmentName); err != nil {
+	if err = checkManagedInstance(tx, merged.ManagedInstanceID, hostID, environmentName); err != nil {
 		return err
-	}
-	if in.ManagedInstanceID != nil {
-		if _, err = tx.Exec(`UPDATE application_deployments SET config_json=json_set(config_json,'$.managedInstanceId',?) WHERE id=?`, managedID, in.ID); err != nil {
-			return err
-		}
 	}
 	if in.RuntimeSoftwareID != nil {
-		softwareID := *in.RuntimeSoftwareID
-		if err = checkApplicationServiceRuntime(tx, hostID, softwareID); err != nil {
+		if err = checkApplicationServiceRuntime(tx, hostID, *in.RuntimeSoftwareID); err != nil {
 			return err
 		}
-		_, err = tx.Exec(`UPDATE application_deployments SET runtime_software_id=NULLIF(?,''),config_json=json_set(config_json,'$.runtimeSoftwareId',?,'$.recordedVersion',?)
-			WHERE project_id=? AND id=?`, softwareID, softwareID, in.RecordedVersion, project.ID, in.ID)
+		merged.RuntimeSoftwareID = *in.RuntimeSoftwareID
+	}
+	merged.RecordedVersion = in.RecordedVersion
+	applyDeploymentInputFields(in, &merged)
+	if err = normalizeApplicationDeployment(&merged, projectModuleIDSet(project), environmentName, nil); err != nil {
 		return err
 	}
-	_, err = tx.Exec("UPDATE application_deployments SET config_json=json_set(config_json,'$.recordedVersion',?) WHERE project_id=? AND id=?", in.RecordedVersion, project.ID, in.ID)
+	if err = validateApplicationDeploymentRefs(tx, merged); err != nil {
+		return err
+	}
+	if err = checkEnvironmentHostPortConflict(project, environmentName, in.ID, merged); err != nil {
+		return err
+	}
+
+	// Update via SQLite json_set/json_remove so unknown future keys in config_json remain intact.
+	jsonExpr := "json_set(config_json,'$.recordedVersion',?"
+	jsonArgs := []any{merged.RecordedVersion}
+	if merged.HostID != "" && in.HostID != "" {
+		jsonExpr += ",'$.hostId',?"
+		jsonArgs = append(jsonArgs, hostID)
+	}
+	if in.ManagedInstanceID != nil {
+		jsonExpr += ",'$.managedInstanceId',?"
+		jsonArgs = append(jsonArgs, merged.ManagedInstanceID)
+	}
+	if in.RuntimeSoftwareID != nil {
+		jsonExpr += ",'$.runtimeSoftwareId',?"
+		jsonArgs = append(jsonArgs, merged.RuntimeSoftwareID)
+	}
+	if in.DeployMode != nil {
+		jsonExpr += ",'$.deployMode',?"
+		jsonArgs = append(jsonArgs, merged.DeployMode)
+	}
+	if in.Profile != nil {
+		jsonExpr += ",'$.profile',?"
+		jsonArgs = append(jsonArgs, merged.Profile)
+	}
+	if in.BindAddress != nil {
+		jsonExpr += ",'$.bindAddress',?"
+		jsonArgs = append(jsonArgs, merged.BindAddress)
+	}
+	if in.ServicePort != nil {
+		jsonExpr += ",'$.servicePort',?"
+		jsonArgs = append(jsonArgs, merged.ServicePort)
+	}
+	if in.MemoryMiB != nil {
+		jsonExpr += ",'$.memoryMiB',?"
+		jsonArgs = append(jsonArgs, merged.MemoryMiB)
+	}
+	if in.StartCommand != nil {
+		jsonExpr += ",'$.startCommand',?"
+		jsonArgs = append(jsonArgs, merged.StartCommand)
+	}
+	if in.HealthPath != nil {
+		jsonExpr += ",'$.healthPath',?"
+		jsonArgs = append(jsonArgs, merged.HealthPath)
+	}
+	if in.Ports != nil {
+		jsonExpr += ",'$.ports',json(?)"
+		jsonArgs = append(jsonArgs, jsonText(merged.Ports))
+	}
+	if in.Variables != nil {
+		jsonExpr += ",'$.variables',json(?)"
+		jsonArgs = append(jsonArgs, jsonText(merged.Variables))
+	}
+	if in.DependencyIDs != nil {
+		ids := merged.DependencyIDs
+		if ids == nil {
+			ids = []string{}
+		}
+		jsonExpr += ",'$.dependencyIds',json(?)"
+		jsonArgs = append(jsonArgs, jsonText(ids))
+	}
+	if in.ConfigDir != nil {
+		jsonExpr += ",'$.configDir',?"
+		jsonArgs = append(jsonArgs, merged.ConfigDir)
+	}
+	if in.ConfigFiles != nil {
+		files := merged.ConfigFiles
+		if files == nil {
+			files = []applicationConfigFileMeta{}
+		}
+		jsonExpr += ",'$.configFiles',json(?)"
+		jsonArgs = append(jsonArgs, jsonText(files))
+	}
+	if in.ConfigDrafts != nil {
+		jsonExpr += ",'$.configDrafts',json(?)"
+		jsonArgs = append(jsonArgs, jsonText(*in.ConfigDrafts))
+	}
+	if in.Nginx != nil && merged.Nginx != nil {
+		jsonExpr += ",'$.nginx',json(?)"
+		jsonArgs = append(jsonArgs, jsonText(merged.Nginx))
+	}
+	jsonExpr += ")"
+	if in.Nginx != nil && merged.Nginx == nil {
+		jsonExpr = "json_remove(" + jsonExpr + ",'$.nginx')"
+	}
+
+	var updateCols []string
+	var args []any
+	if in.HostID != "" {
+		updateCols = append(updateCols, "host_id=?")
+		args = append(args, hostID)
+	}
+	if in.RuntimeSoftwareID != nil {
+		updateCols = append(updateCols, "runtime_software_id=NULLIF(?,'')")
+		args = append(args, merged.RuntimeSoftwareID)
+	}
+	updateCols = append(updateCols, "config_json="+jsonExpr)
+	args = append(args, jsonArgs...)
+	args = append(args, project.ID, in.ID)
+
+	_, err = tx.Exec("UPDATE application_deployments SET "+strings.Join(updateCols, ",")+" WHERE project_id=? AND id=?", args...)
 	return err
 }

@@ -33,7 +33,7 @@ func (x *executor) installResumeOffset(req Request, dir string) (int64, error) {
 		}
 	}
 	if !serviceinstall.IsOfficial(i.Definition) {
-		if _, err = os.Lstat(serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config)); !os.IsNotExist(err) {
+		if _, err = os.Lstat(i.InstallRoot(x.root)); !os.IsNotExist(err) {
 			return 0, unsafe
 		}
 	}

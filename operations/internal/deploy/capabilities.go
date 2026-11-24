@@ -42,5 +42,7 @@ func inspectExecutorCapabilities(owner Owner, platform string, command func(time
 		"firewallVersion":           FirewallCapabilityVersion,
 		"serviceInstallVersion":     serviceinstall.CapabilityVersion,
 		"serviceCatalogHash":        serviceinstall.CatalogHash(),
+		"mavenConfigVersion":        MavenConfigCapabilityVersion,
+		"appConfigVersion":          AppConfigCapabilityVersion,
 	}
 }

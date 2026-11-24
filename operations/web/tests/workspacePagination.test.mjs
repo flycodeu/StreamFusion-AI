@@ -9,7 +9,7 @@ const script = ts.transpileModule(source.split('<script setup lang="ts">')[1].sp
   .replace(/^import[\s\S]*?;\r?$/gm, ""), {
   compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
 }).outputText;
-const makeWorkspace = new Function("ref", "computed", "watch", "onMounted", "onUnmounted", "defineProps", "defineEmits", "request", "requestAllPages", "softwareJobPhaseLabels", "softwareJobKindLabels", "setTimeout", "clearTimeout", "ElMessage", "upload", "ApiError",
+const makeWorkspace = new Function("ref", "computed", "watch", "onMounted", "onUnmounted", "defineProps", "defineEmits", "request", "requestAllPages", "softwareJobPhaseLabels", "softwareJobKindLabels", "deploymentPhaseLabels", "setTimeout", "clearTimeout", "ElMessage", "upload", "ApiError",
   script + "\nreturn { refresh, loadJobs, changeJobPage, changeJobSize, jobs, jobPage, jobPageSize, jobCursors, jobStatusFilter, jobKindFilter, detail, dialog, artifactList, instanceList, bindingList, releaseList, selected, bindingOptions, credentials, openRuntimePolicy, instanceProgressLabel, reconcile, instanceDraft, saveInstance, choosePublish, planInstance, projectRelease, artifactChoice, openImport, closeWorkspaceDialog, importArtifact, importRecipe, importSHA, importJobId, importError, pickFile }; ");
 const flush = async () => { for (let i = 0; i < 15; i++) await vue.nextTick(); };
 
@@ -47,7 +47,7 @@ function harness(page = "jobs", overrides = {}) {
   };
   const requestAllPages = async path => (await request(`${path}?page=1&pageSize=100`)).items;
   const scope = vue.effectScope();
-  const panel = scope.run(() => makeWorkspace(vue.ref, vue.computed, vue.watch, callback => { mounted = callback; }, callback => unmounts.push(callback), () => props, () => (_event, error) => errors.push(error), request, requestAllPages, {}, {}, () => 1, () => {}, { success() {} }, overrides.upload, class ApiError extends Error {}));
+  const panel = scope.run(() => makeWorkspace(vue.ref, vue.computed, vue.watch, callback => { mounted = callback; }, callback => unmounts.push(callback), () => props, () => (_event, error) => errors.push(error), request, requestAllPages, {}, {}, {}, () => 1, () => {}, { success() {} }, overrides.upload, class ApiError extends Error {}));
   return { panel, props, calls, writes, errors, lists, start: () => mounted(), fail() { failNext = true; }, hold() { holdNext = true; }, release() { release(); }, close() { unmounts.forEach(callback => callback()); scope.stop(); } };
 }
 

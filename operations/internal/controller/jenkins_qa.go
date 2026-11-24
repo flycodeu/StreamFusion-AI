@@ -170,20 +170,37 @@ func (c jenkinsBuildClient) enqueue(ctx context.Context, base url.URL) (int, boo
 		return 0, false, errJenkinsTriggerUnknown
 	}
 	defer resp.Body.Close()
-	if resp.Header.Get("X-Jenkins") != c.version {
+	hdr := resp.Header.Get("X-Jenkins")
+	if (hdr == "" || hdr == c.version) && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+		return 0, true, errJenkinsAuth
+	}
+	if hdr != "" && hdr != c.version {
 		return 0, false, errJenkinsTriggerUnknown
 	}
 	switch resp.StatusCode {
 	case http.StatusCreated:
 		// Only the numeric ID is used. Never follow a Location with credentials.
 		location, err := url.Parse(resp.Header.Get("Location"))
-		if err == nil && location.User == nil && location.RawQuery == "" && location.Fragment == "" {
+		if err == nil && location.User == nil && location.RawQuery == "" && location.Fragment == "" &&
+			(!location.IsAbs() && location.Host == "" || location.Scheme == base.Scheme && location.Host == base.Host) {
 			part, ok := strings.CutPrefix(strings.TrimSuffix(location.EscapedPath(), "/"), base.EscapedPath()+"/queue/item/")
 			queue, e := strconv.Atoi(part)
 			if ok && e == nil && queue > 0 && queue <= 1<<31-1 && strconv.Itoa(queue) == part {
+				if hdr == "" {
+					resp.Body.Close()
+					if _, err := c.queueStatus(ctx, base, queue); err != nil {
+						return 0, false, errJenkinsTriggerUnknown
+					}
+				}
 				return queue, false, nil
 			}
 		}
+		return 0, false, errJenkinsTriggerUnknown
+	}
+	if hdr != c.version {
+		return 0, false, errJenkinsTriggerUnknown
+	}
+	switch resp.StatusCode {
 	case http.StatusNotFound:
 		return 0, true, errJenkinsMissing
 	case http.StatusUnauthorized, http.StatusForbidden:

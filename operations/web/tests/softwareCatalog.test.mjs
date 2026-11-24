@@ -6,7 +6,7 @@ import ts from "typescript";
 const source = await readFile(new URL("../src/softwareCatalog.ts", import.meta.url), "utf8");
 const module = { exports: {} };
 new Function("exports", ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText)(module.exports);
-const { catalogDefaultRecipe, installedPythonPaths, catalogInstallState, catalogPending, catalogPendingRecords, catalogVersionMatches, catalogInstances } = module.exports;
+const { catalogDefaultRecipe, installedPythonPaths, installedJavaPaths, catalogInstallState, catalogPending, catalogPendingRecords, catalogVersionMatches, catalogInstances } = module.exports;
 const recipe = { key: "java", version: "21", runtimeModes: ["NATIVE", "DOCKER"] };
 const instance = (version, extra = {}) => ({ id: version, hostId: "hp", softwareType: "JAVA", softwareVersion: version,
   managementMode: "MANAGED", actualState: "INSTALLED", installationStatus: "READY", createdAt: "2026-11-09T00:00:00Z",
@@ -75,4 +75,13 @@ test("fresh installed-package evidence marks restarting Label Studio installed w
   for (const excluded of [{ managementMode: "RELEASED" }, { actualState: "REMOVED" }, { actualState: "MISSING" }, { installationStatus: "UNINSTALLED" }, { freshness: "STALE" }])
     assert.equal(catalogInstallState([{ ...external, ...excluded }], "hp", definition).label, "");
   assert.equal(catalogInstallState([{ ...external, softwareVersion: "1.22.0", observation: { state: "UNKNOWN", version: "1.22.0" } }], "hp", definition).label, "");
+});
+
+test("Java path candidates extract installed native Java paths on the selected host", () => {
+  const j21 = { hostId: "hp", softwareType: "JAVA", runtimeKind: "TOOL", managementMode: "MANAGED", actualState: "INSTALLED", locator: "/opt/java21/bin/java", observation: { state: "INSTALLED", executablePath: "/opt/java21/bin/java" } };
+  const j17 = { hostId: "hp", softwareType: "JAVA", runtimeKind: "TOOL", managementMode: "OBSERVE", actualState: "INSTALLED", locator: "/usr/lib/jvm/java-17-openjdk-amd64/bin/java" };
+  assert.deepEqual(
+    installedJavaPaths([j21, j17, { ...j21, hostId: "other" }, { ...j21, runtimeKind: "DOCKER" }, { ...j21, managementMode: "RELEASED" }], "hp"),
+    ["/opt/java21/bin/java", "/usr/lib/jvm/java-17-openjdk-amd64/bin/java"],
+  );
 });

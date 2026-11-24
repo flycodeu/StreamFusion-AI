@@ -64,6 +64,11 @@ export function useServiceInstallation(
   const credentialName = ref("");
   const credentialSecret = ref("");
   const revealSecret = ref(false);
+  const s3PairOpen = ref(false);
+  const s3PairName = ref("");
+  const s3PairAccess = ref("");
+  const s3PairSecret = ref("");
+  const s3PairReveal = ref(false);
   const selectedFile = ref<File>();
   const archiveSHA = ref("");
   const materialKey = ref("");
@@ -301,6 +306,10 @@ export function useServiceInstallation(
       uploadController.value?.abort();
       credentialSecret.value = "";
       credentialRole.value = undefined;
+      s3PairOpen.value = false;
+      s3PairAccess.value = "";
+      s3PairSecret.value = "";
+      s3PairReveal.value = false;
       preparationOpen.value = false;
       automaticUpdate.value = undefined;
       preparationAttempts.clear();
@@ -443,6 +452,9 @@ export function useServiceInstallation(
   );
 
   function editCredential(role: CredentialRole) {
+    s3PairOpen.value = false;
+    s3PairAccess.value = "";
+    s3PairSecret.value = "";
     credentialRole.value = role;
     credentialSecret.value = "";
     revealSecret.value = false;
@@ -451,6 +463,63 @@ export function useServiceInstallation(
         0,
         60,
       );
+  }
+  function openS3PairEditor() {
+    credentialRole.value = undefined;
+    credentialSecret.value = "";
+    s3PairName.value = `${configuration.value?.name || "SeaweedFS"} · S3`.slice(0, 46);
+    s3PairAccess.value = "";
+    s3PairSecret.value = "";
+    s3PairReveal.value = false;
+    s3PairOpen.value = true;
+  }
+  function randomToken(alphabet: string, length: number) {
+    const bytes = crypto.getRandomValues(new Uint8Array(length));
+    return Array.from(bytes, (value) => alphabet[value % alphabet.length]).join("");
+  }
+  function generateS3Pair() {
+    s3PairAccess.value = randomToken("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", 20);
+    s3PairSecret.value = randomToken(
+      "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#_-",
+      32,
+    );
+    s3PairReveal.value = true;
+  }
+  async function saveS3Pair() {
+    const baseName = s3PairName.value.trim();
+    const access = s3PairAccess.value.trim();
+    const secret = s3PairSecret.value.trim();
+    if (!baseName || !access || !secret) {
+      fieldError.value = "填写密钥组名称、Access Key 与 Secret Key，或点击一键生成";
+      return;
+    }
+    await act(async () => {
+      const revision = generation;
+      const accessName = `${baseName} · Access Key`.slice(0, 60);
+      const secretName = `${baseName} · Secret Key`.slice(0, 60);
+      const savedAccess = await request<{ id: string; revision: string }>(
+        "/credentials",
+        "POST",
+        { name: accessName, kind: "TOKEN", secret: access },
+      );
+      if (!current(revision)) return;
+      const savedSecret = await request<{ id: string; revision: string }>(
+        "/credentials",
+        "POST",
+        { name: secretName, kind: "PASSWORD", secret },
+      );
+      if (!current(revision)) return;
+      credentials.value.unshift(
+        { ...savedSecret, name: secretName, kind: "PASSWORD", revokedAt: "" },
+        { ...savedAccess, name: accessName, kind: "TOKEN", revokedAt: "" },
+      );
+      credentialChoices.value.access = `${savedAccess.id}:${savedAccess.revision}`;
+      credentialChoices.value.primary = `${savedSecret.id}:${savedSecret.revision}`;
+      s3PairAccess.value = "";
+      s3PairSecret.value = "";
+      s3PairOpen.value = false;
+      s3PairReveal.value = false;
+    });
   }
   function generateSecret() {
     const alphabet =
@@ -487,6 +556,10 @@ export function useServiceInstallation(
       credentialChoices.value[role] = `${saved.id}:${saved.revision}`;
       credentialSecret.value = "";
       credentialRole.value = undefined;
+      s3PairOpen.value = false;
+      s3PairAccess.value = "";
+      s3PairSecret.value = "";
+      s3PairReveal.value = false;
       revealSecret.value = false;
     });
   }
@@ -1027,6 +1100,14 @@ export function useServiceInstallation(
     credentialName,
     credentialSecret,
     revealSecret,
+    s3PairOpen,
+    s3PairName,
+    s3PairAccess,
+    s3PairSecret,
+    s3PairReveal,
+    openS3PairEditor,
+    generateS3Pair,
+    saveS3Pair,
     selectedFile,
     archiveSHA,
     materialProgress,

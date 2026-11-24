@@ -66,7 +66,7 @@ func (h *HTTP) confirmedFailedInstallResources(ctx context.Context, host target,
 	for _, item := range items {
 		i := item.Installation
 		claims := []serviceinstall.ResolvedResource{}
-		for _, resource := range installationResources(host.InstallRoot, item.ID, i.Definition, i.Config) {
+		for _, resource := range installationResources(host.InstallRoot, item.ID, i.DirectoryName, i.Definition, i.Config) {
 			if failedInstallServiceResource(resource) {
 				claims = append(claims, resource)
 			}
@@ -106,7 +106,7 @@ func (h *HTTP) confirmedFailedInstallResources(ctx context.Context, host target,
 }
 
 func legacyFailedInstallCheck(base string, i serviceinstall.Request, checked serviceinstall.Preflight) bool {
-	if checked.Root != serviceinstall.InstallRoot(base, i.SoftwareID, i.Config) {
+	if checked.Root != i.InstallRoot(base) {
 		return false
 	}
 	directoryExists := false
@@ -126,7 +126,7 @@ func legacyFailedInstallCheck(base string, i serviceinstall.Request, checked ser
 }
 
 func failedInstallObjectsAbsent(base string, i serviceinstall.Request, checked serviceinstall.Preflight) bool {
-	if checked.Root != serviceinstall.InstallRoot(base, i.SoftwareID, i.Config) {
+	if checked.Root != i.InstallRoot(base) {
 		return false
 	}
 	docker := failedDockerServiceInstall(i)

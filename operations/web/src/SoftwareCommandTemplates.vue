@@ -1,8 +1,32 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from "vue";
-import { ElDialog, ElDropdown, ElDropdownItem, ElDropdownMenu, ElMessage, ElMessageBox } from "element-plus";
+import {
+  ElAlert,
+  ElButton,
+  ElCheckbox,
+  ElCheckboxGroup,
+  ElCollapse,
+  ElCollapseItem,
+  ElDialog,
+  ElDropdown,
+  ElDropdownItem,
+  ElDropdownMenu,
+  ElEmpty,
+  ElForm,
+  ElFormItem,
+  ElInput,
+  ElOption,
+  ElPagination,
+  ElPopover,
+  ElRadioButton,
+  ElRadioGroup,
+  ElSelect,
+  ElTable,
+  ElTableColumn,
+  ElMessage,
+  ElMessageBox,
+} from "element-plus";
 import { ApiError, request } from "./api";
-import OpsPagination from "./OpsPagination.vue";
 import { useGridPagination } from "./pagination";
 import { hostTime } from "./hosts";
 import { recipeCatalogKey, type ServiceRecipe } from "./serviceInstallation";
@@ -41,6 +65,7 @@ const catalogChoices = computed(() => {
 const selectedExample = ref("");
 const search = ref("");
 const statusFilter = ref("ALL");
+const originFilter = ref("ALL");
 const selectedId = ref("");
 const editingVersion = ref("");
 const draft = ref<ServiceRecipe>();
@@ -79,6 +104,8 @@ const softwareGroups = computed(() => {
   const groups = new Map<string, { key: string; name: string; records: CommandTemplate[] }>();
   const query = search.value.trim().toLowerCase();
   for (const record of records.value) {
+    if (originFilter.value === "CUSTOM" && record.draft.commands?.builtin) continue;
+    if (originFilter.value === "BUILTIN" && !record.draft.commands?.builtin) continue;
     if (statusFilter.value === "PUBLISHED" && !record.published || statusFilter.value === "DRAFT" && templateStatus(record) === "已发布") continue;
     const key = recipeCatalogKey(record.draft), name = softwareNames[key] || record.draft.name;
     if (query && !`${name} ${record.draft.name} ${record.draft.version} ${key}`.toLowerCase().includes(query)) continue;
@@ -89,7 +116,7 @@ const softwareGroups = computed(() => {
 });
 const selectedGroupKey = computed(() => draft.value ? recipeCatalogKey(draft.value) : "");
 const { grid: libraryGrid, page, pageSize, total, pageSizeOptions, pageItems: pagedSoftwareGroups } = useGridPagination(
-  () => softwareGroups.value, [search, statusFilter],
+  () => softwareGroups.value, [search, statusFilter, originFilter],
 );
 const selectedGroupName = computed(() => softwareNames[selectedGroupKey.value] || draft.value?.name || "新建软件");
 const groupRecords = computed(() => records.value.filter(record => recipeCatalogKey(record.draft) === selectedGroupKey.value));
@@ -137,6 +164,22 @@ const totalSteps = computed(() => commands.value?.steps.length || 0);
 function selectPhase(phase: CommandStep["phase"]) {
   activePhase.value = operationOf(phase);
   activeStep.value = -1;
+}
+const metadataPanels = ref<string[]>([]);
+function groupOriginLabel(group: { records?: CommandTemplate[] }) {
+  const items = group.records || [];
+  const hasBuiltin = items.some(item => item.draft.commands?.builtin);
+  const hasCustom = items.some(item => !item.draft.commands?.builtin);
+  if (hasBuiltin && hasCustom) return "内置 + 自定义";
+  return hasBuiltin ? "内置标准" : "自定义";
+}
+function groupRuntimeLabel(group: { records?: CommandTemplate[] }) {
+  const modes = Array.from(new Set((group.records || []).flatMap(item => item.draft.runtimeModes || [])));
+  return modes.map(mode => (mode === "DOCKER" ? "Docker" : "原生")).join(" / ") || "—";
+}
+function groupStatusLabel(group: { records?: CommandTemplate[] }) {
+  const pending = (group.records || []).filter(item => templateStatus(item) !== "已发布").length;
+  return pending ? `含 ${pending} 项待发布` : "全部已发布";
 }
 async function selectGroup(key: string) {
   const group = softwareGroups.value.find(item => item.key === key);
@@ -199,6 +242,7 @@ async function canDiscard(title = "切换配置") {
 async function edit(record?: CommandTemplate, example = false) {
   if (busy.value || !await canDiscard()) return;
   loadDraft(record, example);
+  metadataPanels.value = record ? [] : ["metadata"];
   editorOpen.value = true;
 }
 async function closeEditor(done?: () => void) {
@@ -405,47 +449,216 @@ function extraAction(command: string) {
   if (command === "demo") void edit(undefined, true);
   if (command === "reload") void reloadSelected();
 }
+async function cloneAsCustom() {
+  if (!draft.value || !commands.value || busy.value) return;
+  const source = clone(draft.value);
+  const catalogKey = recipeCatalogKey(source);
+  const baseKey = `custom-${catalogKey}`.replace(/[^a-z0-9-]/g, "-").slice(0, 48);
+  let candidateKey = `${baseKey}-copy`;
+  let suffix = 2;
+  while (records.value.some((item) => item.draft.key === candidateKey)) {
+    candidateKey = `${baseKey}-copy-${suffix++}`.slice(0, 56);
+  }
+  const runtime = viewingRuntime.value === "DOCKER" ? "DOCKER" : "NATIVE";
+  const kind = runtime === "DOCKER" ? "DOCKER" : source.kind === "TOOL" ? "TOOL" : "SYSTEMD";
+  const convertedSteps = (source.commands?.steps || [])
+    .filter((s) => (!s.runtimeMode || s.runtimeMode === runtime) && (!s.sourceModes?.length || s.sourceModes.includes(viewingSource.value)))
+    .map((s) =>
+      s.kind === "SYSTEM"
+        ? {
+            id: `command-${crypto.randomUUID()}`,
+            kind: "COMMAND" as const,
+            phase: s.phase,
+            name: `${s.name}（请按需替换为自定义脚本）`,
+            script: s.phase === "INSTALL"
+              ? "# 原内置系统步骤占位：请替换为自定义安装命令"
+              : s.phase === "VERIFY"
+                ? "true"
+                : "# 原内置卸载步骤占位：请按需补充清理命令",
+            runAs: "ROOT" as const,
+            timeoutSeconds: s.timeoutSeconds || 300,
+            workingDirectory: "",
+            runtimeMode: runtime as "NATIVE" | "DOCKER",
+            sourceModes: [runtime === "DOCKER" ? "REGISTRY" : "ONLINE"],
+          }
+        : { ...s, id: `command-${crypto.randomUUID()}`, runtimeMode: runtime as "NATIVE" | "DOCKER", sourceModes: [runtime === "DOCKER" ? "REGISTRY" : "ONLINE"] },
+    );
+  const ensuredSteps = convertedSteps.length ? convertedSteps : [emptyStep("INSTALL"), emptyStep("VERIFY"), emptyStep("UNINSTALL")];
+  if (!ensuredSteps.some((s) => s.phase === "INSTALL")) ensuredSteps.unshift(emptyStep("INSTALL"));
+  if (!ensuredSteps.some((s) => s.phase === "UNINSTALL")) ensuredSteps.push(emptyStep("UNINSTALL"));
+  selectedId.value = "";
+  editingVersion.value = "";
+  source.key = candidateKey;
+  source.catalogKey = catalogKey;
+  source.name = `${source.name}（自定义）`.slice(0, 120);
+  source.runtimeModes = [runtime];
+  source.sourceModes = [runtime === "DOCKER" ? "REGISTRY" : "ONLINE"];
+  source.commands = {
+    flowVersion: 1,
+    builtin: false,
+    kind,
+    locator: source.commands?.locator || (kind === "TOOL" ? "${OPS_INSTALL_ROOT}/bin/" + catalogKey : `${candidateKey}-\${OPS_SOFTWARE_ID}`),
+    binaryPath: source.commands?.binaryPath || "",
+    distributions: [],
+    steps: ensuredSteps,
+  };
+  draft.value = source;
+  baseline.value = "";
+  resetView();
+  preview.value = false;
+  feedback.value = "已克隆为可编辑的自定义模板";
+}
 onMounted(refresh);
 </script>
 
 <template>
-  <section class="recipe-workspace" aria-label="软件配置">
-    <div v-if="error && !editorOpen" class="template-error" role="alert">{{ error.message }}</div>
-    <div class="library-tools">
-      <div class="library-filters">
-        <input v-model="search" type="search" aria-label="搜索软件配置" placeholder="搜索软件" />
-        <select v-model="statusFilter" aria-label="筛选发布状态">
-          <option value="ALL">全部状态</option>
-          <option value="PUBLISHED">已发布</option>
-          <option value="DRAFT">待发布</option>
-        </select>
+  <section class="panel-card recipe-workspace" aria-label="安装模板">
+    <ElAlert
+      v-if="error && !editorOpen"
+      type="error"
+      :closable="false"
+      show-icon
+      :title="error.message"
+      style="margin-bottom: 12px"
+    />
+
+    <div class="ops-el-toolbar">
+      <div class="ops-el-toolbar-group">
+        <ElInput
+          v-model="search"
+          clearable
+          aria-label="搜索安装模板"
+          placeholder="搜索模板或软件"
+          style="width: 240px"
+        />
+        <ElRadioGroup v-model="originFilter" size="small" aria-label="按模板来源筛选">
+          <ElRadioButton value="ALL">全部</ElRadioButton>
+          <ElRadioButton value="CUSTOM">自定义</ElRadioButton>
+          <ElRadioButton value="BUILTIN">内置标准</ElRadioButton>
+        </ElRadioGroup>
+        <ElSelect
+          v-model="statusFilter"
+          aria-label="筛选发布状态"
+          style="width: 124px"
+        >
+          <ElOption label="全部状态" value="ALL" />
+          <ElOption label="已发布" value="PUBLISHED" />
+          <ElOption label="待发布" value="DRAFT" />
+        </ElSelect>
+        <ElButton
+          v-if="search || originFilter !== 'ALL' || statusFilter !== 'ALL'"
+          @click="search = ''; originFilter = 'ALL'; statusFilter = 'ALL'"
+        >
+          清空
+        </ElButton>
       </div>
-      <div class="library-actions">
-        <select v-if="examples.length" v-model="selectedExample" aria-label="从模板创建" :disabled="busy" @change="createFromExample">
-          <option value="" disabled>从示例创建</option>
-          <option v-for="example in examples" :key="example.key" :value="example.key">{{ example.name }} {{ example.version }} · {{ example.runtimeModes[0] === 'DOCKER' ? 'Docker' : '原生' }} · {{ example.sourceModes[0] === 'ARCHIVE' ? '离线' : '在线' }}</option>
-        </select>
-        <button class="secondary" aria-label="刷新软件配置" :disabled="busy" @click="refresh">刷新</button>
-        <button class="primary" aria-label="新增软件" :disabled="busy" @click="edit()">新增软件</button>
+      <div class="ops-el-toolbar-group">
+        <ElSelect
+          v-if="examples.length"
+          v-model="selectedExample"
+          aria-label="从模板创建"
+          placeholder="从示例创建"
+          style="width: 220px"
+          :disabled="busy"
+          @change="createFromExample"
+        >
+          <ElOption
+            v-for="example in examples"
+            :key="example.key"
+            :label="`${example.name} ${example.version} · ${example.runtimeModes[0] === 'DOCKER' ? 'Docker' : '原生'}`"
+            :value="example.key"
+          />
+        </ElSelect>
+        <ElButton aria-label="刷新安装模板" :disabled="busy" @click="refresh">刷新</ElButton>
+        <ElButton type="primary" aria-label="新增自定义模板" :disabled="busy" @click="edit()">
+          + 新增模板
+        </ElButton>
       </div>
     </div>
-    <div ref="libraryGrid" class="library-list" aria-label="软件配置列表">
-      <button v-for="group in pagedSoftwareGroups" :key="group.key" class="software-option" :disabled="busy" @click="selectGroup(group.key)">
-        <SoftwareIcon :type="group.key" />
-        <span><strong>{{ group.name }}</strong><small>{{ group.records.length }} 个安装方案</small></span>
-        <span v-if="group.records.some(item => templateStatus(item) !== '已发布')" class="draft-dot" title="有待发布配置" />
-        <span class="entry-arrow" aria-hidden="true">›</span>
-      </button>
-      <p v-if="!softwareGroups.length" class="library-empty">{{ busy ? '正在加载配置…' : search ? '没有匹配的软件' : '暂无软件配置' }}</p>
+
+    <div ref="libraryGrid" aria-label="安装模板列表" style="margin-top: 14px">
+      <ElTable
+        :data="pagedSoftwareGroups"
+        row-key="key"
+        border
+        stripe
+        style="width: 100%"
+        @row-dblclick="(row) => selectGroup(row.key)"
+      >
+        <ElTableColumn type="index" label="#" width="52" align="center" />
+        <ElTableColumn label="软件 / 模板名称" min-width="200">
+          <template #default="{ row }">
+            <div class="template-name-cell">
+              <SoftwareIcon :type="row.key" />
+              <span>{{ row.name }}</span>
+            </div>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="标识" min-width="150">
+          <template #default="{ row }">
+            <span class="mono-muted">{{ row.key }}</span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="来源" width="120">
+          <template #default="{ row }">
+            <span>{{ groupOriginLabel(row) }}</span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="方案数" width="90" align="center">
+          <template #default="{ row }">
+            <span>{{ row.records.length }}</span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="运行方式" width="140">
+          <template #default="{ row }">
+            <span>{{ groupRuntimeLabel(row) }}</span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="发布状态" width="125">
+          <template #default="{ row }">
+            <span :class="{ 'status-pending-text': groupStatusLabel(row) !== '全部已发布' }">
+              {{ groupStatusLabel(row) }}
+            </span>
+          </template>
+        </ElTableColumn>
+        <ElTableColumn label="操作" width="120" fixed="right">
+          <template #default="{ row }">
+            <ElButton
+              link
+              type="primary"
+              size="small"
+              :disabled="busy"
+              @click="selectGroup(row.key)"
+            >
+              管理方案
+            </ElButton>
+          </template>
+        </ElTableColumn>
+        <template #empty>
+          <ElEmpty
+            :description="busy ? '正在加载配置…' : search ? '没有匹配的软件模板' : '暂无软件配置'"
+          />
+        </template>
+      </ElTable>
     </div>
-    <OpsPagination v-if="total" v-model:page="page" v-model:page-size="pageSize" :size-options="pageSizeOptions" :total="total" label="软件配置分页" />
+
+    <div v-if="total > 0" class="ops-el-pager">
+      <ElPagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :page-sizes="pageSizeOptions"
+        :total="total"
+        background
+        layout="total, sizes, prev, pager, next"
+      />
+    </div>
 
     <ElDialog
       v-if="active"
       v-model="editorOpen"
-      :title="preview ? '发布预览 · ' + selectedGroupName : '软件配置 · ' + selectedGroupName"
+      :title="preview ? '发布预览 · ' + selectedGroupName : '安装模板 · ' + selectedGroupName"
       class="command-editor"
-      width="min(820px, calc(100vw - 24px))"
+      width="min(860px, calc(100vw - 24px))"
       align-center
       append-to-body
       destroy-on-close
@@ -455,42 +668,243 @@ onMounted(refresh);
       :close-on-click-modal="!busy"
     >
       <div v-if="draft && commands" ref="editorContent" class="editor-content">
-    <div v-if="error" class="template-error" role="alert"><strong>{{ error.message }}</strong><button v-if="error.code === 'VERSION_CONFLICT' && selected" class="quiet" :disabled="busy" @click="reloadSelected">加载最新配置</button><details v-if="error.code"><summary>诊断信息</summary><code>{{ error.code }} · {{ hostTime(error.at) }}</code><code v-if="error.traceId">{{ error.traceId }}</code></details></div>
+        <ElAlert
+          v-if="error"
+          type="error"
+          :closable="false"
+          show-icon
+          :title="error.message"
+        >
+          <div v-if="(error.code === 'VERSION_CONFLICT' && selected) || error.code" class="alert-inline-actions">
+            <ElButton
+              v-if="error.code === 'VERSION_CONFLICT' && selected"
+              link
+              type="primary"
+              size="small"
+              :disabled="busy"
+              @click="reloadSelected"
+            >
+              加载最新配置
+            </ElButton>
+            <ElPopover v-if="error.code" trigger="click" placement="bottom-start" :width="340">
+              <div class="diag-popover-dl">
+                <div><span>错误码</span><code>{{ error.code }}</code></div>
+                <div v-if="error.at"><span>时间</span><code>{{ hostTime(error.at) }}</code></div>
+                <div v-if="error.traceId"><span>追踪标识</span><code>{{ error.traceId }}</code></div>
+              </div>
+              <template #reference>
+                <ElButton link type="primary" size="small">排查详情</ElButton>
+              </template>
+            </ElPopover>
+          </div>
+        </ElAlert>
+
         <div v-if="selected" class="variant-bar" aria-label="选择安装方案">
-          <label>软件版本<select aria-label="软件版本" :value="draft.version" :disabled="busy || preview" @change="selectVariant('version', ($event.target as HTMLSelectElement).value)"><option v-for="version in versionChoices" :key="version" :value="version">{{ versionLabel(version) }}</option></select></label>
-          <label>运行方式<select aria-label="运行方式" :value="viewingRuntime" :disabled="busy || preview" @change="selectVariant('runtime', ($event.target as HTMLSelectElement).value)"><option v-for="runtime in runtimeChoices" :key="runtime" :value="runtime">{{ runtime === 'DOCKER' ? 'Docker' : '原生安装' }}</option></select></label>
-          <label>安装来源<select aria-label="安装来源" :value="viewingSource" :disabled="busy || preview" @change="selectVariant('source', ($event.target as HTMLSelectElement).value)"><option v-for="source in sourceChoices" :key="source" :value="source">{{ sourceLabels[source] || source }}</option></select></label>
+          <div class="variant-field">
+            <span class="variant-label">软件版本</span>
+            <ElSelect
+              :model-value="draft.version"
+              :disabled="busy || preview"
+              style="width: 100%"
+              @update:model-value="(val) => selectVariant('version', String(val))"
+            >
+              <ElOption
+                v-for="version in versionChoices"
+                :key="version"
+                :label="versionLabel(version)"
+                :value="version"
+              />
+            </ElSelect>
+          </div>
+          <div class="variant-field">
+            <span class="variant-label">运行方式</span>
+            <ElSelect
+              :model-value="viewingRuntime"
+              :disabled="busy || preview"
+              style="width: 100%"
+              @update:model-value="(val) => selectVariant('runtime', String(val))"
+            >
+              <ElOption
+                v-for="runtime in runtimeChoices"
+                :key="runtime"
+                :label="runtime === 'DOCKER' ? 'Docker' : '原生安装'"
+                :value="runtime"
+              />
+            </ElSelect>
+          </div>
+          <div class="variant-field">
+            <span class="variant-label">安装来源</span>
+            <ElSelect
+              :model-value="viewingSource"
+              :disabled="busy || preview"
+              style="width: 100%"
+              @update:model-value="(val) => selectVariant('source', String(val))"
+            >
+              <ElOption
+                v-for="source in sourceChoices"
+                :key="source"
+                :label="sourceLabels[source] || source"
+                :value="source"
+              />
+            </ElSelect>
+          </div>
         </div>
 
-        <details v-if="!preview" :open="!selected" class="recipe-settings"><summary><span>方案信息</span><a v-if="draft.officialUrl" :href="draft.officialUrl" target="_blank" rel="noopener noreferrer" @click.stop>来源说明 ↗</a></summary>
-          <fieldset :disabled="busy || builtin" class="metadata-grid">
-            <label>方案名称<input v-model="draft.name" maxlength="120" placeholder="例如 Eclipse Temurin JDK" /></label>
-            <label>软件版本<input v-model="draft.version" maxlength="80" placeholder="例如 21" /></label>
-            <label>所属软件<input :value="draft.catalogKey || (builtin ? draft.key : '')" list="command-catalog-groups" @input="draft.catalogKey = ($event.target as HTMLInputElement).value" maxlength="64" placeholder="选择或填写软件标识" spellcheck="false" /><datalist id="command-catalog-groups"><option v-for="item in catalogChoices" :key="item.key" :value="item.key">{{ item.name }}</option></datalist></label>
-            <label>配置标识<input v-model="draft.key" :disabled="!!selected" maxlength="63" placeholder="custom-my-tool" spellcheck="false" /></label>
-            <label>运行类型<select v-model="commands.kind" @change="changeKind"><option v-for="[key, label] in kindChoices" :key="key" :value="key">{{ label }}</option></select></label>
-            <label v-if="builtin">支持来源<input :value="draft.sourceModes.map(source => sourceLabels[source] || source).join('、')" /></label><label v-else>安装来源<select v-model="draft.sourceModes[0]" @change="changeSource"><option :value="commands.kind === 'DOCKER' ? 'REGISTRY' : 'ONLINE'">在线</option><option value="ARCHIVE">离线包</option></select></label>
-            <label class="wide-field">安装对象<input v-model="commands.locator" :placeholder="commands.kind === 'TOOL' ? '${OPS_INSTALL_ROOT}/bin/tool' : commands.kind === 'SYSTEMD' ? 'my-service-${OPS_SOFTWARE_ID}.service' : 'my-container-${OPS_SOFTWARE_ID}'" spellcheck="false" maxlength="300" /></label>
-            <label>来源地址<input v-model="draft.officialUrl" type="url" placeholder="https://example.com/install" spellcheck="false" /></label>
-            <label>系统架构<select v-model="draft.platform"><option value="linux/amd64">Linux amd64</option></select></label>
-            <label v-if="commands.kind !== 'TOOL'">程序路径<input v-model="commands.binaryPath" placeholder="可选" spellcheck="false" maxlength="300" /></label>
-            <label v-if="commands.kind !== 'TOOL'">监听端口<input v-model.number="draft.port" type="number" min="0" max="65535" placeholder="0 表示无需监听" /></label>
-            <label>建议内存（MiB）<input :value="draft.defaultMemoryMiB || ''" type="number" min="128" max="16384" placeholder="默认 512" @input="draft.defaultMemoryMiB = ($event.target as HTMLInputElement).value ? Number(($event.target as HTMLInputElement).value) : undefined" /></label>
-            <label v-if="commands.kind !== 'TOOL'">默认监听地址<input v-model="draft.defaultBindAddress" :placeholder="draft.web ? '留空默认 0.0.0.0' : '留空使用主机地址'" maxlength="45" spellcheck="false" /></label>
-            <div class="distribution-field"><span>适用系统 <small>不选择则不限制</small></span><div class="distribution-options"><label v-for="distribution in distributions" :key="distribution"><input v-model="commands.distributions" type="checkbox" :value="distribution" />{{ distribution }}</label></div></div>
-          </fieldset>
-        </details>
+        <ElCollapse v-if="!preview" v-model="metadataPanels">
+          <ElCollapseItem name="metadata">
+            <template #title>
+              <div class="collapse-title-row">
+                <span>方案基本信息</span>
+                <a
+                  v-if="draft.officialUrl"
+                  class="meta-source-link"
+                  :href="draft.officialUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  @click.stop
+                >
+                  来源说明 ↗
+                </a>
+              </div>
+            </template>
+            <ElForm label-position="top" :disabled="busy || builtin" class="metadata-form">
+              <div class="metadata-grid">
+                <ElFormItem label="方案名称">
+                  <ElInput v-model="draft.name" maxlength="120" placeholder="例如 Eclipse Temurin JDK" />
+                </ElFormItem>
+                <ElFormItem label="软件版本">
+                  <ElInput v-model="draft.version" maxlength="80" placeholder="例如 21" />
+                </ElFormItem>
+                <ElFormItem label="所属软件">
+                  <ElSelect
+                    :model-value="draft.catalogKey || (builtin ? draft.key : '')"
+                    filterable
+                    allow-create
+                    clearable
+                    placeholder="选择或输入软件标识"
+                    style="width: 100%"
+                    @update:model-value="(val) => { draft && (draft.catalogKey = String(val || '')); }"
+                  >
+                    <ElOption
+                      v-for="item in catalogChoices"
+                      :key="item.key"
+                      :label="`${item.name} (${item.key})`"
+                      :value="item.key"
+                    />
+                  </ElSelect>
+                </ElFormItem>
+                <ElFormItem label="配置标识">
+                  <ElInput
+                    v-model="draft.key"
+                    :disabled="!!selected"
+                    maxlength="63"
+                    placeholder="custom-my-tool"
+                    spellcheck="false"
+                  />
+                </ElFormItem>
+                <ElFormItem label="运行类型">
+                  <ElSelect v-model="commands.kind" style="width: 100%" @change="changeKind">
+                    <ElOption
+                      v-for="[key, label] in kindChoices"
+                      :key="key"
+                      :label="label"
+                      :value="key"
+                    />
+                  </ElSelect>
+                </ElFormItem>
+                <ElFormItem v-if="builtin" label="支持来源">
+                  <ElInput
+                    :model-value="draft.sourceModes.map(source => sourceLabels[source] || source).join('、')"
+                    readonly
+                  />
+                </ElFormItem>
+                <ElFormItem v-else label="安装来源">
+                  <ElSelect v-model="draft.sourceModes[0]" style="width: 100%" @change="changeSource">
+                    <ElOption
+                      label="在线"
+                      :value="commands.kind === 'DOCKER' ? 'REGISTRY' : 'ONLINE'"
+                    />
+                    <ElOption label="离线包" value="ARCHIVE" />
+                  </ElSelect>
+                </ElFormItem>
+                <ElFormItem label="安装对象" class="wide-field">
+                  <ElInput
+                    v-model="commands.locator"
+                    :placeholder="commands.kind === 'TOOL' ? '${OPS_INSTALL_ROOT}/bin/tool' : commands.kind === 'SYSTEMD' ? 'my-service-${OPS_SOFTWARE_ID}.service' : 'my-container-${OPS_SOFTWARE_ID}'"
+                    spellcheck="false"
+                    maxlength="300"
+                  />
+                </ElFormItem>
+                <ElFormItem label="系统架构">
+                  <ElSelect v-model="draft.platform" style="width: 100%">
+                    <ElOption label="Linux amd64" value="linux/amd64" />
+                  </ElSelect>
+                </ElFormItem>
+                <ElFormItem label="来源地址" class="wide-field">
+                  <ElInput v-model="draft.officialUrl" placeholder="https://example.com/install" spellcheck="false" />
+                </ElFormItem>
+                <ElFormItem v-if="commands.kind !== 'TOOL'" label="程序路径">
+                  <ElInput v-model="commands.binaryPath" placeholder="可选" spellcheck="false" maxlength="300" />
+                </ElFormItem>
+                <ElFormItem v-if="commands.kind !== 'TOOL'" label="监听端口">
+                  <ElInput
+                    :model-value="draft.port ? String(draft.port) : ''"
+                    placeholder="0 表示无需监听"
+                    @update:model-value="(val) => { draft && (draft.port = val ? Number(val) || 0 : 0); }"
+                  />
+                </ElFormItem>
+                <ElFormItem label="建议内存（MiB）">
+                  <ElInput
+                    :model-value="draft.defaultMemoryMiB ? String(draft.defaultMemoryMiB) : ''"
+                    placeholder="默认 512"
+                    @update:model-value="(val) => { draft && (draft.defaultMemoryMiB = val ? Number(val) : undefined); }"
+                  />
+                </ElFormItem>
+                <ElFormItem v-if="commands.kind !== 'TOOL'" label="默认监听地址">
+                  <ElInput
+                    v-model="draft.defaultBindAddress"
+                    :placeholder="draft.web ? '留空默认 0.0.0.0' : '留空使用主机地址'"
+                    maxlength="45"
+                    spellcheck="false"
+                  />
+                </ElFormItem>
+                <ElFormItem label="适用系统（不选择则不限制）" class="distribution-field">
+                  <ElCheckboxGroup v-model="commands.distributions">
+                    <ElCheckbox
+                      v-for="distribution in distributions"
+                      :key="distribution"
+                      :value="distribution"
+                      :label="distribution"
+                    />
+                  </ElCheckboxGroup>
+                </ElFormItem>
+              </div>
+            </ElForm>
+          </ElCollapseItem>
+        </ElCollapse>
 
         <section v-if="!preview" class="command-workbench" aria-label="命令步骤编辑器">
           <div class="step-toolbar">
-            <nav class="phase-tabs" aria-label="命令阶段">
-              <button v-for="[phase, label] in phaseChoices" :key="phase" :class="{ active: activePhase === phase }" :aria-pressed="activePhase === phase" :disabled="busy" @click="selectPhase(phase)">{{ label }}</button>
-            </nav>
+            <ElRadioGroup
+              :model-value="activePhase"
+              size="small"
+              aria-label="命令阶段"
+              @update:model-value="(val) => selectPhase(val as CommandStep['phase'])"
+            >
+              <ElRadioButton v-for="[phase, label] in phaseChoices" :key="phase" :value="phase">
+                {{ label }}
+              </ElRadioButton>
+            </ElRadioGroup>
             <div class="step-actions">
-              <button v-if="hasSystemSteps" class="quiet" :disabled="busy" :aria-pressed="commandsOnly" @click="toggleCommandsOnly">{{ commandsOnly ? '查看完整流程' : '仅看命令' }}</button>
-              <button class="secondary compact-button" :disabled="busy || totalSteps >= 80" @click="addStep">添加步骤</button>
+              <ElButton v-if="hasSystemSteps" size="small" text :disabled="busy" @click="toggleCommandsOnly">
+                {{ commandsOnly ? '查看完整流程' : '仅看命令' }}
+              </ElButton>
+              <ElButton size="small" type="primary" plain :disabled="busy || totalSteps >= 80" @click="addStep">
+                添加步骤
+              </ElButton>
             </div>
           </div>
+
           <div v-for="(entry, order) in displaySteps" :key="entry.item.id || entry.index" class="step-row">
             <button
               :class="['step-option', { active: activeStep === entry.index, automatic: entry.item.kind === 'SYSTEM' }]"
@@ -506,74 +920,137 @@ onMounted(refresh);
             </button>
             <div v-if="activeStep === entry.index && step" class="step-body">
               <RecipeSystemStepDetails v-if="step.kind === 'SYSTEM'" :recipe="draft" :step="step" :context="stepContext" />
-              <template v-else>
-                <label>步骤名称<input ref="stepNameInput" v-model="step.name" maxlength="120" :disabled="busy" /></label>
-                <label>步骤命令<textarea v-model="step.script" spellcheck="false" maxlength="16384" :disabled="busy" placeholder="输入 Bash 命令" /></label>
+              <ElForm v-else label-position="top" :disabled="busy">
+                <ElFormItem label="步骤名称">
+                  <ElInput ref="stepNameInput" v-model="step.name" maxlength="120" />
+                </ElFormItem>
+                <ElFormItem label="步骤命令">
+                  <textarea
+                    v-model="step.script"
+                    class="step-script-area"
+                    spellcheck="false"
+                    maxlength="16384"
+                    :disabled="busy"
+                    placeholder="输入 Bash 命令"
+                  />
+                </ElFormItem>
                 <div class="step-controls">
                   <details class="step-advanced">
                     <summary>高级设置</summary>
-                    <fieldset :disabled="busy" class="metadata-grid">
-                      <label>执行账号<select v-model="step.runAs" aria-label="执行账号"><option value="ROOT">管理员（sudo）</option><option value="ACCOUNT">所选服务器账号</option></select></label>
-                      <label>超时（秒）<input v-model.number="step.timeoutSeconds" type="number" min="1" max="3600" /></label>
-                      <label v-if="activePhase === 'INSTALL'">步骤用途<select v-model="step.phase"><option value="INSTALL">执行命令</option><option value="VERIFY">检查结果</option></select></label>
-                      <label v-else>执行条件<select v-model="step.phase"><option value="UNINSTALL">卸载时执行</option><option value="DELETE_DATA">勾选删除数据时执行</option></select></label>
-                      <label class="wide-field">工作目录<input v-model="step.workingDirectory" placeholder="留空使用默认目录" spellcheck="false" maxlength="300" /></label>
-                    </fieldset>
+                    <div class="metadata-grid" style="margin-top: 10px">
+                      <ElFormItem label="执行账号">
+                        <ElSelect v-model="step.runAs" aria-label="执行账号" style="width: 100%">
+                          <ElOption label="管理员（sudo）" value="ROOT" />
+                          <ElOption label="所选服务器账号" value="ACCOUNT" />
+                        </ElSelect>
+                      </ElFormItem>
+                      <ElFormItem label="超时（秒）">
+                        <ElInput
+                          :model-value="String(step.timeoutSeconds)"
+                          @update:model-value="(val) => { if (step) step.timeoutSeconds = Number(val) || 60; }"
+                        />
+                      </ElFormItem>
+                      <ElFormItem v-if="activePhase === 'INSTALL'" label="步骤用途">
+                        <ElSelect v-model="step.phase" style="width: 100%">
+                          <ElOption label="执行命令" value="INSTALL" />
+                          <ElOption label="检查结果" value="VERIFY" />
+                        </ElSelect>
+                      </ElFormItem>
+                      <ElFormItem v-else label="执行条件">
+                        <ElSelect v-model="step.phase" style="width: 100%">
+                          <ElOption label="卸载时执行" value="UNINSTALL" />
+                          <ElOption label="勾选删除数据时执行" value="DELETE_DATA" />
+                        </ElSelect>
+                      </ElFormItem>
+                      <ElFormItem label="工作目录" class="wide-field">
+                        <ElInput v-model="step.workingDirectory" placeholder="留空使用默认目录" spellcheck="false" maxlength="300" />
+                      </ElFormItem>
+                    </div>
                   </details>
                   <div class="step-actions">
                     <template v-if="!commandsOnly">
-                      <button class="quiet" :disabled="busy || !canMoveStep(-1)" @click="moveStep(-1)">上移步骤</button>
-                      <button class="quiet" :disabled="busy || !canMoveStep(1)" @click="moveStep(1)">下移步骤</button>
+                      <ElButton link size="small" :disabled="busy || !canMoveStep(-1)" @click="moveStep(-1)">
+                        上移步骤
+                      </ElButton>
+                      <ElButton link size="small" :disabled="busy || !canMoveStep(1)" @click="moveStep(1)">
+                        下移步骤
+                      </ElButton>
                     </template>
-                    <button class="quiet danger" :disabled="busy" @click="removeStep">删除步骤</button>
+                    <ElButton link type="danger" size="small" :disabled="busy" @click="removeStep">
+                      删除步骤
+                    </ElButton>
                   </div>
                 </div>
-              </template>
+              </ElForm>
             </div>
           </div>
-          <p v-if="!displaySteps.length" class="library-empty">{{ commandsOnly ? '当前阶段没有命令' : '当前阶段没有步骤' }}</p>
+          <p v-if="!displaySteps.length" class="library-empty">
+            {{ commandsOnly ? '当前阶段没有命令' : '当前阶段没有步骤' }}
+          </p>
         </section>
+
         <section v-else class="publish-preview" aria-label="发布预览">
           <section v-for="(label, operation) in operations" :key="operation">
             <h4>{{ label }}</h4>
-            <details v-for="({ item }, index) in visibleSteps.filter(entry => operationOf(entry.item.phase) === operation)" :key="item.id || index" class="preview-step">
+            <details
+              v-for="({ item }, index) in visibleSteps.filter(entry => operationOf(entry.item.phase) === operation)"
+              :key="item.id || index"
+              class="preview-step"
+            >
               <summary>
                 <strong>{{ index + 1 }}. {{ item.name }}</strong>
-                <small>{{ item.kind === 'SYSTEM' ? '平台处理' : item.runAs === 'ROOT' ? '管理员' : '所选账号' }}<template v-if="item.phase === 'DELETE_DATA'"> · 删除数据时执行</template></small>
+                <small>
+                  {{ item.kind === 'SYSTEM' ? '平台处理' : item.runAs === 'ROOT' ? '管理员' : '所选账号' }}
+                  <template v-if="item.phase === 'DELETE_DATA'"> · 删除数据时执行</template>
+                </small>
               </summary>
               <pre v-if="item.kind !== 'SYSTEM'">{{ item.script }}</pre>
               <RecipeSystemStepDetails v-else :recipe="draft" :step="item" :context="stepContext" />
             </details>
           </section>
         </section>
+
         <SoftwareDefinitionExtensions ref="extensions" :definition="draft" :disabled="busy" :preview="preview" />
+
         <details v-if="!preview && availableVariables.length" class="variables">
           <summary>可用变量</summary>
-          <dl><template v-for="variable in availableVariables" :key="variable.name"><dt>{{ variable.name }}</dt><dd>{{ variable.label }}</dd></template></dl>
+          <dl>
+            <template v-for="variable in availableVariables" :key="variable.name">
+              <dt>{{ variable.name }}</dt>
+              <dd>{{ variable.label }}</dd>
+            </template>
+          </dl>
         </details>
       </div>
       <template #footer>
         <div class="editor-footer">
-          <span class="editor-status" role="status">{{ dirty ? '未保存' : feedback || (selected ? templateStatus(selected) : '新配置') }}</span>
+          <span class="editor-status" role="status">
+            {{ dirty ? '未保存' : feedback || (selected ? templateStatus(selected) : '新配置') }}
+          </span>
           <div class="step-actions">
             <template v-if="preview">
-              <button class="secondary" :disabled="busy" @click="preview = false">返回编辑</button>
-              <button class="primary" :disabled="busy" @click="publish">确认发布</button>
+              <ElButton :disabled="busy" @click="preview = false">返回编辑</ElButton>
+              <ElButton type="primary" :loading="busy" @click="publish">确认发布</ElButton>
             </template>
             <template v-else>
               <ElDropdown trigger="click" @command="extraAction">
-                <button class="quiet" aria-label="更多配置操作" :disabled="busy">⋯</button>
+                <ElButton text aria-label="更多配置操作" :disabled="busy">更多 ▾</ElButton>
                 <template #dropdown>
                   <ElDropdownMenu>
                     <ElDropdownItem command="reload" :disabled="busy || !selected">重新载入</ElDropdownItem>
                     <ElDropdownItem command="demo" :disabled="busy">创建演示工具</ElDropdownItem>
-                    <ElDropdownItem v-if="selected?.published" command="withdraw" divided :disabled="busy">下架方案</ElDropdownItem>
-                    <ElDropdownItem v-if="deletable" command="delete" divided :disabled="busy">删除方案</ElDropdownItem>
+                    <ElDropdownItem v-if="selected?.published" command="withdraw" divided :disabled="busy">
+                      下架方案
+                    </ElDropdownItem>
+                    <ElDropdownItem v-if="deletable" command="delete" divided :disabled="busy">
+                      删除方案
+                    </ElDropdownItem>
                   </ElDropdownMenu>
                 </template>
               </ElDropdown>
-              <button class="secondary" :disabled="busy" @click="save">保存草稿</button>
-              <button class="primary" :disabled="busy" @click="previewPublish">预览发布</button>
+              <ElButton v-if="builtin" :disabled="busy" @click="cloneAsCustom">克隆为自定义模板</ElButton>
+              <ElButton :loading="busy" @click="save">保存草稿</ElButton>
+              <ElButton type="primary" :disabled="busy" @click="previewPublish">预览发布</ElButton>
             </template>
           </div>
         </div>
@@ -583,68 +1060,57 @@ onMounted(refresh);
 </template>
 
 <style scoped>
-.recipe-workspace, .editor-content { display: grid; gap: 16px; min-width: 0; }
-.library-tools, .library-filters, .library-actions, .step-toolbar, .step-actions, .editor-footer {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
-}
-.library-tools, .step-toolbar, .editor-footer { justify-content: space-between; }
-.library-filters input { width: min(280px, 100%); }
-.library-tools select { width: auto; max-width: min(240px, 100%); }
-.library-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 228px), 1fr)); gap: 10px; }
-.software-option {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center;
-  gap: 12px; min-width: 0; text-align: left; background: white; border: 1px solid var(--border);
-  border-radius: 7px; padding: 13px; color: #22374e;
-}
-.software-option:hover { border-color: #8eb5c6; background: #f7fbfc; }
-.software-option strong, .software-option small { display: block; overflow-wrap: anywhere; }
-.software-option small { margin-top: 4px; color: var(--muted); font-size: 12px; }
-.entry-arrow { grid-column: 4; color: #5e8094; font-size: 20px; }
-.draft-dot { width: 7px; height: 7px; background: #c98530; border-radius: 50%; }
-.library-empty { margin: 0; padding: 16px; color: var(--muted); }
-.editor-status { color: var(--muted); font-size: 13px; }
-.variant-bar, .metadata-grid {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px;
-}
-.variant-bar { padding: 12px; background: #f4f7fa; border-radius: 6px; }
-.editor-content label { display: grid; gap: 5px; min-width: 0; color: #506577; font-size: 12px; }
-.editor-content input, .editor-content select { min-width: 0; width: 100%; }
-.editor-content fieldset { padding: 0; margin: 10px 0 0; border: 0; min-width: 0; }
+.recipe-workspace, .editor-content { display: grid; gap: 14px; min-width: 0; }
+.template-name-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.template-name-cell :deep(.software-icon) { width: 26px; height: 26px; border-radius: 6px; font-size: 13px; flex-shrink: 0; }
+.template-name-cell :deep(svg) { width: 20px; height: 20px; }
+.mono-muted { font: 12px/1.4 var(--mono); color: var(--muted); }
+.status-pending-text { color: #b45309; }
+.alert-inline-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.diag-popover-dl { display: grid; gap: 6px; font-size: 12px; }
+.diag-popover-dl > div { display: grid; grid-template-columns: 60px 1fr; gap: 8px; }
+.diag-popover-dl span { color: var(--muted); }
+.diag-popover-dl code { overflow-wrap: anywhere; word-break: break-all; }
+.variant-bar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 12px; background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; }
+.variant-field { display: grid; gap: 5px; }
+.variant-label { font-size: 12px; color: var(--muted); }
+.collapse-title-row { display: inline-flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 500; }
+.meta-source-link { font-size: 12px; color: var(--el-color-primary); text-decoration: none; }
+.meta-source-link:hover { text-decoration: underline; }
+.metadata-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 12px; }
 .wide-field { grid-column: span 2; }
-.distribution-field { grid-column: 1 / -1; font-size: 12px; }
-.distribution-options { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; }
-.distribution-options label { display: flex; align-items: center; }
-.distribution-options input { width: auto; }
-.recipe-settings > summary, .variables > summary, .step-advanced > summary, .preview-step > summary {
-  cursor: pointer; color: #425d73; font-size: 13px;
-}
-.recipe-settings > summary a { margin-left: 12px; }
-.command-workbench { border: 1px solid var(--border); border-radius: 7px; }
-.step-toolbar { padding: 8px 10px; background: #f7f9fc; border-radius: 7px 7px 0 0; }
-.phase-tabs { display: flex; gap: 4px; }
-.phase-tabs button { background: transparent; border: 1px solid transparent; border-radius: 4px; color: #53687d; padding: 7px 9px; }
-.phase-tabs button.active { background: #e7f2f5; color: #17637a; font-weight: 600; }
+.distribution-field { grid-column: 1 / -1; margin-bottom: 0; }
+.step-toolbar, .step-actions, .editor-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.step-toolbar, .editor-footer { justify-content: space-between; }
+.editor-status { color: var(--muted); font-size: 13px; }
+.command-workbench { border: 1px solid var(--border); border-radius: 6px; }
+.step-toolbar { padding: 8px 12px; background: #f8fafc; border-radius: 6px 6px 0 0; }
 .step-row { border-top: 1px solid var(--border); }
 .step-option {
-  display: flex; align-items: center; text-align: left; gap: 10px; width: 100%; min-height: 42px;
+  display: flex; align-items: center; text-align: left; gap: 10px; width: 100%; min-height: 40px;
   border: 0; padding: 8px 12px; background: transparent; color: #263d53; border-radius: 0;
 }
-.step-option:hover, .step-option.active { background: #edf5f8; }
+.step-option:hover, .step-option.active { background: #f1f5f9; }
 .step-option.automatic { color: #586e81; }
 .step-option strong { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 13px; font-weight: 500; }
 .step-option small { font-size: 11px; color: #5e7487; }
 .step-number {
-  display: grid; place-items: center; width: 23px; height: 23px; flex-shrink: 0;
+  display: grid; place-items: center; width: 22px; height: 22px; flex-shrink: 0;
   background: #e9f0f5; border-radius: 4px; font: 11px var(--mono);
 }
 .step-arrow { color: #688599; }
 .step-option.active .step-arrow { transform: rotate(90deg); }
-.step-body { display: grid; min-width: 0; gap: 12px; padding: 12px; background: #f9fbfd; }
-.step-body textarea {
+.step-body { display: grid; min-width: 0; gap: 10px; padding: 12px 14px; background: #fafbfd; }
+.step-script-area {
   min-height: 136px; width: 100%; resize: vertical; padding: 12px; white-space: pre; tab-size: 2;
   background: #142638; color: #e4edf5; border: 1px solid #294359; border-radius: 5px; font: 13px/1.6 var(--mono);
+  box-sizing: border-box;
+}
+.step-advanced > summary, .variables > summary, .preview-step > summary {
+  cursor: pointer; color: #425d73; font-size: 13px;
 }
 .step-controls .step-actions { justify-content: flex-end; margin-top: 8px; }
+.library-empty { margin: 0; padding: 16px; color: var(--muted); }
 .publish-preview { display: grid; gap: 12px; }
 .publish-preview h4 { margin: 0 0 8px; }
 .preview-step { border-top: 1px solid var(--border); padding: 9px 0; }
@@ -652,14 +1118,9 @@ onMounted(refresh);
 .preview-step pre, .variables dl { margin: 8px 0 0; padding: 12px; background: #f3f6f9; border-radius: 5px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .variables dl { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 12px; font-size: 12px; }
 .variables dd { margin: 0; }
-.template-error { padding: 10px; background: #fff5f3; border: 1px solid #f2d1ca; border-radius: 5px; color: #943c31; }
-.template-error details { margin-top: 6px; }
-.template-error code { display: block; overflow-wrap: anywhere; }
 @media (max-width: 550px) {
   .variant-bar, .metadata-grid { grid-template-columns: 1fr; }
   .wide-field { grid-column: auto; }
-  .library-filters, .library-actions { width: 100%; }
-  .library-filters input, .library-actions select { flex: 1; min-width: 0; }
   .editor-footer .step-actions { margin-left: auto; }
 }
 </style>

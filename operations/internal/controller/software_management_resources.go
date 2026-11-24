@@ -57,8 +57,8 @@ func verifyManagementResourceSnapshot(plan storedSoftwareOperationPlan, actual [
 	return nil
 }
 
-func installationResources(root, id string, definition serviceinstall.Definition, config serviceinstall.Config) []serviceinstall.ResolvedResource {
-	installRoot := serviceinstall.InstallRoot(root, id, config)
+func installationResources(root, id, directoryName string, definition serviceinstall.Definition, config serviceinstall.Config) []serviceinstall.ResolvedResource {
+	installRoot := serviceinstall.InstallRootFor(root, id, directoryName, config)
 	resources := []serviceinstall.ResolvedResource{{Type: "PATH_WRITE", Value: installRoot}}
 	if serviceinstall.IsOfficial(definition) {
 		if spec, err := serviceinstall.OfficialRecipeSpec(definition); err == nil {
@@ -127,7 +127,7 @@ func (s *Store) confirmedFailedManagementPorts(host target, checked serviceinsta
 		if !failedCustomInstall(*item.Installation) {
 			continue
 		}
-		claims := installationResources(host.InstallRoot, item.ID, item.Installation.Definition, item.Installation.Config)
+		claims := installationResources(host.InstallRoot, item.ID, item.Installation.DirectoryName, item.Installation.Definition, item.Installation.Config)
 		if resourcesConflict(ports, claims) {
 			if confirmed == nil {
 				confirmed = map[string]string{}
@@ -184,7 +184,7 @@ func reserveManagementResources(tx *sql.Tx, targetID, softwareID, excludePlan st
 	for _, item := range instances {
 		claimed := []serviceinstall.ResolvedResource{}
 		if item.Installation != nil {
-			claimed = installationResources(root, item.ID, item.Installation.Definition, item.Installation.Config)
+			claimed = installationResources(root, item.ID, item.Installation.DirectoryName, item.Installation.Definition, item.Installation.Config)
 		}
 		// A fresh target check can release a failed attempt's unused service
 		// claims. Its files and later management resources remain protected.
@@ -254,11 +254,13 @@ UNION ALL SELECT p.id,p.snapshot_json FROM software_configuration_plans p JOIN j
 			continue
 		}
 		var p struct {
-			Kind       string                            `json:"kind"`
-			SoftwareID string                            `json:"softwareId"`
-			Definition serviceinstall.Definition         `json:"definition"`
-			Config     serviceinstall.Config             `json:"config"`
-			Resources  []serviceinstall.ResolvedResource `json:"resources"`
+			Kind          string                            `json:"kind"`
+			SoftwareID    string                            `json:"softwareId"`
+			DirectoryName string                            `json:"directoryName,omitempty"`
+			Previous      *serviceinstall.Request           `json:"previous,omitempty"`
+			Definition    serviceinstall.Definition         `json:"definition"`
+			Config        serviceinstall.Config             `json:"config"`
+			Resources     []serviceinstall.ResolvedResource `json:"resources"`
 		}
 		if err = json.Unmarshal([]byte(raw), &p); err != nil {
 			return err
@@ -268,7 +270,11 @@ UNION ALL SELECT p.id,p.snapshot_json FROM software_configuration_plans p JOIN j
 		}
 		claimed := p.Resources
 		if p.Kind != "OPERATION" {
-			claimed = installationResources(root, p.SoftwareID, p.Definition, p.Config)
+			dirName := p.DirectoryName
+			if dirName == "" && p.Previous != nil {
+				dirName = p.Previous.DirectoryName
+			}
+			claimed = installationResources(root, p.SoftwareID, dirName, p.Definition, p.Config)
 		}
 		if resourcesConflict(wanted, claimed) {
 			return errors.New("MANAGEMENT_RESOURCE_RESERVED")

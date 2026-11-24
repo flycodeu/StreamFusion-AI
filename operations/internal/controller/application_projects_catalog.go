@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,17 +16,35 @@ import (
 )
 
 type applicationModuleCatalog struct {
-	Kind         string `json:"kind"`
-	Environment  string `json:"environment"`
-	StartCommand string `json:"startCommand"`
-	RuntimeMode  string `json:"runtimeMode"`
+	Kind              string                      `json:"kind"`
+	Description       string                      `json:"description,omitempty"`
+	Environment       string                      `json:"environment"`
+	Dependencies      []string                    `json:"dependencies,omitempty"`
+	StartCommand      string                      `json:"startCommand"`
+	RuntimeMode       string                      `json:"runtimeMode"`
+	AccessURL         string                      `json:"accessUrl,omitempty"`
+	CheckCommand      string                      `json:"checkCommand,omitempty"`
+	TestCommand       string                      `json:"testCommand,omitempty"`
+	SkipTests         bool                        `json:"skipTests,omitempty"`
+	BuildCommand      string                      `json:"buildCommand,omitempty"`
+	ArtifactPath      string                      `json:"artifactPath,omitempty"`
+	DefaultPort       int                         `json:"defaultPort,omitempty"`
+	HealthPath        string                      `json:"healthPath,omitempty"`
+	Profiles          []string                    `json:"profiles,omitempty"`
+	DefaultProfile    string                      `json:"defaultProfile,omitempty"`
+	EnvHints          []applicationEnvHint        `json:"envHints,omitempty"`
+	ProxyHints        []applicationProxyHint      `json:"proxyHints,omitempty"`
+	ConfigTemplates   []applicationConfigTemplate `json:"configTemplates,omitempty"`
+	SupportsContainer bool                        `json:"supportsContainer,omitempty"`
 }
 
 type applicationCatalogRepository struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	URL    string `json:"url"`
-	Branch string `json:"branch"`
+	ID                  string  `json:"id"`
+	Name                string  `json:"name"`
+	URL                 string  `json:"url"`
+	Branch              string  `json:"branch"`
+	GitAccountID        *string `json:"gitAccountId,omitempty"`
+	JenkinsCredentialID *string `json:"jenkinsCredentialId,omitempty"`
 }
 
 type applicationCatalogModule struct {
@@ -38,6 +57,7 @@ type applicationCatalogModule struct {
 
 type applicationCatalogInput struct {
 	Version      string                         `json:"version"`
+	Code         *string                        `json:"code"`
 	Name         *string                        `json:"name"`
 	Description  *string                        `json:"description"`
 	JenkinsURL   *string                        `json:"jenkinsUrl"`
@@ -46,22 +66,187 @@ type applicationCatalogInput struct {
 	Modules      []applicationCatalogModule     `json:"modules"`
 }
 
+var applicationProjectCodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+
+func applicationArtifactPathValid(value string) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) > 240 || strings.HasPrefix(value, "/") || strings.ContainsAny(value, "\\\r\n\t\x00:?") || strings.Contains(value, "..") {
+		return false
+	}
+	cleaned := path.Clean(value)
+	return cleaned != ".." && !strings.HasPrefix(cleaned, "../")
+}
+
 func (c *applicationModuleCatalog) normalize() error {
 	if c == nil {
 		return nil
 	}
 	c.Kind, c.RuntimeMode = strings.TrimSpace(c.Kind), strings.TrimSpace(c.RuntimeMode)
+	c.Description = strings.TrimSpace(c.Description)
 	c.Environment, c.StartCommand = strings.TrimSpace(c.Environment), strings.TrimSpace(c.StartCommand)
+	c.CheckCommand = strings.TrimSpace(c.CheckCommand)
+	c.TestCommand = strings.TrimSpace(c.TestCommand)
+	c.BuildCommand = strings.TrimSpace(c.BuildCommand)
+	c.ArtifactPath = strings.TrimSpace(c.ArtifactPath)
+	c.HealthPath = strings.TrimSpace(c.HealthPath)
+	c.DefaultProfile = strings.TrimSpace(c.DefaultProfile)
 	for _, value := range []string{c.Kind, c.RuntimeMode} {
 		if !applicationText(value, 240) || strings.ContainsAny(value, "\r\n") {
 			return applicationInvalid("模块类型和运行方式最多240字节，请各填一行")
 		}
 	}
+	if !applicationText(c.Description, 500) {
+		return applicationInvalid("模块描述最多500字节")
+	}
 	if !applicationText(c.Environment, 2000) || !applicationText(c.StartCommand, 8192) {
 		return applicationInvalid("运行环境最多2000字节，启动命令最多8192字节")
 	}
-	if applicationSecretValue(c.Environment) || applicationSecretValue(c.StartCommand) {
+	for _, cmd := range []string{c.CheckCommand, c.TestCommand, c.BuildCommand} {
+		if !applicationText(cmd, 4096) || applicationSecretValue(cmd) {
+			return applicationInvalid("检查、测试或构建命令最多4096字节，请勿包含明文凭据")
+		}
+	}
+	if !applicationArtifactPathValid(c.ArtifactPath) {
+		return applicationInvalid("产物路径须为模块目录下的有效相对路径")
+	}
+	if c.DefaultPort < 0 || c.DefaultPort > 65535 {
+		return applicationInvalid("模块默认端口须在 1–65535 之间")
+	}
+	if c.HealthPath != "" && (!strings.HasPrefix(c.HealthPath, "/") || len(c.HealthPath) > 240 || strings.ContainsAny(c.HealthPath, "\r\n\x00")) {
+		return applicationInvalid("健康检查路径须以 / 开头且不超过240字节")
+	}
+	if c.DefaultProfile != "" && !profilePatternSafe(c.DefaultProfile) {
+		return applicationInvalid("默认 Profile 格式不正确")
+	}
+	if applicationSecretValue(c.Description) || applicationSecretValue(c.Environment) || applicationSecretValue(c.StartCommand) {
 		return applicationInvalid("请通过环境变量引用凭据，避免在模块说明或命令中填写明文凭据")
+	}
+	if len(c.Dependencies) > 0 {
+		seen := make(map[string]bool, len(c.Dependencies))
+		cleaned := make([]string, 0, len(c.Dependencies))
+		for _, dep := range c.Dependencies {
+			dep = strings.TrimSpace(dep)
+			if dep == "" {
+				continue
+			}
+			if !applicationText(dep, 64) || strings.ContainsAny(dep, "\r\n") || applicationSecretValue(dep) {
+				return applicationInvalid("每个依赖软件最多64字节，且不能包含换行或明文凭据")
+			}
+			key := strings.ToLower(dep)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			cleaned = append(cleaned, dep)
+			if len(cleaned) > 20 {
+				return applicationInvalid("单个模块最多登记20项依赖软件")
+			}
+		}
+		c.Dependencies = cleaned
+	}
+	if len(c.Profiles) > 0 {
+		seen := make(map[string]bool, len(c.Profiles))
+		cleaned := make([]string, 0, len(c.Profiles))
+		for _, profile := range c.Profiles {
+			profile = strings.TrimSpace(profile)
+			if profile == "" {
+				continue
+			}
+			if !profilePatternSafe(profile) {
+				return applicationInvalid("环境 Profile 名称格式不正确")
+			}
+			key := strings.ToLower(profile)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			cleaned = append(cleaned, profile)
+			if len(cleaned) > 20 {
+				return applicationInvalid("单个模块最多登记20个 Profile")
+			}
+		}
+		c.Profiles = cleaned
+	}
+	if len(c.EnvHints) > 0 {
+		seen := make(map[string]bool, len(c.EnvHints))
+		cleaned := make([]applicationEnvHint, 0, len(c.EnvHints))
+		for _, hint := range c.EnvHints {
+			hint.Name = strings.TrimSpace(hint.Name)
+			hint.Profile = strings.TrimSpace(hint.Profile)
+			if hint.Name == "" {
+				continue
+			}
+			if !applicationVariableName.MatchString(hint.Name) || (hint.Profile != "" && !profilePatternSafe(hint.Profile)) {
+				return applicationInvalid("环境变量提示名称或 Profile 格式不正确")
+			}
+			if seen[hint.Name] {
+				continue
+			}
+			seen[hint.Name] = true
+			hint.Sensitive = hint.Sensitive || applicationSensitiveName.MatchString(hint.Name)
+			if hint.Sensitive {
+				hint.DefaultValue = ""
+			} else if !applicationText(hint.DefaultValue, 512) || strings.ContainsAny(hint.DefaultValue, "\r\n") || applicationSecretValue(hint.DefaultValue) {
+				return applicationInvalid("环境变量提示默认值过长或包含疑似凭据")
+			}
+			cleaned = append(cleaned, hint)
+			if len(cleaned) > 40 {
+				return applicationInvalid("单个模块最多保留40项环境变量提示")
+			}
+		}
+		c.EnvHints = cleaned
+	}
+	if len(c.ProxyHints) > 0 {
+		cleaned := make([]applicationProxyHint, 0, len(c.ProxyHints))
+		for _, hint := range c.ProxyHints {
+			hint.Location = strings.TrimSpace(hint.Location)
+			if hint.Location == "" {
+				continue
+			}
+			if !strings.HasPrefix(hint.Location, "/") || len(hint.Location) > 120 || strings.ContainsAny(hint.Location, " \t\r\n\x00") || hint.TargetPort < 0 || hint.TargetPort > 65535 {
+				return applicationInvalid("识别的代理路径或端口提示格式不正确")
+			}
+			cleaned = append(cleaned, hint)
+			if len(cleaned) > 15 {
+				return applicationInvalid("单个模块最多保留15条代理路径提示")
+			}
+		}
+		c.ProxyHints = cleaned
+	}
+	if len(c.ConfigTemplates) > 0 {
+		seen := make(map[string]bool, len(c.ConfigTemplates))
+		cleaned := make([]applicationConfigTemplate, 0, len(c.ConfigTemplates))
+		for _, tpl := range c.ConfigTemplates {
+			tpl.Filename = strings.TrimSpace(tpl.Filename)
+			tpl.Profile = strings.TrimSpace(tpl.Profile)
+			tpl.Format = strings.TrimSpace(strings.ToLower(tpl.Format))
+			if tpl.Filename == "" {
+				continue
+			}
+			if !deploy.ValidAppConfigFilename(tpl.Filename) || seen[tpl.Filename] ||
+				(tpl.Profile != "" && !profilePatternSafe(tpl.Profile)) ||
+				len(tpl.Content) > 32<<10 || strings.ContainsRune(tpl.Content, '\x00') {
+				return applicationInvalid("模块配置模板文件名或内容超出限制")
+			}
+			seen[tpl.Filename] = true
+			tpl.Content = deploy.NormalizeConfigText(tpl.Content)
+			cleaned = append(cleaned, tpl)
+			if len(cleaned) >= 8 {
+				break
+			}
+		}
+		c.ConfigTemplates = cleaned
+	}
+	if strings.TrimSpace(c.AccessURL) != "" {
+		access := c.AccessURL
+		if err := normalizeHTTPURLWithMessage(&access, "模块访问地址须为 HTTP 或 HTTPS 地址，且不能包含账号、查询参数或片段"); err != nil {
+			return err
+		}
+		c.AccessURL = access
+	} else {
+		c.AccessURL = ""
 	}
 	return nil
 }
@@ -69,11 +254,15 @@ func (c *applicationModuleCatalog) normalize() error {
 var applicationJenkinsHostLabel = regexp.MustCompile(`^[0-9A-Za-z](?:[0-9A-Za-z-]{0,61}[0-9A-Za-z])?$`)
 
 func normalizeApplicationJenkinsURL(value *string) error {
+	return normalizeHTTPURLWithMessage(value, "Jenkins 作业链接须为 HTTP 或 HTTPS 地址，且不能包含账号、查询参数或片段")
+}
+
+func normalizeHTTPURLWithMessage(value *string, msg string) error {
 	*value = strings.TrimSpace(*value)
 	if *value == "" {
 		return nil
 	}
-	invalid := applicationInvalid("Jenkins 作业链接须为 HTTP 或 HTTPS 地址，且不能包含账号、查询参数或片段")
+	invalid := applicationInvalid(msg)
 	u, err := url.Parse(*value)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.ForceQuery || u.RawQuery != "" || strings.Contains(*value, "#") || len(*value) > 2048 {
 		return invalid
@@ -119,17 +308,30 @@ func preserveApplicationCatalog(p *applicationProject, old applicationProject) {
 			p.Modules[i].Catalog = catalogs[p.Modules[i].ID]
 		}
 	}
-	versions := map[string]string{}
+	previousRepos := map[string]applicationRepository{}
+	for _, repo := range old.Repositories {
+		previousRepos[repo.ID] = repo
+	}
+	for i := range p.Repositories {
+		repo := &p.Repositories[i]
+		if old := previousRepos[repo.ID]; repo.JenkinsCredentialID == "" && old.URL == repo.URL {
+			repo.JenkinsCredentialID = old.JenkinsCredentialID
+		}
+	}
+	deployments := map[string]applicationDeployment{}
 	for _, environment := range old.Environments {
 		for _, deployment := range environment.Deployments {
-			versions[deployment.ID] = deployment.RecordedVersion
+			deployments[deployment.ID] = deployment
 		}
 	}
 	for i := range p.Environments {
 		for j := range p.Environments[i].Deployments {
 			deployment := &p.Environments[i].Deployments[j]
 			if deployment.RecordedVersion == "" {
-				deployment.RecordedVersion = versions[deployment.ID]
+				deployment.RecordedVersion = deployments[deployment.ID].RecordedVersion
+			}
+			if deployment.ConfigDrafts == nil {
+				deployment.ConfigDrafts = deployments[deployment.ID].ConfigDrafts
 			}
 		}
 	}
@@ -170,6 +372,16 @@ func (h *HTTP) saveApplicationCatalog(w http.ResponseWriter, r *http.Request, s 
 	if in.Name != nil {
 		project.Name = strings.TrimSpace(*in.Name)
 	}
+	if in.Code != nil {
+		code := strings.ToLower(strings.TrimSpace(*in.Code))
+		if code != "" {
+			if !applicationProjectCodePattern.MatchString(code) {
+				h.fail(w, r, 400, "APPLICATION_CONFIG_INVALID", "项目简称仅支持小写字母、数字、点、短横线或下划线（1～63 位）")
+				return
+			}
+			project.Code = code
+		}
+	}
 	if in.Description != nil {
 		project.Description = strings.TrimSpace(*in.Description)
 	}
@@ -196,10 +408,13 @@ func (h *HTTP) saveApplicationCatalog(w http.ResponseWriter, r *http.Request, s 
 	now := Now()
 	if id == "" {
 		project.ID = uuid.NewString()
-		_, err = tx.Exec("INSERT INTO application_projects(id,code,name,description,jenkins_url,archived,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", project.ID, "project-"+project.ID, project.Name, project.Description, project.JenkinsURL, project.Archived, now, now)
+		if project.Code == "" {
+			project.Code = "project-" + project.ID
+		}
+		_, err = tx.Exec("INSERT INTO application_projects(id,code,name,description,jenkins_url,archived,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", project.ID, project.Code, project.Name, project.Description, project.JenkinsURL, project.Archived, now, now)
 	} else {
 		var result sql.Result
-		result, err = tx.Exec("UPDATE application_projects SET name=?,description=?,jenkins_url=?,archived=?,version=version+1,updated_at=? WHERE id=? AND version=?", project.Name, project.Description, project.JenkinsURL, project.Archived, now, id, in.Version)
+		result, err = tx.Exec("UPDATE application_projects SET code=?,name=?,description=?,jenkins_url=?,archived=?,version=version+1,updated_at=? WHERE id=? AND version=?", project.Code, project.Name, project.Description, project.JenkinsURL, project.Archived, now, id, in.Version)
 		if err == nil {
 			var count int64
 			if count, err = result.RowsAffected(); err == nil && count == 0 {
@@ -322,20 +537,31 @@ func saveApplicationCatalogChildren(tx *sql.Tx, project applicationProject, in a
 			return err
 		}
 		old, exists := repositories[item.ID]
-		repository := applicationRepository{ID: item.ID, Name: item.Name, URL: item.URL, Branch: item.Branch, GitAccountID: old.GitAccountID}
+		gitAccountID := old.GitAccountID
+		if item.GitAccountID != nil {
+			gitAccountID = strings.TrimSpace(*item.GitAccountID)
+		}
+		jenkinsCredentialID := old.JenkinsCredentialID
+		if item.JenkinsCredentialID != nil {
+			jenkinsCredentialID = *item.JenkinsCredentialID
+		} else if strings.TrimSpace(item.URL) != old.URL {
+			jenkinsCredentialID = ""
+		}
+		repository := applicationRepository{ID: item.ID, Name: item.Name, URL: item.URL, Branch: item.Branch, GitAccountID: gitAccountID, JenkinsCredentialID: jenkinsCredentialID}
 		if err := normalizeApplicationRepository(&repository); err != nil {
 			return applicationInvalid(err.Error())
 		}
+		if repository.GitAccountID != "" && (!exists || old.GitAccountID != repository.GitAccountID || old.URL != repository.URL) {
+			if err := validateApplicationReferences(tx, applicationProject{Repositories: []applicationRepository{repository}}); err != nil {
+				return err
+			}
+		}
 		var err error
 		if exists {
-			if old.GitAccountID != "" && old.URL != repository.URL {
-				if err = validateApplicationReferences(tx, applicationProject{Repositories: []applicationRepository{repository}}); err != nil {
-					return err
-				}
-			}
-			_, err = tx.Exec("UPDATE application_repositories SET name=?,url=?,branch=? WHERE id=? AND project_id=?", repository.Name, repository.URL, repository.Branch, repository.ID, project.ID)
+			_, err = tx.Exec("UPDATE application_repositories SET name=?,url=?,git_account_id=nullif(?,''),branch=?,jenkins_credential_id=? WHERE id=? AND project_id=?", repository.Name, repository.URL, repository.GitAccountID, repository.Branch, repository.JenkinsCredentialID, repository.ID, project.ID)
 		} else {
-			_, err = tx.Exec("INSERT INTO application_repositories(id,project_id,name,url,branch,position) VALUES(?,?,?,?,?,?)", repository.ID, project.ID, repository.Name, repository.URL, repository.Branch, repositoryPosition)
+			_, err = tx.Exec(`INSERT INTO application_repositories(id,project_id,name,url,git_account_id,branch,position,jenkins_credential_id)
+				VALUES(?,?,?,?,nullif(?,''),?,?,?)`, repository.ID, project.ID, repository.Name, repository.URL, repository.GitAccountID, repository.Branch, repositoryPosition, repository.JenkinsCredentialID)
 			repositoryPosition++
 		}
 		if err != nil {

@@ -109,8 +109,14 @@ func TestJenkinsBuildMonitorReadsBoundJobWithoutMutation(t *testing.T) {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
+			w.Header().Del("X-Jenkins")
 			fmt.Fprint(w, `{"stages":[{"name":"环境预检","status":"SUCCESS","durationMillis":3},{"name":"Maven 打包","status":"IN_PROGRESS","durationMillis":7}]}`)
 		case "17/logText/progressiveText":
+			w.Header().Del("X-Jenkins")
+			if upstreamMode.Load() == 7 {
+				fmt.Fprint(w, "not a progressive log")
+				return
+			}
 			w.Header().Set("X-Text-Size", "9824")
 			w.Header().Set("X-More-Data", "true")
 			if upstreamMode.Load() == 6 {
@@ -192,6 +198,8 @@ func TestJenkinsBuildMonitorReadsBoundJobWithoutMutation(t *testing.T) {
 	if bounded := get(logPath); bounded["truncated"] != true || bounded["more"] != false || len(bounded["text"].(string)) != jenkinsLogLimit {
 		t.Fatal("Jenkins log limit not enforced")
 	}
+	upstreamMode.Store(7)
+	callSoftwareLogin(t, b, "GET", logPath, softwareLoginTestPeer, nil, 502, "JENKINS_PEER_UNVERIFIED")
 	before = authRequests.Load()
 	b.call("PATCH", root+"/catalog", map[string]string{"version": "1", "jenkinsUrl": redirect.URL + "/job/other/"}, 200)
 	callSoftwareLogin(t, b, "GET", build, softwareLoginTestPeer, nil, 409, "JENKINS_BINDING_CHANGED")
@@ -223,6 +231,7 @@ func TestJenkinsMonitorV29MigrationPreservesProjectsAndProtectsKey(t *testing.T)
 	pid := testJenkinsProject(t, b, origin+jenkinsFixtureJob)
 	software := installedJenkinsFixture(t, s, b, origin)
 	dir := s.Dir
+	rewindSchema34Fixture(t, s.DB)
 	if _, err := s.DB.Exec("DROP TABLE application_jenkins_connections; DROP TRIGGER application_qa_scope_changed; DROP TABLE application_qa_requests; DROP TABLE application_qa_monitors; DROP TABLE application_jenkins_monitors; DROP TABLE software_login_accounts; DELETE FROM schema_migrations WHERE version>=30;" + schemaV29); err != nil {
 		t.Fatal(err)
 	}

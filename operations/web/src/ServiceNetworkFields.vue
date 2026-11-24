@@ -205,8 +205,13 @@ function portInputValue(key: string) {
         ></template
       >
     </div>
-    <details v-if="!isTool(recipe) && !isDockerEngine(recipe)">
-      <summary>资源设置</summary>
+    <details v-if="!isTool(recipe) && !isDockerEngine(recipe)" :open="(recipe.defaultMemoryMiB || 0) >= 2048">
+      <summary>
+        资源设置
+        <small v-if="recipe.defaultMemoryMiB" style="margin-left: 8px">
+          推荐 ≥ {{ recipe.defaultMemoryMiB }} MiB
+        </small>
+      </summary>
       <label
         >内存上限（MiB）<input
           v-model.number="config.memoryMiB"

@@ -55,7 +55,7 @@ func installSSHFixture(t *testing.T, s *Store, b *browser, extensions ...func(de
 			frozen := change.Previous
 			frozen.Config = change.Config
 			if req.Action == "SOFTWARE_CONFIGURE_CHECK" {
-				root := serviceinstall.InstallRoot("/opt/plugin-test", frozen.SoftwareID, frozen.Config)
+				root := frozen.InstallRoot("/opt/plugin-test")
 				return encode(installPreflightFixture(frozen, root, true))
 			}
 			if req.Action == "PROGRESS" {
@@ -120,7 +120,7 @@ func installSSHFixture(t *testing.T, s *Store, b *browser, extensions ...func(de
 		fixture.mu.Lock()
 		defer fixture.mu.Unlock()
 		install := req.Installation
-		root := serviceinstall.InstallRoot("/opt/plugin-test", install.SoftwareID, install.Config)
+		root := install.InstallRoot("/opt/plugin-test")
 		switch req.Action {
 		case "SOFTWARE_INSTALL_CHECK":
 			return encode(installPreflightFixture(*install, root, !fixture.RejectPreflight.Load()))

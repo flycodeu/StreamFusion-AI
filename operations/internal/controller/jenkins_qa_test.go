@@ -19,6 +19,7 @@ func TestInstanceQAIsolatesJobsAndTracksItsOwnRun(t *testing.T) {
 	const path = "/job/api-test/"
 	var posts atomic.Int32
 	var expired, unknown atomic.Bool
+	var versionlessResponse atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Jenkins", "2.580.2")
 		if r.URL.Path == "/login" {
@@ -40,11 +41,22 @@ func TestInstanceQAIsolatesJobsAndTracksItsOwnRun(t *testing.T) {
 				w.WriteHeader(http.StatusBadGateway)
 				return
 			}
-			w.Header().Set("Location", "/queue/item/51/")
+			location := "/queue/item/51/"
+			if versionlessResponse.Load() > 0 {
+				w.Header().Del("X-Jenkins")
+			}
+			if versionlessResponse.Load() == 1 {
+				location = "https://other.invalid" + location
+			}
+			w.Header().Set("Location", location)
 			w.WriteHeader(http.StatusCreated)
 		case "/queue/item/51/api/json":
 			if expired.Load() {
 				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if versionlessResponse.Load() == 2 {
+				fmt.Fprint(w, `{"id":51,"task":{"url":"/job/another-job/"}}`)
 				return
 			}
 			fmt.Fprint(w, `{"id":51,"task":{"url":"/job/api-test/"},"executable":{"number":12}}`)
@@ -103,6 +115,17 @@ func TestInstanceQAIsolatesJobsAndTracksItsOwnRun(t *testing.T) {
 	b.call("POST", run, req, 409)
 	if posts.Load() != 2 {
 		t.Fatalf("idempotent request or uncertain delivery was replayed: %d", posts.Load())
+	}
+	unknown.Store(false)
+	expired.Store(false)
+	for _, mode := range []int32{1, 2} {
+		versionlessResponse.Store(mode)
+		req["requestId"] = uuid.NewString()
+		callSoftwareLogin(t, b, "POST", run, softwareLoginTestPeer, req, 409, "JENKINS_TRIGGER_UNCONFIRMED")
+		callSoftwareLogin(t, b, "POST", run, softwareLoginTestPeer, req, 409, "JENKINS_TRIGGER_UNCONFIRMED")
+	}
+	if posts.Load() != 4 {
+		t.Fatalf("non-matching queue receipt was retriggered: %d", posts.Load())
 	}
 	// Changing the deployment host invalidates the former execution binding.
 	var host string

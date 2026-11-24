@@ -57,6 +57,8 @@ export async function send(
       ? 900000
       : method === "POST" && /^\/hosts\/[^/]+\/checks$/.test(path)
         ? 120_000
+        : method === "POST" && /^\/application-projects\/[^/]+\/deployments\/[^/]+\/preflight$/.test(path)
+          ? 100_000
       : /\/(recover|reconcile)$/.test(path)
         ? 300000
         : 60000,

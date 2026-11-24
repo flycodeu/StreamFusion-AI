@@ -78,3 +78,33 @@ func TestOfficialOptionalFieldsPreserveLegacyJSON(t *testing.T) {
 		t.Fatal("java shared-path ownership", spec.Paths)
 	}
 }
+
+func TestOfficialSupportsUbuntu2204ExceptDockerAndPython312(t *testing.T) {
+	for _, key := range []string{"nginx", "redis", "mysql", "maven", "ffmpeg", "git"} {
+		d, err := FindOfficial(key, "ubuntu24.04-repository")
+		if err != nil {
+			t.Fatalf("%s lookup failed: %v", key, err)
+		}
+		spec, _ := OfficialRecipeSpec(d)
+		pkgs := make([]OfficialPackage, 0, len(spec.Packages))
+		for _, name := range spec.Packages {
+			pkgs = append(pkgs, OfficialPackage{Name: name, Version: "1.0", Origin: "Ubuntu:22.04/jammy", Direct: true})
+		}
+		p := &OfficialPlan{Manager: "APT", OS: "ubuntu22.04", Architecture: "amd64", Packages: pkgs, Paths: spec.Paths, Commands: OfficialInstallCommands(d, pkgs)}
+		if err := p.Validate(d); err != nil {
+			t.Fatalf("expected ubuntu22.04 plan valid for %s: %v", key, err)
+		}
+	}
+	for _, item := range []struct{ key, ver string }{{"docker", "29.9.2-official-ubuntu24.04"}, {"python", "ubuntu24.04-repository"}} {
+		d, _ := FindOfficial(item.key, item.ver)
+		spec, _ := OfficialRecipeSpec(d)
+		pkgs := make([]OfficialPackage, 0, len(spec.Packages))
+		for _, name := range spec.Packages {
+			pkgs = append(pkgs, OfficialPackage{Name: name, Version: "1.0", Origin: "Ubuntu:22.04/jammy", Direct: true})
+		}
+		p := &OfficialPlan{Manager: "APT", OS: "ubuntu22.04", Architecture: "amd64", Packages: pkgs, Paths: spec.Paths, Commands: OfficialInstallCommands(d, pkgs)}
+		if p.Validate(d) == nil {
+			t.Fatalf("expected ubuntu22.04 plan rejected for %s", item.key)
+		}
+	}
+}

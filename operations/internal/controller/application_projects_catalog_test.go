@@ -126,3 +126,99 @@ func TestApplicationProjectCatalogValidatesLinksAndWritesAtomically(t *testing.T
 		t.Fatal("invalid request left a partial edit", loaded)
 	}
 }
+
+func TestApplicationProjectCatalogCodeAndModuleFieldsRoundTrip(t *testing.T) {
+	_, b := setup(t)
+	b.login()
+	b.call("POST", "/application-projects/catalog", map[string]string{"name": "Bad code", "code": "Invalid Code!"}, 400)
+	b.call("POST", "/application-projects/catalog", map[string]any{
+		"name": "Bad access url",
+		"modules": []applicationCatalogModule{{
+			Name: "api", Directory: "api",
+			Catalog: &applicationModuleCatalog{AccessURL: "javascript:alert(1)"},
+		}},
+	}, 400)
+
+	created := applicationResponse(t, b.call("POST", "/application-projects/catalog", map[string]any{
+		"name": "智慧安防平台",
+		"code": "nt-camera",
+		"modules": []applicationCatalogModule{{
+			Name:      "platform-api",
+			Directory: "platform-api",
+			Catalog: &applicationModuleCatalog{
+				Kind:         "BACKEND",
+				Description:  "视频平台核心后端",
+				Environment:  "JDK 21 + Maven Wrapper",
+				Dependencies: []string{"MySQL", "Redis", "MySQL"},
+				RuntimeMode:  "DOCKER",
+				StartCommand: "java -jar app.jar",
+				AccessURL:    "https://ops.example:8443/api/",
+			},
+		}},
+	}, 200))
+	if created.Code != "nt-camera" || len(created.Modules) != 1 {
+		t.Fatalf("unexpected project: %+v", created)
+	}
+	cat := created.Modules[0].Catalog
+	if cat == nil || cat.Description != "视频平台核心后端" || cat.AccessURL != "https://ops.example:8443/api/" || !reflect.DeepEqual(cat.Dependencies, []string{"MySQL", "Redis"}) {
+		t.Fatalf("unexpected module catalog metadata: %+v", cat)
+	}
+	updated := applicationResponse(t, b.call("PATCH", "/application-projects/"+created.ID+"/catalog", map[string]any{
+		"version": created.Version,
+		"code":    "nt-camera-v2",
+	}, 200))
+	if updated.Code != "nt-camera-v2" {
+		t.Fatalf("expected updated code nt-camera-v2, got %q", updated.Code)
+	}
+}
+
+func TestApplicationProjectCatalogExtendedBuildFieldsRoundTrip(t *testing.T) {
+	_, b := setup(t)
+	b.login()
+	created := applicationResponse(t, b.call("POST", "/application-projects/catalog", map[string]any{
+		"name": "全自动识别项目",
+		"modules": []applicationCatalogModule{{
+			Name:      "platform-api",
+			Directory: "platform-api",
+			Catalog: &applicationModuleCatalog{
+				Kind:              "BACKEND",
+				Environment:       "JDK 21、Spring Boot",
+				Dependencies:      []string{"Java 21", "Maven", "MySQL", "Redis"},
+				RuntimeMode:       "NATIVE",
+				CheckCommand:      "java -version",
+				TestCommand:       "sh mvnw test",
+				SkipTests:         true,
+				BuildCommand:      "sh mvnw -B -ntp -DskipTests package",
+				ArtifactPath:      "target/*.jar",
+				StartCommand:      "java -jar app.jar",
+				DefaultPort:       18080,
+				HealthPath:        "/actuator/health",
+				Profiles:          []string{"test", "prod"},
+				DefaultProfile:    "test",
+				SupportsContainer: true,
+				EnvHints: []applicationEnvHint{
+					{Name: "DB_URL", DefaultValue: "jdbc:mysql://127.0.0.1:3306/app", Profile: "test"},
+					{Name: "DB_PASSWORD", DefaultValue: "strip-secret-default", Sensitive: true, Profile: "test"},
+				},
+			},
+		}},
+	}, 200))
+	cat := created.Modules[0].Catalog
+	if cat == nil || !cat.SkipTests || cat.ArtifactPath != "target/*.jar" || cat.DefaultPort != 18080 || cat.DefaultProfile != "test" || !cat.SupportsContainer {
+		t.Fatalf("unexpected extended catalog fields: %+v", cat)
+	}
+	if len(cat.EnvHints) != 2 || cat.EnvHints[1].DefaultValue != "" || !cat.EnvHints[1].Sensitive {
+		t.Fatalf("sensitive hint default should be cleared: %+v", cat.EnvHints)
+	}
+	// Reject non-sensitive hint with embedded credential in default value.
+	b.call("PATCH", "/application-projects/"+created.ID+"/catalog", map[string]any{
+		"version": created.Version,
+		"modules": []applicationCatalogModule{{
+			ID: created.Modules[0].ID, Name: "platform-api", Directory: "platform-api",
+			Catalog: &applicationModuleCatalog{
+				Kind: "BACKEND", Environment: "JDK 21", RuntimeMode: "NATIVE",
+				EnvHints: []applicationEnvHint{{Name: "SERVICE_DSN", DefaultValue: "https://user:pass@db.example/app"}},
+			},
+		}},
+	}, 400)
+}

@@ -1,20 +1,38 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import {
+  ElButton,
   ElDialog,
   ElDrawer,
-  ElTabs,
-  ElTabPane,
+  ElEmpty,
+  ElInput,
   ElMessage,
   ElMessageBox,
+  ElOption,
+  ElPagination,
+  ElSelect,
+  ElTabPane,
+  ElTable,
+  ElTableColumn,
+  ElTabs,
+  ElTag,
 } from "element-plus";
 import { request } from "./api";
 import HostConnectionDialog from "./HostConnectionDialog.vue";
 import HostPreparationPanel from "./HostPreparationPanel.vue";
 import HostTerminalToolsPanel from "./HostTerminalToolsPanel.vue";
 import HostSystemPanel from "./HostSystemPanel.vue";
+import PortManagement from "./PortManagement.vue";
 import OpsPagination from "./OpsPagination.vue";
 import { usePagination } from "./pagination";
+import {
+  metricBytes,
+  metricPercent,
+  metricSnapshot,
+  metricsLive,
+  type HostMetricSnapshot,
+  type HostObservation,
+} from "./hostMetrics";
 import {
   hostCapabilityLabels,
   hostCapabilityTimedOut,
@@ -34,6 +52,7 @@ const emit = defineEmits<{
 }>();
 const hosts = ref<Host[]>([]);
 const credentials = ref<SSHCredential[]>([]);
+const hostMetrics = ref<Record<string, HostMetricSnapshot>>({});
 const loading = ref(false);
 const actionHost = ref("");
 const query = ref("");
@@ -41,10 +60,14 @@ const stateFilter = ref("");
 const dialog = ref(false);
 const editingHost = ref<Host>();
 const detailId = ref("");
-const detailTab = ref("connection");
+const detailTab = ref("system");
 const terminalAdminId = ref("");
-watch(detailId, () => {
-  detailTab.value = "connection";
+watch(detailId, (id) => {
+  const target = hosts.value.find((h) => h.id === id);
+  detailTab.value =
+    target?.kind === "SSH" && target.capabilities?.mutation?.status !== "AVAILABLE"
+      ? "access"
+      : "system";
   terminalAdminId.value = "";
 });
 async function openTerminalMaintenance() {
@@ -66,7 +89,7 @@ watch(
       detailId.value = props.preparationHostId;
       await nextTick();
       if (detailId.value === props.preparationHostId) {
-        detailTab.value = "preparation";
+        detailTab.value = "access";
         emit("preparationOpened");
       }
     }
@@ -167,19 +190,38 @@ async function load() {
   loading.value = true;
   const revision = dataRevision;
   try {
-    const [items, keys] = await Promise.all([
+    const [items, keys, observations] = await Promise.all([
       request<Host[]>("/hosts"),
       request<SSHCredential[]>("/credentials"),
+      request<HostObservation[]>("/host-observations").catch(() => []),
     ]);
     if (disposed) return;
     if (revision === dataRevision) hosts.value = items;
     credentials.value = keys;
+    hostMetrics.value = Object.fromEntries(
+      observations.map((obs) => [obs.hostId, metricSnapshot(obs)]),
+    );
     now.value = Date.now();
   } catch (error) {
     emit("error", error);
   } finally {
     loading.value = false;
   }
+}
+
+function hostResourceLine(hostId: string) {
+  const snap = hostMetrics.value[hostId];
+  if (!snap || !metricsLive(snap)) return "";
+  const cpu = snap.cpuPercent !== undefined ? `CPU ${snap.cpuPercent.toFixed(0)}%` : "";
+  const memUsed =
+    snap.memoryTotalBytes !== undefined && snap.memoryAvailableBytes !== undefined
+      ? snap.memoryTotalBytes - snap.memoryAvailableBytes
+      : undefined;
+  const memPct = metricPercent(memUsed, snap.memoryTotalBytes);
+  const mem = memPct !== undefined ? `内存 ${memPct.toFixed(0)}%` : "";
+  const diskPct = metricPercent(snap.rootUsedBytes, snap.rootTotalBytes);
+  const disk = diskPct !== undefined ? `磁盘 ${diskPct.toFixed(0)}%` : "";
+  return [cpu, mem, disk].filter(Boolean).join(" · ");
 }
 
 async function act(host: Host, action: () => Promise<void>) {
@@ -208,8 +250,18 @@ function updateHost(host: Host) {
 }
 
 async function connectionSaved(host: Host) {
+  const isNew = !hosts.value.some((item) => item.id === host.id);
   updateHost(host);
   await load();
+  if (
+    isNew &&
+    host.kind === "SSH" &&
+    host.capabilities?.mutation?.status !== "AVAILABLE"
+  ) {
+    detailId.value = host.id;
+    await nextTick();
+    detailTab.value = "access";
+  }
 }
 
 async function refreshCredentials() {
@@ -296,6 +348,13 @@ function poll() {
   }, 15000);
 }
 
+function hostStateTag(tone: string): "success" | "danger" | "warning" | "info" {
+  if (tone === "state-success") return "success";
+  if (tone === "state-error") return "danger";
+  if (tone === "state-warning") return "warning";
+  return "info";
+}
+
 onMounted(async () => {
   await load();
   if (!disposed) poll();
@@ -308,134 +367,174 @@ onUnmounted(() => {
 
 <template>
   <section class="content host-management" aria-label="主机管理">
-    <div class="host-toolbar">
-      <div class="host-filters">
-        <input
+    <div class="ops-el-toolbar">
+      <div class="ops-el-toolbar-group">
+        <ElInput
           v-model="query"
-          type="search"
-          aria-label="搜索主机名称或地址"
-          placeholder="搜索名称、地址或用户"
+          clearable
+          placeholder="搜索服务器名称、IP 或 SSH 用户"
+          style="width: 240px"
         />
-        <select v-model="stateFilter" aria-label="筛选主机状态">
-          <option value="">全部状态</option>
-          <option value="CONNECTED">已连接</option>
-          <option value="ATTENTION">待检查 / 异常</option>
-          <option value="MAINTENANCE">维护中</option>
-        </select>
+        <ElSelect
+          v-model="stateFilter"
+          clearable
+          :value-on-clear="''"
+          placeholder="全部状态"
+          style="width: 155px"
+        >
+          <ElOption label="全部状态" value="" />
+          <ElOption label="已连接" value="CONNECTED" />
+          <ElOption label="待检查 / 异常" value="ATTENTION" />
+          <ElOption label="维护中" value="MAINTENANCE" />
+        </ElSelect>
+        <span v-if="query || stateFilter" class="host-count" aria-live="polite">
+          {{ visibleHosts.length }} / {{ hosts.length }} 台主机
+        </span>
       </div>
-      <div class="host-toolbar-actions">
-        <button
-          class="secondary"
-          :disabled="loading || !!actionHost"
+      <div class="ops-el-toolbar-group">
+        <ElButton
+          :loading="loading"
+          :disabled="!!actionHost"
           @click="load"
         >
           刷新
-        </button>
-        <button
-          class="primary"
+        </ElButton>
+        <ElButton
+          type="primary"
           :disabled="!!actionHost"
           @click="openConnection()"
         >
           新增主机
-        </button>
+        </ElButton>
       </div>
     </div>
-    <div v-if="query || stateFilter" class="host-count" aria-live="polite">
-      找到 {{ visibleHosts.length }} / {{ hosts.length }} 台主机
-      <span v-if="loading">· 加载中…</span>
+
+    <ElTable
+      :data="pagedHosts"
+      row-key="id"
+      border
+      stripe
+      style="width: 100%; margin-top: 16px"
+    >
+      <ElTableColumn label="状态" width="118">
+        <template #default="{ row }">
+          <div class="host-status">
+            <ElTag :type="hostStateTag(connectionState(row as Host).tone)" size="small">
+              {{ connectionState(row as Host).label }}
+            </ElTag>
+            <ElTag v-if="row.maintenance" type="warning" size="small" effect="plain">
+              维护中
+            </ElTag>
+          </div>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="服务器 / 连接地址" min-width="230" show-overflow-tooltip>
+        <template #default="{ row }">
+          <div class="host-cell">
+            <strong class="host-name">{{ row.name }}</strong>
+            <span class="host-address">
+              {{ row.kind === "LOCAL" ? "控制器本机" : `${row.address}:${row.sshPort}` }}
+            </span>
+            <small v-if="row.capabilities?.platform || hostResourceLine(row.id)" class="muted">
+              {{ hostMetrics[row.id]?.os || row.capabilities?.platform || "未检测系统" }}
+              <template v-if="hostResourceLine(row.id)">
+                · {{ hostResourceLine(row.id) }}
+              </template>
+            </small>
+            <small v-if="row.kind === 'SSH'" class="muted">
+              {{ row.sshUser }} · {{ credentialName(row as Host) }}
+            </small>
+          </div>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="运维能力" min-width="240">
+        <template #default="{ row }">
+          <div class="capability-grid">
+            <span
+              v-for="key in capabilityKeys"
+              :key="key"
+              :class="capabilityTone(row as Host, key)"
+            >
+              <i aria-hidden="true"></i>
+              {{
+                row.kind === "LOCAL" && key === "reachability"
+                  ? "本机连通"
+                  : hostCapabilityLabels[key]
+              }}
+              <b>{{ capabilityLabel(row as Host, key) }}</b>
+            </span>
+          </div>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="最近检查" width="165">
+        <template #default="{ row }">
+          <div>
+            <span class="host-time">{{ hostTime(row.observedAt) }}</span>
+            <small v-if="row.capabilities?.expiresAt" class="muted" style="display: block">
+              {{ hostObservationExpired(row as Host, now) ? "上次检查 · 待更新" : "观测有效" }}
+            </small>
+            <small v-else class="muted" style="display: block">尚无观测</small>
+          </div>
+        </template>
+      </ElTableColumn>
+      <ElTableColumn label="操作" width="235" fixed="right">
+        <template #default="{ row }">
+          <div class="host-actions">
+            <ElButton
+              link
+              type="primary"
+              size="small"
+              :disabled="!!actionHost"
+              @click="checkHost(row as Host)"
+            >
+              {{ checking(row as Host) ? "检查中…" : "检查能力" }}
+            </ElButton>
+            <ElButton
+              link
+              type="primary"
+              size="small"
+              :disabled="!!actionHost || row.maintenance"
+              @click="emit('docker', row.id)"
+            >
+              装软件
+            </ElButton>
+            <ElButton
+              link
+              size="small"
+              :disabled="!!actionHost"
+              @click="openConnection(row as Host)"
+            >
+              编辑
+            </ElButton>
+            <ElButton link type="primary" size="small" @click="detailId = row.id">
+              管理
+            </ElButton>
+          </div>
+        </template>
+      </ElTableColumn>
+      <template #empty>
+        <ElEmpty
+          :description="
+            hosts.length
+              ? '没有匹配的主机'
+              : loading
+                ? '正在加载主机…'
+                : '尚未添加服务器，点击右上角新增主机'
+          "
+        />
+      </template>
+    </ElTable>
+
+    <div v-if="hosts.length" class="ops-el-pager">
+      <ElPagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :page-sizes="[10, 20, 50]"
+        :total="total"
+        background
+        layout="total, sizes, prev, pager, next"
+      />
     </div>
-    <div v-if="!hosts.length" class="empty host-empty">
-      <strong>{{ loading ? "正在加载主机" : "尚未添加主机" }}</strong>
-    </div>
-    <div v-else-if="!visibleHosts.length" class="empty">没有匹配的主机</div>
-    <div v-else class="table-scroll host-table">
-      <table>
-        <thead>
-          <tr>
-            <th>主机状态</th>
-            <th>主机 / 连接</th>
-            <th>能力</th>
-            <th>最近检查</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="host in pagedHosts" :key="host.id">
-            <td data-label="主机状态">
-              <div class="host-status">
-                <span class="state-tag" :class="connectionState(host).tone">
-                  {{ connectionState(host).label }}
-                </span>
-                <span v-if="host.maintenance" class="maintenance-tag">
-                  维护中
-                </span>
-              </div>
-            </td>
-            <td data-label="主机 / 连接">
-              <strong class="host-name">{{ host.name }}</strong>
-              <span class="host-address">
-                {{
-                  host.kind === "LOCAL"
-                    ? "控制器本机"
-                    : `${host.address}:${host.sshPort}`
-                }}
-              </span>
-              <small v-if="host.kind === 'SSH'">
-                {{ host.sshUser }} · {{ credentialName(host) }}
-              </small>
-            </td>
-            <td data-label="能力">
-              <div class="capability-grid">
-                <span
-                  v-for="key in capabilityKeys"
-                  :key="key"
-                  :class="capabilityTone(host, key)"
-                >
-                  <i aria-hidden="true"></i>
-                  {{
-                    host.kind === "LOCAL" && key === "reachability"
-                      ? "本机连通"
-                      : hostCapabilityLabels[key]
-                  }}
-                  <b>{{ capabilityLabel(host, key) }}</b>
-                </span>
-              </div>
-            </td>
-            <td data-label="最近检查">
-              <span class="host-time">{{ hostTime(host.observedAt) }}</span>
-              <small v-if="host.capabilities?.expiresAt">
-                {{
-                  hostObservationExpired(host, now)
-                    ? "上次检查 · 待更新"
-                    : "观测有效"
-                }}
-              </small>
-              <small v-else>尚无观测</small>
-            </td>
-            <td data-label="操作">
-              <div class="host-actions">
-                <button
-                  class="quiet"
-                  :disabled="!!actionHost"
-                  @click="checkHost(host)"
-                >
-                  {{ checking(host) ? "检查中…" : "检查能力" }}
-                </button>
-                <button
-                  class="quiet"
-                  :disabled="!!actionHost"
-                  @click="openConnection(host)"
-                >
-                  编辑连接
-                </button>
-                <button class="quiet" @click="detailId = host.id">详情</button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <OpsPagination v-if="hosts.length" v-model:page="page" v-model:page-size="pageSize" :total="total" label="主机分页" />
   </section>
   <HostConnectionDialog
     :open="dialog"
@@ -470,125 +569,123 @@ onUnmounted(() => {
         </button>
       </div>
       <ElTabs v-model="detailTab">
-        <ElTabPane label="系统信息" name="system">
+        <ElTabPane label="资源监控" name="system">
           <HostSystemPanel v-if="detailTab === 'system'" :key="detail.id" :host="detail"
             @error="emit('error', $event)" />
         </ElTabPane>
-        <ElTabPane label="连接信息" name="connection">
-          <dl class="host-facts">
-            <dt>连接地址</dt>
-            <dd>
-              {{
-                detail.kind === "LOCAL"
-                  ? "控制器本机"
-                  : `${detail.address}:${detail.sshPort}`
-              }}
-            </dd>
-            <template v-if="detail.kind === 'SSH'">
-              <dt>SSH 用户</dt>
-              <dd>{{ detail.sshUser }}</dd>
-              <dt>连接凭据</dt>
-              <dd>{{ credentialName(detail) }}</dd>
-              <dt>已确认指纹</dt>
-              <dd>
-                <code>{{ detail.hostFingerprint }}</code>
-              </dd>
-            </template>
-            <dt>检查时间</dt>
-            <dd>{{ hostTime(detail.observedAt) }}</dd>
-            <dt>运行环境</dt>
-            <dd>{{ detail.capabilities?.platform || "未检查" }}</dd>
-            <dt>项目目录</dt>
-            <dd>
-              <code>{{ detail.installRoot }}</code>
-            </dd>
-            <dt>有效至</dt>
-            <dd>{{ hostTime(detail.capabilities?.expiresAt) }}</dd>
-          </dl>
+        <ElTabPane label="端口与防火墙" name="ports">
+          <PortManagement
+            v-if="detailTab === 'ports'"
+            :key="detail.id"
+            :fixed-host-id="detail.id"
+            @error="emit('error', $event)"
+            @preparation="detailTab = 'access'"
+          />
         </ElTabPane>
-        <ElTabPane label="能力检查" name="capabilities">
-          <div class="capability-details">
-            <article v-for="key in capabilityKeys" :key="key">
-              <header>
-                <div class="capability-heading"><strong>
-                  {{
-                    detail.kind === "LOCAL" && key === "reachability"
-                      ? "本机连通"
-                      : hostCapabilityLabels[key]
-                  }}
-                </strong>
-                <button v-if="key === 'docker'" class="quiet capability-action" :disabled="!!actionHost || detail.maintenance"
-                  @click="emit('docker', detail.id)">安装与管理</button></div>
-                <span :class="capabilityTone(detail, key)">
-                  {{ capabilityLabel(detail, key) }}
-                </span>
-              </header>
-              <p v-if="detail.capabilities?.[key]?.status !== 'AVAILABLE'">{{ capabilityMessage(detail, key) }}</p>
-              <details
-                v-if="
-                  detail.capabilities?.[key]?.observedAt ||
-                  (detail.capabilities?.[key]?.source &&
-                    detail.capabilities?.[key]?.source !== 'NONE')
-                "
-                class="capability-evidence"
-              >
-                <summary>检查依据</summary>
-                <p v-if="detail.capabilities?.[key]?.status === 'AVAILABLE'">{{ detail.capabilities?.[key]?.message }}</p>
-                <span>
-                  来源：{{
-                    observationSources[
-                      detail.capabilities?.[key]?.source || "NONE"
-                    ] || '其他检查方式'
-                  }}
-                </span>
-                <time>
-                  {{ hostTime(detail.capabilities?.[key]?.observedAt) }}
-                </time>
-              </details>
-            </article>
+        <ElTabPane label="接入与能力" name="access">
+          <div class="access-tab-stack">
+            <div
+              v-if="detail.kind === 'SSH' && detail.capabilities?.mutation?.status !== 'AVAILABLE'"
+              class="ops-guide-banner"
+            >
+              <strong>启用全部运维能力：</strong>
+              安装接入组件后，本台服务器即可支持软件安装、启停控制、实时日志与防火墙配置。
+            </div>
+            <HostPreparationPanel
+              v-if="detailTab === 'access'"
+              :host="detail"
+              @checked="load"
+            />
+            <div class="capability-details">
+              <article v-for="key in capabilityKeys" :key="key">
+                <header>
+                  <div class="capability-heading"><strong>
+                    {{
+                      detail.kind === "LOCAL" && key === "reachability"
+                        ? "本机连通"
+                        : hostCapabilityLabels[key]
+                    }}
+                  </strong>
+                  <button v-if="key === 'docker'" class="quiet capability-action" :disabled="!!actionHost || detail.maintenance"
+                    @click="emit('docker', detail.id)">安装与管理</button></div>
+                  <span :class="capabilityTone(detail, key)">
+                    {{ capabilityLabel(detail, key) }}
+                  </span>
+                </header>
+                <p v-if="detail.capabilities?.[key]?.status !== 'AVAILABLE'">{{ capabilityMessage(detail, key) }}</p>
+                <details
+                  v-if="
+                    detail.capabilities?.[key]?.observedAt ||
+                    (detail.capabilities?.[key]?.source &&
+                      detail.capabilities?.[key]?.source !== 'NONE')
+                  "
+                  class="capability-evidence"
+                >
+                  <summary>检查依据</summary>
+                  <p v-if="detail.capabilities?.[key]?.status === 'AVAILABLE'">{{ detail.capabilities?.[key]?.message }}</p>
+                  <span>
+                    来源：{{
+                      observationSources[
+                        detail.capabilities?.[key]?.source || "NONE"
+                      ] || '其他检查方式'
+                    }}
+                  </span>
+                  <time>
+                    {{ hostTime(detail.capabilities?.[key]?.observedAt) }}
+                  </time>
+                </details>
+              </article>
+            </div>
           </div>
         </ElTabPane>
-        <ElTabPane label="安装准备" name="preparation"
-          ><HostPreparationPanel
-            v-if="detailTab === 'preparation'"
-            :host="detail"
-            @checked="load"
-        /></ElTabPane>
-        <ElTabPane label="项目目录" name="directory">
-          <div class="host-identifiers">
+        <ElTabPane label="连接与目录" name="connection">
+          <div class="connection-tab-stack">
             <dl class="host-facts">
-              <dt>应用与版本</dt>
+              <dt>连接地址</dt>
               <dd>
-                <code>{{ detail.installRoot }}/instances/</code>
+                {{
+                  detail.kind === "LOCAL"
+                    ? "控制器本机"
+                    : `${detail.address}:${detail.sshPort}`
+                }}
               </dd>
-              <dt>环境记录</dt>
+              <template v-if="detail.kind === 'SSH'">
+                <dt>SSH 用户</dt>
+                <dd>{{ detail.sshUser }}</dd>
+                <dt>连接凭据</dt>
+                <dd>{{ credentialName(detail) }}</dd>
+                <dt>已确认指纹</dt>
+                <dd>
+                  <code>{{ detail.hostFingerprint }}</code>
+                </dd>
+              </template>
+              <dt>运行环境</dt>
+              <dd>{{ detail.capabilities?.platform || "未检查" }}</dd>
+              <dt>Ops 工作目录</dt>
               <dd>
-                <code>{{ detail.installRoot }}/plugins/</code>
+                <code>{{ detail.installRoot }}</code>
               </dd>
-              <dt>离线材料</dt>
-              <dd>
-                <code>{{ detail.installRoot }}/packages/</code>
-              </dd>
-              <dt>作业回执</dt>
-              <dd>
-                <code>{{ detail.installRoot }}/jobs/</code>
-              </dd>
+              <dt>最近检查</dt>
+              <dd>{{ hostTime(detail.observedAt) }} · 有效至 {{ hostTime(detail.capabilities?.expiresAt) }}</dd>
             </dl>
+            <details class="host-identifiers">
+              <summary>工作目录结构与登记标识</summary>
+              <dl class="host-facts">
+                <dt>应用与版本</dt>
+                <dd><code>{{ detail.installRoot }}/instances/</code></dd>
+                <dt>环境记录</dt>
+                <dd><code>{{ detail.installRoot }}/plugins/</code></dd>
+                <dt>离线材料</dt>
+                <dd><code>{{ detail.installRoot }}/packages/</code></dd>
+                <dt>作业回执</dt>
+                <dd><code>{{ detail.installRoot }}/jobs/</code></dd>
+                <dt>主机标识</dt>
+                <dd><code>{{ detail.id }}</code></dd>
+                <dt>记录版本</dt>
+                <dd>{{ detail.version }}<template v-if="detail.kind === 'SSH'"> · 凭据 r{{ detail.credentialRevision }}</template></dd>
+              </dl>
+            </details>
           </div>
-        </ElTabPane>
-        <ElTabPane label="登记信息" name="registration">
-          <dl class="host-facts">
-            <dt>主机标识</dt>
-            <dd>
-              <code>{{ detail.id }}</code>
-            </dd>
-            <dt>记录版本</dt>
-            <dd>{{ detail.version }}</dd>
-            <template v-if="detail.kind === 'SSH'">
-              <dt>凭据修订</dt>
-              <dd>r{{ detail.credentialRevision }}</dd>
-            </template>
-          </dl>
         </ElTabPane>
       </ElTabs>
     </div>
@@ -720,9 +817,12 @@ onUnmounted(() => {
   background: currentColor;
   margin-right: 6px;
 }
+.host-cell {
+  display: grid;
+  gap: 2px;
+}
 .host-name {
   display: block;
-  margin-bottom: 7px;
   font-size: 14px;
   font-weight: 600;
   overflow-wrap: anywhere;
@@ -731,13 +831,6 @@ onUnmounted(() => {
   display: block;
   color: #435269;
   font: 12px/1.5 var(--mono);
-}
-.host-table td {
-  white-space: normal;
-}
-.host-table td small {
-  display: block;
-  margin-top: 6px;
 }
 .capability-grid {
   display: grid;
@@ -779,12 +872,7 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 4px;
-  margin-left: -8px;
-}
-.host-actions .quiet {
-  margin: 0;
-  white-space: nowrap;
+  gap: 8px;
 }
 .host-detail {
   display: grid;
@@ -804,6 +892,11 @@ onUnmounted(() => {
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+.access-tab-stack,
+.connection-tab-stack {
+  display: grid;
+  gap: 20px;
 }
 .host-facts {
   display: grid;

@@ -424,7 +424,7 @@ func (x *executor) dockerEngineHealth(ctx context.Context, req Request) (string,
 	i := req.Installation
 	out, err := x.sourceSoftwareCommand(ctx, "verify-docker-info")
 	version := strings.Split(i.Definition.Version, "-")[0]
-	want := version + "\t" + filepath.Join(serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config), "data")
+	want := version + "\t" + filepath.Join(i.InstallRoot(x.root), "data")
 	if err != nil || strings.TrimSpace(string(out)) != want {
 		return "", errors.New("DOCKER_ENGINE_HEALTH_MISMATCH")
 	}
@@ -439,7 +439,7 @@ func (x *executor) reconcileDockerEngine(req Request, dir string) Result {
 	result := softwareResult(req)
 	result.ErrorCode = "DOCKER_PACKAGE_RECONCILE_REQUIRED"
 	var marker dockerPackageOwnership
-	if readJSON(filepath.Join(dir, "docker-packages.json"), &marker) != nil || marker.SoftwareID != req.Installation.SoftwareID || marker.JobID != req.JobID || marker.ConfigHash != Digest(req.Installation.Config) || marker.Root != serviceinstall.InstallRoot(x.root, marker.SoftwareID, req.Installation.Config) {
+	if readJSON(filepath.Join(dir, "docker-packages.json"), &marker) != nil || marker.SoftwareID != req.Installation.SoftwareID || marker.JobID != req.JobID || marker.ConfigHash != Digest(req.Installation.Config) || marker.Root != req.Installation.InstallRoot(x.root) {
 		return result
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -483,7 +483,7 @@ func (x *executor) dockerRemovalOwnership(req Request) (dockerPackageOwnership, 
 	i, o := req.Uninstallation.Installation, req.Software.Ownership
 	dir := filepath.Join(x.root, "jobs", o.JobID)
 	expected, err := dockerRecipePackages(i.Definition)
-	if err != nil || readJSON(filepath.Join(dir, "docker-packages.json"), &marker) != nil || marker.SoftwareID != i.SoftwareID || marker.JobID != o.JobID || marker.ConfigHash != o.ConfigHash || marker.Root != serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config) || Digest(marker.Packages) != Digest(expected) || marker.BinaryHash != o.BinaryHash || marker.UnitPath != "/usr/lib/systemd/system/docker.service" || !Hex.MatchString(marker.UnitHash) || marker.DaemonHash != bytesSHA(dockerDaemonConfig(marker.Root)) {
+	if err != nil || readJSON(filepath.Join(dir, "docker-packages.json"), &marker) != nil || marker.SoftwareID != i.SoftwareID || marker.JobID != o.JobID || marker.ConfigHash != o.ConfigHash || marker.Root != i.InstallRoot(x.root) || Digest(marker.Packages) != Digest(expected) || marker.BinaryHash != o.BinaryHash || marker.UnitPath != "/usr/lib/systemd/system/docker.service" || !Hex.MatchString(marker.UnitHash) || marker.DaemonHash != bytesSHA(dockerDaemonConfig(marker.Root)) {
 		return marker, errors.New("DOCKER_PACKAGE_OWNERSHIP_MISMATCH")
 	}
 	return marker, nil

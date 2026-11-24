@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import { ElDialog } from "element-plus";
 
 export interface ControllerCredential {
@@ -50,6 +51,19 @@ const emit = defineEmits<{
   changePassword: [];
 }>();
 
+const revealCredentialSecret = ref(false);
+
+function generateRandomSecret() {
+  const alphabet =
+    "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*-_";
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  let next = "";
+  for (const b of bytes) next += alphabet[b % alphabet.length];
+  emit("update:secret", next);
+  revealCredentialSecret.value = true;
+}
+
 const displayTime = (value?: string) =>
   value
     ? new Date(value).toLocaleString("zh-CN", {
@@ -66,7 +80,10 @@ const displayTime = (value?: string) =>
     width="min(480px, 94vw)"
     align-center
     @update:model-value="emit('update:credentialDialog', $event)"
-    @closed="emit('update:secret', '')"
+    @closed="
+      revealCredentialSecret = false;
+      emit('update:secret', '');
+    "
   >
     <form class="dialog-form" @submit.prevent="emit('saveCredential')">
       <label
@@ -85,28 +102,64 @@ const displayTime = (value?: string) =>
           :value="credentialKind"
           :disabled="!!selected"
           @change="
+            revealCredentialSecret = false;
             emit(
               'update:credentialKind',
               ($event.target as HTMLSelectElement).value,
-            )
+            );
           "
         >
           <option value="TOKEN">Token</option>
           <option value="PASSWORD">密码</option>
           <option value="SSH_KEY">SSH 私钥</option>
         </select></label
-      ><label
-        >凭据内容<textarea
+      ><label v-if="credentialKind === 'SSH_KEY'"
+        >SSH 私钥内容<textarea
           :value="secret"
           required
           maxlength="32768"
           spellcheck="false"
           autocomplete="off"
+          placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
           @input="
             emit('update:secret', ($event.target as HTMLTextAreaElement).value)
           "
         ></textarea>
       </label>
+      <div v-else class="credential-secret-block">
+        <div class="secret-label-row">
+          <span>{{ credentialKind === "TOKEN" ? "Token 密钥" : "密码内容" }}</span>
+          <button
+            type="button"
+            class="quiet"
+            :disabled="busy"
+            @click="generateRandomSecret"
+          >
+            随机生成
+          </button>
+        </div>
+        <div class="secret-input-row">
+          <input
+            :value="secret"
+            :type="revealCredentialSecret ? 'text' : 'password'"
+            required
+            maxlength="32768"
+            spellcheck="false"
+            autocomplete="new-password"
+            @input="
+              emit('update:secret', ($event.target as HTMLInputElement).value)
+            "
+          />
+          <button
+            type="button"
+            class="secondary"
+            :disabled="busy"
+            @click="revealCredentialSecret = !revealCredentialSecret"
+          >
+            {{ revealCredentialSecret ? "隐藏" : "显示" }}
+          </button>
+        </div>
+      </div>
       <div class="dialog-footer">
         <button
           type="button"
@@ -208,3 +261,31 @@ const displayTime = (value?: string) =>
     </dl></ElDialog
   >
 </template>
+
+<style scoped>
+.credential-secret-block {
+  display: grid;
+  gap: 8px;
+}
+.secret-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 500;
+  color: #334155;
+}
+.secret-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.secret-input-row input {
+  flex: 1;
+  margin-top: 0;
+}
+.secret-input-row button {
+  flex-shrink: 0;
+  min-height: 38px;
+}
+</style>

@@ -2,7 +2,8 @@
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import { ApiError, request } from "./api";
 import { hostTime } from "./hosts";
-import { jobKindLabel, type JobSummary } from "./jobs";
+import { isProjectJob, jobKindLabel, type JobSummary } from "./jobs";
+import { deploymentPhaseText, jobStatusText } from "./projectDeployments";
 import { softwareJobErrorMessages, softwareJobPhaseLabel, softwareJobStatusLabel, softwareState, type SoftwareInstance } from "./software";
 
 const props = defineProps<{ mode?: "jobs" | "runtime"; jobId?: string; softwareId?: string; title?: string; hostName?: string }>();
@@ -20,10 +21,15 @@ let disposed = false, generation = 0, failures = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let controller: AbortController | undefined;
 const live = computed(() => !!id.value && (mode.value === "runtime" || !!job.value &&
-  (["QUEUED", "RUNNING", "UNKNOWN"].includes(job.value.status) || job.value.targetAckPending)));
+  (["QUEUED", "RUNNING", "RECOVERING"].includes(job.value.status) ||
+    (job.value.status === "UNKNOWN" && !isProjectJob(job.value.kind)) || job.value.targetAckPending)));
 const title = computed(() => props.title || job.value?.subjectName || software.value?.name || (job.value ? jobKindLabel(job.value.kind) : "执行记录"));
 const host = computed(() => props.hostName || job.value?.hostName || software.value?.hostName || "");
-const state = computed(() => job.value ? softwareJobStatusLabel(job.value.status) : software.value ? softwareState(software.value).label : "");
+const state = computed(() => job.value ?
+  isProjectJob(job.value.kind) ? jobStatusText(job.value.status) : softwareJobStatusLabel(job.value.status)
+  : software.value ? softwareState(software.value).label : "");
+const phase = computed(() => job.value && isProjectJob(job.value.kind)
+  ? deploymentPhaseText(job.value.phase) : softwareJobPhaseLabel(job.value?.phase));
 const receipt = computed(() => source.value === "JOB_RECEIPT");
 
 function stopTimer() { if (timer) clearTimeout(timer); timer = undefined; }
@@ -126,7 +132,7 @@ onUnmounted(() => { disposed = true; generation++; stopTimer(); controller?.abor
         <button class="quiet" :disabled="reading || !id" @click="readOutput(true)">{{ reading ? '读取中…' : paused ? '继续刷新' : '刷新输出' }}</button>
       </header>
       <div v-if="receipt && job" class="receipt-summary" role="status">
-        <strong>{{ softwareJobStatusLabel(job.status) }}</strong><p>{{ softwareJobPhaseLabel(job.phase) }}</p>
+        <strong>{{ state }}</strong><p>{{ phase }}</p>
         <p v-if="job.errorCode">{{ softwareJobErrorMessages[job.errorCode] || '操作结果尚未确认，请核对原任务。' }}</p>
         <time>{{ hostTime(job.updatedAt) }}</time>
       </div>

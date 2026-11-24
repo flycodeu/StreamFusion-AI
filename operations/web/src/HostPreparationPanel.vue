@@ -378,7 +378,7 @@ async function check() {
           <progress :value="transferPercent" max="100" aria-label="已发送比例" />
           <span>{{ confirmingUpload ? '已上传' : '已发送' }} {{ transferSize(transfer.sentBytes) }} / {{ transferSize(transfer.totalBytes) }} · {{ transferPercent }}%{{ confirmingUpload ? '' : transferSpeed }}</span>
         </div>
-        <p v-if="job?.status === 'SUCCEEDED' && !job.includesHostTerminal && !automaticUpdate && !updateRequested && host.kind === 'SSH'">已有 Docker 实例缺少终端命令时，更新接入组件即可在 Ubuntu 24.04 上一次补齐。</p>
+        <p v-if="job?.status === 'SUCCEEDED' && !job.includesHostTerminal && !automaticUpdate && !updateRequested && host.kind === 'SSH'">支持主流 Linux amd64 发行版；若为 Ubuntu 24.04 且已有 Docker 实例缺少终端命令，更新接入组件可补齐宿主机终端工具。</p>
         <div v-if="!automaticUpdate || visibleStatus === 'UNKNOWN' || visibleStatus === 'FAILED'" class="status-actions">
           <button v-if="job?.status === 'UNKNOWN'" class="primary" :disabled="busy" @click="reconcile">{{ busy ? '正在检查…' : '检查安装结果' }}</button>
           <button v-if="job?.status === 'SUCCEEDED'" class="secondary" :disabled="busy" @click="check">重新检查</button>
@@ -397,7 +397,7 @@ async function check() {
       </section>
       <section v-if="!blocked && (job?.status !== 'SUCCEEDED' || updateRequested)" class="install-workspace">
         <header class="install-heading"><div><h3>{{ automaticUpdate ? '安装权限' : updateRequested ? updateOnly ? '更新接入组件' : '更新组件与授权' : mode === 'online' ? '安装接入组件' : '离线安装' }}</h3></div><div v-if="!automaticUpdate" class="method-switch"><button :class="{ active: mode === 'online' }" :disabled="busy || host.kind !== 'SSH'" @click="mode = 'online'">在线</button><button :class="{ active: mode === 'offline' }" :disabled="busy" @click="mode = 'offline'">离线</button></div></header>
-        <p v-if="automaticUpdate?.mode !== 'AUTHORIZE'">Ubuntu 24.04 会随接入组件一起准备宿主机终端工具，已有 Docker 实例也可使用。缺少客户端时会从主机的 APT 软件源补装。</p>
+        <p v-if="automaticUpdate?.mode !== 'AUTHORIZE'">支持安装受管执行器至主流 Linux amd64 服务器（Ubuntu 22.04/24.04、Debian、Rocky/Alma/CentOS/openEuler 等）。在 Ubuntu 24.04 上还会随接入组件准备宿主机终端工具。</p>
         <div v-if="mode === 'online'" class="install-card">
           <form @submit.prevent="install">
             <label v-if="data.account !== 'root' && needsSudoPassword" class="password-field">{{ data.account }} 的登录密码 <span>用于 sudo 提权，仅本次使用</span><input v-model="sudoPassword" type="password" autocomplete="off" maxlength="1024" :disabled="busy" :aria-label="`${data.account} 的登录密码`" placeholder="请输入该账号的系统密码" /></label>

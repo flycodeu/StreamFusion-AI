@@ -37,7 +37,7 @@ func configurationRequest(req Request) Request {
 func (x *executor) configurationPreflight(req Request) serviceinstall.Preflight {
 	target := configurationRequest(req)
 	i := target.Installation
-	root := serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config)
+	root := i.InstallRoot(x.root)
 	p := serviceinstall.Preflight{Ready: true, Root: root, DataDirectory: filepath.Join(root, "data"), ConfigDirectory: filepath.Join(root, "config"), Checks: []serviceinstall.Check{}, PortMappings: serviceinstall.PortMappings(i.Definition, i.Config)}
 	fail := func(key, code, message string) {
 		p.Ready = false

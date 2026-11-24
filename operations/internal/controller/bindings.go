@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -191,6 +192,83 @@ func (h *HTTP) probeBinding(w http.ResponseWriter, r *http.Request, id string) {
 }
 func (s *Store) releaseSecrets(req *deploy.Request) error {
 	req.Secrets = map[string]string{}
+	if p := req.ProjectDeployment; p != nil {
+		if req.Action != deploy.ProjectApply {
+			return nil
+		}
+		load := func(key, ref string) error {
+			id, rev, ok := strings.Cut(ref, ":")
+			if !ok {
+				return errors.New("PROJECT_CREDENTIAL_UNAVAILABLE")
+			}
+			material, err := s.openCredentialByIDRev(id, rev)
+			if err != nil {
+				return errors.New("PROJECT_CREDENTIAL_UNAVAILABLE")
+			}
+			defer clear(material)
+			req.Secrets[key] = string(material)
+			return nil
+		}
+		for _, v := range p.Variables {
+			if v.CredentialRef != "" {
+				if err := load(v.Name, v.CredentialRef); err != nil {
+					return err
+				}
+			}
+		}
+		for _, f := range p.Files {
+			for _, ref := range deploy.ExtractAppConfigCredentialRefs(f.Content) {
+				if err := load(deploy.ProjectSecretVar(ref), ref); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if req.MavenConfig != nil {
+		if req.Action == deploy.MavenConfigWriteAction {
+			plain, err := unseal(s.Key, "maven-settings/"+req.MavenConfig.SoftwareID, 1, req.MavenConfig.ContentEnvelope)
+			if err != nil {
+				return errors.New("MAVEN_SETTINGS_CONTENT_INVALID")
+			}
+			normalized := deploy.NormalizeConfigText(string(plain))
+			clear(plain)
+			if deploy.ContentSHA256Hex(normalized) != req.MavenConfig.ContentSHA256 {
+				return errors.New("MAVEN_SETTINGS_CONTENT_INVALID")
+			}
+			req.Secrets[deploy.MavenConfigSecretKey] = normalized
+		}
+		req.MavenConfig.ContentEnvelope = nil
+		return nil
+	}
+	if req.AppConfig != nil {
+		if req.Action == deploy.AppConfigWriteAction {
+			plain, err := unseal(s.Key, "app-config/"+req.AppConfig.AppSlug+"/"+req.AppConfig.Filename, 1, req.AppConfig.ContentEnvelope)
+			if err != nil {
+				return errors.New("APP_CONFIG_CONTENT_INVALID")
+			}
+			normalized := deploy.NormalizeConfigText(string(plain))
+			clear(plain)
+			if deploy.ContentSHA256Hex(normalized) != req.AppConfig.ContentSHA256 {
+				return errors.New("APP_CONFIG_CONTENT_INVALID")
+			}
+			req.Secrets[deploy.AppConfigBodySecretKey] = normalized
+			for placeholder, ref := range req.AppConfig.CredentialRefs {
+				credID, credRev, ok := strings.Cut(ref, ":")
+				if !ok || credID == "" || credRev == "" {
+					return errors.New("APP_CONFIG_CREDENTIAL_MISSING")
+				}
+				secret, err := s.openCredentialByIDRev(credID, credRev)
+				if err != nil {
+					return errors.New("APP_CONFIG_CREDENTIAL_MISSING")
+				}
+				req.Secrets[deploy.AppConfigCredSecretPrefix+placeholder] = string(secret)
+				clear(secret)
+			}
+		}
+		req.AppConfig.ContentEnvelope = nil
+		return nil
+	}
 	if req.Management != nil {
 		if f := req.Management.ConfigFile; f != nil {
 			if f.Action == "save" && (req.Action == "SOFTWARE_OPERATION_CHECK" || req.Action == "SOFTWARE_OPERATION") {

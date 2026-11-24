@@ -39,7 +39,7 @@ func validateInstallPreflightPaths(base string, plan *softwareInstallPlan, prefl
 		plan.Official = preflight.Official
 		return nil
 	}
-	root := serviceinstall.InstallRoot(base, plan.SoftwareID, plan.Config)
+	root := plan.request().InstallRoot(base)
 	if preflight.Official != nil || preflight.Root != root || preflight.DataDirectory != root+"/data" || preflight.ConfigDirectory != root+"/config" {
 		return errors.New("INSTALL_PREFLIGHT_MISMATCH")
 	}

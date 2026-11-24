@@ -39,6 +39,7 @@ func TestSchemaTwentyThreeUpgradesTemplatesAndKeepsHistory(t *testing.T) {
 	}
 	before := schemaSeventeenHistoricalRows(t, s.DB)
 	dir := s.Dir
+	rewindSchema34Fixture(t, s.DB)
 	if _, err := s.DB.Exec(dropApplicationFixtureTables + "DROP TABLE software_management_credentials; DROP TABLE software_management_state; DELETE FROM schema_migrations WHERE version>=23; PRAGMA user_version=22"); err != nil {
 		t.Fatal(err)
 	}

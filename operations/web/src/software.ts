@@ -228,12 +228,37 @@ export function softwareVersionReason(
   return "尚未识别";
 }
 
-export function softwareVersionText(value?: string) {
+export function cleanObservedVersionText(value?: string) {
   if (!value) return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (
+    /Failed to load native library:jansi|UnsatisfiedLinkError/i.test(trimmed) &&
+    trimmed.includes("Apache Maven ")
+  ) {
+    return trimmed.slice(trimmed.indexOf("Apache Maven ")).trim();
+  }
+  const filtered = trimmed
+    .split(/\r?\n/)
+    .filter(
+      (line) =>
+        !/Failed to load native library:jansi|libjansi\.so|java\.lang\.UnsatisfiedLinkError.*jansi/i.test(
+          line,
+        ),
+    )
+    .join("\n")
+    .trim();
+  return filtered || trimmed;
+}
+
+export function softwareVersionText(value?: string) {
+  const cleaned = cleanObservedVersionText(value);
+  if (!cleaned) return "";
   return (
-    value.match(/(?:openjdk version|java version)\s+"([^"]+)"/)?.[1] ||
-    value.match(/^(?:Python|ffmpeg version)\s+(\S+)/)?.[1] ||
-    value
+    cleaned.match(/(?:openjdk version|java version)\s+"([^"]+)"/)?.[1] ||
+    cleaned.match(/Apache Maven\s+([0-9][^\s(]*)/)?.[1] ||
+    cleaned.match(/^(?:Python|ffmpeg version)\s+(\S+)/)?.[1] ||
+    cleaned
   );
 }
 

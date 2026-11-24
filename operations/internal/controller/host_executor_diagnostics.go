@@ -20,7 +20,7 @@ func executorFailureCode(err error) string {
 	if _, known := commandErrorMessages[code]; known {
 		return code
 	}
-	if _, known := executorFailureMessages[code]; known || jenkinsUnlockMessages[code] != "" {
+	if _, known := executorFailureMessages[code]; known || jenkinsUnlockMessages[code] != "" || configCapabilityMessages[code] != "" {
 		return code
 	}
 	if code == "LINUX_TARGET_REQUIRED" || code == "TARGET_PATH_INVALID" || code == "CREDENTIAL_UNAVAILABLE" {
@@ -75,6 +75,23 @@ var executorFailureMessages = map[string]string{
 	"COMPOSE_UNAVAILABLE":              "Docker Compose不可用，仅依赖Compose的发布需要准备它",
 }
 
+var configCapabilityMessages = map[string]string{
+	"MAVEN_CONFIG_CONFLICT":          "服务器上的 Maven settings.xml 已被其他修改更新，请刷新后重试",
+	"MAVEN_SETTINGS_XML_INVALID":     "Maven settings.xml 语法无效，请检查 XML 标签闭合与格式",
+	"MAVEN_SETTINGS_ROOT_INVALID":    "Maven 配置根节点必须为 <settings>",
+	"MAVEN_SETTINGS_CONTENT_INVALID": "Maven settings.xml 内容超出限制或校验未通过",
+	"MAVEN_CONFIG_PATH_INVALID":      "Maven 配置路径校验未通过",
+	"APP_CONFIG_CONFLICT":            "服务器上的配置文件已被其他操作修改，请先读取最新版本后重试",
+	"APP_CONFIG_CREDENTIAL_MISSING":  "配置中引用的凭据无法解析或已撤销，请重新选择凭据",
+	"APP_CONFIG_YAML_TAB_INDENT":     "YAML 配置不能使用 Tab 制表符缩进，请改为空格",
+	"APP_CONFIG_YAML_SYNTAX_INVALID": "YAML 配置语法或凭据占位符格式无效",
+	"APP_CONFIG_JSON_INVALID":        "JSON 配置格式无效",
+	"APP_CONFIG_XML_INVALID":         "XML 配置语法无效",
+	"APP_CONFIG_CONTENT_INVALID":     "配置文件内容为空、超出大小限制或包含非法字符",
+	"CONFIG_FILE_UNSAFE":             "目标配置文件存在符号链接或权限异常，已拒绝访问",
+	"CONFIG_FILE_UNSUPPORTED":        "目标配置文件格式或大小不受支持",
+}
+
 // Only stable classifications leave this boundary. Target stderr may contain
 // arbitrary program output and must never be copied into API errors or audits.
 func classifyExecutorInvocation(err error, stderr string) error {
@@ -97,6 +114,7 @@ func classifyExecutorInvocation(err error, stderr string) error {
 	// Account checks return fixed classifications only. A diagnostic containing
 	// another line (including command output or secrets) must not pass through.
 	if fixed := strings.TrimSpace(stderr); dockerAccessMessages[fixed] != "" || jenkinsUnlockMessages[fixed] != "" ||
+		configCapabilityMessages[fixed] != "" ||
 		fixed == "SOFTWARE_INPUT_INVALID" || fixed == "SOFTWARE_JOB_IDENTITY_INVALID" {
 		return errors.New(fixed)
 	}

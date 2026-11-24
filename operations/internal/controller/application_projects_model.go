@@ -31,11 +31,12 @@ type applicationProject struct {
 	Environments []applicationEnvironment `json:"environments"`
 }
 type applicationRepository struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	URL          string `json:"url"`
-	GitAccountID string `json:"gitAccountId"`
-	Branch       string `json:"branch"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	URL                 string `json:"url"`
+	GitAccountID        string `json:"gitAccountId"`
+	Branch              string `json:"branch"`
+	JenkinsCredentialID string `json:"jenkinsCredentialId,omitempty"`
 }
 type applicationModule struct {
 	ID           string                    `json:"id"`
@@ -81,20 +82,57 @@ type applicationEnvironment struct {
 	Name        string                  `json:"name"`
 	Deployments []applicationDeployment `json:"deployments"`
 }
+type applicationNginxProxyRule struct {
+	Location       string `json:"location"`
+	TargetModuleID string `json:"targetModuleId,omitempty"`
+	UpstreamURL    string `json:"upstreamUrl,omitempty"`
+	StripPrefix    bool   `json:"stripPrefix,omitempty"`
+	WebSocket      bool   `json:"webSocket,omitempty"`
+	SSE            bool   `json:"sse,omitempty"`
+}
+
+type applicationNginxDeploy struct {
+	NginxSoftwareID string                      `json:"nginxSoftwareId,omitempty"`
+	SiteName        string                      `json:"siteName,omitempty"`
+	ServerName      string                      `json:"serverName,omitempty"`
+	ListenPort      int                         `json:"listenPort,omitempty"`
+	SPA             bool                        `json:"spa,omitempty"`
+	StaticDir       string                      `json:"staticDir,omitempty"`
+	ProxyRules      []applicationNginxProxyRule `json:"proxyRules,omitempty"`
+}
+
 type applicationDeployment struct {
-	RuntimePolicy     *runtimepolicy.Policy `json:"runtimePolicy,omitempty"`
-	ID                string                `json:"id"`
-	ModuleID          string                `json:"moduleId"`
-	HostID            string                `json:"hostId"`
-	RuntimeSoftwareID string                `json:"runtimeSoftwareId"`
-	ManagedInstanceID string                `json:"managedInstanceId,omitempty"`
-	RecordedVersion   string                `json:"recordedVersion,omitempty"`
-	BindAddress       string                `json:"bindAddress"`
-	MemoryMiB         int                   `json:"memoryMiB"`
-	Ports             []applicationPort     `json:"ports"`
-	Variables         []applicationVariable `json:"variables"`
-	Mounts            []applicationMount    `json:"mounts"`
-	Logs              applicationLogs       `json:"logs"`
+	RuntimePolicy     *runtimepolicy.Policy       `json:"runtimePolicy,omitempty"`
+	ID                string                      `json:"id"`
+	ModuleID          string                      `json:"moduleId"`
+	HostID            string                      `json:"hostId"`
+	RuntimeSoftwareID string                      `json:"runtimeSoftwareId"`
+	ManagedInstanceID string                      `json:"managedInstanceId,omitempty"`
+	RecordedVersion   string                      `json:"recordedVersion,omitempty"`
+	DeployMode        string                      `json:"deployMode,omitempty"`
+	Profile           string                      `json:"profile,omitempty"`
+	BindAddress       string                      `json:"bindAddress"`
+	ServicePort       int                         `json:"servicePort,omitempty"`
+	MemoryMiB         int                         `json:"memoryMiB"`
+	StartCommand      string                      `json:"startCommand,omitempty"`
+	HealthPath        string                      `json:"healthPath,omitempty"`
+	Ports             []applicationPort           `json:"ports"`
+	Variables         []applicationVariable       `json:"variables"`
+	Nginx             *applicationNginxDeploy     `json:"nginx,omitempty"`
+	DependencyIDs     []string                    `json:"dependencyIds,omitempty"`
+	ConfigDir         string                      `json:"configDir,omitempty"`
+	ConfigFiles       []applicationConfigFileMeta `json:"configFiles,omitempty"`
+	ConfigDrafts      []deploy.ProjectConfigFile  `json:"configDrafts,omitempty"`
+	Mounts            []applicationMount          `json:"mounts"`
+	Logs              applicationLogs             `json:"logs"`
+	ComputedAccessURL string                      `json:"computedAccessUrl,omitempty"`
+}
+type applicationConfigFileMeta struct {
+	Filename        string   `json:"filename"`
+	RemotePath      string   `json:"remotePath,omitempty"`
+	Revision        string   `json:"revision,omitempty"`
+	CredentialNames []string `json:"credentialNames,omitempty"`
+	UpdatedAt       string   `json:"updatedAt,omitempty"`
 }
 type applicationPort struct {
 	HostPort      int    `json:"hostPort"`
@@ -124,6 +162,7 @@ var applicationVariableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,99}$`
 var applicationSensitiveName = regexp.MustCompile(`(?i)(password|passwd|secret|token|api_?key|private_?key|credential)`)
 var applicationConnectionSecret = regexp.MustCompile(`(?i)(^|[;?&\s])(password|passwd|pwd|token|access_token|secret|api[_-]?key|authorization)\s*=\s*[^;\s&]+`)
 var applicationSCP = regexp.MustCompile(`^([A-Za-z0-9_.-]+)@([A-Za-z0-9][A-Za-z0-9.-]*):([^\s]+)$`)
+var applicationJenkinsCredentialID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,119}$`)
 
 func applicationSecretValue(value string) bool {
 	if applicationConnectionSecret.MatchString(value) || strings.Contains(value, "PRIVATE KEY-----") {
@@ -152,6 +191,10 @@ func applicationAbsolute(value string) bool {
 
 func normalizeApplicationRepository(r *applicationRepository) error {
 	r.Name, r.URL, r.Branch = strings.TrimSpace(r.Name), strings.TrimSpace(r.URL), strings.TrimSpace(r.Branch)
+	r.JenkinsCredentialID = strings.TrimSpace(r.JenkinsCredentialID)
+	if r.JenkinsCredentialID != "" && !applicationJenkinsCredentialID.MatchString(r.JenkinsCredentialID) {
+		return errors.New("Jenkins 凭据 ID 仅支持字母、数字、点、下划线和连字符")
+	}
 	if !validName(r.Name) {
 		return errors.New("请填写仓库名称，最多60个字符")
 	}
@@ -384,9 +427,6 @@ func normalizeApplicationProject(p *applicationProject) error {
 				return errors.New("每环境的模块配置必须属于本项目且不能重复")
 			}
 			seenModules[d.ModuleID] = true
-			if err := normalizeApplicationRecordedVersion(&d.RecordedVersion); err != nil {
-				return err
-			}
 			if d.RuntimePolicy != nil {
 				kind := "SYSTEMD"
 				for _, module := range p.Modules {
@@ -403,38 +443,8 @@ func normalizeApplicationProject(p *applicationProject) error {
 					return errors.New("运行策略与模块运行方式不匹配")
 				}
 			}
-			if d.HostID != "" && !deploy.ID.MatchString(d.HostID) || d.BindAddress != "" && net.ParseIP(d.BindAddress) == nil || d.MemoryMiB < 0 || d.MemoryMiB > 1048576 || len(d.Ports) > 30 || len(d.Variables) > 100 || len(d.Mounts) > 30 {
-				return errors.New("部署主机、监听地址、内存或配置数量不正确")
-			}
-			for k := range d.Ports {
-				port := &d.Ports[k]
-				if port.Protocol == "" {
-					port.Protocol = "TCP"
-				}
-				port.Protocol = strings.ToUpper(port.Protocol)
-				if port.HostPort < 1 || port.HostPort > 65535 || port.ContainerPort < 1 || port.ContainerPort > 65535 || port.Protocol != "TCP" && port.Protocol != "UDP" {
-					return errors.New("请填写有效端口和TCP/UDP协议")
-				}
-				key := fmt.Sprintf("%s:%s:%d", d.HostID, port.Protocol, port.HostPort)
-				if d.HostID != "" && ports[key] {
-					return errors.New("同一环境主机的端口配置重复")
-				}
-				if d.HostID != "" {
-					ports[key] = true
-				}
-			}
-			variables := map[string]bool{}
-			for _, v := range d.Variables {
-				if !applicationVariableName.MatchString(v.Name) || variables[v.Name] || !applicationText(v.Value, 4096) {
-					return errors.New("环境变量名称重复、格式错误或值过长")
-				}
-				variables[v.Name] = true
-				if (v.CredentialID == "") != (v.CredentialRevision == "") || v.CredentialID != "" && (!deploy.ID.MatchString(v.CredentialID) || v.Value != "") {
-					return errors.New("变量请填写普通值或选择凭据，不能同时填写")
-				}
-				if v.CredentialID == "" && v.Value != "" && (applicationSensitiveName.MatchString(v.Name) || applicationSecretValue(v.Value)) {
-					return errors.New("密码、Token等敏感变量请使用凭据引用")
-				}
+			if err := normalizeApplicationDeployment(d, modules, e.Name, ports); err != nil {
+				return err
 			}
 			mountTargets := map[string]bool{}
 			for _, m := range d.Mounts {
@@ -447,6 +457,239 @@ func normalizeApplicationProject(p *applicationProject) error {
 			if l.Kind != "" && l.Kind != "FILE" && l.Kind != "DOCKER" && l.Kind != "JOURNAL" || l.Directory != "" && !applicationAbsolute(l.Directory) || !applicationText(l.Pattern, 120) || strings.ContainsAny(l.Pattern, "/\\\r\n") || l.RetentionDays < 0 || l.RetentionDays > 3650 || l.MaxMiB < 0 || l.MaxMiB > 1048576 {
 				return errors.New("日志来源、目录、文件规则或保留范围不正确")
 			}
+		}
+	}
+	return nil
+}
+
+var (
+	nginxSitePattern       = regexp.MustCompile(`^[a-zA-Z0-9._-]{0,64}$`)
+	nginxServerNamePattern = regexp.MustCompile(`^(_|[a-zA-Z0-9*][a-zA-Z0-9*.-]{0,120})$`)
+	nginxLocationPattern   = regexp.MustCompile(`^/[a-zA-Z0-9_./-]{0,120}$`)
+)
+
+func normalizeApplicationDeployment(d *applicationDeployment, modules map[string]bool, _ string, envPorts map[string]bool) error {
+	d.ComputedAccessURL = ""
+	if d.Ports == nil {
+		d.Ports = []applicationPort{}
+	}
+	if d.Variables == nil {
+		d.Variables = []applicationVariable{}
+	}
+	if d.Mounts == nil {
+		d.Mounts = []applicationMount{}
+	}
+	d.DeployMode = strings.TrimSpace(d.DeployMode)
+	d.Profile = strings.TrimSpace(d.Profile)
+	d.BindAddress = strings.TrimSpace(d.BindAddress)
+	d.StartCommand = strings.TrimSpace(d.StartCommand)
+	d.HealthPath = strings.TrimSpace(d.HealthPath)
+	d.ConfigDir = strings.TrimSpace(d.ConfigDir)
+	if err := normalizeProjectConfigDrafts(d.ConfigDrafts); err != nil {
+		return err
+	}
+	if d.ConfigDir != "" && !applicationAbsolute(d.ConfigDir) {
+		return applicationInvalid("应用配置目录须使用规范的绝对路径")
+	}
+	if len(d.ConfigFiles) > 20 {
+		return applicationInvalid("单个部署配置最多关联20个配置文件")
+	}
+	if len(d.ConfigFiles) > 0 {
+		seenFiles := make(map[string]bool, len(d.ConfigFiles))
+		cleaned := make([]applicationConfigFileMeta, 0, len(d.ConfigFiles))
+		for _, cf := range d.ConfigFiles {
+			cf.Filename = strings.TrimSpace(cf.Filename)
+			cf.RemotePath = strings.TrimSpace(cf.RemotePath)
+			cf.Revision = strings.TrimSpace(cf.Revision)
+			if cf.Filename == "" {
+				continue
+			}
+			if !deploy.ValidAppConfigFilename(cf.Filename) || seenFiles[cf.Filename] {
+				return applicationInvalid("配置文件名称无效或存在重复")
+			}
+			seenFiles[cf.Filename] = true
+			if cf.RemotePath != "" && !applicationAbsolute(cf.RemotePath) {
+				return applicationInvalid("服务器配置文件路径无效")
+			}
+			if cf.Revision != "" && cf.Revision != "ABSENT" && !deploy.Hex.MatchString(cf.Revision) {
+				return applicationInvalid("配置文件版本摘要无效")
+			}
+			var cleanCreds []string
+			for _, cname := range cf.CredentialNames {
+				cname = strings.TrimSpace(cname)
+				if cname != "" && len(cname) <= 120 {
+					cleanCreds = append(cleanCreds, cname)
+				}
+			}
+			cf.CredentialNames = cleanCreds
+			cleaned = append(cleaned, cf)
+		}
+		d.ConfigFiles = cleaned
+	}
+	if err := normalizeApplicationRecordedVersion(&d.RecordedVersion); err != nil {
+		return err
+	}
+	if d.DeployMode != "" && d.DeployMode != "NATIVE" && d.DeployMode != "DOCKER" && d.DeployMode != "STATIC" {
+		return applicationInvalid("部署形态仅支持 NATIVE、DOCKER 或 STATIC")
+	}
+	if d.Profile != "" && !profilePatternSafe(d.Profile) {
+		return applicationInvalid("运行 Profile 格式不正确")
+	}
+	if !applicationText(d.StartCommand, 8192) || applicationSecretValue(d.StartCommand) {
+		return applicationInvalid("启动命令最多8192字节，且不能包含明文凭据，请使用环境变量")
+	}
+	if d.HealthPath != "" && (!strings.HasPrefix(d.HealthPath, "/") || len(d.HealthPath) > 240 || strings.ContainsAny(d.HealthPath, "\r\n\x00")) {
+		return applicationInvalid("健康检查路径须以 / 开头且不超过240字节")
+	}
+	if d.HostID != "" && !deploy.ID.MatchString(d.HostID) || d.BindAddress != "" && net.ParseIP(d.BindAddress) == nil || d.ServicePort < 0 || d.ServicePort > 65535 || d.MemoryMiB < 0 || d.MemoryMiB > 1048576 || len(d.Ports) > 30 || len(d.Variables) > 100 || len(d.Mounts) > 30 {
+		return applicationInvalid("部署主机、监听地址、端口、内存或配置数量不正确")
+	}
+	for k := range d.Ports {
+		port := &d.Ports[k]
+		if port.Protocol == "" {
+			port.Protocol = "TCP"
+		}
+		port.Protocol = strings.ToUpper(port.Protocol)
+		if port.HostPort < 1 || port.HostPort > 65535 || port.ContainerPort < 1 || port.ContainerPort > 65535 || port.Protocol != "TCP" && port.Protocol != "UDP" {
+			return applicationInvalid("请填写有效端口和TCP/UDP协议")
+		}
+		if d.HostID != "" && envPorts != nil {
+			key := fmt.Sprintf("%s:%s:%d", d.HostID, port.Protocol, port.HostPort)
+			if envPorts[key] {
+				return applicationInvalid("同一环境主机的端口配置重复")
+			}
+			envPorts[key] = true
+		}
+	}
+	variables := map[string]bool{}
+	for _, v := range d.Variables {
+		if !applicationVariableName.MatchString(v.Name) || variables[v.Name] || !applicationText(v.Value, 4096) {
+			return applicationInvalid("环境变量名称重复、格式错误或值过长")
+		}
+		variables[v.Name] = true
+		if (v.CredentialID == "") != (v.CredentialRevision == "") || v.CredentialID != "" && (!deploy.ID.MatchString(v.CredentialID) || v.Value != "") {
+			return applicationInvalid("变量请填写普通值或选择凭据，不能同时填写")
+		}
+		if v.CredentialID == "" && v.Value != "" && (applicationSensitiveName.MatchString(v.Name) || applicationSecretValue(v.Value)) {
+			return applicationInvalid("密码、Token等敏感变量请使用凭据引用")
+		}
+	}
+	if len(d.DependencyIDs) > 0 {
+		seen := make(map[string]bool, len(d.DependencyIDs))
+		cleaned := make([]string, 0, len(d.DependencyIDs))
+		for _, id := range d.DependencyIDs {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				continue
+			}
+			if !deploy.ID.MatchString(id) {
+				return applicationInvalid("关联软件依赖标识无效")
+			}
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			cleaned = append(cleaned, id)
+			if len(cleaned) > 20 {
+				return applicationInvalid("单个部署配置最多关联20个软件实例")
+			}
+		}
+		d.DependencyIDs = cleaned
+	}
+	if d.Nginx != nil {
+		n := d.Nginx
+		n.NginxSoftwareID = strings.TrimSpace(n.NginxSoftwareID)
+		n.SiteName = strings.TrimSpace(n.SiteName)
+		n.ServerName = strings.TrimSpace(n.ServerName)
+		n.StaticDir = strings.TrimSpace(n.StaticDir)
+		if n.NginxSoftwareID != "" && !deploy.ID.MatchString(n.NginxSoftwareID) {
+			return applicationInvalid("所选 Nginx 实例标识无效")
+		}
+		if !nginxSitePattern.MatchString(n.SiteName) {
+			return applicationInvalid("Nginx 站点名称仅支持字母、数字、点、下划线和连字符，最多64字符")
+		}
+		if n.ServerName != "" && !nginxServerNamePattern.MatchString(n.ServerName) {
+			return applicationInvalid("Nginx 域名格式无效")
+		}
+		if n.ListenPort < 0 || n.ListenPort > 65535 {
+			return applicationInvalid("Nginx 监听端口须在 1–65535 之间")
+		}
+		if n.StaticDir != "" && !applicationAbsolute(n.StaticDir) {
+			return applicationInvalid("Nginx 静态目录须使用规范的绝对路径")
+		}
+		if len(n.ProxyRules) > 15 {
+			return applicationInvalid("单个前端站点最多配置15条反向代理规则")
+		}
+		for idx := range n.ProxyRules {
+			rule := &n.ProxyRules[idx]
+			rule.Location = strings.TrimSpace(rule.Location)
+			rule.TargetModuleID = strings.TrimSpace(rule.TargetModuleID)
+			rule.UpstreamURL = strings.TrimSpace(rule.UpstreamURL)
+			if !nginxLocationPattern.MatchString(rule.Location) {
+				return applicationInvalid("反向代理路径须以 / 开头，仅含字母、数字及 /._-")
+			}
+			if rule.TargetModuleID == "" && rule.UpstreamURL == "" {
+				return applicationInvalid("每条反向代理规则须选择目标后端模块或填写上游地址")
+			}
+			if rule.TargetModuleID != "" {
+				if !deploy.ID.MatchString(rule.TargetModuleID) || (modules != nil && !modules[rule.TargetModuleID]) || rule.TargetModuleID == d.ModuleID {
+					return applicationInvalid("反向代理目标模块须属于本项目且不能指向自身")
+				}
+			}
+			if rule.UpstreamURL != "" {
+				if err := normalizeHTTPURLWithMessage(&rule.UpstreamURL, "反向代理上游地址须为有效的 HTTP 或 HTTPS 地址"); err != nil {
+					return err
+				}
+			}
+		}
+		if n.NginxSoftwareID == "" && n.SiteName == "" && n.ServerName == "" && n.ListenPort == 0 && !n.SPA && n.StaticDir == "" && len(n.ProxyRules) == 0 {
+			d.Nginx = nil
+		}
+	}
+	return nil
+}
+
+func validateApplicationDeploymentRefs(tx *sql.Tx, d applicationDeployment) error {
+	for _, v := range d.Variables {
+		if v.CredentialID != "" {
+			var count int
+			err := tx.QueryRow("SELECT count(*) FROM credential_refs WHERE id=? AND CAST(revision AS TEXT)=? AND revoked_at IS NULL AND kind IN ('PASSWORD','TOKEN')", v.CredentialID, v.CredentialRevision).Scan(&count)
+			if err != nil {
+				return err
+			}
+			if count != 1 {
+				return applicationInvalid("所选密码或Token凭据修订不存在或已撤销")
+			}
+		}
+	}
+	if d.Nginx != nil && d.Nginx.NginxSoftwareID != "" {
+		if d.HostID == "" {
+			return applicationInvalid("选择 Nginx 实例前请先选择运行服务器")
+		}
+		var ok bool
+		err := tx.QueryRow(`SELECT EXISTS(SELECT 1
+			FROM software_instances s LEFT JOIN jobs j ON j.id=s.last_job_id
+			WHERE s.id=? AND s.host_id=?
+			AND (s.software_type='NGINX' OR lower(json_extract(s.installation_json,'$.definition.catalogKey'))='nginx' OR lower(json_extract(s.installation_json,'$.recipeKey'))='nginx')
+			AND s.management_mode<>'RELEASED' AND s.installation_status<>'UNINSTALLED' AND s.actual_state<>'REMOVED'
+			AND NOT COALESCE(j.kind IN ('SOFTWARE_UNINSTALL','SOFTWARE_UNMANAGE','PLUGIN_REMOVE') AND j.status IN ('QUEUED','RUNNING','UNKNOWN'),0))`,
+			d.Nginx.NginxSoftwareID, d.HostID).Scan(&ok)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return applicationInvalid("所选 Nginx 实例须已安装于当前服务器且未被卸载")
+		}
+	}
+	for _, depID := range d.DependencyIDs {
+		var ok bool
+		err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM software_instances
+			WHERE id=? AND management_mode<>'RELEASED' AND installation_status<>'UNINSTALLED' AND actual_state<>'REMOVED')`, depID).Scan(&ok)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return applicationInvalid("关联的依赖软件不存在或已卸载")
 		}
 	}
 	return nil
@@ -545,17 +788,8 @@ func validateApplicationReferences(tx *sql.Tx, p applicationProject) error {
 			if err := checkSoftware(d.RuntimeSoftwareID, d.HostID); err != nil {
 				return err
 			}
-			for _, v := range d.Variables {
-				if v.CredentialID != "" {
-					var count int
-					err := tx.QueryRow("SELECT count(*) FROM credential_refs WHERE id=? AND CAST(revision AS TEXT)=? AND revoked_at IS NULL AND kind IN ('PASSWORD','TOKEN')", v.CredentialID, v.CredentialRevision).Scan(&count)
-					if err != nil {
-						return err
-					}
-					if count != 1 {
-						return applicationInvalid("所选密码或Token凭据修订不存在或已撤销")
-					}
-				}
+			if err := validateApplicationDeploymentRefs(tx, d); err != nil {
+				return err
 			}
 		}
 	}

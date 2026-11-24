@@ -8,6 +8,7 @@ const props = defineProps<{ fields: ParameterDefinition[]; modelValue: Record<st
 const emit = defineEmits<{ "update:modelValue": [Record<string, string>]; "update:credentialRefs": [Record<string, CredentialReference>]; busy: [boolean]; draft: [boolean]; error: [unknown] }>();
 const credentials = ref<Credential[]>([]), saving = ref(false), editing = ref("");
 const fresh = reactive<Record<string, { name: string; secret: string }>>({});
+const reveal = reactive<Record<string, boolean>>({});
 let disposed = false;
 let fieldRevision = 0;
 const options = computed(() => credentials.value.filter(item => item.kind === "PASSWORD" && !item.revokedAt));
@@ -25,6 +26,41 @@ function selectCredential(key: string, choice: string) {
 function newCredential(field: ParameterDefinition) {
   if (!fresh[field.key]) fresh[field.key] = { name: `${props.contextName || "软件"} · ${field.label}`.slice(0, 60), secret: "" };
   editing.value = editing.value === field.key ? "" : field.key;
+}
+function isBase64TokenField(field: ParameterDefinition): boolean {
+  return field.key === "AUTH_TOKEN" || field.label.includes("Base64");
+}
+function generateFieldSecret(field: ParameterDefinition) {
+  if (!fresh[field.key]) newCredential(field);
+  if (isBase64TokenField(field)) {
+    const raw = new Uint8Array(32);
+    crypto.getRandomValues(raw);
+    let bin = "";
+    for (const b of raw) bin += String.fromCharCode(b);
+    fresh[field.key]!.secret = btoa(bin);
+  } else {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#_-";
+    const raw = new Uint8Array(24);
+    crypto.getRandomValues(raw);
+    let out = "";
+    for (const b of raw) out += alphabet[b % alphabet.length];
+    fresh[field.key]!.secret = out;
+  }
+  reveal[field.key] = true;
+}
+function base64SecretCheck(val: string): { valid: boolean; bytes: number; message: string } | undefined {
+  const trimmed = val.trim();
+  if (!trimmed) return undefined;
+  try {
+    const decoded = atob(trimmed);
+    const bytes = decoded.length;
+    if (bytes < 32) {
+      return { valid: false, bytes, message: `当前解码仅 ${bytes} 字节，Nacos 要求至少 32 字节 Base64 密钥（请点击「随机生成」）` };
+    }
+    return { valid: true, bytes, message: `有效 Base64 密钥（${bytes} 字节 / ${bytes * 8} 位）` };
+  } catch {
+    return { valid: false, bytes: 0, message: "不是有效的 Base64 编码字符串，建议使用「随机生成」" };
+  }
 }
 async function saveCredentials() {
   if (saving.value) return false;
@@ -67,9 +103,39 @@ defineExpose({ saveCredentials });
       <template v-else-if="field.type === 'CREDENTIAL'">
         <label>{{ field.label }}<select :aria-label="field.label" :value="credentialRefs?.[field.key] ? `${credentialRefs[field.key]!.id}:${credentialRefs[field.key]!.revision}` : ''" @change="selectCredential(field.key, ($event.target as HTMLSelectElement).value)"><option value="">{{ field.required ? '选择凭据或填写新值' : '可选' }}</option><option v-for="item in options" :key="`${item.id}:${item.revision}`" :value="`${item.id}:${item.revision}`">{{ item.name }}</option></select></label>
         <button type="button" class="quiet" @click="newCredential(field)">{{ editing === field.key ? '收起' : '填写新值' }}</button>
-        <div v-if="editing === field.key && fresh[field.key]" class="parameter-secret"><label>凭据名称<input v-model="fresh[field.key]!.name" maxlength="60" /></label><label>{{ field.label }}<input v-model="fresh[field.key]!.secret" type="password" :aria-label="field.label + '新值'" autocomplete="new-password" /></label></div>
+        <div v-if="editing === field.key && fresh[field.key]" class="parameter-secret">
+          <label>凭据名称<input v-model="fresh[field.key]!.name" maxlength="60" /></label>
+          <div class="secret-head-row">
+            <span>{{ field.label }}</span>
+            <button type="button" class="quiet" @click="generateFieldSecret(field)">随机生成</button>
+          </div>
+          <div class="secret-inline-row">
+            <input v-model="fresh[field.key]!.secret" :type="reveal[field.key] ? 'text' : 'password'" :aria-label="field.label + '新值'" autocomplete="new-password" />
+            <button type="button" class="secondary" @click="reveal[field.key] = !reveal[field.key]">{{ reveal[field.key] ? '隐藏' : '显示' }}</button>
+          </div>
+          <small
+            v-if="isBase64TokenField(field) && base64SecretCheck(fresh[field.key]!.secret)"
+            :class="base64SecretCheck(fresh[field.key]!.secret)?.valid ? 'token-valid' : 'token-invalid'"
+          >
+            {{ base64SecretCheck(fresh[field.key]!.secret)?.message }}
+          </small>
+        </div>
       </template>
-      <label v-else>{{ field.label }}<select v-if="field.type === 'SELECT'" :value="value(field)" :aria-label="field.label" @change="setValue(field.key, ($event.target as HTMLSelectElement).value)"><option value="">请选择</option><option v-for="option in field.options" :key="option" :value="option">{{ option }}</option></select><input v-else :value="value(field)" :type="['INTEGER', 'PORT'].includes(field.type) ? 'number' : 'text'" :aria-label="field.label" :list="field.type === 'PATH' && pathOptions?.[field.key]?.length ? `${inputId}-${field.key}` : undefined" :min="field.type === 'PORT' ? 1 : field.min" :max="field.type === 'PORT' ? 65535 : field.max" maxlength="8192" :placeholder="field.default || (field.type === 'PATH' ? '/srv/app' : field.required ? '' : '可选')" @input="setValue(field.key, ($event.target as HTMLInputElement).value)" /></label>
+      <template v-else>
+        <label>{{ field.label }}<select v-if="field.type === 'SELECT'" :value="value(field)" :aria-label="field.label" @change="setValue(field.key, ($event.target as HTMLSelectElement).value)"><option value="">请选择</option><option v-for="option in field.options" :key="option" :value="option">{{ option }}</option></select><input v-else :value="value(field)" :type="['INTEGER', 'PORT'].includes(field.type) ? 'number' : 'text'" :aria-label="field.label" :list="field.type === 'PATH' && pathOptions?.[field.key]?.length ? `${inputId}-${field.key}` : undefined" :min="field.type === 'PORT' ? 1 : field.min" :max="field.type === 'PORT' ? 65535 : field.max" maxlength="8192" :placeholder="field.default || (field.type === 'PATH' ? '/srv/app' : field.required ? '' : '可选')" @input="setValue(field.key, ($event.target as HTMLInputElement).value)" /></label>
+        <div v-if="field.type === 'PATH' && pathOptions?.[field.key]?.length" class="path-suggestions">
+          <small class="muted">已检测路径：</small>
+          <button
+            v-for="cand in pathOptions[field.key]"
+            :key="cand"
+            type="button"
+            class="path-chip"
+            @click="setValue(field.key, cand)"
+          >
+            {{ cand }}
+          </button>
+        </div>
+      </template>
       <datalist v-if="field.type === 'PATH' && pathOptions?.[field.key]?.length" :id="`${inputId}-${field.key}`"><option v-for="path in pathOptions[field.key]" :key="path" :value="path" /></datalist>
     </div>
   </fieldset>
@@ -82,6 +148,16 @@ defineExpose({ saveCredentials });
 .parameter-field .quiet { margin-top: 6px; padding-left: 0; }
 .parameter-checkbox { display: flex !important; align-items: center; padding-top: 25px; }
 .parameter-checkbox input { width: 16px; min-height: 16px; margin: 0; }
-.parameter-secret { display: grid; gap: 12px; margin-top: 10px; padding: 12px; background: var(--bg-page); border-radius: var(--control-radius); }
+.parameter-secret { display: grid; gap: 10px; margin-top: 10px; padding: 12px; background: var(--bg-page); border: 1px solid var(--border); border-radius: var(--control-radius); }
+.secret-head-row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; font-weight: 500; color: #334155; }
+.secret-head-row .quiet { margin-top: 0; padding: 2px 6px; }
+.secret-inline-row { display: flex; gap: 6px; align-items: center; }
+.secret-inline-row input { flex: 1; margin-top: 0; }
+.secret-inline-row button { flex-shrink: 0; min-height: 36px; }
+.token-valid { color: var(--success); }
+.token-invalid { color: var(--error); }
+.path-suggestions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.path-chip { border: 1px solid var(--border); background: #f8fafc; color: #334155; font: 11px var(--mono); padding: 2px 7px; border-radius: 4px; }
+.path-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 @media (max-width: 700px) { .software-parameters { grid-template-columns: 1fr; } .parameter-checkbox { padding-top: 0; } }
 </style>

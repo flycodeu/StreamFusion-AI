@@ -1,8 +1,25 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
+import {
+  ElAlert,
+  ElButton,
+  ElDescriptions,
+  ElDescriptionsItem,
+  ElEmpty,
+  ElPopover,
+  ElTable,
+  ElTableColumn,
+  ElTag,
+} from "element-plus";
 import { ApiError, request } from "./api";
 import { hostTime } from "./hosts";
 import { moduleJenkinsPath, jenkinsBuildLink, jenkinsElapsed, jenkinsState, type JenkinsBuild, type JenkinsBuildLog, type JenkinsInstanceContext, type JenkinsMonitor } from "./projectJenkins";
+
+interface ErrorMeta {
+  code?: string;
+  traceId?: string;
+  timestamp?: string;
+}
 
 const props = defineProps<{ projectId: string; context: JenkinsInstanceContext; monitor: JenkinsMonitor }>();
 const emit = defineEmits<{ error: [unknown]; observed: [build: JenkinsBuild] }>();
@@ -11,6 +28,7 @@ const lifetime = new AbortController();
 const build = ref<JenkinsBuild>();
 const loadingStatus = ref(false);
 const statusError = ref("");
+const statusErrorMeta = ref<ErrorMeta>();
 const jobUrl = computed(() => props.monitor.jobUrl || "");
 const state = computed(() => jenkinsState(build.value?.status));
 const running = computed(() => build.value?.status === "QUEUED" || build.value?.status === "RUNNING");
@@ -27,7 +45,9 @@ const runUrl = computed(() => jenkinsBuildLink(jobUrl.value, build.value?.buildU
 
 const logOpen = ref(props.context.action === "logs"), loadingLog = ref(false), logMore = ref(false), logLimited = ref(false);
 const log = ref(""), logError = ref("");
+const logErrorMeta = ref<ErrorMeta>();
 const submitting = ref(false), submitError = ref("");
+const submitErrorMeta = ref<ErrorMeta>();
 type QaTracking = { version: string; requestId: string; queueId?: number; number?: number };
 const tracking = ref<QaTracking>();
 const awaitingReceipt = computed(() => !!tracking.value && !tracking.value.queueId);
@@ -53,12 +73,26 @@ let logRequest: AbortController | undefined;
 let statusRequest: AbortController | undefined;
 let timer: ReturnType<typeof setTimeout> | undefined;
 
-function message(error: unknown, fallback: string) {
+function extractError(error: unknown, fallback: string): { text: string; meta?: ErrorMeta } {
   if (error instanceof ApiError) {
     if (error.code === "AUTH_REQUIRED") emit("error", error);
-    return [error.message || fallback, error.code, error.traceId, error.timestamp].filter(Boolean).join(" · ");
+    const meta: ErrorMeta | undefined =
+      error.code || error.traceId || error.timestamp
+        ? { code: error.code, traceId: error.traceId, timestamp: error.timestamp }
+        : undefined;
+    return { text: error.message || fallback, meta };
   }
-  return error instanceof Error && /[\u4e00-\u9fff]/.test(error.message) ? error.message : fallback;
+  return {
+    text: error instanceof Error && /[\u4e00-\u9fff]/.test(error.message) ? error.message : fallback,
+  };
+}
+
+function jenkinsTagType(tone: string): "success" | "danger" | "warning" | "primary" | "info" {
+  if (tone === "state-success") return "success";
+  if (tone === "state-error") return "danger";
+  if (tone === "state-warning") return "warning";
+  if (tone === "state-running") return "primary";
+  return "info";
 }
 
 function stopTimer() {
@@ -81,6 +115,7 @@ async function refreshStatus() {
   const controller = statusRequest = new AbortController();
   loadingStatus.value = true;
   statusError.value = "";
+  statusErrorMeta.value = undefined;
   try {
     const pinned = tracking.value;
     const query = pinned?.number ? `?number=${pinned.number}` : pinned?.queueId ? `?queueId=${pinned.queueId}` : "";
@@ -94,7 +129,11 @@ async function refreshStatus() {
     if (pinned?.queueId && data.number && data.status !== "QUEUED") remember({ ...pinned, number: data.number });
     if (logOpen.value && data.number && (changedRun || logMore.value || data.building || wasBuilding)) void readLog();
   } catch (error) {
-    if (!controller.signal.aborted) statusError.value = message(error, "无法读取 Jenkins 构建状态，请检查连接后重试。");
+    if (!controller.signal.aborted) {
+      const diag = extractError(error, "无法读取 Jenkins 构建状态，请检查连接后重试。");
+      statusError.value = diag.text;
+      statusErrorMeta.value = diag.meta;
+    }
   } finally {
     if (statusRequest === controller) {
       statusRequest = undefined;
@@ -111,6 +150,7 @@ async function startQa() {
   stopTimer();
   submitting.value = true;
   submitError.value = "";
+  submitErrorMeta.value = undefined;
   let queued = false;
   try {
     const intent = pending ? tracking.value! : { version: props.monitor.version, requestId: crypto.randomUUID() };
@@ -127,7 +167,11 @@ async function startQa() {
     emit("observed", build.value);
     queued = true;
   } catch (error) {
-    if (!lifetime.signal.aborted) submitError.value = message(error, "无法确认 QA 是否已提交，请核对提交结果。");
+    if (!lifetime.signal.aborted) {
+      const diag = extractError(error, "无法确认 QA 是否已提交，请核对提交结果。");
+      submitError.value = diag.text;
+      submitErrorMeta.value = diag.meta;
+    }
   } finally {
     submitting.value = false;
     if (!lifetime.signal.aborted) {
@@ -140,6 +184,7 @@ async function startQa() {
 function showLatest() {
   remember();
   submitError.value = "";
+  submitErrorMeta.value = undefined;
   build.value = undefined;
   clearLog();
   void refreshStatus();
@@ -150,6 +195,7 @@ function clearLog() {
   logRequest = undefined;
   loadingLog.value = logLimited.value = logMore.value = false;
   log.value = logError.value = "";
+  logErrorMeta.value = undefined;
   logOffset = 0;
 }
 
@@ -167,6 +213,7 @@ async function readLog() {
   const params = new URLSearchParams({ number: String(number), offset: String(offset) });
   loadingLog.value = true;
   logError.value = "";
+  logErrorMeta.value = undefined;
   try {
     const chunk = await request<JenkinsBuildLog>(`${base}/jenkins-build/log?${params}`, "GET", undefined, controller.signal);
     if (controller.signal.aborted) return;
@@ -182,7 +229,11 @@ async function readLog() {
     logMore.value = chunk.more;
     logOffset = chunk.nextOffset;
   } catch (error) {
-    if (!controller.signal.aborted) logError.value = message(error, "读取 Jenkins 日志失败，请重试。");
+    if (!controller.signal.aborted) {
+      const diag = extractError(error, "读取 Jenkins 日志失败，请重试。");
+      logError.value = diag.text;
+      logErrorMeta.value = diag.meta;
+    }
   } finally {
     if (logRequest === controller) {
       loadingLog.value = false;
@@ -215,96 +266,215 @@ onUnmounted(() => {
   <section class="jenkins-build" aria-label="构建详情" :aria-busy="submitting">
     <header class="build-toolbar">
       <div class="build-heading">
-        <span v-if="submitting || !build && loadingStatus" role="status">{{ submitting ? '正在提交 QA…' : '正在读取构建…' }}</span>
-        <span v-else-if="build" class="state-tag" :class="statusError ? 'state-muted' : state.tone">{{ state.label }}</span>
-        <span v-if="tracking?.queueId && build?.status === 'QUEUED'">队列 #{{ tracking.queueId }}</span>
+        <span v-if="submitting || !build && loadingStatus" class="status-hint" role="status">
+          {{ submitting ? '正在提交 QA…' : '正在读取构建…' }}
+        </span>
+        <ElTag
+          v-else-if="build"
+          size="small"
+          effect="light"
+          :type="statusError ? 'info' : jenkinsTagType(state.tone)"
+        >
+          {{ state.label }}
+        </ElTag>
+        <ElTag v-if="tracking?.queueId && build?.status === 'QUEUED'" size="small" type="info" effect="plain">
+          队列 #{{ tracking.queueId }}
+        </ElTag>
       </div>
-      <button type="button" class="quiet" :disabled="loadingStatus || submitting" @click="refreshStatus">刷新</button>
+      <div class="build-toolbar-actions">
+        <ElButton
+          v-if="tracking?.number && !running"
+          size="small"
+          :disabled="loadingStatus || submitting"
+          @click="showLatest"
+        >
+          查看最新构建
+        </ElButton>
+        <ElButton
+          size="small"
+          :loading="loadingStatus && !submitting"
+          :disabled="submitting"
+          @click="refreshStatus"
+        >
+          刷新
+        </ElButton>
+      </div>
     </header>
-    <div v-if="submitError" class="build-error" role="alert">
-      {{ submitError }}
-      <button v-if="awaitingReceipt" type="button" class="quiet" :disabled="loadingStatus || submitting" @click="startQa">核对提交结果</button>
-      <button v-if="awaitingReceipt" type="button" class="quiet" :disabled="loadingStatus || submitting" @click="showLatest">已核对记录，结束本次跟踪</button>
-    </div>
-    <p v-if="statusError" class="build-error" role="alert">{{ statusError }}</p>
-    <button v-if="tracking?.number && !running" type="button" class="quiet latest-run" :disabled="loadingStatus || submitting" @click="showLatest">查看作业最新构建</button>
+
+    <ElAlert v-if="submitError" type="error" :closable="false" show-icon :title="submitError">
+      <div v-if="awaitingReceipt || submitErrorMeta" class="alert-actions">
+        <ElButton v-if="awaitingReceipt" link type="primary" size="small" :disabled="loadingStatus || submitting" @click="startQa">
+          重试查询
+        </ElButton>
+        <ElButton v-if="awaitingReceipt" link size="small" :disabled="loadingStatus || submitting" @click="showLatest">
+          重置跟踪
+        </ElButton>
+        <ElPopover v-if="submitErrorMeta" trigger="click" placement="bottom-start" :width="340">
+          <div class="diag-meta-list">
+            <div v-if="submitErrorMeta.code"><span>错误码</span><code>{{ submitErrorMeta.code }}</code></div>
+            <div v-if="submitErrorMeta.traceId"><span>追踪标识</span><code>{{ submitErrorMeta.traceId }}</code></div>
+            <div v-if="submitErrorMeta.timestamp"><span>发生时间</span><code>{{ submitErrorMeta.timestamp }}</code></div>
+          </div>
+          <template #reference>
+            <ElButton link type="primary" size="small">排查详情</ElButton>
+          </template>
+        </ElPopover>
+      </div>
+    </ElAlert>
+
+    <ElAlert v-if="statusError" type="error" :closable="false" show-icon :title="statusError">
+      <div v-if="statusErrorMeta" class="alert-actions">
+        <ElPopover trigger="click" placement="bottom-start" :width="340">
+          <div class="diag-meta-list">
+            <div v-if="statusErrorMeta.code"><span>错误码</span><code>{{ statusErrorMeta.code }}</code></div>
+            <div v-if="statusErrorMeta.traceId"><span>追踪标识</span><code>{{ statusErrorMeta.traceId }}</code></div>
+            <div v-if="statusErrorMeta.timestamp"><span>发生时间</span><code>{{ statusErrorMeta.timestamp }}</code></div>
+          </div>
+          <template #reference>
+            <ElButton link type="primary" size="small">排查详情</ElButton>
+          </template>
+        </ElPopover>
+      </div>
+    </ElAlert>
+
     <template v-if="build?.configured">
-      <p v-if="build.status === 'NEVER_BUILT'" class="build-note">此作业尚无构建记录。</p>
-      <p v-if="build.queueReason" class="build-note">{{ build.queueReason }}</p>
-      <dl v-if="build.number" class="build-facts">
-        <div><dt>{{ queuedWithPrevious ? '上次构建号' : '构建号' }}</dt><dd v-if="runUrl"><a :href="runUrl" target="_blank" rel="noopener noreferrer">#{{ build.number }} ↗</a></dd><dd v-else>#{{ build.number }}</dd></div>
-        <div><dt>{{ queuedWithPrevious ? '上次构建阶段' : build.building ? '当前阶段' : '最后阶段' }}</dt><dd>{{ stageLabel }}</dd></div>
-        <div v-if="build.startedAt"><dt>开始时间</dt><dd>{{ hostTime(build.startedAt) }}</dd></div>
-        <div v-if="jenkinsElapsed(build.durationMs)"><dt>耗时</dt><dd>{{ jenkinsElapsed(build.durationMs) }}</dd></div>
-      </dl>
-      <ol v-if="context.action !== 'logs' && build.stagesAvailable && build.stages?.length" class="build-stages" :aria-label="queuedWithPrevious ? '上次构建阶段' : '构建阶段'">
-        <li v-for="(stage, index) in build.stages" :key="index">
-          <strong>{{ stage.name }}</strong>
-          <span class="state-tag" :class="jenkinsState(stage.status).tone">{{ jenkinsState(stage.status).label }}</span>
-          <small v-if="jenkinsElapsed(stage.durationMs)">{{ jenkinsElapsed(stage.durationMs) }}</small>
-        </li>
-      </ol>
-      <section v-if="context.action !== 'logs' && build.number" class="build-artifacts" aria-label="构建产物">
-        <h4>{{ queuedWithPrevious ? '上次构建产物' : '归档产物' }}</h4>
-        <ul v-if="build.artifacts?.length">
-          <li v-for="artifact in build.artifacts" :key="artifact.path">
-            <a v-if="jenkinsBuildLink(jobUrl, artifact.url)" :href="jenkinsBuildLink(jobUrl, artifact.url)" target="_blank" rel="noopener noreferrer" :title="artifact.path">{{ artifact.name }} ↗</a>
-            <span v-else>{{ artifact.name }}</span>
-          </li>
-        </ul>
+      <ElEmpty v-if="build.status === 'NEVER_BUILT'" description="此作业尚无构建记录" :image-size="56" />
+      <ElAlert v-if="build.queueReason" type="info" :closable="false" show-icon :title="build.queueReason" />
+
+      <ElDescriptions v-if="build.number" :column="2" border size="small">
+        <ElDescriptionsItem :label="queuedWithPrevious ? '上次构建号' : '构建号'">
+          <a v-if="runUrl" :href="runUrl" target="_blank" rel="noopener noreferrer">#{{ build.number }} ↗</a>
+          <span v-else>#{{ build.number }}</span>
+        </ElDescriptionsItem>
+        <ElDescriptionsItem :label="queuedWithPrevious ? '上次构建阶段' : build.building ? '当前阶段' : '最后阶段'">
+          {{ stageLabel }}
+        </ElDescriptionsItem>
+        <ElDescriptionsItem v-if="build.startedAt" label="开始时间">
+          {{ hostTime(build.startedAt) }}
+        </ElDescriptionsItem>
+        <ElDescriptionsItem v-if="jenkinsElapsed(build.durationMs)" label="耗时">
+          {{ jenkinsElapsed(build.durationMs) }}
+        </ElDescriptionsItem>
+      </ElDescriptions>
+
+      <div v-if="context.action !== 'logs' && build.stagesAvailable && build.stages?.length" class="build-section">
+        <h4 class="build-section-title">{{ queuedWithPrevious ? '上次构建阶段' : '流水线阶段' }}</h4>
+        <ElTable :data="build.stages" size="small" border style="width: 100%">
+          <ElTableColumn prop="name" label="阶段" min-width="160" />
+          <ElTableColumn label="状态" width="110">
+            <template #default="{ row }">
+              <ElTag size="small" :type="jenkinsTagType(jenkinsState(row.status).tone)">
+                {{ jenkinsState(row.status).label }}
+              </ElTag>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn label="耗时" width="100" align="right">
+            <template #default="{ row }">
+              <span class="muted">{{ jenkinsElapsed(row.durationMs) || '—' }}</span>
+            </template>
+          </ElTableColumn>
+        </ElTable>
+      </div>
+
+      <section v-if="context.action !== 'logs' && build.number" class="build-section" aria-label="构建产物">
+        <h4 class="build-section-title">{{ queuedWithPrevious ? '上次构建产物' : '归档产物' }}</h4>
+        <ElTable v-if="build.artifacts?.length" :data="build.artifacts" size="small" border style="width: 100%">
+          <ElTableColumn label="产物文件" min-width="200">
+            <template #default="{ row }">
+              <a
+                v-if="jenkinsBuildLink(jobUrl, row.url)"
+                :href="jenkinsBuildLink(jobUrl, row.url)"
+                target="_blank"
+                rel="noopener noreferrer"
+                :title="row.path"
+              >
+                {{ row.name }} ↗
+              </a>
+              <span v-else>{{ row.name }}</span>
+            </template>
+          </ElTableColumn>
+        </ElTable>
         <p v-else class="build-note">暂无归档产物。</p>
       </section>
+
       <div v-if="build.number" class="build-actions">
-        <button v-if="context.action !== 'logs'" type="button" class="secondary" :aria-expanded="logOpen" @click="toggleLog">{{ logOpen ? '收起日志' : queuedWithPrevious ? '查看上次构建日志' : '查看构建日志' }}</button>
-        <a v-if="consoleUrl" :href="consoleUrl" target="_blank" rel="noopener noreferrer">{{ queuedWithPrevious ? '上次构建控制台' : 'Jenkins 控制台' }} ↗</a>
+        <ElButton
+          v-if="context.action !== 'logs'"
+          size="small"
+          :type="logOpen ? 'default' : 'primary'"
+          plain
+          :aria-expanded="logOpen"
+          @click="toggleLog"
+        >
+          {{ logOpen ? '收起日志' : queuedWithPrevious ? '查看上次构建日志' : '查看构建日志' }}
+        </ElButton>
+        <ElButton
+          v-if="consoleUrl"
+          tag="a"
+          :href="consoleUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          size="small"
+          link
+          type="primary"
+        >
+          {{ queuedWithPrevious ? '上次构建控制台' : 'Jenkins 控制台' }} ↗
+        </ElButton>
       </div>
+
       <section v-if="logOpen && build.number" class="build-log" aria-label="Jenkins 构建日志">
-        <header><strong>#{{ build.number }} 控制台输出</strong><span v-if="logLimited">部分输出，完整日志可在 Jenkins 查看</span></header>
+        <header>
+          <strong>#{{ build.number }} 控制台输出</strong>
+          <span v-if="logLimited">部分输出，完整日志可在 Jenkins 查看</span>
+        </header>
         <pre tabindex="0">{{ log || (loadingLog ? "正在读取日志…" : "暂无日志输出") }}</pre>
         <footer v-if="logMore || build.building || logError">
-          <p v-if="logError" role="alert">{{ logError }}</p>
-          <button type="button" class="quiet" :disabled="loadingLog" @click="readLog">{{ loadingLog ? "读取中…" : logError ? "重试" : "读取后续日志" }}</button>
+          <template v-if="logError">
+            <span class="log-error-text" role="alert">{{ logError }}</span>
+            <ElPopover v-if="logErrorMeta" trigger="click" placement="top" :width="340">
+              <div class="diag-meta-list">
+                <div v-if="logErrorMeta.code"><span>错误码</span><code>{{ logErrorMeta.code }}</code></div>
+                <div v-if="logErrorMeta.traceId"><span>追踪标识</span><code>{{ logErrorMeta.traceId }}</code></div>
+                <div v-if="logErrorMeta.timestamp"><span>发生时间</span><code>{{ logErrorMeta.timestamp }}</code></div>
+              </div>
+              <template #reference>
+                <ElButton link type="primary" size="small">排查详情</ElButton>
+              </template>
+            </ElPopover>
+          </template>
+          <ElButton size="small" link type="primary" :loading="loadingLog" @click="readLog">
+            {{ loadingLog ? "读取中…" : logError ? "重试" : "读取后续日志" }}
+          </ElButton>
         </footer>
       </section>
+
       <p v-if="build.observedAt" class="build-note">最近读取 {{ hostTime(build.observedAt) }}</p>
     </template>
   </section>
-
 </template>
 
 <style scoped>
-.jenkins-build { display: grid; gap: 12px; padding: 0; min-width: 0; }
-.build-toolbar, .build-heading, .build-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.jenkins-build { display: grid; gap: 14px; padding: 0; min-width: 0; }
+.build-toolbar, .build-heading, .build-toolbar-actions, .build-actions, .alert-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .build-toolbar { justify-content: space-between; }
-.build-heading h3 { margin: 0; font-size: 16px; }
-.latest-run { justify-self: start; }
-.build-source { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border-subtle); font-size: 13px; }
-.build-source > span { color: var(--muted); }
-.build-note, .build-artifacts h4 { margin: 0; font-size: 13px; }
-.build-note { color: var(--muted); overflow-wrap: anywhere; }
-.jenkins-build a { color: var(--accent); text-underline-offset: 2px; overflow-wrap: anywhere; }
-.state-running { color: var(--accent); background: var(--accent-soft); border-color: #bfdbfe; }
-.build-error { margin: 0; padding: 9px 12px; border: 1px solid #fecaca; border-radius: var(--control-radius); color: #991b1b; background: #fef2f2; font-size: 13px; overflow-wrap: anywhere; }
-.build-facts { display: grid; gap: 8px 16px; grid-template-columns: repeat(auto-fit, minmax(138px, 1fr)); margin: 0; }
-.build-facts dt { color: var(--muted); font-size: 12px; }
-.build-facts dd { margin: 2px 0 0; font-weight: 600; overflow-wrap: anywhere; }
-.build-stages, .build-artifacts ul { margin: 0; padding: 0; list-style: none; }
-.build-stages { display: grid; border: 1px solid var(--border); border-radius: var(--control-radius); }
-.build-stages li { display: grid; grid-template-columns: minmax(80px, 1fr) max-content 90px; align-items: center; gap: 6px 12px; padding: 6px 10px; font-size: 13px; }
-.build-stages li + li { border-top: 1px solid var(--border); }
-.build-stages strong { overflow-wrap: anywhere; }
-.build-stages small { color: var(--muted); text-align: right; }
-.build-artifacts ul { display: grid; gap: 4px; margin-top: 6px; font-size: 13px; }
-.build-artifacts p { margin-top: 6px; }
-.build-log { overflow: hidden; border: 1px solid #26374a; border-radius: var(--control-radius); background: #111d2b; color: #d6e3ef; }
+.status-hint { font-size: 13px; color: var(--muted); }
+.build-section { display: grid; gap: 8px; }
+.build-section-title { margin: 0; font-size: 13px; font-weight: 600; color: #334155; }
+.build-note { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.muted { color: var(--muted); font-size: 12px; }
+.jenkins-build a { color: var(--el-color-primary); text-decoration: none; overflow-wrap: anywhere; }
+.jenkins-build a:hover { text-decoration: underline; }
+.alert-actions { margin-top: 4px; }
+.diag-meta-list { display: grid; gap: 6px; font-size: 12px; }
+.diag-meta-list > div { display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: baseline; }
+.diag-meta-list span { color: var(--muted); }
+.diag-meta-list code { overflow-wrap: anywhere; word-break: break-all; }
+.build-log { overflow: hidden; border: 1px solid #26374a; border-radius: 6px; background: #111d2b; color: #d6e3ef; }
 .build-log header, .build-log footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 8px 12px; font-size: 12px; background: #19293b; }
 .build-log header span { color: #a4b9cf; }
-.build-log footer p { margin: 0; color: #fecaca; overflow-wrap: anywhere; }
-.build-log .quiet { color: #d1e0ed; }
+.log-error-text { color: #fecaca; overflow-wrap: anywhere; }
 .build-log pre { margin: 0; padding: 12px; min-height: 70px; max-height: min(360px, 50vh); overflow: auto; overscroll-behavior: contain; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.75 var(--mono); }
 @media (max-width: 540px) {
-  .jenkins-build { padding: 12px; }
-  .build-stages li { grid-template-columns: minmax(0, 1fr) max-content; }
-  .build-stages small { grid-column: 1 / -1; text-align: left; }
+  .jenkins-build { padding: 4px; }
 }
 </style>

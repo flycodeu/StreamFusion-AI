@@ -37,8 +37,29 @@ func TestSchemaTwentySixAddsCodesAndPreservesProjectHistory(t *testing.T) {
 			if _, err = tx.Exec("INSERT INTO application_projects(id,name,description,version,archived,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", p.ID, p.Name, p.Description, p.Version, p.Archived, p.CreatedAt, p.UpdatedAt); err != nil {
 				t.Fatal(err)
 			}
-			if err = saveApplicationChildren(tx, p); err != nil {
-				t.Fatal(err)
+			// Insert the records using the schema that was available at v25.
+			for pos, r := range p.Repositories {
+				if _, err = tx.Exec(`INSERT INTO application_repositories(id,project_id,name,url,git_account_id,branch,position)
+					VALUES(?,?,?,?,nullif(?,''),?,?)`, r.ID, p.ID, r.Name, r.URL, r.GitAccountID, r.Branch, pos); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for pos, m := range p.Modules {
+				if _, err = tx.Exec(`INSERT INTO application_modules(id,project_id,name,repository_id,directory,build_host_id,build_software_id,config_json,position)
+					VALUES(?,?,?,nullif(?,''),?,nullif(?,''),nullif(?,''),?,?)`, m.ID, p.ID, m.Name, m.RepositoryID, m.Directory, m.Build.HostID, m.Build.SoftwareID, jsonText(m), pos); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for pos, e := range p.Environments {
+				if _, err = tx.Exec(`INSERT INTO application_environments(id,project_id,name,position) VALUES(?,?,?,?)`, e.ID, p.ID, e.Name, pos); err != nil {
+					t.Fatal(err)
+				}
+				for index, d := range e.Deployments {
+					if _, err = tx.Exec(`INSERT INTO application_deployments(id,project_id,environment_id,module_id,host_id,runtime_software_id,config_json,position)
+						VALUES(?,?,?,?,nullif(?,''),nullif(?,''),?,?)`, d.ID, p.ID, e.ID, d.ModuleID, d.HostID, d.RuntimeSoftwareID, jsonText(d), index); err != nil {
+						t.Fatal(err)
+					}
+				}
 			}
 			otherID := uuid.NewString()
 			if _, err = tx.Exec("INSERT INTO application_projects(id,name,created_at,updated_at) VALUES(?,?,?,?)", otherID, "另一个旧项目", Now(), Now()); err != nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -46,6 +47,7 @@ type softwareInstallPlan struct {
 	TargetSnapshot      string                       `json:"-"`
 	HostVersion         string                       `json:"-"`
 	SoftwareID          string                       `json:"-"`
+	DirectoryName       string                       `json:"-"`
 	Definition          serviceinstall.Definition    `json:"definition"`
 	Config              serviceinstall.Config        `json:"config"`
 	Source              installSource                `json:"source"`
@@ -59,22 +61,23 @@ type softwareInstallPlan struct {
 // supplied field. The public plan response contains only actionable options.
 type storedInstallPlan struct {
 	softwareInstallPlan
-	Snapshot string `json:"targetSnapshot"`
-	Version  string `json:"hostVersion"`
-	Software string `json:"softwareId"`
+	Snapshot      string `json:"targetSnapshot"`
+	Version       string `json:"hostVersion"`
+	Software      string `json:"softwareId"`
+	DirectoryName string `json:"directoryName,omitempty"`
 }
 
 func (p softwareInstallPlan) request() *serviceinstall.Request {
-	return &serviceinstall.Request{SoftwareID: p.SoftwareID, BindingRevision: 1, Definition: p.Definition, Config: p.Config, Source: p.Source.Source, Official: p.Official, Node: p.Node, PrepareHostTerminal: p.PrepareHostTerminal}
+	return &serviceinstall.Request{SoftwareID: p.SoftwareID, DirectoryName: p.DirectoryName, BindingRevision: 1, Definition: p.Definition, Config: p.Config, Source: p.Source.Source, Official: p.Official, Node: p.Node, PrepareHostTerminal: p.PrepareHostTerminal}
 }
 func (p softwareInstallPlan) snapshot() string {
-	return jsonText(storedInstallPlan{softwareInstallPlan: p, Snapshot: p.TargetSnapshot, Version: p.HostVersion, Software: p.SoftwareID})
+	return jsonText(storedInstallPlan{softwareInstallPlan: p, Snapshot: p.TargetSnapshot, Version: p.HostVersion, Software: p.SoftwareID, DirectoryName: p.DirectoryName})
 }
 func parseInstallPlan(raw string) (softwareInstallPlan, error) {
 	var stored storedInstallPlan
 	err := deploy.StrictJSON([]byte(raw), &stored)
 	p := stored.softwareInstallPlan
-	p.TargetSnapshot, p.HostVersion, p.SoftwareID = stored.Snapshot, stored.Version, stored.Software
+	p.TargetSnapshot, p.HostVersion, p.SoftwareID, p.DirectoryName = stored.Snapshot, stored.Version, stored.Software, stored.DirectoryName
 	return p, err
 }
 
@@ -358,12 +361,33 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 			return
 		}
 	}
-	p := softwareInstallPlan{Node: node, ID: uuid.NewString(), TargetID: t.ID, TargetSnapshot: pluginTargetSnapshot(t), HostVersion: t.Version, SoftwareID: uuid.NewString(), Definition: d, Config: in.Config, Source: source, ExpiresAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339), PrepareHostTerminal: in.Config.Mode() == "DOCKER"}
+	softwareID := uuid.NewString()
+	dirName := ""
+	shortDirRequested := false
+	if !serviceinstall.IsOfficial(d) && !serviceinstall.IsNode(d) {
+		usedDirs, dirErr := h.usedSoftwareDirectories(t.ID, t.InstallRoot, in.Config.StorageRoot)
+		if dirErr != nil {
+			h.internal(w, r, dirErr)
+			return
+		}
+		dirName = serviceinstall.SuggestDirectoryName(d, in.Config, softwareID, usedDirs)
+		shortDirRequested = true
+	}
+	p := softwareInstallPlan{Node: node, ID: uuid.NewString(), TargetID: t.ID, TargetSnapshot: pluginTargetSnapshot(t), HostVersion: t.Version, SoftwareID: softwareID, DirectoryName: dirName, Definition: d, Config: in.Config, Source: source, ExpiresAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339), PrepareHostTerminal: in.Config.Mode() == "DOCKER"}
 	var preflight serviceinstall.Preflight
 	if err = h.store.callTarget(ctx, t, deploy.Request{Action: "SOFTWARE_INSTALL_CHECK", Installation: p.request()}, "", &preflight); err != nil {
 		code, message := installPreflightError(err)
 		h.fail(w, r, 409, code, message)
 		return
+	}
+	if !preflight.Ready && shortDirRequested && hasDirectoryConflictCheck(preflight) && preflight.Root == p.request().InstallRoot(t.InstallRoot) {
+		p.DirectoryName = serviceinstall.DirectoryNameWithShortID(p.DirectoryName, p.SoftwareID)
+		preflight = serviceinstall.Preflight{}
+		if err = h.store.callTarget(ctx, t, deploy.Request{Action: "SOFTWARE_INSTALL_CHECK", Installation: p.request()}, "", &preflight); err != nil {
+			code, message := installPreflightError(err)
+			h.fail(w, r, 409, code, message)
+			return
+		}
 	}
 	if !preflight.Ready {
 		code, message := h.installPreflightRejection(preflight, p.Config)
@@ -371,8 +395,18 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if err = validateInstallPreflightPaths(t.InstallRoot, &p, preflight); err != nil {
-		h.fail(w, r, 409, "INSTALL_PREFLIGHT_MISMATCH", "执行器返回的目标路径不匹配，请升级并核对执行器")
-		return
+		if shortDirRequested {
+			legacyPlan := p
+			legacyPlan.DirectoryName = ""
+			if validateInstallPreflightPaths(t.InstallRoot, &legacyPlan, preflight) == nil {
+				p = legacyPlan
+				err = nil
+			}
+		}
+		if err != nil {
+			h.fail(w, r, 409, "INSTALL_PREFLIGHT_MISMATCH", "执行器返回的目标路径不匹配，请升级并核对执行器")
+			return
+		}
 	}
 	p.Paths = installPaths{Root: preflight.Root, Data: preflight.DataDirectory, Config: preflight.ConfigDirectory, Bin: preflight.BinaryDirectory, Logs: preflight.LogsDirectory}
 	for _, mapping := range preflight.PortMappings {
@@ -385,7 +419,7 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		}
 		p.Checks = append(p.Checks, installCheck{check.Key, status, check.Message})
 	}
-	available, err := h.confirmedFailedInstallResources(ctx, t, installationResources(t.InstallRoot, p.SoftwareID, d, in.Config))
+	available, err := h.confirmedFailedInstallResources(ctx, t, installationResources(t.InstallRoot, p.SoftwareID, p.DirectoryName, d, in.Config))
 	if err != nil {
 		code, message := installTargetError(err)
 		h.fail(w, r, 409, code, message)
@@ -449,7 +483,7 @@ func (h *HTTP) createSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		h.fail(w, r, 409, "INSTALL_PORT_RESERVED", "同主机有效计划已预留该协议端口，请修改后重检")
 		return
 	}
-	if err = reserveManagementResources(tx, t.ID, p.SoftwareID, "", installationResources(t.InstallRoot, p.SoftwareID, d, in.Config), resourceClaimExemptions{AbsentInstallations: available}); err != nil {
+	if err = reserveManagementResources(tx, t.ID, p.SoftwareID, "", installationResources(t.InstallRoot, p.SoftwareID, p.DirectoryName, d, in.Config), resourceClaimExemptions{AbsentInstallations: available}); err != nil {
 		h.fail(w, r, 409, err.Error(), "安装目录、端口或服务与现有软件及待执行操作冲突，请调整后重检")
 		return
 	}
@@ -580,7 +614,7 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		h.fail(w, r, 409, "INSTALL_PREFLIGHT_MISMATCH", "执行器返回的目标路径不匹配，请重新预检")
 		return
 	}
-	available, err := h.confirmedFailedInstallResources(ctx, t, installationResources(t.InstallRoot, p.SoftwareID, p.Definition, p.Config))
+	available, err := h.confirmedFailedInstallResources(ctx, t, installationResources(t.InstallRoot, p.SoftwareID, p.DirectoryName, p.Definition, p.Config))
 	if err != nil {
 		code, message := installTargetError(err)
 		h.fail(w, r, 409, code, message)
@@ -678,7 +712,7 @@ func (h *HTTP) submitSoftwareInstallPlan(w http.ResponseWriter, r *http.Request,
 		h.fail(w, r, 409, "TOOL_ALREADY_INSTALLED", "该Docker工具已有安装记录，请查看原工具及发布引用")
 		return
 	}
-	if err = reserveManagementResources(tx, p.TargetID, p.SoftwareID, p.ID, installationResources(current.InstallRoot, p.SoftwareID, p.Definition, p.Config), resourceClaimExemptions{AbsentInstallations: available}); err != nil {
+	if err = reserveManagementResources(tx, p.TargetID, p.SoftwareID, p.ID, installationResources(current.InstallRoot, p.SoftwareID, p.DirectoryName, p.Definition, p.Config), resourceClaimExemptions{AbsentInstallations: available}); err != nil {
 		h.fail(w, r, 409, err.Error(), "安装资源已被其他软件或待执行操作占用，请重新检查安装条件")
 		return
 	}
@@ -819,4 +853,66 @@ func (h *HTTP) installPreflightRejection(p serviceinstall.Preflight, c servicein
 		message = string(runes[:1200])
 	}
 	return code, message
+}
+
+func hasDirectoryConflictCheck(p serviceinstall.Preflight) bool {
+	for _, c := range p.Checks {
+		if c.Status == "FAIL" && c.Key == "DIRECTORY" && c.Code == "SERVICE_DATA_DIRECTORY_EXISTS" {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *HTTP) usedSoftwareDirectories(targetID, baseRoot, storageRoot string) (map[string]bool, error) {
+	parentDir := storageRoot
+	if parentDir == "" {
+		parentDir = path.Join(baseRoot, "software")
+	}
+	parentDir = path.Clean(parentDir)
+	used := map[string]bool{}
+	rows, err := h.store.DB.Query("SELECT "+softwareColumns+" FROM software_instances s JOIN targets t ON t.id=s.host_id WHERE s.host_id=? AND s.management_mode<>'RELEASED' AND s.installation_status<>'UNINSTALLED'", targetID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		item, scanErr := scanSoftware(rows)
+		if scanErr != nil {
+			rows.Close()
+			return nil, scanErr
+		}
+		if item.Installation == nil {
+			continue
+		}
+		root := path.Clean(item.Installation.InstallRoot(baseRoot))
+		if path.Dir(root) == parentDir {
+			used[path.Base(root)] = true
+		}
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	planRows, err := h.store.DB.Query(`SELECT snapshot_json FROM software_install_plans WHERE target_id=? AND status='DRAFT' AND expires_at>?
+UNION ALL SELECT p.snapshot_json FROM software_install_plans p JOIN jobs j ON j.software_plan_id=p.id WHERE p.target_id=? AND (j.status IN ('QUEUED','RUNNING','UNKNOWN') OR j.target_ack_pending=1)`, targetID, Now(), targetID)
+	if err != nil {
+		return nil, err
+	}
+	defer planRows.Close()
+	for planRows.Next() {
+		var raw string
+		if err = planRows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		plan, parseErr := parseInstallPlan(raw)
+		if parseErr != nil {
+			continue
+		}
+		root := path.Clean(plan.request().InstallRoot(baseRoot))
+		if path.Dir(root) == parentDir {
+			used[path.Base(root)] = true
+		}
+	}
+	return used, planRows.Err()
 }

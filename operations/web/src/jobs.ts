@@ -13,6 +13,7 @@ export interface JobSummary extends SoftwareJob {
 }
 
 export const jobKindLabels: Record<string, string> = {
+  PROJECT_DEPLOY: "发布项目", PROJECT_VERIFY: "检查项目服务", PROJECT_ROLLBACK: "回退项目",
   SOFTWARE_RUNTIME_POLICY: "修改运行策略", APP_RUNTIME_POLICY: "应用运行策略",
   APP_START: "启动应用", APP_STOP: "停止应用", APP_RESTART: "重启应用",
   SOFTWARE_INSTALL: "软件安装", SOFTWARE_CONFIGURE: "软件配置", SOFTWARE_UNINSTALL: "软件卸载",
@@ -24,5 +25,9 @@ export const jobKindLabels: Record<string, string> = {
   PLUGIN_INSTALL: "工具安装", PLUGIN_REMOVE: "工具卸载",
 };
 export function jobKindLabel(kind: string) { return jobKindLabels[kind] || "软件操作"; }
+
+export function isProjectJob(kind?: string) {
+  return kind === "PROJECT_DEPLOY" || kind === "PROJECT_VERIFY" || kind === "PROJECT_ROLLBACK";
+}
 
 export interface LogSelection { jobId?: string; softwareId?: string; title?: string }

@@ -98,7 +98,7 @@ func (x *executor) readJenkinsUnlock(req Request, output io.Writer) error {
 		s.Ownership.ConfigHash != Digest(i.Config) || s.Ownership.CommandTemplateHash != Digest(i.Definition) || s.Ownership.RuntimeMode != i.Config.Mode() {
 		return jenkinsUnlockBinding
 	}
-	root := serviceinstall.InstallRoot(x.root, s.ID, i.Config)
+	root := serviceinstall.InstallRootFor(x.root, s.ID, i.DirectoryName, i.Config)
 	if secureAncestors(root) != nil {
 		return jenkinsUnlockBinding
 	}

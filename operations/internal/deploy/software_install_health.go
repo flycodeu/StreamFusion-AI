@@ -238,7 +238,7 @@ func (x *executor) nativeServiceHealth(ctx context.Context, req Request, s Softw
 	if err != nil {
 		return "", err
 	}
-	root := serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config)
+	root := i.InstallRoot(x.root)
 	binary := filepath.Join(root, nativeBinaryRelative(i.Definition))
 	args := deployCommand("verify-version-default")
 	switch i.Definition.Key {

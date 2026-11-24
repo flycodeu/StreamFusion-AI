@@ -32,6 +32,15 @@ func (s *Store) secret(id, revision, kind string) ([]byte, error) {
 	return s.openCredentialMaterial(id, revision, material)
 }
 
+func (s *Store) openCredentialByIDRev(id, revision string) ([]byte, error) {
+	var material string
+	e := s.DB.QueryRow("SELECT material FROM credential_refs WHERE id=? AND CAST(revision AS TEXT)=? AND revoked_at IS NULL", id, revision).Scan(&material)
+	if e != nil {
+		return nil, errors.New("CREDENTIAL_UNAVAILABLE")
+	}
+	return s.openCredentialMaterial(id, revision, material)
+}
+
 func (s *Store) openCredentialMaterial(id, revision, material string) ([]byte, error) {
 	rev, e := strconv.Atoi(revision)
 	if e != nil {

@@ -180,12 +180,22 @@ func OfficialInstallCommands(d Definition, packages []OfficialPackage) []Officia
 	return commands
 }
 
+func OfficialSupportsOS(d Definition, osName string) bool {
+	if osName == "ubuntu24.04" {
+		return true
+	}
+	if osName == "ubuntu22.04" {
+		return d.Key != "docker" && d.Key != "python"
+	}
+	return false
+}
+
 func (p *OfficialPlan) Validate(d Definition) error {
 	if p == nil {
 		return errors.New("OFFICIAL_PLAN_INVALID")
 	}
 	spec, err := OfficialRecipeSpec(d)
-	if err != nil || p.Manager != "APT" || p.OS != "ubuntu24.04" || p.Architecture != "amd64" || !reflect.DeepEqual(p.Paths, spec.Paths) || len(p.Packages) < len(spec.Packages) || len(p.Packages) > 200 || !reflect.DeepEqual(p.Commands, OfficialInstallCommands(d, p.Packages)) {
+	if err != nil || p.Manager != "APT" || !OfficialSupportsOS(d, p.OS) || p.Architecture != "amd64" || !reflect.DeepEqual(p.Paths, spec.Paths) || len(p.Packages) < len(spec.Packages) || len(p.Packages) > 200 || !reflect.DeepEqual(p.Commands, OfficialInstallCommands(d, p.Packages)) {
 		return errors.New("OFFICIAL_PLAN_INVALID")
 	}
 	wanted, seen := map[string]bool{}, map[string]bool{}

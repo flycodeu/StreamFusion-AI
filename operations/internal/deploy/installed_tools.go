@@ -164,10 +164,14 @@ func observeInstalledTool(ctx context.Context, s SoftwareRequest, run SoftwareCo
 		if checkErr != nil || json.Unmarshal(inspected, &actual) != nil || actual.ID != o.ImageID || actual.OS != "linux" || actual.Arch != "amd64" {
 			return nil, errors.New("TOOL_IMAGE_IDENTITY_MISMATCH")
 		}
-		dockerArgs := []string{"run", "--rm", "--pull", "never", "--network", "none", "--read-only", "--user", "65534:65534", "--workdir", "/tmp", "--tmpfs", "/tmp:rw,noexec,nosuid,size=32m", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--memory", "256m", "--cpus", "1", "--pids-limit", "64", "--env", "HOME=/tmp", "--entrypoint", command, o.ImageID}
+		dockerArgs := []string{"run", "--rm", "--pull", "never", "--network", "none", "--read-only", "--user", "65534:65534", "--workdir", "/tmp", "--tmpfs", "/tmp:rw,noexec,nosuid,size=32m", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--memory", "256m", "--cpus", "1", "--pids-limit", "64", "--env", "HOME=/tmp"}
+		if strings.EqualFold(s.SoftwareKey, "MAVEN") {
+			dockerArgs = append(dockerArgs, "--env", "MAVEN_OPTS=-Djansi.mode=strip -Djansi.graceful=true -Dstyle.color=never")
+		}
+		dockerArgs = append(dockerArgs, "--entrypoint", command, o.ImageID)
 		out, err = softwareCommand(ctx, run, "/usr/bin/docker", append(dockerArgs, args...)...)
 	}
-	version := strings.TrimSpace(string(out))
+	version := cleanToolVersionOutput(s.SoftwareKey, strings.TrimSpace(string(out)))
 	if err != nil && (err.Error() == "FFMPEG_H264_ENCODER_UNAVAILABLE" || err.Error() == "FFPROBE_UNAVAILABLE") {
 		return nil, err
 	}
@@ -179,6 +183,30 @@ func observeInstalledTool(ctx context.Context, s SoftwareRequest, run SoftwareCo
 		hash = o.ImageID
 	}
 	return &SoftwareObservation{SoftwareMetadata: SoftwareMetadata{VersionSource: "VERSION_COMMAND", VersionStatus: "VERIFIED", ExecutablePath: o.BinaryPath}, Kind: "TOOL", Locator: s.Locator, IdentityHash: Digest([]string{"TOOL", s.Locator, hash}), State: "INSTALLED", Version: version, ObservedAt: stamp()}, nil
+}
+
+func cleanToolVersionOutput(key, text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	if strings.Contains(strings.ToLower(key), "maven") {
+		if idx := strings.Index(trimmed, "Apache Maven "); idx > 0 &&
+			(strings.Contains(trimmed[:idx], "jansi") || strings.Contains(trimmed[:idx], "UnsatisfiedLinkError")) {
+			return strings.TrimSpace(trimmed[idx:])
+		}
+		var kept []string
+		for _, line := range strings.Split(trimmed, "\n") {
+			if strings.Contains(line, "Failed to load native library:jansi") || strings.Contains(line, "libjansi.so") {
+				continue
+			}
+			kept = append(kept, line)
+		}
+		if joined := strings.TrimSpace(strings.Join(kept, "\n")); joined != "" {
+			return joined
+		}
+	}
+	return trimmed
 }
 func verifyNativeBinary(ctx context.Context, o *SoftwareOwnership, run SoftwareCommandRunner) error {
 	out, err := softwareCommand(ctx, run, "/usr/bin/sha256sum", "--", o.BinaryPath)

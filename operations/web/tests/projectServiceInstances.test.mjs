@@ -14,6 +14,7 @@ function load(source, imports = {}, globals = {}) {
   return exports;
 }
 const model = load(await read("applicationProjects.ts"));
+const projectDeployments = load(await read("projectDeployments.ts"));
 const component = (await read("ProjectServiceInstances.vue")).split('<script setup lang="ts">')[1].split("</script>")[0];
 
 async function workspace(t, { archived = false, configured = true } = {}) {
@@ -40,6 +41,7 @@ async function workspace(t, { archived = false, configured = true } = {}) {
     } },
     "./projectJenkins": { moduleJenkinsPath: (project, module, id) => "/application-projects/" + project + (id ? "/service-instances/" + id : "/modules/" + module) },
     "./applicationProjects": model,
+    "./projectDeployments": projectDeployments,
     "./software": { softwareState: item => ({ label: item.name + "服务已启动", tone: "state-success" }) },
   }, {
     defineProps: () => ({ hosts: [] }), defineEmits: () => (...event) => events.push(event),
@@ -64,16 +66,20 @@ test("one row per module and environment, build infrastructure is never an appli
   assert.deepEqual(flow.visibleRows.value.map(row => row.registration.id), ["stage-api"]);
 });
 
-test("QA and build logs stay with the selected binding, publication retains its host and environment", async t => {
-  const { flow, events } = await workspace(t);
+test("module QA is shared across environments while legacy publication retains its host and environment", async t => {
+  const { flow, events, calls } = await workspace(t);
   const [test, stage] = flow.visibleRows.value;
   await flow.openBuild(test, "qa");
-  assert.equal(flow.panel.value.context.serviceInstanceId, "test-api");
+  assert.equal(flow.panel.value.context.serviceInstanceId, undefined);
   assert.equal(flow.panel.value.context.action, "qa");
   await flow.openBuild(stage, "logs");
-  assert.equal(flow.panel.value.context.serviceInstanceId, "stage-api");
+  assert.equal(flow.panel.value.context.serviceInstanceId, undefined);
   assert.equal(flow.panel.value.context.action, "logs");
   assert.deepEqual(events, []);
+  assert.deepEqual(calls.map(([path]) => path), [
+    "/application-projects/project/modules/api/jenkins-monitor",
+    "/application-projects/project/modules/api/jenkins-monitor",
+  ]);
   flow.openRelease(stage);
   flow.openRelease(stage, "verify");
   const target = {

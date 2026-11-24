@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
-import { ElDialog, ElDrawer, ElTabs, ElTabPane, ElMessage, ElMessageBox } from "element-plus";
+import { ElDialog, ElDrawer, ElMessage, ElMessageBox } from "element-plus";
 import { request } from "./api";
 import {
   hostTime,
@@ -26,16 +26,12 @@ const credentialKind = ref("SSH_KEY");
 const credentialSecret = ref("");
 const draft = ref(emptyDraft());
 const initialDraft = ref(JSON.stringify(draft.value));
-const formTab = ref("connection");
 const hostForm = ref<HTMLFormElement>();
 async function validateForm() {
   const field = hostForm.value?.querySelector<
     HTMLInputElement | HTMLSelectElement
   >("input:invalid, select:invalid, textarea:invalid");
   if (!field) return true;
-  formTab.value =
-    field.closest("[data-form-panel]")?.getAttribute("data-form-panel") ||
-    "connection";
   await nextTick();
   field.reportValidity();
   return false;
@@ -92,7 +88,6 @@ watch(
   () => props.open,
   async (open) => {
     if (!open) return;
-    formTab.value = "connection";
     draft.value = props.host
       ? {
           name: props.host.name,
@@ -282,147 +277,143 @@ async function close(done?: () => void) {
       ref="hostForm"
       novalidate
     >
-      <ElTabs v-model="formTab">
-        <ElTabPane label="连接设置" name="connection">
-          <fieldset data-form-panel="connection" :disabled="busy">
+      <div v-if="!host" class="ops-guide-banner">
+        <strong>新增 Linux 服务器步骤：</strong>1. 填写连接地址与 SSH 凭据 → 2. 点击「获取主机指纹」并核对 → 3. 保存后系统将引导安装接入组件。
+      </div>
+      <fieldset :disabled="busy">
+        <label>
+          服务器名称
+          <input
+            v-model="draft.name"
+            required
+            maxlength="60"
+            autocomplete="off"
+            placeholder="例如：生产应用节点 01"
+          />
+        </label>
+        <template v-if="draft.kind === 'SSH'">
+          <div class="connection-grid">
             <label>
-              主机名称
+              IP / 域名
               <input
-                v-model="draft.name"
+                v-model="draft.address"
                 required
-                maxlength="60"
+                maxlength="253"
                 autocomplete="off"
-                placeholder="例如：分析服务器 A"
+                placeholder="192.168.1.10"
               />
             </label>
-            <template v-if="draft.kind === 'SSH'">
-              <div class="connection-grid">
-                <label>
-                  IP / 域名
-                  <input
-                    v-model="draft.address"
-                    required
-                    maxlength="253"
-                    autocomplete="off"
-                    placeholder="192.168.1.10"
-                  />
-                </label>
-                <label>
-                  SSH 端口
-                  <input
-                    v-model.number="draft.sshPort"
-                    required
-                    type="number"
-                    min="1"
-                    max="65535"
-                  />
-                </label>
-              </div>
-              <label>
-                SSH 用户
-                <input
-                  v-model="draft.sshUser"
-                  required
-                  maxlength="64"
-                  autocomplete="off"
-                  placeholder="登录服务器的账号"
-                />
-              </label>
-              <div class="credential-row">
-                <label>
-                  SSH 凭据
-                  <select
-                    v-model="draft.credentialId"
-                    aria-label="SSH 凭据"
-                    required
-                  >
-                    <option value="">选择已保存的私钥或密码</option>
-                    <option
-                      v-for="item in credentialOptions"
-                      :key="item.id"
-                      :value="item.id"
-                    >
-                      {{ item.name }} ·
-                      {{ item.kind === "SSH_KEY" ? "私钥" : "密码" }}
-                    </option>
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  class="secondary"
-                  @click="
-                    credentialName = '';
-                    credentialSecret = '';
-                    credentialKind = 'SSH_KEY';
-                    credentialDialog = true;
-                  "
+            <label>
+              SSH 端口
+              <input
+                v-model.number="draft.sshPort"
+                required
+                type="number"
+                min="1"
+                max="65535"
+              />
+            </label>
+          </div>
+          <label>
+            SSH 用户
+            <input
+              v-model="draft.sshUser"
+              required
+              maxlength="64"
+              autocomplete="off"
+              placeholder="登录服务器的账号"
+            />
+          </label>
+          <div class="credential-row">
+            <label>
+              SSH 凭据
+              <select
+                v-model="draft.credentialId"
+                aria-label="SSH 凭据"
+                required
+              >
+                <option value="">选择已保存的私钥或密码</option>
+                <option
+                  v-for="item in credentialOptions"
+                  :key="item.id"
+                  :value="item.id"
                 >
-                  新增凭据
-                </button>
-              </div>
-              <div class="fingerprint-panel">
-                <div class="fingerprint-head">
-                  <span>主机身份</span>
-                  <button
-                    type="button"
-                    class="quiet"
-                    @click="discoverFingerprint"
-                  >
-                    {{
-                      busy
-                        ? "获取中…"
-                        : fingerprint || unchangedConnection
-                          ? "重新获取指纹"
-                          : "获取主机指纹"
-                    }}
-                  </button>
-                </div>
-                <template v-if="fingerprint">
-                  <code>{{ fingerprint.hostFingerprint }}</code>
-                  <label class="fingerprint-confirm">
-                    <input v-model="confirmed" type="checkbox" />
-                    <span>已通过服务器控制台或管理员核对该指纹</span>
-                  </label>
-                  <small>有效至 {{ hostTime(fingerprint.expiresAt) }}</small>
-                </template>
-                <template v-else-if="unchangedConnection">
-                  <code>{{ host?.hostFingerprint }}</code>
-                  <small>已确认</small>
-                </template>
-              </div>
+                  {{ item.name }} ·
+                  {{ item.kind === "SSH_KEY" ? "私钥" : "密码" }}
+                </option>
+              </select>
+            </label>
+            <button
+              type="button"
+              class="secondary"
+              @click="
+                credentialName = '';
+                credentialSecret = '';
+                credentialKind = 'SSH_KEY';
+                credentialDialog = true;
+              "
+            >
+              新增凭据
+            </button>
+          </div>
+          <div class="fingerprint-panel">
+            <div class="fingerprint-head">
+              <span>主机身份</span>
+              <button
+                type="button"
+                class="quiet"
+                @click="discoverFingerprint"
+              >
+                {{
+                  busy
+                    ? "获取中…"
+                    : fingerprint || unchangedConnection
+                      ? "重新获取指纹"
+                      : "获取主机指纹"
+                }}
+              </button>
+            </div>
+            <template v-if="fingerprint">
+              <code>{{ fingerprint.hostFingerprint }}</code>
+              <label class="fingerprint-confirm">
+                <input v-model="confirmed" type="checkbox" />
+                <span>已通过服务器控制台或管理员核对该指纹</span>
+              </label>
+              <small>有效至 {{ hostTime(fingerprint.expiresAt) }}</small>
             </template>
-            <details class="advanced-fields">
-              <summary>高级配置</summary>
-              <label>
-                连接方式
-                <select
-                  v-model="draft.kind"
-                  aria-label="连接方式"
-                  :disabled="!!host"
-                >
-                  <option value="SSH">SSH 远程主机</option>
-                  <option value="LOCAL">控制器本机</option>
-                </select>
-              </label>
-            </details>
-          </fieldset>
-        </ElTabPane>
-        <ElTabPane label="项目目录" name="directory">
-          <fieldset data-form-panel="directory" :disabled="busy">
-            <label>
-              项目目录
-              <input
-                v-model="draft.installRoot"
-                required
-                maxlength="240"
-                autocomplete="off"
-                placeholder="/opt/streamfusion-ops-target"
-                aria-label="项目目录"
-              />
-            </label>
-          </fieldset>
-        </ElTabPane>
-      </ElTabs>
+            <template v-else-if="unchangedConnection">
+              <code>{{ host?.hostFingerprint }}</code>
+              <small>已确认</small>
+            </template>
+          </div>
+        </template>
+        <details class="advanced-fields">
+          <summary>高级设置（连接方式与 Ops 工作目录）</summary>
+          <label>
+            连接方式
+            <select
+              v-model="draft.kind"
+              aria-label="连接方式"
+              :disabled="!!host"
+            >
+              <option value="SSH">SSH 远程主机</option>
+              <option value="LOCAL">控制器本机</option>
+            </select>
+          </label>
+          <label>
+            Ops 工作目录
+            <input
+              v-model="draft.installRoot"
+              required
+              maxlength="240"
+              autocomplete="off"
+              placeholder="/opt/streamfusion-ops-target"
+              aria-label="Ops 工作目录"
+            />
+            <span class="root-help">用于存放接入组件、安装缓存与软件运行目录（通常保持默认即可）。</span>
+          </label>
+        </details>
+      </fieldset>
     </form>
     <template #footer>
       <footer class="dialog-actions">

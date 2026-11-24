@@ -72,7 +72,7 @@ func scanSoftware(row interface{ Scan(...any) error }) (softwareInstance, error)
 			return s, err
 		}
 		s.Installation = &installed
-		root := serviceinstall.InstallRoot(installRoot, installed.SoftwareID, installed.Config)
+		root := installed.InstallRoot(installRoot)
 		s.InstallationPaths = &installPaths{Root: root, Data: root + "/data", Config: root + "/config", Logs: root + "/logs"}
 		if installed.Config.Mode() == "NATIVE" {
 			s.InstallationPaths.Bin = path.Dir(root + "/" + serviceinstall.NativeBinaryRelative(installed.Definition))
@@ -144,7 +144,7 @@ func softwareRequest(s softwareInstance) *deploy.SoftwareRequest {
 	}
 	req := &deploy.SoftwareRequest{ID: s.ID, Version: s.BindingRevision, Kind: s.RuntimeKind, Locator: locator, IdentityHash: s.IdentityHash, SoftwareKey: s.SoftwareType}
 	if s.Installation != nil && s.IdentityHash != "" && s.ManagementMode == "MANAGED" {
-		req.Ownership = &deploy.SoftwareOwnership{ControllerID: s.ControllerID, TargetID: s.HostID, SoftwareID: s.ID, JobID: s.InstallationJobID, ConfigHash: serviceinstall.Digest(s.Installation.Config), ImageID: s.Installation.Definition.ImageID}
+		req.Ownership = &deploy.SoftwareOwnership{ControllerID: s.ControllerID, TargetID: s.HostID, SoftwareID: s.ID, DirectoryName: s.Installation.DirectoryName, JobID: s.InstallationJobID, ConfigHash: serviceinstall.Digest(s.Installation.Config), ImageID: s.Installation.Definition.ImageID}
 		if s.RuntimeKind == "DOCKER" && s.InstallationEvidence != nil && s.InstallationEvidence.ValidateFor(*s.Installation) == nil {
 			req.Ownership.ImageID = s.InstallationEvidence.ImageID
 		}

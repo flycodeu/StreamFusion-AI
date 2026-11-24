@@ -58,7 +58,7 @@ func (x *executor) validateManagedDataClaim(req Request) error {
 	if !exists && u.DataDirectory == "" && u.DataDirectoryIdentity == "" {
 		return nil
 	}
-	root := serviceinstall.InstallRoot(x.root, u.Installation.SoftwareID, u.Installation.Config)
+	root := u.Installation.InstallRoot(x.root)
 	if !exists || u.DataDirectory == "" || active.Value != u.DataDirectory || active.IdentityHash != u.DataDirectoryIdentity || !Hex.MatchString(active.IdentityHash) || u.DataDirectory == path.Join(root, "data") || strings.HasPrefix(u.DataDirectory, root+"/") || strings.HasPrefix(root, u.DataDirectory+"/") {
 		return errors.New("MIGRATED_DATA_CONFIRMATION_REQUIRED")
 	}

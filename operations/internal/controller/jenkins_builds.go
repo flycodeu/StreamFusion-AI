@@ -23,6 +23,7 @@ var (
 	errJenkinsConnection    = errors.New("JENKINS_UNAVAILABLE")
 	errJenkinsPeer          = errors.New("JENKINS_PEER_UNVERIFIED")
 	errJenkinsAuth          = errors.New("JENKINS_AUTH_REQUIRED")
+	errJenkinsPluginMissing = errors.New("JENKINS_PLUGIN_REQUIRED")
 	errJenkinsMissing       = errors.New("JENKINS_RESOURCE_NOT_FOUND")
 	errJenkinsResponse      = errors.New("JENKINS_RESPONSE_INVALID")
 	errJenkinsBusy          = errors.New("JENKINS_QUERY_BUSY")
@@ -96,10 +97,22 @@ func (h *HTTP) jenkinsError(w http.ResponseWriter, r *http.Request, err error) {
 		h.fail(w, r, 409, errJenkinsArchived.Error(), "此项目已归档")
 	case errors.Is(err, errJenkinsNotConfigured):
 		h.fail(w, r, 409, errJenkinsNotConfigured.Error(), "请在项目维护中核对 Jenkins 连接、模块类型和仓库。")
+	case errors.Is(err, errJenkinsReleaseNotReady):
+		h.fail(w, r, 409, err.Error(), "本次构建未成功完成，请查看 QA 结果。")
+	case errors.Is(err, errJenkinsReleaseNotSupported):
+		h.fail(w, r, 409, err.Error(), "此模块的 QA 结果不包含可上线制品。")
+	case errors.Is(err, errJenkinsReleaseArtifact):
+		h.fail(w, r, 409, err.Error(), "构建缺少唯一的可发布制品或来源记录，请重新运行模块 QA。")
+	case errors.Is(err, errJenkinsReleaseTooLarge):
+		h.fail(w, r, 413, err.Error(), "构建制品超过当前发布方式允许的大小。")
+	case errors.Is(err, errJenkinsReleaseMismatch):
+		h.fail(w, r, 409, err.Error(), "下载内容与 Jenkins 记录的文件大小或摘要不符，请核对原构建。")
 	case errors.Is(err, errJenkinsBusy):
 		h.fail(w, r, 429, errJenkinsBusy.Error(), "Jenkins 查询繁忙，请稍后刷新")
 	case errors.Is(err, errJenkinsAuth):
-		h.fail(w, r, 502, errJenkinsAuth.Error(), "Jenkins 拒绝访问，请核对项目 API Token 及 QA 作业的创建、读取配置和构建权限。")
+		h.fail(w, r, 502, errJenkinsAuth.Error(), "Jenkins 拒绝访问或凭据无效：请确认填写的是「个人 API Token」（非登录密码），且账号具备创建、配置及构建作业权限。")
+	case errors.Is(err, errJenkinsPluginMissing):
+		h.fail(w, r, 502, errJenkinsPluginMissing.Error(), "Jenkins 缺少 Pipeline（workflow-aggregator / workflow-job）插件，请在「Manage Jenkins → Plugins」安装并启用后重试。")
 	case errors.Is(err, errJenkinsMissing):
 		h.fail(w, r, 404, errJenkinsMissing.Error(), "Jenkins 作业、构建或日志已不存在，请刷新并核对作业链接")
 	case errors.Is(err, errJenkinsPeer):
@@ -276,6 +289,13 @@ func (c jenkinsBuildClient) jobPath(suffix string, query url.Values) url.URL {
 }
 
 func (c jenkinsBuildClient) get(ctx context.Context, u url.URL, authenticate bool) (*http.Response, error) {
+	return c.getWithVersionPolicy(ctx, u, authenticate, false)
+}
+
+// Some Jenkins endpoints stream files without the standard X-Jenkins header.
+// Use this only after the pinned endpoint's /login has verified the version,
+// and only for responses whose payload the caller can validate.
+func (c jenkinsBuildClient) getWithVersionPolicy(ctx context.Context, u url.URL, authenticate, allowMissingVersion bool) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, errJenkinsResponse
@@ -287,7 +307,15 @@ func (c jenkinsBuildClient) get(ctx context.Context, u url.URL, authenticate boo
 	if err != nil {
 		return nil, errJenkinsConnection
 	}
-	if res.Header.Get("X-Jenkins") != c.version {
+	hdr := res.Header.Get("X-Jenkins")
+	if authenticate && (res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden) {
+		res.Body.Close()
+		if hdr != "" && hdr != c.version {
+			return nil, errJenkinsPeer
+		}
+		return nil, errJenkinsAuth
+	}
+	if hdr != c.version && !(allowMissingVersion && hdr == "" && res.StatusCode == http.StatusOK) {
 		res.Body.Close()
 		return nil, errJenkinsPeer
 	}
@@ -314,7 +342,11 @@ func (c jenkinsBuildClient) readJSON(ctx context.Context, suffix, tree string, v
 }
 
 func (c jenkinsBuildClient) readJSONAt(ctx context.Context, location url.URL, v any) error {
-	res, err := c.get(ctx, location, true)
+	return c.readJSONWithVersionPolicy(ctx, location, v, false)
+}
+
+func (c jenkinsBuildClient) readJSONWithVersionPolicy(ctx context.Context, location url.URL, v any, allowMissingVersion bool) error {
+	res, err := c.getWithVersionPolicy(ctx, location, true, allowMissingVersion)
 	if err != nil {
 		return err
 	}
@@ -444,7 +476,7 @@ func (c jenkinsBuildClient) readStages(ctx context.Context, out *jenkinsBuildSta
 			Duration int64  `json:"durationMillis"`
 		} `json:"stages"`
 	}
-	if err := c.readJSON(ctx, prefix+"wfapi/describe", "", &phases); err == nil && phases.Stages != nil {
+	if err := c.readJSONWithVersionPolicy(ctx, c.jobPath(prefix+"wfapi/describe", nil), &phases, true); err == nil && phases.Stages != nil {
 		out.StagesAvailable = true
 		for _, phase := range phases.Stages[:min(len(phases.Stages), 80)] {
 			stage := jenkinsStage{Name: c.label(phase.Name), Status: normalizedJenkinsStage(phase.Status), DurationMS: max(phase.Duration, 0)}
@@ -491,7 +523,7 @@ func (c jenkinsBuildClient) log(ctx context.Context, number int, offset int64) (
 	console := c.jobPath(prefix+"console", nil)
 	out := jenkinsBuildLog{Number: number, Offset: offset, NextOffset: offset, ConsoleURL: console.String()}
 	query := url.Values{"start": {strconv.FormatInt(offset, 10)}}
-	res, err := c.get(ctx, c.jobPath(prefix+"logText/progressiveText", query), true)
+	res, err := c.getWithVersionPolicy(ctx, c.jobPath(prefix+"logText/progressiveText", query), true, true)
 	if err != nil {
 		return out, err
 	}
@@ -506,6 +538,8 @@ func (c jenkinsBuildClient) log(ctx context.Context, number int, offset int64) (
 			return out, errJenkinsResponse
 		}
 		out.NextOffset = next
+	} else if res.Header.Get("X-Jenkins") == "" {
+		return out, errJenkinsPeer
 	}
 	out.More = res.Header.Get("X-More-Data") == "true"
 	if len(body) > jenkinsLogLimit {

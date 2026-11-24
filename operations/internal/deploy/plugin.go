@@ -250,8 +250,13 @@ func (x *executor) probePlugin(d plugin.Definition) (Result, error) {
 		return result, e
 	}
 	result.ImageID = imageID
-	out, e := x.docker("run", "--rm", "--pull", "never", "--network", "none", "--read-only", "--user", "65534:65534", "--workdir", "/tmp", "--tmpfs", "/tmp:rw,noexec,nosuid,size=32m", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--memory", "256m", "--cpus", "1", "--pids-limit", "64", "--env", "HOME=/tmp", "--entrypoint", d.Command, imageID, d.Argument)
-	text := strings.TrimSpace(string(out))
+	dockerArgs := []string{"run", "--rm", "--pull", "never", "--network", "none", "--read-only", "--user", "65534:65534", "--workdir", "/tmp", "--tmpfs", "/tmp:rw,noexec,nosuid,size=32m", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--memory", "256m", "--cpus", "1", "--pids-limit", "64", "--env", "HOME=/tmp"}
+	if d.Command == "mvn" {
+		dockerArgs = append(dockerArgs, "--env", "MAVEN_OPTS=-Djansi.mode=strip -Djansi.graceful=true -Dstyle.color=never")
+	}
+	dockerArgs = append(dockerArgs, "--entrypoint", d.Command, imageID, d.Argument)
+	out, e := x.docker(dockerArgs...)
+	text := cleanToolVersionOutput(d.Key, strings.TrimSpace(string(out)))
 	if e != nil || len(text) > 8192 || !plugin.VersionMatches(d, text) {
 		return result, errors.New("PLUGIN_VERSION_CHECK_FAILED")
 	}

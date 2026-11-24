@@ -64,7 +64,7 @@ func validateSoftwareUninstall(req Request) error {
 	} else if u.ClearNodeDefault {
 		return errors.New("NODE_DEFAULT_CLEAR_INVALID")
 	}
-	if i.SoftwareID != s.ID || i.BindingRevision != s.Version || o.ControllerID != req.ControllerID || o.TargetID != req.TargetID || o.ConfigHash != Digest(i.Config) || s.SoftwareKey != strings.ToUpper(i.Definition.Key) || (i.Config.Mode() == "NATIVE") != (o.RuntimeMode == "NATIVE") {
+	if i.SoftwareID != s.ID || i.DirectoryName != o.DirectoryName || i.BindingRevision != s.Version || o.ControllerID != req.ControllerID || o.TargetID != req.TargetID || o.ConfigHash != Digest(i.Config) || s.SoftwareKey != strings.ToUpper(i.Definition.Key) || (i.Config.Mode() == "NATIVE") != (o.RuntimeMode == "NATIVE") {
 		return errors.New("SOFTWARE_UNINSTALL_OWNERSHIP_MISMATCH")
 	}
 	if i.Official != nil || o.Official != nil || serviceinstall.IsOfficial(i.Definition) {
@@ -77,8 +77,9 @@ func validateSoftwareUninstall(req Request) error {
 
 func (x *executor) uninstallRoot(req Request) (string, error) {
 	i := req.Uninstallation.Installation
-	root := serviceinstall.InstallRoot(x.root, i.SoftwareID, i.Config)
-	if filepath.Base(root) != req.Software.ID || filepath.Clean(root) != root || !filepath.IsAbs(root) || root == x.root || filepath.Dir(root) == root {
+	root := i.InstallRoot(x.root)
+	wantDir := serviceinstall.InstallDirectoryName(i.SoftwareID, i.DirectoryName)
+	if filepath.Base(root) != wantDir || filepath.Clean(root) != root || !filepath.IsAbs(root) || root == x.root || filepath.Dir(root) == root {
 		return "", errors.New("SOFTWARE_UNINSTALL_PATH_INVALID")
 	}
 	if req.Software.Ownership.RuntimeMode == "NATIVE" && i.Definition.Key != "docker" && req.Software.Ownership.BinaryPath != filepath.Join(root, serviceinstall.NativeBinaryRelative(i.Definition)) {

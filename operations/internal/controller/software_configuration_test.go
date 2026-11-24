@@ -77,7 +77,7 @@ func installReceiptFixture(req deploy.Request, i serviceinstall.Request, marker 
 		}
 	} else {
 		e.BinaryHash = strings.Repeat("a", 64)
-		e.BinaryPath = serviceinstall.InstallRoot("/opt/plugin-test", i.SoftwareID, i.Config) + "/" + serviceinstall.NativeBinaryRelative(i.Definition)
+		e.BinaryPath = i.InstallRoot("/opt/plugin-test") + "/" + serviceinstall.NativeBinaryRelative(i.Definition)
 		if kind == "SYSTEMD" {
 			locator = "sfops-service-" + i.SoftwareID + ".service"
 		} else {

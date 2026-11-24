@@ -126,6 +126,9 @@ func (h *HTTP) operationsRoute(w http.ResponseWriter, r *http.Request, s *sessio
 	if h.jenkinsUnlockRoute(w, r, s, path) {
 		return true
 	}
+	if h.mavenConfigRoute(w, r, s, path) {
+		return true
+	}
 	if h.applicationProjectsRoute(w, r, s, path) {
 		return true
 	}

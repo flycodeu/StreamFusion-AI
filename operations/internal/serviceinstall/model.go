@@ -23,6 +23,7 @@ var sha = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var revision = regexp.MustCompile(`^[1-9][0-9]{0,5}$`)
 var identifier = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_]{0,31}$`)
 var storagePath = regexp.MustCompile(`^/[a-zA-Z0-9_./-]+$`)
+var directoryNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}[a-z0-9]?$`)
 
 // Config contains only public options and immutable credential references.
 // Passwords and S3 access keys are resolved into Request.Secrets at transport.
@@ -65,6 +66,7 @@ type Request struct {
 	Node                *NodeContext  `json:"node,omitempty"`
 	Official            *OfficialPlan `json:"official,omitempty"`
 	SoftwareID          string        `json:"softwareId"`
+	DirectoryName       string        `json:"directoryName,omitempty"`
 	BindingRevision     int64         `json:"bindingRevision"`
 	Definition          Definition    `json:"definition"`
 	Config              Config        `json:"config"`
@@ -154,11 +156,157 @@ func (c Config) Mode() string {
 	return c.RuntimeMode
 }
 
+func ValidDirectoryName(value string) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) > 64 || strings.Contains(value, "..") || strings.HasPrefix(value, ".") || strings.HasSuffix(value, ".") {
+		return false
+	}
+	return directoryNamePattern.MatchString(value)
+}
+
+func InstallDirectoryName(id, directoryName string) string {
+	if directoryName != "" && ValidDirectoryName(directoryName) {
+		return directoryName
+	}
+	return id
+}
+
 func InstallRoot(base, id string, c Config) string {
 	if c.StorageRoot != "" {
 		return path.Join(c.StorageRoot, id)
 	}
 	return path.Join(base, "software", id)
+}
+
+func InstallRootFor(base, id, directoryName string, c Config) string {
+	return InstallRoot(base, InstallDirectoryName(id, directoryName), c)
+}
+
+func (r Request) InstallRoot(base string) string {
+	return InstallRootFor(base, r.SoftwareID, r.DirectoryName, r.Config)
+}
+
+func sanitizeDirectorySlug(raw string) string {
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(raw)) {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+			lastDash = false
+		} else if !lastDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastDash = true
+		}
+		if b.Len() >= 28 {
+			break
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+func shortVersionSlug(version string) string {
+	v := strings.TrimPrefix(strings.TrimSpace(strings.ToLower(version)), "v")
+	if v == "" {
+		return ""
+	}
+	core := v
+	if idx := strings.IndexAny(core, "-+"); idx > 0 {
+		prefix := core[:idx]
+		if len(prefix) > 0 && prefix[0] >= '0' && prefix[0] <= '9' {
+			core = prefix
+		}
+	}
+	parts := strings.Split(core, ".")
+	if len(parts) > 0 && len(parts[0]) > 0 && parts[0][0] >= '0' && parts[0][0] <= '9' {
+		major := sanitizeDirectorySlug(parts[0])
+		if major != "" {
+			if len(parts) > 1 {
+				minor := sanitizeDirectorySlug(parts[1])
+				if minor != "" && minor != "0" {
+					return major + "-" + minor
+				}
+			}
+			return major
+		}
+	}
+	s := sanitizeDirectorySlug(v)
+	if len(s) > 16 {
+		s = strings.Trim(s[:16], "-")
+	}
+	return s
+}
+
+func SuggestDirectoryName(d Definition, c Config, softwareID string, used map[string]bool) string {
+	slug := sanitizeDirectorySlug(d.Key)
+	if slug == "" {
+		slug = sanitizeDirectorySlug(d.Name)
+	}
+	if slug == "" {
+		slug = "app"
+	}
+	suffix := ""
+	if c.HostPort > 0 {
+		suffix = fmt.Sprint(c.HostPort)
+	} else {
+		for _, pm := range PortMappings(d, c) {
+			if pm.HostPort > 0 {
+				suffix = fmt.Sprint(pm.HostPort)
+				break
+			}
+		}
+	}
+	if suffix == "" {
+		suffix = shortVersionSlug(d.Version)
+	}
+	base := slug
+	if suffix != "" {
+		base = slug + "-" + suffix
+	}
+	if len(base) > 48 {
+		base = strings.Trim(base[:48], "-.")
+	}
+	if base == "" || !ValidDirectoryName(base) {
+		base = "app"
+	}
+	isUsed := func(name string) bool {
+		return used != nil && (used[name] || used[strings.ToLower(name)])
+	}
+	if !isUsed(base) {
+		return base
+	}
+	for n := 2; n <= 99; n++ {
+		candidate := fmt.Sprintf("%s-%d", base, n)
+		if ValidDirectoryName(candidate) && !isUsed(candidate) {
+			return candidate
+		}
+	}
+	return DirectoryNameWithShortID(base, softwareID)
+}
+
+func DirectoryNameWithShortID(baseName, softwareID string) string {
+	cleanID := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(softwareID)), "-", "")
+	short := cleanID
+	if len(short) > 6 {
+		short = short[:6]
+	}
+	if short == "" {
+		short = "inst"
+	}
+	base := strings.Trim(baseName, "-.")
+	maxBase := 64 - 1 - len(short)
+	if len(base) > maxBase {
+		base = strings.Trim(base[:maxBase], "-.")
+	}
+	if base == "" {
+		return short
+	}
+	candidate := base + "-" + short
+	if ValidDirectoryName(candidate) {
+		return candidate
+	}
+	return softwareID
 }
 
 func ValidStorageRoot(value string) bool {
@@ -372,7 +520,7 @@ func (r Request) Validate() error {
 	} else if r.Node != nil {
 		return errors.New("NODE_CONTEXT_UNEXPECTED")
 	}
-	if !uuid.MatchString(r.SoftwareID) || r.BindingRevision < 1 {
+	if !uuid.MatchString(r.SoftwareID) || !ValidDirectoryName(r.DirectoryName) || r.BindingRevision < 1 {
 		return errors.New("SERVICE_INSTALL_IDENTITY_INVALID")
 	}
 	if err := ValidateDefinition(r.Definition); err != nil {

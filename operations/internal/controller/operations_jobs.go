@@ -35,6 +35,10 @@ const jobHistorySQL = `WITH inputs AS (
  FROM inputs j LEFT JOIN targets t ON t.id=j.target_id LEFT JOIN instances i ON i.id=j.instance_id
  LEFT JOIN software_instances s ON s.id=coalesce(nullif(json_extract(j.safe_input,'$.software.id'),''),
     nullif(json_extract(j.safe_input,'$.installation.softwareId'),''),json_extract(j.safe_input,'$.reconfiguration.softwareId'))
+ UNION ALL
+ SELECT id,'PROJECT_'||action,'',coalesce(target_id,''),status,phase,error_code,0,trace_id,
+ json_object('output',execution_log,'health',health,'releaseId',release_id,'buildNumber',build_number,'commit',commit_id),
+ created_at,updated_at,'',subject_name,'',host_name FROM project_deployment_jobs
 ) SELECT id,kind,instance_id,target_id,status,phase,error_code,target_ack_pending,trace_id,result_json,
  created_at,updated_at,software_id,subject_name,operation_key,host_name FROM history `
 
@@ -148,6 +152,11 @@ func (h *HTTP) getJob(w http.ResponseWriter, r *http.Request, id string) {
 }
 func (h *HTTP) RunOperations(ctx context.Context) {
 	h.store.recoverInstallationMaterials()
+	h.cleanupProjectDownloads()
+	projectDone := make(chan struct{})
+	projectCtx, stopProject := context.WithCancel(ctx)
+	go func() { defer close(projectDone); h.runProjectDeployments(projectCtx) }()
+	defer func() { stopProject(); <-projectDone }()
 	_, _ = h.store.DB.Exec("UPDATE jobs SET status='UNKNOWN',error_code='CONTROLLER_RESTARTED' WHERE status='RUNNING' AND kind<>'IMPORT'; UPDATE jobs SET status='FAILED',error_code='UPLOAD_INTERRUPTED' WHERE kind='IMPORT' AND (phase='UPLOADING' OR status='RUNNING')")
 	_, _ = h.store.DB.Exec("UPDATE plugin_installations SET status='UNKNOWN',error_code='CONTROLLER_RESTARTED' WHERE last_job_id IN (SELECT id FROM jobs WHERE status='UNKNOWN')")
 	_, _ = h.store.DB.Exec("UPDATE software_instances SET actual_state='UNKNOWN',error_code='CONTROLLER_RESTARTED' WHERE last_job_id IN (SELECT id FROM jobs WHERE status='UNKNOWN')")

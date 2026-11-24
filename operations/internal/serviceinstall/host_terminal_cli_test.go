@@ -147,10 +147,18 @@ func TestHostTerminalWorksWithoutPlatform(t *testing.T) {
 func TestHostTerminalToolsUseLocalImageAndWorkspace(t *testing.T) {
 	f := newTerminalFixture(t)
 	got := f.run(t, "mvn", "test", "-Dname=a b")
-	for _, key := range []string{"--pull=never", "--user", "--workdir", "--mount", "MAVEN_OPTS=-Duser.home=/tmp", "MAVEN_CONFIG=/tmp/.m2", f.mvn} {
+	for _, key := range []string{"--pull=never", "--user", "--workdir", "--mount", "MAVEN_OPTS=-Duser.home=/tmp -Djansi.graceful=true", "MAVEN_CONFIG=/tmp/.m2", f.mvn} {
 		if !slices.Contains(got, key) {
 			t.Fatalf("missing %s: %q", key, got)
 		}
+	}
+	f.write(t, "managed-settings.xml", "<settings/>\n")
+	outSettings, err := f.call(t, nil, `export SF_MAVEN_SETTINGS="$RECORD/managed-settings.xml"; exec bash "$RECORD/sf-docker" mvn -version`)
+	if err != nil {
+		t.Fatalf("managed settings: %v %s", err, outSettings)
+	}
+	if !strings.Contains(f.read(t, "args"), `target=/usr/share/maven/conf/settings.xml",readonly`) {
+		t.Fatalf("missing readonly settings mount: %q", f.read(t, "args"))
 	}
 	if !slices.Equal(got[len(got)-5:], []string{"--entrypoint", "mvn", f.mvn, "test", "-Dname=a b"}) {
 		t.Fatalf("maven: %q", got)

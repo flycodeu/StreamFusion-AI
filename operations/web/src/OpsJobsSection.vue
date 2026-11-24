@@ -1,5 +1,7 @@
 <script setup lang="ts">
+import { ElButton, ElEmpty, ElOption, ElSelect, ElTable, ElTableColumn, ElTag } from "element-plus";
 import OpsPagination from "./OpsPagination.vue";
+import { isProjectJob } from "./jobs";
 
 export interface WorkspaceJobItem {
   id: string;
@@ -45,119 +47,116 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="section-head">
+  <div class="ops-el-toolbar" style="margin-bottom: 14px">
     <h2>作业记录</h2>
-    <div class="job-filters">
-      <select
-        :value="jobStatusFilter"
-        aria-label="筛选作业状态"
-        @change="emit('update:jobStatusFilter', ($event.target as HTMLSelectElement).value)"
+    <div class="ops-el-toolbar-group">
+      <ElSelect
+        :model-value="jobStatusFilter"
+        clearable
+        :value-on-clear="''"
+        placeholder="全部状态"
+        style="width: 140px"
+        @update:model-value="emit('update:jobStatusFilter', $event ?? '')"
       >
-        <option value="">全部状态</option>
-        <option
+        <ElOption label="全部状态" value="" />
+        <ElOption
           v-for="(label, code) in statusLabels"
           :key="code"
+          :label="label"
           :value="code"
-        >
-          {{ label }}
-        </option>
-      </select>
-      <select
-        :value="jobKindFilter"
-        aria-label="筛选作业类型"
-        @change="emit('update:jobKindFilter', ($event.target as HTMLSelectElement).value)"
+        />
+      </ElSelect>
+      <ElSelect
+        :model-value="jobKindFilter"
+        clearable
+        :value-on-clear="''"
+        placeholder="全部类型"
+        style="width: 160px"
+        @update:model-value="emit('update:jobKindFilter', $event ?? '')"
       >
-        <option value="">全部类型</option>
-        <option
+        <ElOption label="全部类型" value="" />
+        <ElOption
           v-for="(label, code) in jobKindLabels"
           :key="code"
+          :label="label"
           :value="code"
-        >
-          {{ label }}
-        </option>
-      </select>
-      <button class="secondary" :disabled="busy" @click="emit('refresh')">
+        />
+      </ElSelect>
+      <ElButton :disabled="busy" :loading="jobsLoading" @click="emit('refresh')">
         刷新
-      </button>
+      </ElButton>
     </div>
   </div>
-  <div v-if="!jobs.length" class="empty">暂无作业</div>
-  <div v-else class="table-scroll">
-    <table>
-      <thead>
-        <tr>
-          <th>时间 / 作业</th>
-          <th>类型</th>
-          <th>阶段</th>
-          <th>状态</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="j in jobs" :key="j.id">
-          <td>
-            {{ time(j.createdAt) }}<small>{{ short(j.id) }}</small>
-          </td>
-          <td>
-            {{ j.kind === "HOST_PREPARE" ? j.subjectName || "主机接入" : jobKindLabels[j.kind] || "其他操作" }}
-          </td>
-          <td>
-            {{ phaseLabels[j.phase] || "阶段待确认"
-            }}<small v-if="j.targetAckPending">目标确认收尾中</small>
-          </td>
-          <td>
-            <span
-              class="state-tag"
-              :class="
-                j.status === 'SUCCEEDED'
-                  ? 'state-success'
-                  : jobStatus(j) === 'FAILED'
-                    ? 'state-error'
-                    : 'state-muted'
-              "
-              >{{ statusLabels[jobStatus(j)] || "状态待确认" }}</span
-            >
-          </td>
-          <td>
-            <button
-              class="quiet"
-              @click="emit('openDetail', j)"
-            >
-              详情</button
-            ><button
-              v-if="
-                j.status === 'QUEUED' &&
-                j.phase !== 'UPLOADING' &&
-                !j.targetAckPending
-              "
-              class="quiet"
-              :disabled="busy"
-              @click="emit('cancelJob', j)"
-            >
-              取消排队</button
-            ><button
-              v-if="j.status === 'UNKNOWN' || j.targetAckPending"
-              class="quiet"
-              :disabled="busy"
-              @click="emit('reconcile', j)"
-            >
-              核对</button
-            ><button
-              v-if="
-                j.status === 'UNKNOWN' &&
-                ['PUBLISH', 'ROLLBACK'].includes(j.kind)
-              "
-              class="quiet danger"
-              :disabled="busy"
-              @click="emit('reconcile', j, true)"
-            >
-              恢复
-            </button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
+  <ElTable :data="jobs" border stripe style="width: 100%">
+    <ElTableColumn label="时间 / 作业" min-width="170">
+      <template #default="{ row }">
+        <div>{{ time(row.createdAt) }}</div>
+        <small class="muted">{{ short(row.id) }}</small>
+      </template>
+    </ElTableColumn>
+    <ElTableColumn label="类型" min-width="150" show-overflow-tooltip>
+      <template #default="{ row }">
+        {{ row.kind === "HOST_PREPARE" ? row.subjectName || "主机接入" : jobKindLabels[row.kind] || "其他操作" }}
+      </template>
+    </ElTableColumn>
+    <ElTableColumn label="阶段" min-width="140">
+      <template #default="{ row }">
+        <div>{{ phaseLabels[row.phase] || "阶段待确认" }}</div>
+        <small v-if="row.targetAckPending" class="muted">目标确认收尾中</small>
+      </template>
+    </ElTableColumn>
+    <ElTableColumn label="状态" width="110" align="center">
+      <template #default="{ row }">
+        <ElTag
+          size="small"
+          :type="row.status === 'SUCCEEDED' ? 'success' : jobStatus(row as WorkspaceJobItem) === 'FAILED' ? 'danger' : 'info'"
+        >
+          {{ statusLabels[jobStatus(row as WorkspaceJobItem)] || "状态待确认" }}
+        </ElTag>
+      </template>
+    </ElTableColumn>
+    <ElTableColumn label="操作" width="210" fixed="right">
+      <template #default="{ row }">
+        <div class="ops-el-toolbar-group" style="gap: 8px">
+          <ElButton link type="primary" size="small" @click="emit('openDetail', row as WorkspaceJobItem)">
+            详情
+          </ElButton>
+          <ElButton
+            v-if="!isProjectJob(row.kind) && row.status === 'QUEUED' && row.phase !== 'UPLOADING' && !row.targetAckPending"
+            link
+            size="small"
+            :disabled="busy"
+            @click="emit('cancelJob', row as WorkspaceJobItem)"
+          >
+            取消排队
+          </ElButton>
+          <ElButton
+            v-if="!isProjectJob(row.kind) && (row.status === 'UNKNOWN' || row.targetAckPending)"
+            link
+            type="primary"
+            size="small"
+            :disabled="busy"
+            @click="emit('reconcile', row as WorkspaceJobItem)"
+          >
+            核对
+          </ElButton>
+          <ElButton
+            v-if="row.status === 'UNKNOWN' && ['PUBLISH', 'ROLLBACK'].includes(row.kind)"
+            link
+            type="danger"
+            size="small"
+            :disabled="busy"
+            @click="emit('reconcile', row as WorkspaceJobItem, true)"
+          >
+            恢复
+          </ElButton>
+        </div>
+      </template>
+    </ElTableColumn>
+    <template #empty>
+      <ElEmpty description="暂无作业记录" />
+    </template>
+  </ElTable>
   <OpsPagination
     :page="jobPage"
     :page-size="jobPageSize"

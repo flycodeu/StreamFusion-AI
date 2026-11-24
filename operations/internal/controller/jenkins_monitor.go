@@ -1,8 +1,11 @@
 package controller
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -10,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -23,10 +27,14 @@ var (
 	jenkinsUsername   = regexp.MustCompile(`^[A-Za-z0-9_.@-]{1,128}$`)
 	jenkinsToken      = regexp.MustCompile(`^[\x21-\x7e]{16,256}$`)
 	jenkinsPathPart   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_. -]{0,127}$`)
+	jenkinsAgentLabel = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 )
+
+const defaultJenkinsBuildAgentLabel = "sfops-build"
 
 type jenkinsMonitor struct {
 	SoftwareID, JobURL, EndpointIdentity, Username string
+	BuildAgentLabel                                string
 	Version                                        int
 	Ciphertext                                     []byte
 	automation                                     *jenkinsAutomation
@@ -110,9 +118,9 @@ func readJenkinsMonitor(q applicationReader, scope jenkinsScope) (string, jenkin
 		return "", saved, err
 	}
 	if scope.connection {
-		err := q.QueryRow(`SELECT coalesce(c.software_id,''),coalesce(c.endpoint_identity,''),coalesce(c.username,''),coalesce(c.version,0),c.token_ciphertext
-            FROM application_projects p LEFT JOIN application_jenkins_connections c ON c.project_id=p.id WHERE p.id=?`, scope.project).
-			Scan(&saved.SoftwareID, &saved.EndpointIdentity, &saved.Username, &saved.Version, &saved.Ciphertext)
+		err := q.QueryRow(`SELECT coalesce(c.software_id,''),coalesce(c.endpoint_identity,''),coalesce(c.username,''),coalesce(c.version,0),c.token_ciphertext,coalesce(c.build_agent_label,?)
+            FROM application_projects p LEFT JOIN application_jenkins_connections c ON c.project_id=p.id WHERE p.id=?`, defaultJenkinsBuildAgentLabel, scope.project).
+			Scan(&saved.SoftwareID, &saved.EndpointIdentity, &saved.Username, &saved.Version, &saved.Ciphertext, &saved.BuildAgentLabel)
 		return "", saved, err
 	}
 	if scope.instance != "" {
@@ -127,6 +135,17 @@ func readJenkinsMonitor(q applicationReader, scope jenkinsScope) (string, jenkin
 		FROM application_projects p LEFT JOIN application_jenkins_monitors m ON m.project_id=p.id WHERE p.id=?`, scope.project).
 		Scan(&job, &saved.SoftwareID, &saved.JobURL, &saved.EndpointIdentity, &saved.Username, &saved.Version, &saved.Ciphertext)
 	return job, saved, err
+}
+
+func resolveJenkinsBuildAgentLabel(requested *string, saved string) (string, bool) {
+	label := saved
+	if requested != nil {
+		label = strings.TrimSpace(*requested)
+	}
+	if label == "" {
+		label = defaultJenkinsBuildAgentLabel
+	}
+	return label, jenkinsAgentLabel.MatchString(label)
 }
 
 func (m jenkinsMonitor) secretID(project string) string {
@@ -331,8 +350,12 @@ func readJenkinsMonitorMetadata(q applicationReader, scope jenkinsScope) (map[st
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"configured": reason == "" && saved.Version > 0 && saved.JobURL == job, "reason": reason, "hasToken": saved.Version > 0, "jobUrl": job,
-		"version": strconv.Itoa(saved.Version), "softwareId": saved.SoftwareID, "username": saved.Username, "instances": options}, nil
+	data := map[string]any{"configured": reason == "" && saved.Version > 0 && saved.JobURL == job, "reason": reason, "hasToken": saved.Version > 0, "jobUrl": job,
+		"version": strconv.Itoa(saved.Version), "softwareId": saved.SoftwareID, "username": saved.Username, "instances": options}
+	if scope.connection {
+		data["buildAgentLabel"] = saved.BuildAgentLabel
+	}
+	return data, nil
 }
 
 func (h *HTTP) saveJenkinsMonitor(w http.ResponseWriter, r *http.Request, actor *session, scope jenkinsScope) {
@@ -341,11 +364,12 @@ func (h *HTTP) saveJenkinsMonitor(w http.ResponseWriter, r *http.Request, actor 
 		return
 	}
 	var in struct {
-		ExpectedVersion string `json:"expectedVersion"`
-		SoftwareID      string `json:"softwareId"`
-		Username        string `json:"username"`
-		Token           string `json:"token"`
-		JobURL          string `json:"jobUrl"`
+		ExpectedVersion string  `json:"expectedVersion"`
+		SoftwareID      string  `json:"softwareId"`
+		Username        string  `json:"username"`
+		Token           string  `json:"token"`
+		JobURL          string  `json:"jobUrl"`
+		BuildAgentLabel *string `json:"buildAgentLabel"`
 	}
 	if h.decodeSensitive(w, r, actor, &in) != nil {
 		h.rejectSecureRequest(w, r)
@@ -406,6 +430,14 @@ func (h *HTTP) saveJenkinsMonitor(w http.ResponseWriter, r *http.Request, actor 
 	}
 	project := scope.bindingID()
 	saved := jenkinsMonitor{SoftwareID: in.SoftwareID, JobURL: job, EndpointIdentity: endpoint.identity, Username: in.Username, Version: old.Version + 1}
+	if scope.connection {
+		var ok bool
+		saved.BuildAgentLabel, ok = resolveJenkinsBuildAgentLabel(in.BuildAgentLabel, old.BuildAgentLabel)
+		if !ok {
+			h.fail(w, r, 400, "INVALID_INPUT", "构建节点只接受一个标签：以字母或数字开头，至多 64 个字符，可包含下划线、短横线和点")
+			return
+		}
+	}
 	token := []byte(in.Token)
 	if len(token) == 0 {
 		if old.Version == 0 || old.secretID(project) != saved.secretID(project) {
@@ -434,9 +466,10 @@ func (h *HTTP) saveJenkinsMonitor(w http.ResponseWriter, r *http.Request, actor 
 				scope.instance, saved.SoftwareID, job, saved.EndpointIdentity, saved.Username, saved.Version, saved.Ciphertext)
 		}
 	} else if err == nil && scope.connection {
-		_, err = tx.Exec(`INSERT INTO application_jenkins_connections(project_id,software_id,endpoint_identity,username,version,token_ciphertext)
-            VALUES(?,?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET software_id=excluded.software_id,endpoint_identity=excluded.endpoint_identity,
-            username=excluded.username,version=excluded.version,token_ciphertext=excluded.token_ciphertext`, scope.project, saved.SoftwareID, saved.EndpointIdentity, saved.Username, saved.Version, saved.Ciphertext)
+		_, err = tx.Exec(`INSERT INTO application_jenkins_connections(project_id,software_id,endpoint_identity,username,version,token_ciphertext,build_agent_label)
+            VALUES(?,?,?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET software_id=excluded.software_id,endpoint_identity=excluded.endpoint_identity,
+            username=excluded.username,version=excluded.version,token_ciphertext=excluded.token_ciphertext,build_agent_label=excluded.build_agent_label`, scope.project,
+			saved.SoftwareID, saved.EndpointIdentity, saved.Username, saved.Version, saved.Ciphertext, saved.BuildAgentLabel)
 	} else if err == nil {
 		_, err = tx.Exec(`INSERT INTO application_jenkins_monitors(project_id,software_id,job_url,endpoint_identity,username,version,token_ciphertext)
 			VALUES(?,?,?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET software_id=excluded.software_id, job_url=excluded.job_url,
@@ -458,4 +491,198 @@ func (h *HTTP) saveJenkinsMonitor(w http.ResponseWriter, r *http.Request, actor 
 		return
 	}
 	h.success(w, r, data)
+}
+
+type jenkinsPluginStatus struct {
+	ShortName string `json:"shortName"`
+	Installed bool   `json:"installed"`
+	Active    bool   `json:"active"`
+	Version   string `json:"version,omitempty"`
+}
+
+type jenkinsAgentCheck struct {
+	Checked  bool `json:"checked"`
+	Matching int  `json:"matching"`
+	Online   int  `json:"online"`
+}
+
+func checkJenkinsBuildAgents(ctx context.Context, client jenkinsBuildClient, base url.URL, label string) jenkinsAgentCheck {
+	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+	base.Path += "/computer/api/json"
+	base.RawQuery = url.Values{"tree": []string{"computer[offline,numExecutors,assignedLabels[name]]"}}.Encode()
+	var list struct {
+		Computer []struct {
+			Offline        *bool `json:"offline"`
+			NumExecutors   *int  `json:"numExecutors"`
+			AssignedLabels []struct {
+				Name string `json:"name"`
+			} `json:"assignedLabels"`
+		} `json:"computer"`
+	}
+	if client.readJSONAt(ctx, base, &list) != nil || list.Computer == nil {
+		return jenkinsAgentCheck{}
+	}
+	check := jenkinsAgentCheck{Checked: true}
+	for _, node := range list.Computer {
+		if node.Offline == nil || node.NumExecutors == nil || node.AssignedLabels == nil {
+			return jenkinsAgentCheck{}
+		}
+		for _, assigned := range node.AssignedLabels {
+			if assigned.Name == label {
+				check.Matching++
+				if !*node.Offline && *node.NumExecutors > 0 {
+					check.Online++
+				}
+				break
+			}
+		}
+	}
+	return check
+}
+
+func (h *HTTP) testJenkinsConnection(w http.ResponseWriter, r *http.Request, actor *session, projectID string) {
+	if !h.sensitiveResponseAllowed(r) {
+		h.fail(w, r, 403, "JENKINS_TLS_REQUIRED", "请通过 HTTPS 或本机回环地址测试 Jenkins 连接")
+		return
+	}
+	var in struct {
+		SoftwareID      string  `json:"softwareId"`
+		Username        string  `json:"username"`
+		Token           string  `json:"token"`
+		BuildAgentLabel *string `json:"buildAgentLabel"`
+	}
+	if h.decodeSensitive(w, r, actor, &in) != nil {
+		h.rejectSecureRequest(w, r)
+		return
+	}
+	in.Username = strings.TrimSpace(in.Username)
+	in.Token = strings.TrimSpace(in.Token)
+	if !deploy.ID.MatchString(in.SoftwareID) || !jenkinsUsername.MatchString(in.Username) || (in.Token != "" && !jenkinsToken.MatchString(in.Token)) {
+		h.fail(w, r, 400, "INVALID_INPUT", "请选择 Jenkins 实例，并填写有效的账号和 API Token")
+		return
+	}
+	scope := jenkinsScope{project: projectID, connection: true}
+	tx, err := h.store.DB.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		h.internal(w, r, err)
+		return
+	}
+	defer tx.Rollback()
+	_, old, err := readJenkinsMonitor(tx, scope)
+	if err != nil {
+		h.opsError(w, r, err)
+		return
+	}
+	label, ok := resolveJenkinsBuildAgentLabel(in.BuildAgentLabel, old.BuildAgentLabel)
+	if !ok {
+		h.fail(w, r, 400, "INVALID_INPUT", "构建节点只接受一个标签：以字母或数字开头，至多 64 个字符，可包含下划线、短横线和点")
+		return
+	}
+	endpoint, err := readJenkinsEndpoint(tx, in.SoftwareID)
+	if err != nil {
+		h.jenkinsError(w, r, err)
+		return
+	}
+	tx.Rollback()
+
+	var token []byte
+	if in.Token != "" {
+		token = []byte(in.Token)
+	} else {
+		if old.Version == 0 || old.SoftwareID != in.SoftwareID || old.Username != in.Username {
+			h.fail(w, r, 400, "JENKINS_TOKEN_REQUIRED", "请输入该账号的 API Token 后再测试连接")
+			return
+		}
+		token, err = unseal(h.store.Key, old.secretID(scope.bindingID()), old.Version, old.Ciphertext)
+		if err != nil || !jenkinsToken.Match(token) {
+			clear(token)
+			h.jenkinsError(w, r, errJenkinsSecret)
+			return
+		}
+	}
+	defer clear(token)
+
+	select {
+	case h.hostCheckSlots <- struct{}{}:
+		defer func() { <-h.hostCheckSlots }()
+	default:
+		h.jenkinsError(w, r, errJenkinsBusy)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	client, done, err := h.store.connectJenkinsBuild(ctx, endpoint, endpoint.base, in.Username, token)
+	if err != nil {
+		h.jenkinsError(w, r, err)
+		return
+	}
+	defer done()
+
+	meURL := endpoint.base
+	meURL.Path += "/me/api/json"
+	meURL.RawQuery = url.Values{"tree": []string{"id,fullName"}}.Encode()
+	meRes, err := client.get(ctx, meURL, true)
+	if err != nil {
+		h.jenkinsError(w, r, err)
+		return
+	}
+	jenkinsVersion := meRes.Header.Get("X-Jenkins")
+	meBody, readErr := io.ReadAll(io.LimitReader(meRes.Body, (128<<10)+1))
+	meRes.Body.Close()
+	if readErr != nil || len(meBody) > (128<<10) {
+		h.jenkinsError(w, r, errJenkinsResponse)
+		return
+	}
+	var authUser struct {
+		ID       string `json:"id"`
+		FullName string `json:"fullName"`
+	}
+	if json.Unmarshal(meBody, &authUser) != nil {
+		h.jenkinsError(w, r, errJenkinsResponse)
+		return
+	}
+
+	recommendedNames := []string{"git", "workflow-aggregator", "pipeline-stage-view", "credentials-binding", "ssh-agent"}
+	pluginsChecked := false
+	recommended := make([]jenkinsPluginStatus, 0, len(recommendedNames))
+	pmURL := endpoint.base
+	pmURL.Path += "/pluginManager/api/json"
+	pmURL.RawQuery = url.Values{"depth": []string{"1"}, "tree": []string{"plugins[shortName,active,version]"}}.Encode()
+	var pmData struct {
+		Plugins []struct {
+			ShortName string `json:"shortName"`
+			Active    bool   `json:"active"`
+			Version   string `json:"version"`
+		} `json:"plugins"`
+	}
+	if client.readJSONAt(ctx, pmURL, &pmData) == nil {
+		pluginsChecked = true
+		byName := make(map[string]jenkinsPluginStatus, len(pmData.Plugins))
+		for _, p := range pmData.Plugins {
+			byName[p.ShortName] = jenkinsPluginStatus{ShortName: p.ShortName, Installed: true, Active: p.Active, Version: p.Version}
+		}
+		for _, name := range recommendedNames {
+			if st, ok := byName[name]; ok {
+				recommended = append(recommended, st)
+			} else {
+				recommended = append(recommended, jenkinsPluginStatus{ShortName: name, Installed: false, Active: false})
+			}
+		}
+	}
+
+	h.success(w, r, map[string]any{
+		"ok":              true,
+		"jenkinsVersion":  jenkinsVersion,
+		"buildAgentLabel": label,
+		"authenticatedUser": map[string]string{
+			"id":       authUser.ID,
+			"fullName": authUser.FullName,
+		},
+		"pluginsChecked":     pluginsChecked,
+		"recommendedPlugins": recommended,
+		"buildAgents":        checkJenkinsBuildAgents(ctx, client, endpoint.base, label),
+		"checkedAt":          Now(),
+	})
 }

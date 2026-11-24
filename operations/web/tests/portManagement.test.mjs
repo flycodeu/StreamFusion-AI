@@ -28,13 +28,14 @@ function view(host = "host-a") {
     managedRules: Array.from({ length: 23 }, (_, i) => ({ id: `rule-${i}`, action: "allow", protocol: "tcp", source: "0.0.0.0/0", start: 8000 + i, end: 8000 + i })) } };
 }
 function savedPlan() { return { id: "original-plan", expiresAt: "2099-01-01T00:00:00Z", snapshot: view().snapshot, change: { operation: "ADD", rule: { start: 8080, end: 8080, action: "allow", protocol: "tcp", source: "0.0.0.0/0" } } }; }
-function harness(respond = () => undefined) {
+function harness(respond = () => undefined, props = {}) {
   const calls = [], events = [], messages = [], mounts = [], unmounts = [], scope = vue.effectScope();
   const request = async (path, method, data) => {
     calls.push({ path, method, data });
     const result = respond(path, method, data);
     if (result !== undefined) return result;
     if (path === "/hosts") return hosts;
+    if (path.startsWith("/software-instances")) return { items: [], nextCursor: "" };
     if (path.startsWith("/jobs?")) return { items: [{ id: "first", kind: "FIREWALL_CHANGE", targetId: new URL(path, "http://ops.test").searchParams.get("hostId") }], nextCursor: "cursor-1" };
     if (path.endsWith("/ports")) return view(path.includes("host-b") ? "host-b" : "host-a");
     throw new Error(`Unexpected request ${path}`);
@@ -42,12 +43,13 @@ function harness(respond = () => undefined) {
   const imports = {
     vue: { ...vue, onMounted: fn => mounts.push(fn), onUnmounted: fn => unmounts.push(fn) },
     "./api": { ApiError, request }, "./pagination": pagination, "./hosts": { hostTime: value => value },
+    "./listPages": { requestAllPages: async () => [] },
     "element-plus": { ElMessage: { success: value => messages.push(value) } },
   };
   const module = { exports: {} };
-  scope.run(() => new Function("require", "module", "exports", "defineEmits", "setTimeout", "clearTimeout", "setInterval", "clearInterval", "document", compile(
-    script + "\nexport { hostId, view, jobs, busy, loading, search, error, errorDetails, plan, now, receipt, submitKey, submissionAttempted, dialog, jobLogs, portPage, portRows, portTotal, rulePage, ruleRows, historyPage, historyPageSize, nextCursor, act, refresh, preflight, submit, logs, open, changeHistoryPage, changeHistorySize };",
-  ))(name => imports[name] || {}, module, module.exports, () => (name, ...args) => events.push([name, ...args]), () => 1, () => {}, () => 1, () => {}, { hidden: false }));
+  scope.run(() => new Function("require", "module", "exports", "defineProps", "defineEmits", "setTimeout", "clearTimeout", "setInterval", "clearInterval", "document", compile(
+    script + "\nexport { hostId, view, jobs, busy, loading, search, error, errorDetails, plan, now, receipt, submitKey, submissionAttempted, dialog, jobLogs, portPage, portRows, portTotal, rulePage, ruleRows, historyPage, historyPageSize, nextCursor, rule, portOwners, quickAllow, act, refresh, preflight, submit, logs, open, changeHistoryPage, changeHistorySize };",
+  ))(name => imports[name] || {}, module, module.exports, () => props, () => (name, ...args) => events.push([name, ...args]), () => 1, () => {}, () => 1, () => {}, { hidden: false }));
   mounts.forEach(fn => fn());
   return { panel: module.exports, calls, events, messages, dispose() { unmounts.forEach(fn => fn()); scope.stop(); } };
 }
@@ -196,5 +198,19 @@ test("a lost submit reply reuses its original plan and key after expiry", async 
   assert.equal(h.panel.historyPage.value, 1);
   assert.equal(new URL(h.calls.filter(call => call.path.startsWith("/jobs?")).at(-1).path, "http://ops.test").searchParams.has("before"), false);
   assert.equal(h.messages.length, 1);
+  h.dispose();
+});
+
+test("fixedHostId locks host selection and quickAllow prefills the rule dialog", async () => {
+  const h = harness(undefined, { fixedHostId: "host-b" });
+  await flush();
+  assert.equal(h.panel.hostId.value, "host-b");
+  assert.equal(h.panel.view.value.snapshot.hash, "host-b");
+  h.panel.quickAllow(8080, "TCP");
+  assert.equal(h.panel.dialog.value, true);
+  assert.equal(h.panel.rule.value.action, "allow");
+  assert.equal(h.panel.rule.value.protocol, "tcp");
+  assert.equal(h.panel.rule.value.start, 8080);
+  assert.equal(h.panel.rule.value.end, 8080);
   h.dispose();
 });
