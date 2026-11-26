@@ -6,11 +6,11 @@ import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.streamfusion.platform.camera.config.CameraProperties;
+import com.streamfusion.platform.camera.locator.OnvifStreamLocatorAdapter;
+import com.streamfusion.platform.camera.locator.StreamLocatorAdapterRegistry;
 import com.streamfusion.platform.camera.pojo.entity.CameraLocatorEntity;
 import com.streamfusion.platform.camera.service.CameraSourceRules;
 import com.streamfusion.platform.camera.status.CameraStatusStreamResolver;
-import com.streamfusion.platform.media.preview.source.OnvifStreamLocatorAdapter;
-import com.streamfusion.platform.media.preview.source.StreamLocatorAdapterRegistry;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;

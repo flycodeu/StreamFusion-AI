@@ -5,7 +5,6 @@ import { RouterLink } from 'vue-router'
 import { getMediaRuntime } from '../../api/media-runtime/api'
 import type { MediaRuntimeCandidate } from '../../api/media-runtime/types'
 import {
-  getPreviewNodes,
   getDirectZlmInstances,
   createDirectZlmInstance,
   saveDirectZlmInstance,
@@ -19,7 +18,6 @@ import {
   previewNodeAction,
   registerPreviewNode,
   savePreviewNode,
-  type PreviewCluster,
   type DirectZlmInstances,
   type DirectZlmInstance,
   type DirectZlmInput,
@@ -37,12 +35,10 @@ import { sessionState } from '../../session/state'
 import { formatDateTime } from '../../utils/dateTime'
 import { labelOf } from '../../utils/display'
 import { findPreviewPath, previewReason } from './model'
-import {
-  defaultDirectBudget,
-  nodeUsageMetrics as usageMetrics,
-  previewNodeLabels as names,
-} from './nodePresentation'
+import { defaultDirectBudget, previewNodeLabels as names } from './nodePresentation'
 import ZlmNetworkLoad from './ZlmNetworkLoad.vue'
+import PreviewNodeStatusCard from './PreviewNodeStatusCard.vue'
+import { usePreviewNodeObservation } from './usePreviewNodeObservation'
 import PreviewOpsSync from './PreviewOpsSync.vue'
 import PreviewNodeCatalogPopovers from './PreviewNodeCatalogPopovers.vue'
 import PreviewNodeDialogs, {
@@ -53,12 +49,18 @@ import './preview-node.css'
 
 const props = withDefaults(defineProps<{ management?: boolean }>(), { management: false })
 const captureScope = usePageScope()
-const snapshot = ref<PreviewCluster | null>(null),
-  busy = ref(false),
-  error = ref<unknown>(null)
-const displayClock = ref(Date.now())
-const snapshotRefreshedAt = ref(0)
-let lastObservationAttemptAt = Date.now()
+const maintaining = ref<PreviewNodeStatus | null>(null)
+const {
+  snapshot,
+  busy,
+  error,
+  run,
+  reset: resetObservation,
+  liveZlmLoad,
+} = usePreviewNodeObservation((value) => {
+  if (maintaining.value)
+    maintaining.value = value.nodes.find((n) => n.nodeId === maintaining.value?.nodeId) ?? null
+})
 const localZlm = ref<MediaRuntimeCandidate | null>(null)
 const opsInstances = ref<OpsPreviewInstances | null>(null)
 const opsZlmInstances = ref<OpsZlmInstances | null>(null)
@@ -99,19 +101,15 @@ const configuredConnections = computed(() =>
     registered: snapshot.value?.nodes.find((node) => node.nodeId === item.nodeId),
   })),
 )
-const maintaining = ref<PreviewNodeStatus | null>(null)
 const synchronizing = ref<PreviewNodeStatus | null>(null)
 const maintenance = ref<PreviewMaintenance | null>(null)
 const syncedNodeId = ref<string | null>(null)
 const nodesById = computed(() => new Map(snapshot.value?.nodes.map((node) => [node.nodeId, node])))
 
-let controller: globalThis.AbortController | undefined
 let runtimeController: globalThis.AbortController | undefined
 let opsController: globalThis.AbortController | undefined
 let opsZlmController: globalThis.AbortController | undefined
 let directController: globalThis.AbortController | undefined
-let observationController: globalThis.AbortController | undefined
-let observationTimer: ReturnType<typeof globalThis.setInterval> | undefined
 
 function clearManagementState() {
   opsController?.abort()
@@ -142,30 +140,13 @@ function clearManagementState() {
 }
 
 onBeforeUnmount(() => {
-  controller?.abort()
   runtimeController?.abort()
   opsController?.abort()
   opsZlmController?.abort()
   directController?.abort()
-  observationController?.abort()
-  if (observationTimer) globalThis.clearInterval(observationTimer)
 })
 
-onMounted(() => {
-  void run()
-  void loadLocalZlm()
-  observationTimer = globalThis.setInterval(() => {
-    displayClock.value = Date.now()
-    if (
-      !busy.value &&
-      snapshot.value?.nodes.some((node) => node.kind === 'ZLM_DIRECT') &&
-      displayClock.value - lastObservationAttemptAt >= 15_000
-    ) {
-      lastObservationAttemptAt = displayClock.value
-      void refreshObservation()
-    }
-  }, 5000)
-})
+onMounted(() => void loadLocalZlm())
 
 watch(
   canManage,
@@ -179,16 +160,9 @@ watch(
 watch(
   [() => sessionState.me?.user.id, () => sessionState.epoch],
   ([userId], [previousUserId]) => {
-    controller?.abort()
     runtimeController?.abort()
-    observationController?.abort()
-    controller = undefined
     runtimeController = undefined
-    observationController = undefined
-    busy.value = false
-    error.value = null
-    snapshot.value = null
-    snapshotRefreshedAt.value = 0
+    resetObservation()
     localZlm.value = null
     diagnostic.value = null
     clearManagementState()
@@ -313,32 +287,8 @@ function directIdle(instance: DirectZlmInstance) {
   )
 }
 
-function liveZlmLoad(node: PreviewNodeStatus | undefined) {
-  if (displayClock.value - snapshotRefreshedAt.value > 20_000) return null
-  return node?.zlmLoad ?? null
-}
-
 function directZlmLoad(nodeId: string) {
   return liveZlmLoad(snapshot.value?.nodes.find((node) => node.nodeId === nodeId))
-}
-
-async function refreshObservation() {
-  if (observationController) return
-  const active = captureScope()
-  const nextController = new globalThis.AbortController()
-  observationController = nextController
-  try {
-    const value = await getPreviewNodes(nextController.signal)
-    if (active() && !busy.value && observationController === nextController) {
-      snapshot.value = value
-      snapshotRefreshedAt.value = Date.now()
-      lastObservationAttemptAt = snapshotRefreshedAt.value
-    }
-  } catch {
-    // The last reading expires in the UI if the read-only refresh fails.
-  } finally {
-    if (observationController === nextController) observationController = undefined
-  }
 }
 
 async function loadOpsInstances() {
@@ -404,37 +354,6 @@ async function loadLocalZlm() {
         runtime.candidates.find((candidate) => candidate.id === runtime.selected.zlmId) ?? null
   } catch {
     // Node status remains available when local software inspection fails.
-  }
-}
-
-async function run(operation?: () => Promise<unknown>, afterApplied?: () => void) {
-  if (busy.value) return
-  observationController?.abort()
-  observationController = undefined
-  const active = captureScope()
-  const nextController = new globalThis.AbortController()
-  controller = nextController
-  busy.value = true
-  error.value = null
-  try {
-    if (operation) await operation()
-    if (!active()) return
-    afterApplied?.()
-    const value = await getPreviewNodes(nextController.signal)
-    if (active()) {
-      snapshot.value = value
-      snapshotRefreshedAt.value = Date.now()
-      lastObservationAttemptAt = snapshotRefreshedAt.value
-      if (maintaining.value)
-        maintaining.value = value.nodes.find((n) => n.nodeId === maintaining.value?.nodeId) ?? null
-    }
-  } catch (cause) {
-    if (active()) error.value = cause
-  } finally {
-    if (controller === nextController) {
-      controller = undefined
-      busy.value = false
-    }
   }
 }
 
@@ -567,201 +486,82 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
     />
     <div v-if="snapshot" class="node-content">
       <div class="node-list">
-        <article
+        <PreviewNodeStatusCard
           v-for="node in management
             ? snapshot.nodes.filter((item) => item.kind !== 'ZLM_DIRECT')
             : snapshot.nodes"
           :key="node.nodeId"
-          class="node-card"
-          :style="{ order: node.nodeId === 'local' ? -1 : 0 }"
+          :node="node"
+          :local-zlm="localZlm"
+          :zlm-load="liveZlmLoad(node)"
         >
-          <div class="node-heading">
-            <div>
-              <h3>{{ node.name }}</h3>
-              <small>{{ node.nodeId }} · 优先级 {{ node.priority }}</small>
-            </div>
-            <ElTag round :type="node.mode === 'REMOTE' ? 'primary' : 'info'">{{
-              labelOf(names, node.mode)
-            }}</ElTag>
-          </div>
-          <div class="node-status-bar" :class="{ ready: node.state === 'READY' }">
-            <p class="node-state">
-              <span class="state-dot" aria-hidden="true"></span> 节点检查：{{
-                labelOf(names, node.state)
-              }}<span v-if="node.observedAt"> · {{ formatDateTime(node.observedAt) }}</span>
-            </p>
-            <dl class="node-identity">
-              <div>
-                <dt>
-                  {{
-                    node.kind === 'ZLM_DIRECT'
-                      ? 'ZLM API 地址'
-                      : node.nodeId === 'local'
-                        ? 'ZLM 地址'
-                        : '节点控制地址'
-                  }}
-                </dt>
-                <dd>
-                  {{
-                    node.kind === 'ZLM_DIRECT'
-                      ? node.zlmApiAddress || '未登记'
-                      : node.nodeId === 'local'
-                        ? localZlm?.apiBase || '本机'
-                        : node.controlUri || '未登记'
-                  }}
-                </dd>
-              </div>
-              <div v-if="node.nodeId !== 'local'">
-                <dt>媒体地址</dt>
-                <dd>{{ node.mediaAddress || '未登记' }}</dd>
-              </div>
-              <div v-if="node.opsSource">
-                <dt>平台登记的 Ops 发布版本</dt>
-                <dd>
-                  <code>{{ node.opsSource.releaseId }}</code> ·
-                  {{ formatDateTime(node.opsSource.syncedAt) }}
-                </dd>
-              </div>
-              <div v-if="node.kind !== 'ZLM_DIRECT'">
-                <dt>{{ node.nodeId === 'local' ? 'ZLM 版本' : '节点程序版本' }}</dt>
-                <dd>
-                  {{
-                    node.nodeId === 'local'
-                      ? localZlm?.softwareVersion || '未检测'
-                      : node.observation?.version || '未上报'
-                  }}
-                </dd>
-              </div>
-              <div v-if="node.kind === 'MANAGED' || (node.nodeId !== 'local' && !node.kind)">
-                <dt>ZLM 版本</dt>
-                <dd>节点未上报</dd>
-              </div>
-              <div v-if="node.nodeId === 'local' && localZlm?.ports.length">
-                <dt>监听端口</dt>
-                <dd class="node-ports">
-                  <span v-for="port in localZlm.ports" :key="`${port.protocol}-${port.port}`">
-                    {{ port.protocol }} {{ port.port }}
-                  </span>
-                </dd>
-              </div>
-            </dl>
-          </div>
-          <div class="node-operational">
-            <dl class="node-metrics">
-              <div v-for="metric in usageMetrics" :key="metric.usage">
-                <dt>{{ metric.label }}</dt>
-                <dd>{{ node.usage[metric.usage] }} / {{ node.budget[metric.budget] }}</dd>
-                <dd class="metric-track">
-                  <progress
-                    :value="node.usage[metric.usage]"
-                    :max="Math.max(1, node.budget[metric.budget])"
-                    :aria-label="`${metric.label}预算使用率`"
-                  ></progress>
-                </dd>
-              </div>
-            </dl>
-            <div class="node-bandwidth">
-              <div>
-                <div class="bandwidth-label">
-                  <span>预留入站</span
-                  ><strong
-                    >{{ (node.usage.ingressKbps / 1000).toFixed(1) }} /
-                    {{ node.budget.ingressKbps / 1000 }} Mbps</strong
-                  >
-                </div>
-                <progress
-                  :value="node.usage.ingressKbps"
-                  :max="Math.max(1, node.budget.ingressKbps)"
-                  aria-label="预留入站带宽使用率"
-                ></progress>
-              </div>
-              <div>
-                <div class="bandwidth-label">
-                  <span>预留出口</span
-                  ><strong
-                    >{{ (node.usage.egressKbps / 1000).toFixed(1) }} /
-                    {{ node.budget.egressKbps / 1000 }} Mbps</strong
-                  >
-                </div>
-                <progress
-                  :value="node.usage.egressKbps"
-                  :max="Math.max(1, node.budget.egressKbps)"
-                  aria-label="预留出口带宽使用率"
-                ></progress>
-              </div>
-            </div>
-            <ZlmNetworkLoad v-if="node.kind === 'ZLM_DIRECT'" :load="liveZlmLoad(node)" />
-            <p v-if="node.reasonCode" class="node-reason">
-              {{ previewReason(node.reasonCode) }} <code>{{ node.reasonCode }}</code>
-            </p>
-            <p
-              v-if="canManage && syncedNodeId === node.nodeId && node.mode !== 'LOCAL'"
-              class="node-reason"
-              role="status"
-            >
-              <template v-if="node.mode === 'DRAINING'">
-                Ops 配置已同步。<template v-if="node.kind !== 'ZLM_DIRECT'"
-                  >在「维护许可」中核对并解除维护，再参与调度。</template
-                ><template v-else>恢复参与调度后，打开一路相机确认首帧。</template>
+          <p
+            v-if="canManage && syncedNodeId === node.nodeId && node.mode !== 'LOCAL'"
+            class="node-reason"
+            role="status"
+          >
+            <template v-if="node.mode === 'DRAINING'">
+              Ops 配置已同步。<template v-if="node.kind !== 'ZLM_DIRECT'"
+                >在「维护许可」中核对并解除维护，再参与调度。</template
+              ><template v-else>恢复参与调度后，打开一路相机确认首帧。</template>
+            </template>
+            <template v-else-if="node.mode === 'REMOTE'">
+              已设置参与调度。<template v-if="previewPath">
+                <RouterLink :to="previewPath">打开预览</RouterLink>，确认本节点承载的相机已出画。
               </template>
-              <template v-else-if="node.mode === 'REMOTE'">
-                已设置参与调度。<template v-if="previewPath">
-                  <RouterLink :to="previewPath">打开预览</RouterLink>，确认本节点承载的相机已出画。
-                </template>
-                <template v-else>请确认本节点承载的相机已出画。</template>
-              </template>
-            </p>
-            <div class="node-actions node-footer">
-              <ElButton text @click="diagnostic = node">诊断 JSON</ElButton>
-              <template v-if="canManage">
-                <ElButton text :disabled="busy" @click="edit(node)">预算与优先级</ElButton>
-                <ElButton
-                  v-if="node.opsSource"
-                  :disabled="busy || node.mode !== 'DRAINING'"
-                  @click="synchronizing = node"
-                  >同步 Ops 配置</ElButton
-                >
-                <ElButton
-                  v-if="node.kind !== 'ZLM_DIRECT' && node.nodeId !== 'local'"
-                  :disabled="busy"
-                  @click="openMaintenance(node)"
-                  >维护许可</ElButton
-                >
-                <ElButton
-                  v-if="node.mode !== 'REMOTE'"
-                  class="node-mode-action"
-                  :disabled="busy"
-                  @click="mode(node, 'REMOTE')"
-                  >参与调度</ElButton
-                >
-                <ElButton
-                  v-else
-                  text
-                  class="node-mode-action drain-action"
-                  :disabled="busy"
-                  @click="mode(node, 'DRAINING')"
-                  >停止接新预览</ElButton
-                >
-              </template>
-            </div>
-            <details v-if="canManage && node.nodeId !== 'local'" class="node-advanced">
-              <summary>高级连接配置</summary>
+              <template v-else>请确认本节点承载的相机已出画。</template>
+            </template>
+          </p>
+          <div class="node-actions node-footer">
+            <ElButton text @click="diagnostic = node">诊断 JSON</ElButton>
+            <template v-if="canManage">
+              <ElButton text :disabled="busy" @click="edit(node)">预算与优先级</ElButton>
               <ElButton
-                v-if="node.kind !== 'ZLM_DIRECT' && !node.opsSource"
-                :disabled="busy || node.mode === 'REMOTE'"
-                @click="openConnection(node)"
-                >手工修改连接</ElButton
-              >
-              <ElButton
-                v-if="!node.opsSource"
+                v-if="node.opsSource"
                 :disabled="busy || node.mode !== 'DRAINING'"
                 @click="synchronizing = node"
-                >关联现有 Ops 实例</ElButton
+                >同步 Ops 配置</ElButton
               >
-              <p v-else class="connection-empty">连接由 Ops 来源维护；修改配置请使用同步入口。</p>
-            </details>
+              <ElButton
+                v-if="node.kind !== 'ZLM_DIRECT' && node.nodeId !== 'local'"
+                :disabled="busy"
+                @click="openMaintenance(node)"
+                >维护许可</ElButton
+              >
+              <ElButton
+                v-if="node.mode !== 'REMOTE'"
+                class="node-mode-action"
+                :disabled="busy"
+                @click="mode(node, 'REMOTE')"
+                >参与调度</ElButton
+              >
+              <ElButton
+                v-else
+                text
+                class="node-mode-action drain-action"
+                :disabled="busy"
+                @click="mode(node, 'DRAINING')"
+                >停止接新预览</ElButton
+              >
+            </template>
           </div>
-        </article>
+          <details v-if="canManage && node.nodeId !== 'local'" class="node-advanced">
+            <summary>高级连接配置</summary>
+            <ElButton
+              v-if="node.kind !== 'ZLM_DIRECT' && !node.opsSource"
+              :disabled="busy || node.mode === 'REMOTE'"
+              @click="openConnection(node)"
+              >手工修改连接</ElButton
+            >
+            <ElButton
+              v-if="!node.opsSource"
+              :disabled="busy || node.mode !== 'DRAINING'"
+              @click="synchronizing = node"
+              >关联现有 Ops 实例</ElButton
+            >
+            <p v-else class="connection-empty">连接由 Ops 来源维护；修改配置请使用同步入口。</p>
+          </details>
+        </PreviewNodeStatusCard>
       </div>
       <section v-if="canManage" class="node-guide direct-guide" aria-label="直连 ZLM">
         <div class="connection-heading">

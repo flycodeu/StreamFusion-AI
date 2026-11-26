@@ -2,6 +2,8 @@ package com.streamfusion.platform.camera.service;
 
 import com.streamfusion.platform.camera.config.CameraProperties;
 import com.streamfusion.platform.camera.pojo.dto.SecretWrite;
+import com.streamfusion.platform.camera.pojo.entity.CameraEndpointEntity;
+import com.streamfusion.platform.camera.pojo.entity.CameraSourceEntity;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import java.net.InetAddress;
@@ -149,6 +151,18 @@ public class CameraSourceRules {
         } catch (RuntimeException ex) {
             return false;
         }
+    }
+
+    static boolean endpointEditable(
+            CameraSourceEntity source,
+            CameraEndpointEntity endpoint,
+            boolean hasChannels,
+            boolean hasBoundChannels) {
+        if ("STREAM".equals(source.getConnectionCategory())) return false;
+        return "RTSP".equals(source.getConnectionCategory())
+                || (endpoint != null && "DEVICE_HTTP".equals(endpoint.getPurpose())
+                        ? !hasBoundChannels
+                        : !hasChannels);
     }
 
     public static void port(Integer port) {

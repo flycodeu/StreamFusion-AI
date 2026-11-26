@@ -6,6 +6,9 @@ import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessContext;
+import com.streamfusion.platform.camera.locator.CameraStreamLocator;
+import com.streamfusion.platform.camera.locator.StreamLocatorAdapter;
+import com.streamfusion.platform.camera.locator.StreamLocatorAdapterRegistry;
 import com.streamfusion.platform.camera.mapper.CameraCredentialMapper;
 import com.streamfusion.platform.camera.mapper.CameraEndpointMapper;
 import com.streamfusion.platform.camera.mapper.CameraLocatorMapper;
@@ -17,8 +20,6 @@ import com.streamfusion.platform.camera.pojo.entity.CameraSourceEntity;
 import com.streamfusion.platform.camera.service.CameraCryptoService;
 import com.streamfusion.platform.camera.service.CameraSourceRules;
 import com.streamfusion.platform.media.preview.source.PreviewLocatorService;
-import com.streamfusion.platform.media.preview.source.StreamLocatorAdapter;
-import com.streamfusion.platform.media.preview.source.StreamLocatorAdapterRegistry;
 import java.net.URI;
 import java.time.Duration;
 import java.util.List;
@@ -28,6 +29,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class PreviewLocatorDeadlineTest {
+    private static final String CONNECTION_KEY = "connection-1";
     final CameraLocatorMapper locators = mock(CameraLocatorMapper.class);
     final CameraSourceMapper sources = mock(CameraSourceMapper.class);
     final CameraEndpointMapper endpoints = mock(CameraEndpointMapper.class);
@@ -59,17 +61,20 @@ class PreviewLocatorDeadlineTest {
         when(sources.selectById(30L)).thenReturn(source);
         when(endpoints.selectOne(any())).thenReturn(endpoint);
         when(crypto.decrypt(anyString(), any())).thenReturn(new ObjectMapper().createObjectNode());
+        when(crypto.sign(eq("preview-connection"), any())).thenReturn(CONNECTION_KEY);
         when(adapter.type()).thenReturn("RTSP");
         when(adapter.resolve(any(), any(), any())).thenReturn(URI.create("rtsp://127.0.0.1/live"));
         service =
                 new PreviewLocatorService(
-                        locators,
-                        sources,
-                        endpoints,
-                        credentials,
-                        crypto,
+                        new CameraStreamLocator(
+                                locators,
+                                sources,
+                                endpoints,
+                                credentials,
+                                crypto,
+                                new StreamLocatorAdapterRegistry(List.of(adapter))),
                         rules,
-                        new StreamLocatorAdapterRegistry(List.of(adapter)));
+                        null);
     }
 
     @AfterEach
@@ -99,14 +104,16 @@ class PreviewLocatorDeadlineTest {
         service.close();
         service =
                 new PreviewLocatorService(
-                        locators,
-                        sources,
-                        endpoints,
-                        credentials,
-                        crypto,
+                        new CameraStreamLocator(
+                                locators,
+                                sources,
+                                endpoints,
+                                credentials,
+                                crypto,
+                                new StreamLocatorAdapterRegistry(List.of(adapter))),
                         rules,
-                        new StreamLocatorAdapterRegistry(List.of(adapter)));
-        var uri = service.resolve(profile, authorization).uri();
+                        null);
+        var uri = resolve(PreviewDeadline.after(Duration.ofSeconds(2))).uri();
         assertThat(uri.getRawUserInfo()).isNull();
         assertThat(uri.toString()).doesNotContain("private-appkey", "private-appsecret");
         verify(adapter)
@@ -133,8 +140,7 @@ class PreviewLocatorDeadlineTest {
                             context.checkAuthorization().run();
                             return URI.create("rtsp://127.0.0.1/live");
                         });
-        assertThat(service.resolve(profile, authorization, deadline).uri().getHost())
-                .isEqualTo("127.0.0.1");
+        assertThat(resolve(deadline).uri().getHost()).isEqualTo("127.0.0.1");
         verify(authorization, times(3)).run();
     }
 
@@ -142,8 +148,7 @@ class PreviewLocatorDeadlineTest {
     void cancelledBudgetNeverReadsLocatorsOrStartsNetworkWork() {
         var deadline = PreviewDeadline.after(Duration.ofSeconds(2));
         deadline.cancel();
-        assertThatThrownBy(() -> service.resolve(profile, authorization, deadline))
-                .hasMessage("CANCELLED");
+        assertThatThrownBy(() -> resolve(deadline)).hasMessage("CANCELLED");
         verifyNoInteractions(locators, sources, endpoints, credentials, crypto, authorization);
     }
 
@@ -156,8 +161,7 @@ class PreviewLocatorDeadlineTest {
                             deadline.cancel();
                             return URI.create("rtsp://127.0.0.1/live");
                         });
-        assertThatThrownBy(() -> service.resolve(profile, authorization, deadline))
-                .hasMessage("CANCELLED");
+        assertThatThrownBy(() -> resolve(deadline)).hasMessage("CANCELLED");
         verifyNoInteractions(rules);
     }
 
@@ -166,9 +170,13 @@ class PreviewLocatorDeadlineTest {
         when(adapter.resolve(any(), any(), any())).thenReturn(URI.create("rtsp://192.0.2.25/live"));
         when(rules.host("192.0.2.25", "LAN")).thenThrow(CameraSourceRules.invalid());
 
-        assertThatThrownBy(() -> service.resolve(profile, authorization))
+        assertThatThrownBy(() -> resolve(PreviewDeadline.after(Duration.ofSeconds(2))))
                 .isInstanceOf(PreviewFailure.class)
                 .hasMessage("DESTINATION_REJECTED");
         verify(rules).host("192.0.2.25", "LAN");
+    }
+
+    private PreviewLocatorService.Resolved resolve(PreviewDeadline deadline) {
+        return service.resolve(profile, CONNECTION_KEY, authorization, deadline);
     }
 }

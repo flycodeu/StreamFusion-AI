@@ -1,9 +1,9 @@
-package com.streamfusion.platform.media.preview.source;
+package com.streamfusion.platform.camera.locator;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessContext;
+import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
 import com.streamfusion.platform.camera.pojo.entity.CameraLocatorEntity;
-import com.streamfusion.platform.media.preview.PreviewFailure;
 import java.net.URI;
 import org.springframework.stereotype.Component;
 
@@ -17,7 +17,7 @@ public class HikvisionStreamLocatorAdapter implements StreamLocatorAdapter {
     @Override
     public URI resolve(CameraLocatorEntity locator, JsonNode config, CameraAccessContext context) {
         String token = config.path("profileToken").asText();
-        if (!token.matches("[1-9][0-9]{0,8}")) throw new PreviewFailure("LOCATOR_INVALID");
+        if (!token.matches("[1-9][0-9]{0,8}")) throw new CameraAdapterException("LOCATOR_INVALID");
         return URI.create(
                 "rtsp://"
                         + context.endpoint().getHost()

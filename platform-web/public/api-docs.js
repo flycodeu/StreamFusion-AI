@@ -1,9 +1,5 @@
 const status = globalThis.document.getElementById('document-status')
-// Accept only the existing development prefix; production APIs retain their root paths.
-const apiPrefix =
-  new globalThis.URLSearchParams(globalThis.location.search).get('apiPrefix') === '/api'
-    ? '/api'
-    : ''
+const apiPrefix = '/api'
 globalThis.document.getElementById('swagger-style').href = `${apiPrefix}/swagger-ui/swagger-ui.css`
 
 async function loadScript() {
@@ -49,7 +45,7 @@ async function start() {
   try {
     const [, spec] = await Promise.all([loadScript(), loadDocument()])
     globalThis.SwaggerUIBundle({
-      spec: { ...spec, servers: [{ url: apiPrefix || '/', description: '当前平台 API' }] },
+      spec: { ...spec, servers: [{ url: apiPrefix, description: '当前平台 API' }] },
       queryConfigEnabled: false,
       configUrl: null,
       url: '',

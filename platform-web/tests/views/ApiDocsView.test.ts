@@ -9,7 +9,7 @@ import ApiDocsView from '../../src/views/monitor/ApiDocs.vue'
 
 const api = vi.hoisted(() => ({ status: vi.fn(), document: vi.fn() }))
 vi.mock('../../src/api/api-docs/api', () => ({
-  apiDocsFrameUrl: () => '/api-docs.html?apiPrefix=%2Fapi',
+  apiDocsFrameUrl: () => '/api-docs.html',
   getApiDocsStatus: api.status,
   getOpenApiDocument: api.document,
 }))
@@ -58,9 +58,7 @@ describe('API documentation toolbar', () => {
     const root = await mount()
     expect(nodes(root).some((item) => item.type === 'h1')).toBe(false)
     expect(button(root, '导出 OpenAPI JSON').props.disabled).toBe(false)
-    expect(nodes(root).find((item) => item.type === 'iframe')?.props.src).toBe(
-      '/api-docs.html?apiPrefix=%2Fapi',
-    )
+    expect(nodes(root).find((item) => item.type === 'iframe')?.props.src).toBe('/api-docs.html')
   })
 
   it('keeps export disabled when documentation is not enabled', async () => {

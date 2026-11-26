@@ -65,6 +65,17 @@ public class CameraAccessAdapterRegistry {
                 .anyMatch(d -> d.type().equals(type) && d.category().equals(category));
     }
 
+    public boolean supportsSource(String type) {
+        return descriptors.stream()
+                .anyMatch(
+                        d ->
+                                d.type().equals(type)
+                                        && switch (d.category()) {
+                                            case "DEVICE", "PLATFORM", "RTSP", "STREAM" -> true;
+                                            default -> false;
+                                        });
+    }
+
     public Map<String, Object> locatorConfiguration(CameraAccessCatalog.Locator locator) {
         return required(locator.kind()).locatorConfiguration(locator);
     }

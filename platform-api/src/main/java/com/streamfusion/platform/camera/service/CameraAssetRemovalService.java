@@ -43,6 +43,7 @@ public class CameraAssetRemovalService {
     private final CameraAssetRelations relations;
     private final CameraLocatorService locators;
     private final CameraSourceService sources;
+    private final CameraSourceQueries sourceQueries;
     private final AuditService audit;
 
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
@@ -142,7 +143,8 @@ public class CameraAssetRemovalService {
         if (channelGrants > 0) throw referenced("DIRECT_CAMERA_GRANT", channelGrants);
 
         long sourceId = rows.getFirst().getSourceId();
-        var source = lock ? sources.lockForAssetDelete(sourceId) : sources.requireSource(sourceId);
+        var source =
+                lock ? sources.lockForAssetDelete(sourceId) : sourceQueries.requireSource(sourceId);
         // A platform connection is a reusable directory configuration even when it has no
         // remaining imported assets.
         boolean exclusive =

@@ -238,6 +238,44 @@ describe('preview actions and diagnostics', () => {
     expect(text(root)).toContain('共 500 个通道')
     expect(nodes(root).filter((item) => item.type === 'article')).toHaveLength(4)
   })
+  it('paginates only the active search after its first page succeeds', async () => {
+    const root = await mount()
+    const staleClick = button(root, '加载更多').props.onClick as () => void
+    const search = nodes(root).find((item) => item.props.placeholder === '搜索相机')!
+    const input = search.props['onUpdate:modelValue'] as (value: string) => void
+    api.catalog.mockRejectedValueOnce(new Error('目录查询失败'))
+
+    input('车间')
+    staleClick()
+    await nextTick()
+    expect(button(root, '加载更多')).toBeUndefined()
+    expect(api.catalog).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(api.catalog).toHaveBeenCalledTimes(2))
+    expect(api.catalog.mock.calls[1]![0]).toMatchObject({ page: 1, name: '车间' })
+    expect(button(root, '加载更多')).toBeUndefined()
+
+    api.catalog.mockResolvedValueOnce({ items: [channel('3')], page: 1, size: 100, total: 2 })
+    const refresh = nodes(root).find((item) => item.props['aria-label'] === '刷新相机')!
+    await (refresh.props.onClick as () => void)()
+    await vi.waitFor(() => expect(text(root)).toContain('添加通道3'))
+    expect(text(root)).not.toContain('添加通道1')
+
+    api.catalog.mockResolvedValueOnce({ items: [channel('4')], page: 2, size: 100, total: 2 })
+    await (button(root, '加载更多').props.onClick as () => void)()
+    await vi.waitFor(() => expect(text(root)).toContain('添加通道4'))
+    expect(api.catalog.mock.calls[3]![0]).toMatchObject({ page: 2, name: '车间' })
+    expect(button(root, '加载更多')).toBeUndefined()
+  })
+  it('retries the group tree on the next search if the initial request failed', async () => {
+    api.groups.mockRejectedValueOnce(new Error('分组查询失败'))
+    const root = await mount()
+    const search = nodes(root).find((item) => item.props.placeholder === '搜索相机')!
+    const input = search.props['onUpdate:modelValue'] as (value: string) => void
+
+    input('入口')
+    await vi.waitFor(() => expect(api.groups).toHaveBeenCalledTimes(2))
+    expect(api.catalog.mock.calls[1]![0]).toMatchObject({ page: 1, name: '入口' })
+  })
   it('maximizes an occupied tile on double click and restores it from the visible control', async () => {
     const root = await mount()
     await add(root)
@@ -404,8 +442,11 @@ describe('preview actions and diagnostics', () => {
     app = renderer.createApp(Center)
     app.mount(root)
     await nextTick()
+    const signal = api.catalog.mock.calls[0]![1] as AbortSignal
+    expect(signal.aborted).toBe(false)
     expect(api.connect).not.toHaveBeenCalled()
     await (button(root, '打开收藏测试').props.onClick as () => void)()
+    expect(signal.aborted).toBe(true)
     await vi.waitFor(() => expect(api.connect).toHaveBeenCalledTimes(2))
     deliver({ items: [channel('3')], page: 1, size: 100, total: 1 })
     await nextTick()
@@ -414,6 +455,25 @@ describe('preview actions and diagnostics', () => {
     expect(tiles).toHaveLength(36)
     expect(text(tiles[35]!)).toContain('通道2')
     expect(api.connect).toHaveBeenCalledTimes(2)
+  })
+  it('cancels directory and group reads when the page closes without starting playback', async () => {
+    let deliverCatalog!: (result: unknown) => void
+    let deliverGroups!: (result: unknown) => void
+    api.catalog.mockReturnValueOnce(new Promise((resolve) => (deliverCatalog = resolve)))
+    api.groups.mockReturnValueOnce(new Promise((resolve) => (deliverGroups = resolve)))
+    app = renderer.createApp(Center)
+    app.mount(node('root'))
+    await nextTick()
+    const signal = api.catalog.mock.calls[0]![1] as AbortSignal
+    expect(api.groups.mock.calls[0]![0]).toBe(signal)
+    expect(signal.aborted).toBe(false)
+    app.unmount()
+    app = null
+    expect(signal.aborted).toBe(true)
+    deliverCatalog({ items: [channel('3')], page: 1, size: 100, total: 1 })
+    deliverGroups([])
+    await nextTick()
+    expect(api.connect).not.toHaveBeenCalled()
   })
   it('shows unavailable saved windows even when a device-entry catalog has no visible channels', async () => {
     api.query = { mode: 'device', device: 'd1' }

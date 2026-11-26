@@ -6,6 +6,9 @@ import static org.mockito.Mockito.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.streamfusion.platform.camera.config.CameraProperties;
+import com.streamfusion.platform.camera.locator.CameraStreamLocator;
+import com.streamfusion.platform.camera.locator.StreamLocatorAdapter;
+import com.streamfusion.platform.camera.locator.StreamLocatorAdapterRegistry;
 import com.streamfusion.platform.camera.mapper.CameraCredentialMapper;
 import com.streamfusion.platform.camera.mapper.CameraEndpointMapper;
 import com.streamfusion.platform.camera.mapper.CameraLocatorMapper;
@@ -18,8 +21,7 @@ import com.streamfusion.platform.camera.pojo.entity.CameraSourceEntity;
 import com.streamfusion.platform.camera.service.CameraCryptoService;
 import com.streamfusion.platform.camera.service.CameraSourceRules;
 import com.streamfusion.platform.media.preview.source.PreviewLocatorService;
-import com.streamfusion.platform.media.preview.source.StreamLocatorAdapter;
-import com.streamfusion.platform.media.preview.source.StreamLocatorAdapterRegistry;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -90,13 +92,15 @@ class PreviewConnectionKeyTest {
         when(adapter.type()).thenReturn("RTSP");
         service =
                 new PreviewLocatorService(
-                        locators,
-                        sources,
-                        endpoints,
-                        credentials,
-                        crypto,
+                        new CameraStreamLocator(
+                                locators,
+                                sources,
+                                endpoints,
+                                credentials,
+                                crypto,
+                                new StreamLocatorAdapterRegistry(List.of(adapter))),
                         rules,
-                        new StreamLocatorAdapterRegistry(List.of(adapter)));
+                        null);
         // Adapter type registration is construction only, not connection-key work.
         clearInvocations(adapter);
     }
@@ -131,6 +135,22 @@ class PreviewConnectionKeyTest {
         assertChanges(() -> credential.setSecretNonce(new byte[12]));
         assertChanges(() -> credential.setSecretTag(new byte[16]));
         assertChanges(() -> credential.setEncryptionKeyId("retained-key"));
+    }
+
+    @Test
+    void credentialsRotatedAfterReservationAreRejectedBeforeContactingTheSource() {
+        String reservedKey = service.connectionKey(profile);
+        setCredentialSecret("replacement-password");
+
+        assertThatThrownBy(
+                        () ->
+                                service.resolve(
+                                        profile,
+                                        reservedKey,
+                                        () -> {},
+                                        PreviewDeadline.after(Duration.ofSeconds(2))))
+                .isInstanceOf(PreviewFailure.class)
+                .hasMessage("CONFIGURATION_CHANGED");
     }
 
     @Test

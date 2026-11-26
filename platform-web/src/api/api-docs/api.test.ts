@@ -14,21 +14,17 @@ afterEach(() => vi.unstubAllEnvs())
 beforeEach(() => vi.clearAllMocks())
 
 describe('embedded API documentation', () => {
-  it.each([true, false])('uses the ordinary API prefix when development is %s', (dev) => {
+  it.each([true, false])('loads the static frame from the site when development is %s', (dev) => {
     vi.stubEnv('DEV', dev)
     vi.stubEnv('BASE_URL', 'https://baidu.com/')
-    expect(apiDocsFrameUrl()).toBe(
-      `/${dev ? 'api-docs.html?apiPrefix=%2Fapi' : 'api-docs.html?apiPrefix='}`,
-    )
+    expect(apiDocsFrameUrl()).toBe('/api-docs.html')
   })
 
   it.each([
-    ['?apiPrefix=%2Fapi', '/api'],
-    ['?apiPrefix=', ''],
-    ['?apiPrefix=https%3A%2F%2Fother.invalid', ''],
-    ['?apiPrefix=%2F%2Fbaidu.com&url=https://baidu.com&configUrl=https://baidu.com', ''],
-    ['?apiPrefix=%2Fapi&url=https://baidu.com&configUrl=https://baidu.com', '/api'],
-  ])('loads the specification and local resources through %s', async (search, prefix) => {
+    '',
+    '?apiPrefix=',
+    '?apiPrefix=%2F%2Fother.invalid&url=https://other.invalid&configUrl=https://other.invalid',
+  ])('uses only the fixed production API paths, even with a query (%s)', async (search) => {
     const status = { hidden: false, textContent: '', setAttribute: vi.fn() }
     const style = { href: '' }
     const scripts: { src: string; onload: () => void }[] = []
@@ -49,12 +45,10 @@ describe('embedded API documentation', () => {
         },
       },
       location: {
-        search,
         href: `http://127.0.0.1:8090/api-docs.html${search}`,
         origin: 'http://127.0.0.1:8090',
       },
       URL,
-      URLSearchParams,
       AbortSignal,
       fetch: fetchMock,
       setTimeout,
@@ -63,15 +57,15 @@ describe('embedded API documentation', () => {
     })
     runInContext(script, context)
     await vi.waitFor(() => expect(swagger).toHaveBeenCalledTimes(1))
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(`${prefix}/v3/api-docs`)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v3/api-docs')
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
       credentials: 'same-origin',
       redirect: 'error',
     })
-    expect(scripts[0]?.src).toBe(`${prefix}/swagger-ui/swagger-ui-bundle.js`)
-    expect(style.href).toBe(`${prefix}/swagger-ui/swagger-ui.css`)
+    expect(scripts[0]?.src).toBe('/api/swagger-ui/swagger-ui-bundle.js')
+    expect(style.href).toBe('/api/swagger-ui/swagger-ui.css')
     expect(swagger.mock.calls[0]?.[0]).toMatchObject({
-      spec: { servers: [{ url: prefix || '/' }] },
+      spec: { servers: [{ url: '/api' }] },
       queryConfigEnabled: false,
       configUrl: null,
       url: '',
@@ -79,7 +73,7 @@ describe('embedded API documentation', () => {
       validatorUrl: null,
     })
     const intercept = swagger.mock.calls[0]?.[0].requestInterceptor
-    expect(intercept({ url: `${prefix}/v3/api-docs` })).toMatchObject({
+    expect(intercept({ url: '/api/v3/api-docs' })).toMatchObject({
       credentials: 'same-origin',
       redirect: 'error',
     })
@@ -87,7 +81,8 @@ describe('embedded API documentation', () => {
       'https://baidu.com',
       '//baidu.com',
       '/auth/me',
-      `${prefix}/v3/api-docs?url=https://baidu.com`,
+      '/v3/api-docs',
+      '/api/v3/api-docs?url=https://baidu.com',
     ]) {
       expect(() => intercept({ url })).toThrow('固定文档地址')
     }

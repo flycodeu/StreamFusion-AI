@@ -79,6 +79,7 @@ it('keeps keys and large byte counters exact and unknown capacity distinct from 
   ).toThrow()
 })
 it('encodes a protected content URL once and uses only the current origin', () => {
+  vi.stubEnv('DEV', false)
   const path = objectContentUrl('10', file.objectKey, 'signed+token/%')
   const url = new URL(path, 'http://localhost')
   expect(url.pathname).toBe('/api/storage/scopes/10/object-content')

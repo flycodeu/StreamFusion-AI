@@ -35,6 +35,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -78,10 +79,10 @@ class PreviewLeaseServiceTest {
                         "1");
         when(runtimes.activeZlm()).thenReturn(Optional.of(runtime));
         when(locators.connectionKey(any())).thenReturn("connection-1");
-        when(locators.resolve(any(), any(), any()))
+        when(locators.resolve(any(), anyString(), any(), any()))
                 .thenAnswer(
                         invocation -> {
-                            ((Runnable) invocation.getArgument(1)).run();
+                            ((Runnable) invocation.getArgument(2)).run();
                             return new PreviewLocatorService.Resolved(
                                     URI.create("rtsp://10.0.0.1/live"));
                         });
@@ -156,20 +157,7 @@ class PreviewLeaseServiceTest {
 
     @Test
     void leaseLifecycleWorksThroughExecutorWithoutLocalRuntimeDependencies() {
-        service.close();
-        var executor = mock(PreviewExecutor.class);
-        when(executor.sessionLimit(anyInt())).thenAnswer(call -> call.getArgument(0));
-        when(executor.transcodeLimit(anyInt())).thenAnswer(call -> call.getArgument(0));
-        service =
-                new PreviewLeaseService(
-                        authorization,
-                        new PreviewProfileSelector(channels, profiles),
-                        locators,
-                        executor,
-                        clock,
-                        new PreviewProperties(64, 64));
-        when(executor.start(anyString(), anyList(), any(), any()))
-                .thenReturn(new PreviewExecutor.Playback("H264", false));
+        var executor = useExecutor();
         var expectedAnswer = new PreviewModels.Answer("v=0\r\n", "answer");
         when(executor.answer(anyString(), anyString(), any())).thenReturn(expectedAnswer);
         when(executor.stats(anyString(), any())).thenReturn(stats("H264"));
@@ -208,6 +196,88 @@ class PreviewLeaseServiceTest {
     }
 
     @Test
+    void renewalClosesTheViewerIfAuthorizationWasRevokedDuringExecution() {
+        var executor = useExecutor();
+        var created = service.create(input("MAIN"));
+        var denied = BusinessException.error(ErrorCode.FORBIDDEN);
+        doAnswer(
+                        call -> {
+                            doThrow(denied).when(authorization).request(principal, 10L);
+                            return null;
+                        })
+                .when(executor)
+                .renew(eq(created.leaseId()), any());
+
+        assertThatThrownBy(() -> service.renew(created.leaseId())).isSameAs(denied);
+        verify(executor, timeout(1000)).close(eq(created.leaseId()), any());
+    }
+
+    @Test
+    void renewalClosesTheViewerIfTheConnectionChangedDuringExecution() {
+        var executor = useExecutor();
+        var created = service.create(input("MAIN"));
+        doAnswer(
+                        call -> {
+                            when(locators.connectionKey(main)).thenReturn("connection-2");
+                            return null;
+                        })
+                .when(executor)
+                .renew(eq(created.leaseId()), any());
+
+        assertThatThrownBy(() -> service.renew(created.leaseId()))
+                .isInstanceOf(PreviewFailure.class)
+                .hasMessage("CONFIGURATION_CHANGED");
+        verify(executor, timeout(1000)).close(eq(created.leaseId()), any());
+    }
+
+    @Test
+    void reaperDoesNotCheckExecutionOwnershipBeforeTheViewerIsReserved() {
+        var executor = useExecutor();
+        var prepared = new AtomicBoolean();
+        doAnswer(
+                        call -> {
+                            if (!prepared.get()) throw new PreviewFailure("LEASE_EXPIRED");
+                            return null;
+                        })
+                .when(executor)
+                .requireCurrent(anyString());
+        doAnswer(
+                        call -> {
+                            prepared.set(true);
+                            return null;
+                        })
+                .when(executor)
+                .prepare(anyString(), any(), anyList(), any());
+        when(locators.connectionKey(main))
+                .thenAnswer(
+                        call -> {
+                            service.reap();
+                            return "connection-1";
+                        })
+                .thenReturn("connection-1");
+
+        assertThat(service.create(input("MAIN")).state()).isEqualTo("READY");
+    }
+
+    private PreviewExecutor useExecutor() {
+        service.close();
+        var executor = mock(PreviewExecutor.class);
+        when(executor.sessionLimit(anyInt())).thenAnswer(call -> call.getArgument(0));
+        when(executor.transcodeLimit(anyInt())).thenAnswer(call -> call.getArgument(0));
+        service =
+                new PreviewLeaseService(
+                        authorization,
+                        new PreviewProfileSelector(channels, profiles),
+                        locators,
+                        executor,
+                        clock,
+                        new PreviewProperties(64, 64));
+        when(executor.start(anyString(), anyList(), any(), any()))
+                .thenReturn(new PreviewExecutor.Playback("H264", false));
+        return executor;
+    }
+
+    @Test
     void nullCodecIsRejectedBeforeAuthorizationOrMediaAllocation() {
         var request =
                 new PreviewModels.CreateLease(
@@ -234,7 +304,7 @@ class PreviewLeaseServiceTest {
         var second = service.create(input("MAIN"));
         assertThat(second.leaseId()).isNotEqualTo(first.leaseId());
         assertThat(service.capacity().occupiedSessions()).isEqualTo(2);
-        verify(locators).resolve(any(), any(), any());
+        verify(locators).resolve(same(main), eq("connection-1"), any(), any());
         var root = org.mockito.ArgumentCaptor.forClass(PreviewMediaGateway.Stream.class);
         verify(media, times(2)).openViewer(root.capture(), anyString(), anyString(), any());
         assertThat(root.getAllValues().get(0)).isSameAs(root.getAllValues().get(1));
@@ -440,7 +510,7 @@ class PreviewLeaseServiceTest {
                             throw BusinessException.error(ErrorCode.FORBIDDEN);
                         })
                 .when(locators)
-                .resolve(any(), any(), any());
+                .resolve(any(), anyString(), any(), any());
         var first = CompletableFuture.supplyAsync(() -> service.create(input("MAIN")));
         await(resolving);
         var joined = new CountDownLatch(1);
@@ -824,8 +894,8 @@ class PreviewLeaseServiceTest {
     void managementSelectsSubAndCenterSelectsMainWithoutChangingProfiles() {
         assertThat(service.create(input("SUB")).streamProfileId()).isEqualTo("21");
         assertThat(service.create(input("MAIN")).streamProfileId()).isEqualTo("20");
-        verify(locators).resolve(eq(sub), any(), any());
-        verify(locators).resolve(eq(main), any(), any());
+        verify(locators).resolve(eq(sub), eq("connection-1"), any(), any());
+        verify(locators).resolve(eq(main), eq("connection-1"), any(), any());
     }
 
     @Test
@@ -985,12 +1055,12 @@ class PreviewLeaseServiceTest {
         var deadline = new AtomicReference<PreviewDeadline>();
         doAnswer(
                         invocation -> {
-                            deadline.set(invocation.getArgument(2));
+                            deadline.set(invocation.getArgument(3));
                             return new PreviewLocatorService.Resolved(
                                     URI.create("rtsp://10.0.0.1/live"));
                         })
                 .when(locators)
-                .resolve(any(), any(), any());
+                .resolve(any(), anyString(), any(), any());
         when(media.stats(any(), any(), any())).thenReturn(stats("H265"), stats("H264"));
         when(media.transcode(any(), any(), any()))
                 .thenReturn(new PreviewMediaGateway.Transcode("out", "key"));

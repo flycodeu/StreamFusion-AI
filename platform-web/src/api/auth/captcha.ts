@@ -1,6 +1,7 @@
 import { request } from '../client'
 import { object, string } from '../parse'
 import { isUtcTimestamp } from '../../lib/http/error'
+import { browserApiPrefix } from '../../lib/http/path'
 
 export interface CaptchaChallenge {
   captchaId: string
@@ -42,5 +43,5 @@ export async function createLoginCaptcha(signal: AbortSignal): Promise<CaptchaCh
 /** PNG uses the same session cookie as the JSON request; arbitrary image URLs are never accepted. */
 export function captchaImageSource(challenge: CaptchaChallenge): string {
   const safe = parseCaptcha(challenge)
-  return (import.meta.env.DEV ? '/api' : '') + safe.imageUrl
+  return browserApiPrefix + safe.imageUrl
 }

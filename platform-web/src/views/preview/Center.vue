@@ -13,9 +13,6 @@ import {
   MuteNotification,
   Headset,
 } from '@element-plus/icons-vue'
-import { getPreviewCatalog } from '../../api/preview/api'
-import { getGroupTree } from '../../api/camera-groups/api'
-import type { CameraGroup } from '../../api/camera-groups/types'
 import type { PreviewChannel, PreviewStats } from '../../api/preview/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { usePageScope } from '../../composables/usePageScope'
@@ -36,25 +33,18 @@ import PreviewSlotMenu from '../../features/preview/PreviewSlotMenu.vue'
 import PreviewDiagnosticsDialog from '../../features/preview/PreviewDiagnosticsDialog.vue'
 import { usePreviewSlots } from '../../features/preview/usePreviewSlots'
 import PreviewSavedViews from '../../features/preview/PreviewSavedViews.vue'
-import { captureView, resolveSavedView, type SavedView } from '../../features/preview/saved-views'
+import { usePreviewCatalog } from '../../features/preview/usePreviewCatalog'
+import { useSavedPreviewWorkspace } from '../../features/preview/useSavedPreviewWorkspace'
 import { sessionState } from '../../session/state'
 
 defineOptions({ name: 'PreviewCenter' })
 const route = useRoute(),
   router = useRouter(),
   captureScope = usePageScope()
-const channels = ref<PreviewChannel[]>([]),
-  groups = ref<CameraGroup[]>([]),
-  loading = ref(false),
-  error = ref<unknown>(null),
-  missingTrialChannel = ref(false),
-  search = ref('')
 const layout = ref<PreviewLayout>('4'),
   showStats = ref(false),
   catalogOpen = ref(false),
-  maximizedSlot = ref<number | null>(null),
-  page = ref(1),
-  total = ref(0)
+  maximizedSlot = ref<number | null>(null)
 const selectedDevice = computed(() =>
   typeof route.query.device === 'string' && /^[dc][1-9][0-9]{0,18}$/.test(route.query.device)
     ? route.query.device
@@ -68,22 +58,16 @@ const selectedCamera = computed(() =>
     ? route.query.camera
     : undefined,
 )
-const loadedDeviceCount = computed(
-  () => new Set(channels.value.map((channel) => channel.deviceGroupKey)).size,
-)
-const deviceTitle = computed(
-  () => channels.value[0]?.deviceName || channels.value[0]?.name || '相机预览',
-)
 const activeSlot = ref(0),
   context = ref<{ x: number; y: number; slot: number } | null>(null)
 const diagnosticFailure = ref<PreviewFailure | null>(null)
 let menuTrigger: globalThis.HTMLElement | null = null,
   menuTile: globalThis.HTMLElement | null = null
+const playback = usePreviewSlots()
 const {
   slots,
   setVideoRef,
   assign,
-  play,
   stop,
   switchProfile,
   sampleStats,
@@ -92,147 +76,77 @@ const {
   trim,
   muteAll,
   toggleAudio,
-  unavailable,
   clearIdentity,
-  slotRevision,
-} = usePreviewSlots()
-const openingView = ref(false)
-const retryingSlots = ref(new Set<number>())
-const retryRequests = new Map<number, globalThis.AbortController>()
-let viewSequence = 0,
-  viewAbort: globalThis.AbortController | null = null
-function cancelSavedRetries() {
-  for (const controller of retryRequests.values()) controller.abort()
-  retryRequests.clear()
-  retryingSlots.value.clear()
-}
-function missingChannel(cameraId: string): PreviewChannel {
-  return {
-    cameraId,
-    name: '收藏相机暂不可用',
-    deviceGroupKey: `c${cameraId}`,
-    deviceName: null,
-    groupId: null,
-    groupPath: null,
-    lifecycle: 'DISABLED',
-    profiles: [],
-  }
-}
-async function retrySlot(index: number) {
-  if (openingView.value || retryingSlots.value.has(index) || retryingSlots.value.size >= 4) return
-  const slot = slots[index]!
-  if (slot.error?.code === 'LEASE_RELEASE_FAILED') {
-    closeSlot(index)
-    return
-  }
-  if (!slot.channel || !slot.savedProfileId) {
-    await play(index)
-    return
-  }
-  const cameraId = slot.channel.cameraId,
-    profileId = slot.savedProfileId,
-    active = captureScope(),
-    revision = viewSequence,
-    controller = new globalThis.AbortController()
-  retryRequests.set(index, controller)
-  retryingSlots.value.add(index)
-  try {
-    const generation = await stop(index, false)
-    if (generation < 0 || !active() || controller.signal.aborted) return
-    slot.state = 'CONNECTING'
-    slot.error = null
-    const [target] = await resolveSavedView(
-      {
-        id: 'retry',
-        name: 'retry',
-        layout: layout.value,
-        updatedAt: new Date().toISOString(),
-        slots: [{ index, cameraId, profileId }],
-      },
-      controller.signal,
-    )
-    if (
-      !target ||
-      !active() ||
-      controller.signal.aborted ||
-      revision !== viewSequence ||
-      slotRevision(index) !== generation ||
-      slots[index]!.channel?.cameraId !== cameraId ||
-      slots[index]!.savedProfileId !== profileId
-    )
-      return
-    if (target.channel) await assign(index, target.channel, slot.usage, profileId)
-    else unavailable(index, missingChannel(cameraId), profileId, target.failure)
-  } finally {
-    if (retryRequests.get(index) === controller) {
-      retryRequests.delete(index)
-      retryingSlots.value.delete(index)
-    }
-  }
-}
-function currentView() {
-  return captureView(
-    layout.value,
-    slots.map((slot) => ({
-      channel: slot.channel,
-      profile:
-        slot.profile || (slot.savedProfileId ? { streamProfileId: slot.savedProfileId } : null),
-    })),
-  )
-}
-async function openView(view: SavedView) {
-  if (openingView.value || !sessionState.me) return
-  const revision = ++viewSequence,
-    active = captureScope()
-  cancelSavedRetries()
-  // A device-entry catalog may still be in flight and would otherwise auto-assign
-  // its channels after this explicit saved workspace has taken ownership.
-  sequence++
-  loading.value = false
-  globalThis.clearTimeout(searchTimer)
-  viewAbort?.abort()
-  const controller = new globalThis.AbortController()
-  viewAbort = controller
-  openingView.value = true
-  closeContext()
-  muteAll()
-  try {
-    const closed = await Promise.all(slots.map((_slot, index) => stop(index)))
-    if (!active() || revision !== viewSequence || controller.signal.aborted) return
-    if (closed.some((value) => value < 0)) {
-      ElMessage.info('原画面资源释放尚未确认，请重试关闭后再打开收藏')
+} = playback
+const {
+  channels,
+  groups,
+  loading,
+  error,
+  missingTrialChannel,
+  search,
+  searching,
+  total,
+  hasMore,
+  loadedDeviceCount,
+  deviceTitle,
+  load,
+  invalidate: invalidateCatalog,
+  reset: resetCatalog,
+  include: includeChannels,
+} = usePreviewCatalog(
+  () => ({
+    deviceMode: deviceMode.value,
+    device: selectedDevice.value,
+    trialCamera: selectedCamera.value,
+  }),
+  async ({ channels: items, total: count, trialCamera, isCurrent }) => {
+    const single = trialCamera
+      ? items.find((channel) => channel.cameraId === trialCamera)
+      : count === 1
+        ? items[0]
+        : undefined
+    if (trialCamera || single) {
+      if ((await chooseLayout('1', isCurrent)) && isCurrent()) {
+        if (single) void assign(0, single, 'MAIN', defaultPlaybackProfile(single)?.streamProfileId)
+        else missingTrialChannel.value = true
+      }
       return
     }
-    const targets = await resolveSavedView(view, controller.signal)
-    if (!active() || revision !== viewSequence || controller.signal.aborted) return
-    if (!(await chooseLayout(view.layout))) return
+    const selectedLayout = deviceLayout(items.length)
+    if (!(await chooseLayout(selectedLayout, isCurrent)) || !isCurrent()) return
+    for (let index = 0; index < Math.min(items.length, MAX_PREVIEW_SLOTS); index++)
+      void assign(index, items[index]!, 'SUB')
+    if (selectedLayout === '64')
+      ElMessage.info(
+        count > MAX_PREVIEW_SLOTS
+          ? `已切换为8 × 8，展示前${MAX_PREVIEW_SLOTS}个通道`
+          : `已切换为8 × 8，展示${items.length}个通道`,
+      )
+  },
+)
+const {
+  openingView,
+  retryingSlots,
+  currentView,
+  openView,
+  retrySlot,
+  cancel: cancelSavedView,
+} = useSavedPreviewWorkspace(layout, playback, {
+  takeWorkspace() {
+    // An explicit saved workspace supersedes the automatic device entry.
+    invalidateCatalog()
+    closeContext()
+  },
+  async chooseLayout(value, isCurrent) {
+    if (!(await chooseLayout(value, isCurrent)) || !isCurrent()) return false
     maximizedSlot.value = null
     activeSlot.value = 0
-    const restored = new Map(channels.value.map((channel) => [channel.cameraId, channel]))
-    const starts: Promise<void>[] = []
-    for (const target of targets) {
-      if (!active() || revision !== viewSequence || controller.signal.aborted) return
-      if (target.channel) {
-        restored.set(target.cameraId, target.channel)
-        starts.push(assign(target.index, target.channel, 'MAIN', target.profileId))
-      } else {
-        unavailable(target.index, missingChannel(target.cameraId), target.profileId, target.failure)
-      }
-    }
-    channels.value = [...restored.values()]
-    await Promise.all(starts)
-    if (active() && revision === viewSequence) {
-      const failed = targets.filter((target) => slots[target.index]?.state === 'ERROR').length
-      if (failed) ElMessage.info(`已应用收藏，${failed} 个窗口需重新选择或重试；其余按队列连接`)
-    }
-  } catch {
-    if (active() && revision === viewSequence && !controller.signal.aborted)
-      ElMessage.info('收藏未能完整打开，请保留当前画面并重试')
-  } finally {
-    if (viewAbort === controller) viewAbort = null
-    if (revision === viewSequence) openingView.value = false
-  }
-}
+    return true
+  },
+  showRestoredChannels: includeChannels,
+  closeSlot,
+})
 function soundTitle(index: number) {
   const slot = slots[index]!
   if (slot.audio === 'BLOCKED') return '浏览器阻止发声，点击重试'
@@ -266,10 +180,7 @@ const contextProfiles = computed(
     ) || [],
 )
 const pendingAssignments = new Set<number>()
-let sequence = 0,
-  groupsLoaded = false,
-  statsTimer: ReturnType<typeof globalThis.setInterval> | undefined,
-  searchTimer: ReturnType<typeof globalThis.setTimeout> | undefined
+let statsTimer: ReturnType<typeof globalThis.setInterval> | undefined
 function addChannel(channel: PreviewChannel) {
   if (openingView.value) return
   if (channel.lifecycle !== 'ENABLED') {
@@ -326,80 +237,16 @@ function addDevice(deviceChannels: PreviewChannel[]) {
   }
 }
 let layoutSequence = 0
-async function chooseLayout(value: PreviewLayout): Promise<boolean> {
+async function chooseLayout(value: PreviewLayout, isCurrent = () => true): Promise<boolean> {
   const revision = ++layoutSequence,
     active = captureScope()
   closeContext()
-  if (!(await trim(value)) || revision !== layoutSequence || !active()) return false
+  if (!(await trim(value)) || revision !== layoutSequence || !active() || !isCurrent()) return false
   layout.value = value
   const count = layoutCount(value)
   activeSlot.value = Math.min(activeSlot.value, count - 1)
   if (maximizedSlot.value !== null && maximizedSlot.value >= count) maximizedSlot.value = null
   return true
-}
-async function load(append = false) {
-  const active = captureScope(),
-    current = ++sequence
-  loading.value = true
-  error.value = null
-  missingTrialChannel.value = false
-  if (deviceMode.value && !selectedDevice.value) {
-    channels.value = []
-    total.value = 0
-    loading.value = false
-    return
-  }
-  try {
-    const refreshGroups = !deviceMode.value && !append && (!groupsLoaded || !search.value.trim())
-    const groupPromise = refreshGroups
-      ? getGroupTree().catch(() => groups.value)
-      : Promise.resolve(groups.value)
-    const [result, groupRows] = await Promise.all([
-      getPreviewCatalog({
-        page: append ? page.value + 1 : 1,
-        size: 100,
-        name: search.value.trim() || undefined,
-        device: selectedDevice.value,
-      }),
-      groupPromise,
-    ])
-    if (!active() || current !== sequence) return
-    groups.value = groupRows
-    if (refreshGroups) groupsLoaded = true
-    channels.value = append ? [...channels.value, ...result.items] : result.items
-    page.value = result.page
-    total.value = result.total
-    if (deviceMode.value && !append) {
-      const trial = selectedCamera.value
-      const single = trial
-        ? result.items.find((channel) => channel.cameraId === trial)
-        : result.total === 1
-          ? result.items[0]
-          : undefined
-      if (trial || single) {
-        if ((await chooseLayout('1')) && active() && current === sequence) {
-          if (single)
-            void assign(0, single, 'MAIN', defaultPlaybackProfile(single)?.streamProfileId)
-          else missingTrialChannel.value = true
-        }
-        return
-      }
-      const selectedLayout = deviceLayout(result.items.length)
-      if (!(await chooseLayout(selectedLayout)) || !active() || current !== sequence) return
-      for (let index = 0; index < Math.min(result.items.length, MAX_PREVIEW_SLOTS); index++)
-        void assign(index, result.items[index], 'SUB')
-      if (selectedLayout === '64')
-        ElMessage.info(
-          result.total > MAX_PREVIEW_SLOTS
-            ? `已切换为8 × 8，展示前${MAX_PREVIEW_SLOTS}个通道`
-            : `已切换为8 × 8，展示${result.items.length}个通道`,
-        )
-    }
-  } catch (cause) {
-    if (active() && current === sequence) error.value = cause
-  } finally {
-    if (active() && current === sequence) loading.value = false
-  }
 }
 function openContext(event: globalThis.MouseEvent, index: number) {
   event.preventDefault()
@@ -506,29 +353,16 @@ function dismissContext(event: globalThis.KeyboardEvent) {
     maximizedSlot.value = null
   }
 }
-watch(search, () => {
-  globalThis.clearTimeout(searchTimer)
-  searchTimer = globalThis.setTimeout(() => {
-    void load()
-  }, 300)
-})
 watch(
   () => [route.query.mode, route.query.device, route.query.camera],
   async () => {
-    viewAbort?.abort()
-    cancelSavedRetries()
-    viewSequence++
-    openingView.value = false
+    cancelSavedView()
+    invalidateCatalog()
     muteAll()
     const revision = ++layoutSequence,
       active = captureScope()
-    sequence++
     const closed = await Promise.all(slots.map((_slot, index) => stop(index)))
-    if (!active() || revision !== layoutSequence) return
-    if (closed.some((result) => result < 0)) {
-      loading.value = false
-      return
-    }
+    if (!active() || revision !== layoutSequence || closed.some((result) => result < 0)) return
     layout.value = deviceMode.value ? '1' : '4'
     maximizedSlot.value = null
     void load()
@@ -537,16 +371,11 @@ watch(
 watch(
   [() => sessionState.me?.user.id, () => sessionState.epoch],
   () => {
-    viewAbort?.abort()
-    cancelSavedRetries()
-    viewSequence++
-    sequence++
-    openingView.value = false
+    cancelSavedView()
+    resetCatalog()
     muteAll()
     closeContext(false)
     diagnosticFailure.value = null
-    channels.value = []
-    groups.value = []
     void clearIdentity()
   },
   { flush: 'sync' },
@@ -562,12 +391,7 @@ onMounted(() => {
   globalThis.document.addEventListener('keydown', dismissContext)
 })
 onBeforeUnmount(() => {
-  viewAbort?.abort()
-  cancelSavedRetries()
-  viewSequence++
   muteAll()
-  sequence++
-  globalThis.clearTimeout(searchTimer)
   globalThis.clearInterval(statsTimer)
   globalThis.document.removeEventListener('keydown', dismissContext)
 })
@@ -611,17 +435,12 @@ onBeforeUnmount(() => {
           v-if="channels.length"
           :channels="channels"
           :groups="groups"
-          :searching="Boolean(search.trim())"
+          :searching="searching"
           @device="addDevice"
           @channel="addChannel"
         />
         <ElEmpty v-if="!loading && !channels.length" :image-size="66" description="暂无可见相机" />
-        <ElButton
-          v-if="channels.length < total"
-          text
-          :loading="loading"
-          class="load-more"
-          @click="load(true)"
+        <ElButton v-if="hasMore" text :loading="loading" class="load-more" @click="load(true)"
           >加载更多</ElButton
         >
       </div>

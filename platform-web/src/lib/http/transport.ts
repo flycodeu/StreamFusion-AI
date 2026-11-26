@@ -1,5 +1,5 @@
 import { ApiRequestError, isTraceId } from './error'
-import { isTransportApiPath } from './path'
+import { browserApiPrefix, isTransportApiPath } from './path'
 import type { RawHttpResponse, TransportOptions } from './types'
 
 function invalid(): never {
@@ -66,8 +66,7 @@ function prepare(options: TransportOptions): {
     }
   }
   const suffix = query.toString()
-  // Development separates API requests from SPA routes; production keeps its root API contract.
-  const url = (import.meta.env.DEV ? '/api' : '') + path + (suffix ? `?${suffix}` : '')
+  const url = browserApiPrefix + path + (suffix ? `?${suffix}` : '')
   return { url, headers, body: serialized }
 }
 

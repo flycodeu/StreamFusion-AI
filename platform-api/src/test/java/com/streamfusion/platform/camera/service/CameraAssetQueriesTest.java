@@ -25,7 +25,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 class CameraAssetQueriesTest {
     private final CameraChannelMapper channels = mock(CameraChannelMapper.class);
     private final CameraAccessService access = mock(CameraAccessService.class);
-    private final CameraSourceService sources = mock(CameraSourceService.class);
+    private final CameraSourceQueries sources = mock(CameraSourceQueries.class);
     private final CameraLocatorService locators = mock(CameraLocatorService.class);
     private final CameraGroupService groups = mock(CameraGroupService.class);
     private final CameraStatusQueryService status = mock(CameraStatusQueryService.class);

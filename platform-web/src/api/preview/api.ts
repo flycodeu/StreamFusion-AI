@@ -40,12 +40,10 @@ function withLeaseReceipt(result: ApiResult<PreviewLease>): PreviewLease {
   return { ...result.data, receipt: { status, traceId, timestamp } }
 }
 
-export async function getPreviewCatalog(query: {
-  page: number
-  size: number
-  name?: string
-  device?: string
-}) {
+export async function getPreviewCatalog(
+  query: { page: number; size: number; name?: string; device?: string },
+  signal?: AbortSignal,
+) {
   return (
     await request({
       path: '/preview/catalog',
@@ -53,6 +51,7 @@ export async function getPreviewCatalog(query: {
       params: query,
       successStatus: 200,
       timeoutMs: 15000,
+      signal,
       decode: parsePreviewCatalog,
     })
   ).data

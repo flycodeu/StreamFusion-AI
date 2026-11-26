@@ -6,10 +6,9 @@ import static org.mockito.Mockito.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessContext;
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
+import com.streamfusion.platform.camera.locator.StreamLocatorAdapter;
+import com.streamfusion.platform.camera.locator.StreamLocatorAdapterRegistry;
 import com.streamfusion.platform.camera.pojo.entity.CameraLocatorEntity;
-import com.streamfusion.platform.media.preview.PreviewFailure;
-import com.streamfusion.platform.media.preview.source.StreamLocatorAdapter;
-import com.streamfusion.platform.media.preview.source.StreamLocatorAdapterRegistry;
 import java.net.URI;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -61,7 +60,7 @@ class CameraStatusStreamResolverTest {
                             CameraAccessContext execution = invocation.getArgument(2);
                             assertThat(execution.deadlineNanos()).isEqualTo(deadline);
                             assertThat(execution.checkAuthorization()).isSameAs(checkActive);
-                            throw new PreviewFailure(failure);
+                            throw new CameraAdapterException(failure);
                         });
 
         assertThatThrownBy(

@@ -9,11 +9,9 @@ import com.streamfusion.platform.camera.config.CameraProperties;
 import com.streamfusion.platform.camera.mapper.*;
 import com.streamfusion.platform.camera.pojo.dto.*;
 import com.streamfusion.platform.camera.pojo.entity.*;
-import com.streamfusion.platform.camera.pojo.vo.CameraAddressVo;
 import com.streamfusion.platform.camera.service.CameraAccessService.Actor;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
-import com.streamfusion.platform.common.pojo.vo.PageResultVo;
 import com.streamfusion.platform.common.validation.DecimalInput;
 import com.streamfusion.platform.common.validation.VersionCounter;
 import com.streamfusion.platform.monitor.audit.pojo.dto.AuditContextDto;
@@ -37,6 +35,7 @@ public class CameraSourceService {
     private final CameraLocatorMapper locators;
     private final CameraAccessService access;
     private final CameraSourceRules rules;
+    private final CameraSourceQueries queries;
     private final CameraProperties properties;
     private final CameraCryptoService crypto;
     private final CameraAccessAdapterRegistry adapters;
@@ -44,107 +43,6 @@ public class CameraSourceService {
     private final com.baomidou.mybatisplus.core.incrementer.IdentifierGenerator ids;
     private final AuditService audit;
     private final Clock clock;
-
-    public Map<String, Object> options() {
-        access.requireSuper(access.readActor());
-        return Map.of(
-                "adapterTypes",
-                adapters.descriptors().stream().map(d -> d.type()).toList(),
-                "credentialPurposes",
-                List.of("RTSP", "STREAM", "DEVICE_HTTP", "ONVIF", "VENDOR_HTTP", "PLATFORM_HTTP"),
-                "networkPolicies",
-                properties.networkPolicyOptions(),
-                "ready",
-                crypto.ready() && !properties.getNetworkPolicies().isEmpty());
-    }
-
-    public boolean storageReady() {
-        return crypto.ready();
-    }
-
-    /** Display-only lookup after channel authorization/pagination, never a source-directory API. */
-    public Map<Long, CameraAddressVo> displayAddresses(List<Long> sourceIds) {
-        if (sourceIds.isEmpty()) return Map.of();
-        var result = new HashMap<Long, CameraAddressVo>();
-        for (var address : endpoints.displayAddresses(sourceIds.stream().distinct().toList())) {
-            if (!result.containsKey(address.sourceId()))
-                result.put(
-                        address.sourceId(),
-                        CameraAddressVo.of(address.category(), address.host(), address.port()));
-        }
-        return result;
-    }
-
-    public boolean supportsAdapter(String type) {
-        return type != null
-                && (adapters.supportsCategory(type, "DEVICE")
-                        || adapters.supportsCategory(type, "PLATFORM")
-                        || adapters.supportsCategory(type, "RTSP")
-                        || adapters.supportsCategory(type, "STREAM"));
-    }
-
-    @Transactional(readOnly = true)
-    public PageResultVo<Map<String, Object>> page(CameraSourceQueryDto query) {
-        access.requireSuper(access.readActor());
-        String name = CameraSourceRules.text(query.getName(), 100, false);
-        if (query.getAdapterType() != null && !supportsAdapter(query.getAdapterType()))
-            throw CameraSourceRules.invalid();
-        var filter = new LambdaQueryWrapper<CameraSourceEntity>();
-        if (name != null && !name.isEmpty())
-            filter.apply(
-                    "name LIKE {0} ESCAPE '!'",
-                    "%" + name.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%");
-        filter.eq(
-                query.getAdapterType() != null,
-                CameraSourceEntity::getAdapterType,
-                query.getAdapterType());
-        filter.eq(query.getEnabled() != null, CameraSourceEntity::getEnabled, query.getEnabled());
-        filter.orderByDesc(CameraSourceEntity::getId);
-        var page = sources.selectPage(query.toPage(), filter);
-        // Bound child reads to this page, rather than one query per row.
-        var ids = page.getRecords().stream().map(CameraSourceEntity::getId).toList();
-        Map<Long, CameraEndpointEntity> endpointMap = new HashMap<>();
-        Map<Long, CameraCredentialEntity> credentialMap = new HashMap<>();
-        Set<Long> usedSourceIds = ids.isEmpty() ? Set.of() : sources.sourcesWithChannels(ids);
-        Set<Long> boundSourceIds = ids.isEmpty() ? Set.of() : sources.sourcesWithBoundChannels(ids);
-        if (!ids.isEmpty()) {
-            endpoints
-                    .selectList(
-                            new LambdaQueryWrapper<CameraEndpointEntity>()
-                                    .in(CameraEndpointEntity::getSourceId, ids))
-                    .forEach(e -> endpointMap.put(e.getSourceId(), e));
-            credentials
-                    .selectList(
-                            new LambdaQueryWrapper<CameraCredentialEntity>()
-                                    .select(
-                                            CameraCredentialEntity::getId,
-                                            CameraCredentialEntity::getSourceId,
-                                            CameraCredentialEntity::getPurpose)
-                                    .in(CameraCredentialEntity::getSourceId, ids))
-                    .forEach(c -> credentialMap.put(c.getSourceId(), c));
-        }
-        return PageResultVo.from(
-                page,
-                page.getRecords().stream()
-                        .map(
-                                s ->
-                                        view(
-                                                s,
-                                                endpointMap.get(s.getId()),
-                                                credentialMap.get(s.getId()),
-                                                editable(
-                                                        s,
-                                                        endpointMap.get(s.getId()),
-                                                        usedSourceIds.contains(s.getId()),
-                                                        boundSourceIds.contains(s.getId()))))
-                        .toList());
-    }
-
-    @Transactional(readOnly = true)
-    public Map<String, Object> detail(String id) {
-        access.requireSuper(access.readActor());
-        return view(requireSource(DecimalInput.id(id, "sourceId")));
-    }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> create(CameraSourceWriteDto input, AuditContextDto context) {
@@ -157,7 +55,7 @@ public class CameraSourceService {
                 input.clientRequestId(),
                 input,
                 () -> insertSource(input, actor, context, 554),
-                result -> requireSource(Long.parseLong(result.get("sourceId").toString())));
+                result -> queries.requireSource(Long.parseLong(result.get("sourceId").toString())));
     }
 
     private Map<String, Object> insertSource(
@@ -212,13 +110,13 @@ public class CameraSourceService {
         access.requireSuper(actor);
         long sourceId = DecimalInput.id(id, "sourceId");
         long version = DecimalInput.version(input.getVersion(), "version");
-        var source = requireSource(sourceId);
+        var source = queries.requireSource(sourceId);
         checkVersion(source, version, false);
-        var endpoint = endpoint(sourceId);
+        var endpoint = queries.endpoint(sourceId);
         if (endpoint == null) throw BusinessException.error(ErrorCode.CONFLICT);
         String purpose = endpoint.getPurpose();
         boolean editable =
-                editable(
+                CameraSourceRules.endpointEditable(
                         source,
                         endpoint,
                         sources.channelCount(sourceId) > 0,
@@ -334,7 +232,7 @@ public class CameraSourceService {
                 null,
                 context,
                 Map.of("name", source.getName()));
-        return view(source);
+        return queries.view(source);
     }
 
     /** Creates an internal connection aggregate in the caller's asset transaction, without IO. */
@@ -389,7 +287,7 @@ public class CameraSourceService {
                         actor,
                         context,
                         null);
-        return requireSource(Long.parseLong(result.get("sourceId").toString()));
+        return queries.requireSource(Long.parseLong(result.get("sourceId").toString()));
     }
 
     private String category(String supplied, String type) {
@@ -422,7 +320,7 @@ public class CameraSourceService {
         var actor = access.lockActor();
         access.requireSuper(actor);
         long sourceId = DecimalInput.id(id, "sourceId");
-        var source = requireSource(sourceId);
+        var source = queries.requireSource(sourceId);
         checkVersion(source, DecimalInput.version(version, "version"), true);
         if (sources.channelCount(sourceId) > 0 || sources.deviceCount(sourceId) > 0)
             throw BusinessException.error(ErrorCode.CONFLICT);
@@ -474,7 +372,7 @@ public class CameraSourceService {
     }
 
     public CameraSourceEntity requireArchiveSource(long id, Long expectedVersion) {
-        var source = requireSource(id);
+        var source = queries.requireSource(id);
         if (!Boolean.TRUE.equals(source.getEnabled()))
             throw BusinessException.error(ErrorCode.CONFLICT);
         if (expectedVersion != null) checkVersion(source, expectedVersion, false);
@@ -482,12 +380,12 @@ public class CameraSourceService {
     }
 
     private String purpose(String type) {
-        if (!supportsAdapter(type)) throw CameraSourceRules.invalid();
+        if (!adapters.supportsSource(type)) throw CameraSourceRules.invalid();
         return adapters.descriptor(type).endpointPurpose();
     }
 
     private String basePath(String type) {
-        if (!supportsAdapter(type)) throw CameraSourceRules.invalid();
+        if (!adapters.supportsSource(type)) throw CameraSourceRules.invalid();
         return adapters.descriptor(type).endpointPath();
     }
 
@@ -498,11 +396,11 @@ public class CameraSourceService {
             if (input.sourceVersion() != null) throw CameraSourceRules.invalid();
             return input;
         }
-        var source = requireSource(DecimalInput.id(input.sourceId(), "sourceId"));
+        var source = queries.requireSource(DecimalInput.id(input.sourceId(), "sourceId"));
         checkVersion(source, DecimalInput.version(input.sourceVersion(), "sourceVersion"), false);
         if (!Boolean.TRUE.equals(source.getEnabled()))
             throw BusinessException.error(ErrorCode.CONFLICT);
-        var endpoint = endpoint(source.getId());
+        var endpoint = queries.endpoint(source.getId());
         if (endpoint == null) throw BusinessException.error(ErrorCode.CONFLICT);
         var credential = credential(source.getId());
         String username = null, password = null;
@@ -587,7 +485,7 @@ public class CameraSourceService {
         if (connection.sourceId() != null) {
             var resolved = resolveConnection(connection);
             long sourceId = DecimalInput.id(connection.sourceId(), "sourceId");
-            if ("DEVICE_HTTP".equals(endpoint(sourceId).getPurpose())) {
+            if ("DEVICE_HTTP".equals(queries.endpoint(sourceId).getPurpose())) {
                 if (!"AUTO".equals(resolved.method()) && !adapterType.equals(resolved.method()))
                     throw CameraSourceRules.invalid();
                 return bindImportedAdapter(
@@ -599,7 +497,7 @@ public class CameraSourceService {
                         context);
             }
             if (!adapterType.equals(resolved.method())) throw CameraSourceRules.invalid();
-            return requireSource(sourceId);
+            return queries.requireSource(sourceId);
         }
         String purpose = purpose(adapterType);
         boolean anonymous =
@@ -637,7 +535,7 @@ public class CameraSourceService {
                         actor,
                         context,
                         connection.rtspPort() == null ? 554 : connection.rtspPort());
-        return requireSource(Long.parseLong(result.get("sourceId").toString()));
+        return queries.requireSource(Long.parseLong(result.get("sourceId").toString()));
     }
 
     /** Explicit import binds a registered device driver, retaining credential purpose and AAD. */
@@ -651,7 +549,7 @@ public class CameraSourceService {
             AuditContextDto context) {
         access.requireSuper(actor);
         var source = requireArchiveSource(sourceId, expectedVersion);
-        var endpoint = endpoint(sourceId);
+        var endpoint = queries.endpoint(sourceId);
         if (!"DEVICE".equals(source.getConnectionCategory())
                 || endpoint == null
                 || !"DEVICE_HTTP".equals(endpoint.getPurpose())
@@ -694,14 +592,8 @@ public class CameraSourceService {
         return source;
     }
 
-    public CameraSourceEntity requireSource(long id) {
-        var source = sources.selectById(id);
-        if (source == null) throw BusinessException.error(ErrorCode.NOT_FOUND);
-        return source;
-    }
-
     public String endpointPurpose(long sourceId) {
-        var endpoint = endpoint(sourceId);
+        var endpoint = queries.endpoint(sourceId);
         if (endpoint == null) throw BusinessException.error(ErrorCode.CONFLICT);
         return endpoint.getPurpose();
     }
@@ -710,12 +602,6 @@ public class CameraSourceService {
         if (source.getVersion() != expected)
             throw BusinessException.error(
                     deletion ? ErrorCode.PRECONDITION_FAILED : ErrorCode.VERSION_CONFLICT);
-    }
-
-    private CameraEndpointEntity endpoint(long sourceId) {
-        return endpoints.selectOne(
-                new LambdaQueryWrapper<CameraEndpointEntity>()
-                        .eq(CameraEndpointEntity::getSourceId, sourceId));
     }
 
     private CameraCredentialEntity credential(long sourceId) {
@@ -842,81 +728,10 @@ public class CameraSourceService {
                 + c.getPurpose();
     }
 
-    private Map<String, Object> view(CameraSourceEntity s) {
-        var endpoint = endpoint(s.getId());
-        return view(
-                s,
-                endpoint,
-                credential(s.getId()),
-                editable(
-                        s,
-                        endpoint,
-                        sources.channelCount(s.getId()) > 0,
-                        sources.boundChannelCount(s.getId()) > 0));
-    }
-
-    private Map<String, Object> view(
-            CameraSourceEntity s,
-            CameraEndpointEntity e,
-            CameraCredentialEntity c,
-            boolean endpointEditable) {
-        var result = new LinkedHashMap<String, Object>();
-        result.put("sourceId", s.getId().toString());
-        result.put("name", s.getName());
-        result.put("connectionCategory", s.getConnectionCategory());
-        result.put("adapterType", s.getAdapterType());
-        result.put("vendorHint", s.getVendorHint());
-        result.put("networkPolicyKey", s.getNetworkPolicyKey());
-        result.put("rtspPort", s.getRtspPort());
-        result.put("endpointEditable", endpointEditable);
-        result.put("enabled", s.getEnabled());
-        result.put("remark", s.getRemark());
-        result.put("version", s.getVersion().toString());
-        result.put("createdAt", s.getCreatedAt().atZone(ZONE).toInstant());
-        result.put("updatedAt", s.getUpdatedAt().atZone(ZONE).toInstant());
-        if (e != null) {
-            var endpoint = new LinkedHashMap<String, Object>();
-            endpoint.put("purpose", e.getPurpose());
-            endpoint.put("scheme", e.getScheme());
-            endpoint.put("host", e.getHost());
-            endpoint.put("port", e.getPort());
-            endpoint.put("basePath", e.getBasePath());
-            endpoint.put("authMode", e.getAuthMode());
-            endpoint.put("credentialPurpose", e.getCredentialId() == null ? null : e.getPurpose());
-            endpoint.put("tlsPolicy", e.getTlsPolicy());
-            result.put("endpoints", List.of(endpoint));
-        } else result.put("endpoints", List.of());
-        result.put(
-                "credentials",
-                c == null
-                        ? List.of()
-                        : List.of(
-                                Map.of(
-                                        "purpose",
-                                        c.getPurpose(),
-                                        "configured",
-                                        true,
-                                        "usernameMasked",
-                                        "已配置")));
-        return result;
-    }
-
     private String storedEndpointHost(CameraSourceEntity source, String purpose, String host) {
         return "DEVICE_HTTP".equals(purpose) || source.getNetworkPolicyKey() == null
                 ? rules.storedHost(host)
                 : rules.host(host, source.getNetworkPolicyKey());
-    }
-
-    private static boolean editable(
-            CameraSourceEntity source,
-            CameraEndpointEntity endpoint,
-            boolean hasChannels,
-            boolean hasBoundChannels) {
-        if ("STREAM".equals(source.getConnectionCategory())) return false;
-        return "RTSP".equals(source.getConnectionCategory())
-                || (endpoint != null && "DEVICE_HTTP".equals(endpoint.getPurpose())
-                        ? !hasBoundChannels
-                        : !hasChannels);
     }
 
     private LocalDateTime now() {

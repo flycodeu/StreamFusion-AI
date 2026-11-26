@@ -46,7 +46,7 @@ java -jar target/platform-api-0.1.0-SNAPSHOT.jar --spring.profiles.active=local 
 
 ### 前端生产访问路径
 
-开发代理去掉请求的 `/api` 前缀再转发。发布 `platform-web/dist` 时，静态服务器应把实际后端入口按原路径转发，例如 `/auth/`、`/cameras`、`/preview/`、`/storage/`、`/actuator/health`。Vue 路由后备规则应排在 API 代理之后。保留 Cookie、CSRF、`X-Trace-Id`、`If-Match` 和原响应状态。
+开发和生产前端都通过同源 `/api/` 访问后端。开发代理会去掉此前缀；发布 `platform-web/dist` 时，网关也要把 `/api/` 请求去前缀后转发给 Java，例如 `/api/auth/me` 转到 `/auth/me`。Vue 的 `/preview/center`、`/storage/manage` 等页面仍走静态站点和 SPA 回退。保留 Cookie、CSRF、`X-Trace-Id`、`If-Match` 和后端原响应状态。使用 Ops 发布时见[整站发布步骤](operations/project-delivery.md#streamfusion-整站发布)。
 
 在静态服务器设置下列响应头。开发与本地预览已设置相同头部。
 
@@ -58,6 +58,15 @@ add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 ```
 
 `VITE_*` 会编译入浏览器包。登录、改密和路由刷新应在实际发布代理上验证。
+
+## 按业务查找代码
+
+| 要改的行为 | 首先看 |
+| --- | --- |
+| 相机来源列表、详情、端点和凭据配置 | `platform-api` 的 `camera/service/CameraSourceQueries.java` 负责读取；`CameraSourceService.java` 负责写入和事务。 |
+| 相机取流地址、预览接入与租约 | `camera/locator/CameraStreamLocator.java` 管理取址和连接身份；`media/preview/source/PreviewLocatorService.java` 校验媒体目标；`media/preview/` 管理节点、媒体与租约。 |
+| 网页预览目录、收藏、播放器或节点状态 | [预览维护入口](platform-web/src/features/preview/README.md)按行为列出页面和状态归属。 |
+| Jenkins 构建、项目环境、发布、服务检查与日志 | [Ops 维护入口](operations/project-delivery.md#维护入口)区分仓库识别、项目规则、控制端作业和目标端执行。 |
 
 ## 验证命令
 

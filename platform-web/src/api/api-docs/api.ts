@@ -5,8 +5,7 @@ import { parseRawJson, responseContext } from '../../lib/http/response'
 import { send } from '../../lib/http/transport'
 
 export function apiDocsFrameUrl(): string {
-  const prefix = import.meta.env.DEV ? '/api' : ''
-  return `/api-docs.html?apiPrefix=${encodeURIComponent(prefix)}`
+  return '/api-docs.html'
 }
 
 export async function getApiDocsStatus(signal?: AbortSignal): Promise<{ enabled: boolean }> {

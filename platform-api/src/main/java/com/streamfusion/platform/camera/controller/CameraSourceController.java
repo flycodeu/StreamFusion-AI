@@ -1,6 +1,7 @@
 package com.streamfusion.platform.camera.controller;
 
 import com.streamfusion.platform.camera.pojo.dto.*;
+import com.streamfusion.platform.camera.service.CameraSourceQueries;
 import com.streamfusion.platform.camera.service.CameraSourceService;
 import com.streamfusion.platform.common.pojo.vo.PageResultVo;
 import com.streamfusion.platform.common.response.R;
@@ -23,23 +24,24 @@ import org.springframework.web.bind.annotation.*;
 @ModuleAccess("camera")
 public class CameraSourceController {
     private final CameraSourceService service;
+    private final CameraSourceQueries queries;
 
     @Operation(summary = "读取已开放接入选项与配置就绪状态")
     @GetMapping("/options")
     public R<Map<String, Object>> options() {
-        return R.success(service.options());
+        return R.success(queries.options());
     }
 
     @Operation(summary = "分页读取接入来源")
     @GetMapping
     public R<PageResultVo<Map<String, Object>>> page(@ModelAttribute CameraSourceQueryDto query) {
-        return R.success(service.page(query));
+        return R.success(queries.page(query));
     }
 
     @Operation(summary = "读取脱敏接入来源配置")
     @GetMapping("/{id}")
     public R<Map<String, Object>> detail(@PathVariable String id, HttpServletResponse response) {
-        return tagged(service.detail(id), response);
+        return tagged(queries.detail(id), response);
     }
 
     @Operation(summary = "保存设备、平台或RTSP接入来源，不发起网络请求")

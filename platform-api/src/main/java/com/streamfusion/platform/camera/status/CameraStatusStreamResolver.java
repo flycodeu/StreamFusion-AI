@@ -3,14 +3,12 @@ package com.streamfusion.platform.camera.status;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessContext;
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
+import com.streamfusion.platform.camera.locator.StreamLocatorAdapterRegistry;
 import com.streamfusion.platform.camera.pojo.entity.CameraLocatorEntity;
-import com.streamfusion.platform.media.preview.PreviewFailure;
-import com.streamfusion.platform.media.preview.source.StreamLocatorAdapter;
-import com.streamfusion.platform.media.preview.source.StreamLocatorAdapterRegistry;
 import java.net.URI;
 import org.springframework.stereotype.Component;
 
-/** Reuses preview's protocol identities; only the worker resolves ONVIF over the network. */
+/** Uses stored protocol locators; only the worker resolves ONVIF over the network. */
 @Component
 public class CameraStatusStreamResolver {
     private final StreamLocatorAdapterRegistry adapters;
@@ -25,7 +23,7 @@ public class CameraStatusStreamResolver {
 
     public URI configuredUri(
             CameraLocatorEntity locator, JsonNode config, CameraAccessContext context) {
-        var adapter = required(locator.getLocatorKind());
+        var adapter = adapters.required(locator.getLocatorKind());
         if ("ONVIF".equals(locator.getLocatorKind())) {
             validateOnvif(config, context);
             String host = context.endpoint().getHost();
@@ -51,10 +49,10 @@ public class CameraStatusStreamResolver {
                             deadline);
             URI uri;
             try {
-                uri = required(locator.getLocatorKind()).resolve(locator, config, execution);
+                uri =
+                        adapters.required(locator.getLocatorKind())
+                                .resolve(locator, config, execution);
                 validateRtsp(uri);
-            } catch (PreviewFailure ex) {
-                throw new CameraAdapterException(resolutionReason(ex.reason()));
             } catch (CameraAdapterException ex) {
                 throw new CameraAdapterException(resolutionReason(ex.reasonCode()));
             }
@@ -68,10 +66,6 @@ public class CameraStatusStreamResolver {
         };
     }
 
-    private StreamLocatorAdapter required(String kind) {
-        return adapters.required(kind);
-    }
-
     public static void validateRtsp(URI uri) {
         if (uri == null
                 || !"rtsp".equalsIgnoreCase(uri.getScheme())
@@ -80,7 +74,7 @@ public class CameraStatusStreamResolver {
                 || uri.getRawFragment() != null
                 || uri.toASCIIString().length() > 8192
                 || uri.getPort() == 0
-                || uri.getPort() > 65535) throw new PreviewFailure("LOCATOR_INVALID");
+                || uri.getPort() > 65535) throw new CameraAdapterException("LOCATOR_INVALID");
     }
 
     private static void validateOnvif(JsonNode config, CameraAccessContext context) {
@@ -89,7 +83,7 @@ public class CameraStatusStreamResolver {
                 || config.path("serviceEndpoint").asText().isBlank()
                 || !("http://www.onvif.org/ver10/media/wsdl".equals(namespace)
                         || "http://www.onvif.org/ver20/media/wsdl".equals(namespace)))
-            throw new PreviewFailure("ONVIF_MEDIA_NOT_CONFIGURED");
+            throw new CameraAdapterException("ONVIF_MEDIA_NOT_CONFIGURED");
         URI service = URI.create(config.path("serviceEndpoint").asText());
         if (service.getHost() == null
                 || service.getRawUserInfo() != null
@@ -101,7 +95,7 @@ public class CameraStatusStreamResolver {
                 || !service.getHost().equalsIgnoreCase(context.endpoint().getHost())
                 || ("https".equals(context.endpoint().getScheme())
                         && !"https".equals(service.getScheme())))
-            throw new PreviewFailure("LOCATOR_INVALID");
+            throw new CameraAdapterException("LOCATOR_INVALID");
     }
 
     private static String resolutionReason(String reason) {

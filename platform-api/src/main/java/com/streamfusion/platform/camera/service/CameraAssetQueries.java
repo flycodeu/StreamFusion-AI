@@ -36,7 +36,7 @@ public class CameraAssetQueries {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
     private final CameraChannelMapper channels;
     private final CameraAccessService access;
-    private final CameraSourceService sources;
+    private final CameraSourceQueries sources;
     private final CameraLocatorService locators;
     private final CameraGroupService groups;
     private final CameraStatusQueryService status;

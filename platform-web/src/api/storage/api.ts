@@ -1,5 +1,6 @@
 import { request } from '../client'
 import { object, string } from '../parse'
+import { browserApiPrefix } from '../../lib/http/path'
 import {
   parseInstance,
   parseObject,
@@ -222,7 +223,7 @@ export const objectContentUrl = (
   disposition = 'inline',
 ) => {
   const params = new URLSearchParams({ key, objectToken, disposition })
-  return `${import.meta.env.DEV ? '/api' : ''}/storage/scopes/${scopeId}/object-content?${params}`
+  return `${browserApiPrefix}/storage/scopes/${scopeId}/object-content?${params}`
 }
 export const previewCleanup = (scopeId: string, body: unknown) =>
   write(`/storage/scopes/${scopeId}/cleanup-plans`, 'POST', body, raw, 202)

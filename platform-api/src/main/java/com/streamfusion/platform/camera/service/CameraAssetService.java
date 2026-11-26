@@ -59,6 +59,7 @@ public class CameraAssetService {
     private final CameraScopeMapper scopes;
     private final CameraAccessService access;
     private final CameraSourceService sources;
+    private final CameraSourceQueries sourceQueries;
     private final CameraLocatorService locators;
     private final CameraCreateService creates;
     private final CameraGroupService groups;
@@ -71,7 +72,10 @@ public class CameraAssetService {
     public Map<String, Boolean> options() {
         boolean admin = access.readActor().superAdmin();
         return Map.of(
-                "canManageShared", admin, "manualStorageReady", admin && sources.storageReady());
+                "canManageShared",
+                admin,
+                "manualStorageReady",
+                admin && sourceQueries.storageReady());
     }
 
     @Transactional(readOnly = true)

@@ -7,7 +7,7 @@ import com.streamfusion.platform.camera.pojo.entity.CameraProfileEntity;
 import com.streamfusion.platform.camera.service.CameraAccessService;
 import com.streamfusion.platform.camera.service.CameraCryptoService;
 import com.streamfusion.platform.camera.service.CameraRtspTargetService;
-import com.streamfusion.platform.camera.service.CameraSourceService;
+import com.streamfusion.platform.camera.service.CameraSourceQueries;
 import com.streamfusion.platform.common.exception.BusinessException;
 import com.streamfusion.platform.common.exception.ErrorCode;
 import com.streamfusion.platform.common.validation.DecimalInput;
@@ -38,7 +38,7 @@ public class CameraStatusQueryService {
     private final CameraAccessService cameras;
     private final CameraCryptoService crypto;
     private final CameraRtspTargetService targets;
-    private final CameraSourceService sources;
+    private final CameraSourceQueries sources;
     private final Clock clock;
 
     @Transactional(readOnly = true)

@@ -1,9 +1,9 @@
-package com.streamfusion.platform.media.preview.source;
+package com.streamfusion.platform.camera.locator;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessContext;
+import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
 import com.streamfusion.platform.camera.pojo.entity.CameraLocatorEntity;
-import com.streamfusion.platform.media.preview.PreviewFailure;
 import java.net.URI;
 import org.springframework.stereotype.Component;
 
@@ -30,7 +30,7 @@ public class RtspStreamLocatorAdapter implements StreamLocatorAdapter {
         if (!path.startsWith("/")
                 || path.contains("?")
                 || path.contains("#")
-                || query.contains("#")) throw new PreviewFailure("LOCATOR_INVALID");
+                || query.contains("#")) throw new CameraAdapterException("LOCATOR_INVALID");
         return URI.create(
                 "rtsp://"
                         + (host.contains(":") && !host.startsWith("[") ? "[" + host + "]" : host)

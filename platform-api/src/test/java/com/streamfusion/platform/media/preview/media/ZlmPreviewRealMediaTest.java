@@ -866,6 +866,7 @@ class ZlmPreviewRealMediaTest {
         when(locators.connectionKey(profile)).thenReturn("real-shared-configuration");
         when(locators.resolve(
                         org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.eq("real-shared-configuration"),
                         org.mockito.ArgumentMatchers.any(),
                         org.mockito.ArgumentMatchers.any()))
                 .thenReturn(

@@ -1,11 +1,10 @@
-package com.streamfusion.platform.media.preview.source;
+package com.streamfusion.platform.camera.locator;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessContext;
 import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
 import com.streamfusion.platform.camera.access.adapter.CameraHttpTransport;
 import com.streamfusion.platform.camera.pojo.entity.CameraLocatorEntity;
-import com.streamfusion.platform.media.preview.PreviewFailure;
 import java.io.ByteArrayInputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -42,7 +41,7 @@ public class OnvifStreamLocatorAdapter implements StreamLocatorAdapter {
         String token = config.path("profileToken").asText();
         if ((!MEDIA1.equals(namespace) && !MEDIA2.equals(namespace))
                 || endpoint.isBlank()
-                || token.isBlank()) throw new PreviewFailure("LOCATOR_NOT_CONFIGURED");
+                || token.isBlank()) throw new CameraAdapterException("LOCATOR_NOT_CONFIGURED");
         String content =
                 MEDIA2.equals(namespace)
                         ? "<m:Protocol>RTSP</m:Protocol><m:ProfileToken>"
@@ -79,14 +78,14 @@ public class OnvifStreamLocatorAdapter implements StreamLocatorAdapter {
             factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
             var doc = factory.newDocumentBuilder().parse(new ByteArrayInputStream(response));
             if (doc.getElementsByTagNameNS("*", "Fault").getLength() > 0)
-                throw new PreviewFailure("UPSTREAM_REJECTED");
+                throw new CameraAdapterException("UPSTREAM_REJECTED");
             var values = doc.getElementsByTagNameNS("*", "Uri");
-            if (values.getLength() != 1) throw new PreviewFailure("LOCATOR_INVALID");
+            if (values.getLength() != 1) throw new CameraAdapterException("LOCATOR_INVALID");
             return transport.streamUri(context, values.item(0).getTextContent().strip());
-        } catch (PreviewFailure | CameraAdapterException ex) {
+        } catch (CameraAdapterException ex) {
             throw ex;
         } catch (Exception ex) {
-            throw new PreviewFailure("LOCATOR_INVALID");
+            throw new CameraAdapterException("LOCATOR_INVALID");
         }
     }
 

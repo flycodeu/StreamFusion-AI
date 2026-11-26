@@ -1,4 +1,4 @@
-package com.streamfusion.platform.media.preview.source;
+package com.streamfusion.platform.camera.locator;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.streamfusion.platform.camera.access.adapter.CameraAccessContext;

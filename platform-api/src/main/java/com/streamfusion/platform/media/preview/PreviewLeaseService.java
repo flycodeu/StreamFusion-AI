@@ -243,18 +243,17 @@ public class PreviewLeaseService {
         if (!Boolean.TRUE.equals(profile.getEnabled()))
             throw new PreviewFailure("PROFILE_DISABLED");
         authorization.request(lease.owner, lease.cameraId);
-        lease.connectionKey = locators.connectionKey(profile);
-        executor.prepare(
-                lease.id,
-                new PreviewExecutor.SourceKey(profile.getId(), lease.connectionKey),
-                lease.input.videoCodecs(),
-                deadline);
+        var source =
+                new PreviewExecutor.SourceKey(profile.getId(), locators.connectionKey(profile));
+        lease.connectionKey = source.connectionKey();
+        executor.prepare(lease.id, source, lease.input.videoCodecs(), deadline);
         executor.attachSource(
                 lease.id,
-                new PreviewExecutor.SourceKey(profile.getId(), lease.connectionKey),
+                source,
                 () ->
                         locators.resolve(
                                         profile,
+                                        source.connectionKey(),
                                         () -> {
                                             checkActive(lease, deadline);
                                             authorization.request(lease.owner, lease.cameraId);
@@ -295,10 +294,19 @@ public class PreviewLeaseService {
         try {
             checkUpstream(lease, deadline);
             executor.renew(lease.id, deadline);
-            synchronized (lease) {
-                checkReady(lease);
-                lease.expiresAt = now().plus(TTL);
-                return view(lease);
+            try {
+                authorization.request(lease.owner, lease.cameraId);
+                requireEnabled(lease);
+                synchronized (lease) {
+                    checkActive(lease, deadline);
+                    checkReady(lease);
+                    lease.expiresAt = now().plus(TTL);
+                    return view(lease);
+                }
+            } catch (RuntimeException ex) {
+                // Execution may already have extended its viewer; release it if commit is invalid.
+                closeLater(lease);
+                throw ex;
             }
         } finally {
             endOperation(lease, deadline);
@@ -588,7 +596,7 @@ public class PreviewLeaseService {
                 }
                 if (asynchronous) queueCleanup(lease);
                 else release(lease);
-            } else if (lease.profileId != null) {
+            } else if (lease.ready) {
                 try {
                     requireEnabled(lease);
                 } catch (RuntimeException invalid) {
@@ -699,7 +707,7 @@ public class PreviewLeaseService {
         volatile Instant expiresAt;
         volatile Long profileId;
         volatile String connectionKey;
-        boolean ready;
+        volatile boolean ready;
         volatile boolean closing;
         boolean signalled;
         boolean signalling;

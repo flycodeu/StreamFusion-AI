@@ -61,14 +61,14 @@ describe('HTTP transport', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api${path}`)
   })
 
-  it.each(['/camera/devices', '/actuator/health'])(
-    'preserves the existing root API contract in production: %s',
+  it.each(['/auth/me', '/preview/catalog', '/storage/instances', '/actuator/health'])(
+    'routes production requests away from SPA paths: %s',
     async (path) => {
       vi.stubEnv('DEV', false)
       const fetchMock = vi.fn().mockResolvedValue(new Response('{}'))
       vi.stubGlobal('fetch', fetchMock)
       await send({ path, method: 'GET' })
-      expect(fetchMock.mock.calls[0]?.[0]).toBe(path)
+      expect(fetchMock.mock.calls[0]?.[0]).toBe(`/api${path}`)
     },
   )
 

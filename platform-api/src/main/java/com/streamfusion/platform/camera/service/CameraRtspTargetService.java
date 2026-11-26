@@ -19,7 +19,6 @@ import com.streamfusion.platform.camera.status.CameraStatusStreamResolver;
 import com.streamfusion.platform.camera.status.CameraStatusWorker;
 import com.streamfusion.platform.camera.status.RtspDescribeProbe;
 import com.streamfusion.platform.common.exception.BusinessException;
-import com.streamfusion.platform.media.preview.PreviewFailure;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -412,8 +411,6 @@ public class CameraRtspTargetService {
                     direct || platform ? null : streams.deferred(locator, config, context));
         } catch (CameraAdapterException ex) {
             return blocked(ex.reasonCode());
-        } catch (PreviewFailure ex) {
-            return blocked(ex.reason());
         } catch (BusinessException ex) {
             return blocked("CONFIGURATION_UNAVAILABLE");
         } catch (IllegalArgumentException ex) {

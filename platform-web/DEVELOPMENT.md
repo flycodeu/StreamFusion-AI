@@ -67,7 +67,7 @@
 
 ### 登录与记住密码
 
-登录页在匿名会话中先获取 CSRF，再通过 `POST /auth/captcha` 生成图片验证码。响应仅含随机 `captchaId`、到期时间和同源图片地址；前端校验地址必须等于该 ID 对应的 `/auth/captcha/{captchaId}/image`，原生图片请求沿用当前会话 Cookie。开发环境增加 `/api` 代理前缀，生产环境使用后端原路径。
+登录页在匿名会话中先获取 CSRF，再通过 `POST /api/auth/captcha` 生成图片验证码。响应仅含随机 `captchaId`、到期时间和后端图片路径；前端校验该路径为这个 ID 对应的 `/auth/captcha/{captchaId}/image`，再添加 `/api`，由浏览器沿用当前会话 Cookie 加载图片。
 
 验证码在密码下方，左侧图片按钮支持点击和键盘换图，右侧填写 5 位字母数字。元数据与图片都准备好后才能登录；请求生成和图片加载期间禁止并行换图。图片加载失败或超过 8 秒时显示重试入口，2 分钟过期后清除图片与输入。登录失败会清空输入并生成新码；卸载页面会取消未完成的验证码请求，旧图片事件不会改变新验证码状态。前端没有关闭验证码的开关。
 
@@ -101,7 +101,7 @@
 
 操作记录和服务信息位于监控面板，页面分别为 `src/views/monitor/Audit.vue`、`src/views/monitor/Server.vue`，浏览器地址与组件路径统一为 `/monitor/Audit`、`/monitor/Server`。接口集中在 `src/api/audit/`、`src/api/server/`，使用 `/audit/page`、`/audit/{id}` 和 `/server/status`，分别需要 `audit`、`server` 模块授权。新安装只执行 `platform-api/sql/streamfusion-mysql.sql` 完整文件，包含监控目录及 PAGE；`platform-api/sql/业务/` 逐表文件只供开发维护，完整 SQL 由脚本生成。现有数据库须先备份，再按实际结构和菜单差异执行定向更新；执行 SQL 与结果仅在本地 `.run` 归档，不能重跑初始化建表脚本。
 
-接口文档页面为 `src/views/monitor/ApiDocs.vue`，嵌入同源固定的 `public/api-docs.html`，可刷新和导出 OpenAPI JSON。文档入口检查 `api-docs` 模块授权；嵌入页只从当前站点读取 `/v3/api-docs`，不接受外部 URL。导出接口位于 `src/api/api-docs/`。页面错误统一使用 `PageState` 与 `RequestError`，先展示原因和恢复操作，再按需展开错误码、时间及请求标识。
+接口文档页面为 `src/views/monitor/ApiDocs.vue`，嵌入同源固定的 `public/api-docs.html`，可刷新和导出 OpenAPI JSON。文档入口检查 `api-docs` 模块授权；嵌入页从当前站点的 `/api/v3/api-docs` 读取 JSON，从 `/api/swagger-ui/` 加载资源。导出接口位于 `src/api/api-docs/`。页面错误统一使用 `PageState` 与 `RequestError`，先展示原因和恢复操作，再按需展开错误码、时间及请求标识。
 
 服务信息只读取当前后端运行环境、JVM、NVIDIA GPU 和项目配置的服务端口，不扫描全机所有服务。使用有界单采集线程、请求合并、默认 30 秒缓存和采集超时；页面只在进入和手动刷新时请求，不轮询。端口可达只表示 TCP 连接成功，页面不会将其显示为服务业务健康；未能读取的指标显示不可用。
 
@@ -162,18 +162,16 @@ pnpm dev
 
 工具版本以 `package.json` 的 `engines` 和 `packageManager` 为准。开发服务默认使用 `127.0.0.1:8090`，后端代理目标默认 `http://127.0.0.1:8080`，可通过 Vite 环境配置 `API_TARGET` 调整。
 
-开发环境的 HTTP 传输层自动添加 `/api`，Vite 去掉该前缀后转发到后端。API 函数中始终填写后端原始路径，不手工添加 `/api`。
+开发和生产的浏览器请求统一添加 `/api`。开发由 Vite 去前缀并转发给后端；生产由站点网关完成同样的转发。API 函数中始终填写后端原始路径，由传输层添加 `/api`。
 
-| 调用                                     | 开发浏览器请求              | 后端接收 / 生产浏览器请求 |
-| ---------------------------------------- | --------------------------- | ------------------------- |
-| `request({ path: '/camera/page', ... })` | `/api/camera/page`          | `/camera/page`            |
-| 登录挑战                                 | `/api/auth/login/challenge` | `/auth/login/challenge`   |
-| 生成验证码                               | `/api/auth/captcha`         | `/auth/captcha`           |
-| 健康检查                                 | `/api/actuator/health`      | `/actuator/health`        |
+| 调用                                     | 浏览器请求                  | 后端接收                |
+| ---------------------------------------- | --------------------------- | ----------------------- |
+| `request({ path: '/camera/page', ... })` | `/api/camera/page`          | `/camera/page`          |
+| 登录挑战                                 | `/api/auth/login/challenge` | `/auth/login/challenge` |
+| 生成验证码                               | `/api/auth/captcha`         | `/auth/captcha`         |
+| 健康检查                                 | `/api/actuator/health`      | `/actuator/health`      |
 
-这使开发环境的 `/camera/manage` 页面导航与 API 代理互不干扰。生产构建保留现有后端根路径 API 协议；Vite 的开发代理不会包含在构建产物中。
-
-部署方需要同时配置 SPA history fallback 和后端 API 转发，并区分页面 URL 与实际 API URL。例如页面 `/camera/manage` 与接口 `/camera/page` 应分别落到前端与后端，不要把整个 `/camera/**` 无差别转发。不要给一个 GET URL 同时安排页面 HTML 和业务 JSON。生产部署行为尚未在本轮目标环境验证。
+生产部署需给 Vue 页面配置 SPA 回退，并将 `/api/` 去前缀后转发给 Java。例如刷新 `/camera/manage` 返回前端 HTML，请求 `/api/camera/page` 则转发到 Java 的 `/camera/page`，保留上游响应状态。使用 Ops 发布见[整站发布步骤](../operations/project-delivery.md#streamfusion-整站发布)。
 
 ## 检查与排错
 
@@ -199,17 +197,17 @@ pnpm exec vitest run src/router/dynamic/views.test.ts src/router/dynamic/routes.
 pnpm exec vitest run src/lib/http/client.test.ts src/lib/http/transport.test.ts src/api/health/api.test.ts
 ```
 
-| 现象                        | 检查入口                                                                                                                                 |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| 菜单没有出现                | 浏览器 `/auth/me` 响应（开发为 `/api/auth/me`）中的 routes/modules；角色 PAGE 授权、启用祖先和 visible；`src/router/dynamic/routes.ts`   |
-| 提示页面配置不可用          | `componentKey` 对应文件是否存在、大小写是否一致、是否带了 `.vue`、当前部署是否包含该文件；`src/router/dynamic/views.ts`                  |
-| 菜单保存提示 moduleKey 无效 | 后端控制器是否已启动并声明匹配的 `@ModuleAccess`；`ModuleRegistry`、`MenuRules`                                                          |
-| 401 或自动回登录页          | 会话 Cookie、会话有效期、后端用户状态；`src/session/`、`src/api/client.ts`                                                               |
-| 403 或 CSRF_INVALID         | 实际模块授权、写请求 CSRF；`ModuleAuthorizationInterceptor`、`src/lib/http/client.ts`                                                    |
-| 新菜单出现但接口报 403      | 核对实际监听进程的启动时间及 `/v3/api-docs` 是否包含新接口；新增后端控制器后需重新编译并重启后端，数据库菜单变更不会热加载 Java 类       |
-| 409 或版本冲突              | 当前记录是否被其他用户修改，重新加载最新 version；对应领域 `src/api/`                                                                    |
-| 开发 API 返回 HTML 或 404   | 请求是否经过 `/api`、Vite `API_TARGET`、后端实际接口路径；`vite.config.ts`、`src/lib/http/transport.ts`                                  |
-| 验证码无法获取或一直加载    | 后端是否已重新编译并重启；`POST /auth/captcha` 的 CSRF、当前匿名会话 Cookie，以及其返回图片地址的状态；点击图片重新获取，不要复用过期 ID |
-| 页面刷新出现服务器 404      | 部署的 SPA fallback 与 API 转发规则                                                                                                      |
+| 现象                        | 检查入口                                                                                                                |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 菜单没有出现                | 浏览器 `/api/auth/me` 响应中的 routes/modules；角色 PAGE 授权、启用祖先和 visible；`src/router/dynamic/routes.ts`       |
+| 提示页面配置不可用          | `componentKey` 对应文件是否存在、大小写是否一致、是否带了 `.vue`、当前部署是否包含该文件；`src/router/dynamic/views.ts` |
+| 菜单保存提示 moduleKey 无效 | 后端控制器是否已启动并声明匹配的 `@ModuleAccess`；`ModuleRegistry`、`MenuRules`                                         |
+| 401 或自动回登录页          | 会话 Cookie、会话有效期、后端用户状态；`src/session/`、`src/api/client.ts`                                              |
+| 403 或 CSRF_INVALID         | 实际模块授权、写请求 CSRF；`ModuleAuthorizationInterceptor`、`src/lib/http/client.ts`                                   |
+| 新菜单出现但接口报 403      | 核对实际监听进程的启动时间及 `/api/v3/api-docs` 是否包含新接口；新增后端控制器后需重新编译并重启后端                    |
+| 409 或版本冲突              | 当前记录是否被其他用户修改，重新加载最新 version；对应领域 `src/api/`                                                   |
+| API 返回 HTML 或 404        | 核对 `/api/` 去前缀规则、Vite `API_TARGET` 或生产网关上游、后端实际接口路径                                             |
+| 验证码无法获取或一直加载    | 核对 `POST /api/auth/captcha` 的 CSRF、匿名会话 Cookie 和图片请求状态；点击图片重新获取                                 |
+| 页面刷新出现服务器 404      | 部署的 SPA fallback 与 API 转发规则                                                                                     |
 
 排查请求失败时保留错误码、时间和 `traceId`，用其关联后端日志。不要将密码、会话 Cookie、完整凭据写入日志或文档。

@@ -157,6 +157,7 @@ export function previewReason(code: string | null): string {
     FFMPEG_UNAVAILABLE: '转码环境不可用',
     SOURCE_UNAVAILABLE: '暂时无法获取相机视频',
     MEDIA_NOT_READY: '媒体暂未就绪',
+    CONFIGURATION_CHANGED: '预览连接配置已变化，请重新打开预览',
     LOCATOR_NOT_CONFIGURED: '视频地址未配置，请检查通道连接',
     LOCATOR_INVALID: '视频地址无效，请检查通道连接',
     SOURCE_PROTOCOL_NOT_SUPPORTED: '该接入方式暂不支持预览',

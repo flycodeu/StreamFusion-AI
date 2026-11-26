@@ -29,6 +29,7 @@ public class CameraLocatorService {
     private final CameraLocatorMapper locators;
     private final com.streamfusion.platform.camera.mapper.CameraSourceMapper sourceRows;
     private final CameraSourceService sources;
+    private final CameraSourceQueries sourceQueries;
     private final CameraSourceRules rules;
     private final CameraCryptoService crypto;
     private final Clock clock;
@@ -60,7 +61,7 @@ public class CameraLocatorService {
                 "RTSP".equals(locator.getLocatorKind())
                         ? locator.getRtspSecretCiphertext()
                         : locator.getProtocolSecretCiphertext();
-        if (!sources.supportsAdapter(locator.getLocatorKind())
+        if (!adapters.supportsSource(locator.getLocatorKind())
                 || ciphertext == null
                 || ciphertext.length == 0) return false;
         var source = sourceRows.selectById(locator.getSourceId());
@@ -102,7 +103,7 @@ public class CameraLocatorService {
             String profileKey,
             CameraAccessCatalog.Locator locator,
             int rtspPort) {
-        if (locator == null || !sources.supportsAdapter(locator.kind()))
+        if (locator == null || !adapters.supportsSource(locator.kind()))
             throw CameraSourceRules.invalid();
         String identity =
                 crypto.canonical(Map.of("channelKey", channelKey, "profileKey", profileKey));
@@ -131,7 +132,7 @@ public class CameraLocatorService {
                             "TCP"));
             return;
         }
-        var source = sources.requireSource(sourceId);
+        var source = sourceQueries.requireSource(sourceId);
         if (!locator.kind().equals(source.getAdapterType())
                 || !Boolean.TRUE.equals(source.getEnabled()))
             throw BusinessException.error(ErrorCode.CONFLICT);
@@ -197,7 +198,7 @@ public class CameraLocatorService {
                 || input.port() != null
                 || input.pathSecret() != null
                 || input.querySecret() != null) throw CameraSourceRules.invalid();
-        var source = sources.requireSource(sourceId);
+        var source = sourceQueries.requireSource(sourceId);
         var protocol = CameraStreamProtocol.valueOf(current.getLocatorKind());
         var uri = protocol.parse(input.fullUrl());
         if (!current.getLocatorKind().equals(source.getAdapterType())

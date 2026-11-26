@@ -27,12 +27,13 @@ export async function getDevicePlacements(groupKey: string) {
     })
   ).data
 }
-export async function getGroupTree() {
+export async function getGroupTree(signal?: AbortSignal) {
   return (
     await request({
       path: '/camera-groups/tree',
       method: 'GET',
       successStatus: 200,
+      signal,
       decode: (v) => list(v, parseGroup),
     })
   ).data

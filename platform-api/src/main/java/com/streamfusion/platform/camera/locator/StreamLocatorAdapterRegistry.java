@@ -1,6 +1,6 @@
-package com.streamfusion.platform.media.preview.source;
+package com.streamfusion.platform.camera.locator;
 
-import com.streamfusion.platform.media.preview.PreviewFailure;
+import com.streamfusion.platform.camera.access.adapter.CameraAdapterException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,7 +32,7 @@ public class StreamLocatorAdapterRegistry {
     }
 
     public StreamLocatorAdapter required(String kind) {
-        if (!supports(kind)) throw new PreviewFailure("SOURCE_PROTOCOL_NOT_SUPPORTED");
+        if (!supports(kind)) throw new CameraAdapterException("SOURCE_PROTOCOL_NOT_SUPPORTED");
         return adapters.get(kind);
     }
 }

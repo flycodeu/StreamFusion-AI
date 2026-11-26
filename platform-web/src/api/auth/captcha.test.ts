@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { captchaImageSource, createLoginCaptcha, parseCaptcha } from './captcha'
 
 const request = vi.hoisted(() => vi.fn())
@@ -10,8 +10,11 @@ const challenge = {
   imageUrl: '/auth/captcha/0123456789abcdef0123456789abcdef/image',
 }
 
+afterEach(() => vi.unstubAllEnvs())
+
 describe('login captcha contract', () => {
   it('accepts only the image endpoint belonging to its challenge', () => {
+    vi.stubEnv('DEV', false)
     expect(parseCaptcha(challenge)).toEqual(challenge)
     expect(captchaImageSource(challenge)).toBe(`/api${challenge.imageUrl}`)
   })
