@@ -37,7 +37,6 @@ import {
   deployModeText,
   evaluateDependencyReadiness,
   jenkinsLink,
-  moduleDirectory,
   moduleEdit,
   moduleKinds,
   newModuleDraft,
@@ -46,7 +45,6 @@ import {
   type ApplicationProject,
   type ApplicationProjectPage,
   type InspectedModule,
-  type InspectionSource,
   type ModuleKind,
   type ProjectEnvironment,
   type ProjectGitAccount,
@@ -55,6 +53,7 @@ import {
   type ProjectReleaseSource,
   type ProjectServiceRegistration,
 } from "./applicationProjects";
+import { useProjectInspection } from "./features/project-delivery/useProjectInspection";
 
 const props = defineProps<{ source?: ProjectInstanceSource; active?: boolean }>();
 const emit = defineEmits<{
@@ -74,9 +73,7 @@ const page = ref(1),
 const query = ref(""),
   queryInput = ref(""),
   archived = ref("false");
-const loading = ref(false),
-  opening = ref(false),
-  saving = ref(false);
+const loading = ref(false), saving = ref(false);
 const listError = ref(""),
   formError = ref(""),
   archiveTarget = ref("");
@@ -110,6 +107,7 @@ const environmentBinding = ref<{
   moduleId: string;
   environment?: ProjectEnvironment;
   registration?: ProjectServiceRegistration;
+  addingAlgorithmHost?: boolean;
 }>();
 
 const projectEditorOpen = ref(false),
@@ -221,23 +219,33 @@ function projectEnvironmentsSummary(record: ApplicationProject) {
   return items;
 }
 
-const inspectionOpen = ref(false),
-  sourcesLoading = ref(false),
-  inspecting = ref(false),
-  inspected = ref(false);
-const inspectionMode = ref<"repo" | "local">("repo");
-const inspectionRepoUrl = ref(""),
-  inspectionBranch = ref(""),
-  inspectionGitAccountId = ref("");
-const inspectionModuleId = ref(""),
-  sourceId = ref(""),
-  inspectionRepository = ref("");
-const inspectionSources = ref<InspectionSource[]>([]);
-const inspectionResults = ref<InspectedModule[]>([]);
-const selectedDirectories = ref<string[]>([]);
+const {
+  inspectionOpen,
+  sourcesLoading,
+  inspecting,
+  inspected,
+  inspectionMode,
+  inspectionRepoUrl,
+  inspectionBranch,
+  inspectionGitAccountId,
+  inspectionModuleId,
+  sourceId,
+  inspectionRepository,
+  inspectionRepoMismatch,
+  localRegistrationRepository,
+  inspectionSources,
+  inspectionResults,
+  selectedDirectories,
+  matchingModule,
+  syncInspectionRepoFields,
+  openInspection,
+  selectNewDirectories,
+  inspect,
+  reviewableModule,
+  selectedModuleEdits,
+} = useProjectInspection(project, saving, formError, describeError);
 let listController: AbortController | undefined;
 let projectController: AbortController | undefined;
-let inspectionController: AbortController | undefined;
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 function describeError(error: unknown, fallback: string) {
@@ -324,7 +332,6 @@ function showProject(
 async function openProject(record: { id: string }, moduleId?: string) {
   projectController?.abort();
   const controller = (projectController = new AbortController());
-  opening.value = true;
   listError.value = "";
   try {
     const detail = await request<ApplicationProject>(
@@ -333,15 +340,15 @@ async function openProject(record: { id: string }, moduleId?: string) {
       undefined,
       controller.signal,
     );
-    if (!controller.signal.aborted) showProject(detail, moduleId);
+    if (controller.signal.aborted) return false;
+    showProject(detail, moduleId);
+    return true;
   } catch (error) {
     if (!controller.signal.aborted)
       listError.value = describeError(error, "项目详情读取失败，请重新打开");
+    return false;
   } finally {
-    if (controller === projectController) {
-      opening.value = false;
-      projectController = undefined;
-    }
+    if (controller === projectController) projectController = undefined;
   }
 }
 
@@ -358,17 +365,38 @@ function openDelivery(moduleId: string, serviceInstanceId?: string) {
 }
 
 function editEnvironment(source: ProjectInstanceSource) {
+  if (source.algorithmHostEnvironmentId) {
+    const environment = project.value?.environments?.find((item) => item.id === source.algorithmHostEnvironmentId);
+    const module = project.value?.modules.find((item) => item.id === source.moduleId);
+    if (!environment || module?.catalog?.kind !== "ALGORITHM" ||
+        !environment.deployments.some((row) => row.moduleId === source.moduleId && row.hostId)) return false;
+    selectedModuleId.value = source.moduleId;
+    environmentBinding.value = { moduleId: source.moduleId, environment, addingAlgorithmHost: true };
+    return true;
+  }
   const row = moduleEnvironments(source.moduleId).find(({ registration }) => registration.id === source.serviceInstanceId);
+  if (!row) return false;
   selectedModuleId.value = source.moduleId;
   environmentBinding.value = { moduleId: source.moduleId, ...row };
+  return true;
 }
 
 async function useSource(source: ProjectInstanceSource) {
   moduleQuery.value = "";
-  moduleDrawerOpen.value = true;
-  await openProject({ id: source.projectId }, source.moduleId);
-  if (project.value?.id === source.projectId && source.serviceInstanceId) editEnvironment(source);
-  if (props.source === source) emit("source-used");
+  environmentBinding.value = undefined;
+  const opened = await openProject({ id: source.projectId }, source.moduleId);
+  if (props.active === false || props.source !== source) return;
+  if (opened && project.value?.id === source.projectId) {
+    projectTab.value = "modules";
+    moduleDrawerOpen.value = true;
+    if (
+      (source.serviceInstanceId || source.algorithmHostEnvironmentId) &&
+      !editEnvironment(source)
+    ) {
+      emit("error", new Error("该运行配置已变更，请在项目详情中重新选择。"));
+    }
+  }
+  emit("source-used");
 }
 
 function editProject(
@@ -611,148 +639,8 @@ async function saveModule() {
   }
 }
 
-function matchingModule(directory: string) {
-  const modules = project.value?.modules ?? [];
-  if (inspectionModuleId.value)
-    return modules.find((item) => item.id === inspectionModuleId.value);
-  const atDirectory = modules.filter(
-    (item) => moduleDirectory(item.directory) === directory,
-  );
-  const known = atDirectory.find(
-    (item) => item.repositoryId === inspectionRepository.value,
-  );
-  return (
-    known ??
-    (inspectionRepository.value === primaryRepository.value?.id
-      ? atDirectory.find((item) => !item.repositoryId)
-      : undefined)
-  );
-}
-
-function syncInspectionRepoFields(repoId: string) {
-  const repo =
-    project.value?.repositories.find((r) => r.id === repoId) ??
-    primaryRepository.value;
-  inspectionRepoUrl.value = repo?.url ?? "";
-  inspectionBranch.value = repo?.branch ?? "";
-  inspectionGitAccountId.value = repo?.gitAccountId ?? "";
-}
-
-async function openInspection(item?: ProjectModule) {
-  inspectionController?.abort();
-  const controller = (inspectionController = new AbortController());
-  inspectionModuleId.value = item?.id ?? "";
-  inspectionRepository.value =
-    item?.repositoryId ?? primaryRepository.value?.id ?? "";
-  syncInspectionRepoFields(inspectionRepository.value);
-  inspectionMode.value = "repo";
-  inspectionSources.value = [];
-  sourceId.value = "";
-  inspectionResults.value = [];
-  selectedDirectories.value = [];
-  formError.value = "";
-  inspected.value = false;
-  inspecting.value = false;
-  sourcesLoading.value = true;
-  inspectionOpen.value = true;
-  try {
-    const { items } = await request<{ items: InspectionSource[] }>(
-      `${rootPath}/inspection-sources`,
-      "GET",
-      undefined,
-      controller.signal,
-    );
-    if (controller.signal.aborted) return;
-    inspectionSources.value = items;
-    if (items.length > 0) {
-      inspectionMode.value = "local";
-      if (items.length === 1) sourceId.value = items[0].id;
-    }
-  } catch (error) {
-    if (!controller.signal.aborted)
-      formError.value = describeError(
-        error,
-        "识别来源读取失败，可以手动填写模块",
-      );
-  } finally {
-    if (controller === inspectionController) sourcesLoading.value = false;
-  }
-}
-
-function resetInspectionResults() {
-  inspectionResults.value = [];
-  selectedDirectories.value = [];
-  formError.value = "";
-  inspected.value = false;
-}
-
-function selectNewDirectories() {
-  selectedDirectories.value = inspectionResults.value
-    .filter((item) => !matchingModule(item.directory))
-    .map((item) => item.directory);
-}
-
-async function inspect() {
-  if (inspecting.value || saving.value) return;
-  if (inspectionMode.value === "local" && !sourceId.value) return;
-  if (inspectionMode.value === "repo" && !inspectionRepoUrl.value.trim()) {
-    formError.value = "请先填写要识别的 Git 仓库地址";
-    return;
-  }
-  const directory = project.value?.modules.find(
-    (item) => item.id === inspectionModuleId.value,
-  )?.directory;
-  inspectionController?.abort();
-  const controller = (inspectionController = new AbortController());
-  resetInspectionResults();
-  inspecting.value = true;
-  try {
-    const body =
-      inspectionMode.value === "local"
-        ? {
-            sourceId: sourceId.value,
-            directory: inspectionModuleId.value ? directory || "." : undefined,
-          }
-        : {
-            projectId: project.value?.id,
-            ...(inspectionRepository.value
-              ? { repositoryId: inspectionRepository.value }
-              : {}),
-            repositoryUrl: inspectionRepoUrl.value.trim(),
-            ...(inspectionBranch.value.trim()
-              ? { branch: inspectionBranch.value.trim() }
-              : {}),
-            ...(inspectionGitAccountId.value
-              ? { gitAccountId: inspectionGitAccountId.value }
-              : {}),
-            ...(inspectionModuleId.value
-              ? { directory: directory || "." }
-              : {}),
-          };
-    const { modules } = await request<{ modules: InspectedModule[] }>(
-      `${rootPath}/inspect`,
-      "POST",
-      body,
-      controller.signal,
-    );
-    if (controller.signal.aborted) return;
-    inspectionResults.value = modules;
-    selectNewDirectories();
-    inspected.value = true;
-  } catch (error) {
-    if (!controller.signal.aborted)
-      formError.value = describeError(error, "环境识别失败，可以手动填写模块");
-  } finally {
-    if (controller === inspectionController) inspecting.value = false;
-  }
-}
-
-function closeInspection() {
-  inspectionController?.abort();
-}
-
 function reviewSuggestion(suggestion: InspectedModule) {
-  const existing = matchingModule(suggestion.directory);
+  const existing = reviewableModule(suggestion);
   if (!existing) return;
   inspectionOpen.value = false;
   editModule(existing);
@@ -789,21 +677,7 @@ function reviewSuggestion(suggestion: InspectedModule) {
 }
 
 async function addSuggestions() {
-  const modules = inspectionResults.value
-    .filter(
-      (item) =>
-        selectedDirectories.value.includes(item.directory) &&
-        !matchingModule(item.directory),
-    )
-    .map((item) =>
-      moduleEdit({
-        ...newModuleDraft(inspectionRepository.value),
-        ...item,
-        ...(item.recommendedRuntimeMode
-          ? { runtimeMode: item.recommendedRuntimeMode }
-          : {}),
-      }),
-    );
+  const modules = selectedModuleEdits();
   if (modules.length && (await saveModules(modules)))
     inspectionOpen.value = false;
 }
@@ -846,7 +720,13 @@ function loadProjectInfrastructure() {
     })
     .catch(() => {});
 }
-watch(() => props.active, (active) => { if (active) loadProjectInfrastructure(); });
+watch(() => props.active, (active) => {
+  if (active) loadProjectInfrastructure();
+  else if (active === false) {
+    projectController?.abort();
+    inspectionOpen.value = false;
+  }
+});
 onMounted(() => {
   void load();
   if (props.source) void useSource(props.source);
@@ -862,7 +742,6 @@ onUnmounted(() => {
   lifetime.abort();
   listController?.abort();
   projectController?.abort();
-  inspectionController?.abort();
   if (searchTimer) clearTimeout(searchTimer);
 });
 </script>
@@ -1451,6 +1330,7 @@ onUnmounted(() => {
       :module-id="environmentBinding.moduleId"
       :environment="environmentBinding.environment"
       :registration="environmentBinding.registration"
+      :adding-algorithm-host="environmentBinding.addingAlgorithmHost"
       :software-list="softwareList"
       @install-software="emit('install-software', $event)"
       @saved="showProject($event, selectedModuleId)"
@@ -1752,15 +1632,15 @@ onUnmounted(() => {
                   />
                 </ElSelect>
               </ElFormItem>
-              <ElFormItem label="环境检测命令（选填）">
+              <ElFormItem label="手工环境检测命令（选填）">
                 <ElInput
                   v-model="moduleDraft.checkCommand"
-                  placeholder="留空则按模块类型自动检查"
+                  placeholder="登记供人工参考；Jenkins 按模块类型检查环境"
                 />
               </ElFormItem>
             </div>
 
-            <ElFormItem label="默认启动命令">
+            <ElFormItem label="启动命令参考">
               <ElInput
                 v-model="moduleDraft.startCommand"
                 type="textarea"
@@ -1815,14 +1695,12 @@ onUnmounted(() => {
       :close-on-click-modal="false"
       :close-on-press-escape="!saving"
       :show-close="!saving"
-      @close="closeInspection"
     >
       <div class="project-form">
         <div class="inspection-mode-row">
           <ElRadioGroup
             v-model="inspectionMode"
             :disabled="inspecting || saving"
-            @change="resetInspectionResults"
           >
             <ElRadioButton value="repo">项目 Git 仓库</ElRadioButton>
             <ElRadioButton value="local" :disabled="!inspectionSources.length">
@@ -1846,7 +1724,7 @@ onUnmounted(() => {
                   v-model="inspectionRepository"
                   :disabled="inspecting || saving"
                   style="width: 100%"
-                  @change="syncInspectionRepoFields($event); resetInspectionResults()"
+                  @change="syncInspectionRepoFields"
                 >
                   <ElOption
                     v-for="(repository, index) in project?.repositories"
@@ -1912,7 +1790,6 @@ onUnmounted(() => {
               placeholder="选择控制器上的源码"
               :disabled="inspecting || saving"
               style="width: 100%"
-              @change="resetInspectionResults"
             >
               <ElOption
                 v-for="source in inspectionSources"
@@ -1942,6 +1819,13 @@ onUnmounted(() => {
         <p v-if="inspected && !inspectionResults.length" class="muted">
           没有识别到支持的模块（Java / Maven / Node.js / Python），您可以关闭弹窗并手动添加模块。
         </p>
+        <ElAlert
+          v-if="inspectionRepoMismatch && inspectionResults.length"
+          type="warning"
+          show-icon
+          :closable="false"
+          title="当前地址与所选仓库不同。可查看识别结果；应用前请选回已登记的地址，或更新项目仓库地址后重新识别。"
+        />
 
         <ElFormItem
           v-if="
@@ -1954,7 +1838,7 @@ onUnmounted(() => {
           style="margin-bottom: 0"
         >
           <ElSelect
-            v-model="inspectionRepository"
+            v-model="localRegistrationRepository"
             :disabled="saving"
             style="width: 100%"
             @change="selectNewDirectories"
@@ -1978,7 +1862,7 @@ onUnmounted(() => {
             <div class="project-toolbar">
               <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
                 <ElCheckbox
-                  v-if="!matchingModule(item.directory)"
+                  v-if="!inspectionRepoMismatch && !matchingModule(item.directory)"
                   :value="item.directory"
                   :disabled="saving"
                 >
@@ -1992,7 +1876,7 @@ onUnmounted(() => {
                 </ElTag>
               </div>
               <ElButton
-                v-if="matchingModule(item.directory)"
+                v-if="!inspectionRepoMismatch && matchingModule(item.directory)"
                 link
                 type="primary"
                 size="small"
@@ -2034,7 +1918,7 @@ onUnmounted(() => {
             关闭
           </ElButton>
           <ElButton
-            v-if="selectedDirectories.length"
+            v-if="!inspectionRepoMismatch && selectedDirectories.length"
             type="primary"
             :loading="saving"
             @click="addSuggestions"

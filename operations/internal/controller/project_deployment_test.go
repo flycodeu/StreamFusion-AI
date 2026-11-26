@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/streamfusion-ai/operations/internal/deploy"
@@ -20,12 +21,16 @@ func TestProjectDeploymentReleaseAndReconcile(t *testing.T) {
 	b.login()
 	var mu sync.Mutex
 	var active, behavior string
-	var applies int
+	var applies, observations, recoveries, decommissions int
+	targetVersion := deploy.ProjectDeployVersion
 	targetID := pluginSSHFixture(t, s, b, false, func(req deploy.Request) ([]byte, bool) {
 		if req.Action == "CAPABILITIES" {
+			mu.Lock()
+			version := targetVersion
+			mu.Unlock()
 			out, _ := json.Marshal(executorCapabilities{
 				Owner:                   deploy.Owner{ControllerID: req.ControllerID, TargetID: req.TargetID},
-				ProjectDeployVersion:    deploy.ProjectDeployVersion,
+				ProjectDeployVersion:    version,
 				CommandTrustFingerprint: deploy.CommandPublicKeyFingerprint(s.commandPublicKey()),
 			})
 			return out, true
@@ -70,9 +75,25 @@ func TestProjectDeploymentReleaseAndReconcile(t *testing.T) {
 		case deploy.ProjectLogs:
 			out.Output = "bounded runtime service log"
 		case deploy.ProjectObserve:
+			observations++
+			if behavior == "lost" {
+				out.Status, out.ErrorCode = "UNKNOWN", "PROJECT_RECOVERY_REQUIRED"
+			}
 			if active == "" {
 				out.Health = "NOT_DEPLOYED"
 			}
+		case deploy.ProjectRecover:
+			recoveries++
+		case deploy.ProjectDecommission:
+			decommissions++
+			if decommissions == 1 {
+				if active != spec.ExpectedRelease {
+					t.Error("decommission was not fenced to the confirmed release")
+				}
+				active = ""
+				out.Status, out.ErrorCode = "UNKNOWN", "PROJECT_RECOVERY_REQUIRED"
+			}
+			out.Health = "NOT_DEPLOYED"
 		default:
 			t.Errorf("unexpected target action %s", req.Action)
 		}
@@ -185,7 +206,34 @@ func TestProjectDeploymentReleaseAndReconcile(t *testing.T) {
 	if status["current"].(map[string]any)["releaseId"] != first || status["health"] != "READY" {
 		t.Fatal("first release not visible", status)
 	}
+	old := time.Now().UTC().Add(-2 * projectObservationValidity).Format(time.RFC3339Nano)
+	if _, err := s.DB.Exec("UPDATE project_deployment_jobs SET updated_at=? WHERE id=?", old, first); err != nil {
+		t.Fatal(err)
+	}
+	if status = dataOf(t, b.call("GET", base, nil, 200)); status["health"] != "STALE" || status["healthObservedAt"] != old {
+		t.Fatal("old local health still reports ready", status)
+	}
+	verify := dataOf(t, b.call("POST", base+"/verify", map[string]any{}, 202))["jobId"].(string)
+	if _, err := s.DB.Exec("UPDATE project_deployment_jobs SET status='RUNNING' WHERE id=?", verify); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.h.recoverInterruptedProjectJobs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if status = dataOf(t, b.call("GET", base, nil, 200)); status["health"] != "UNKNOWN" ||
+		status["lastCheck"].(map[string]any)["errorCode"] != "PROJECT_JOB_INTERRUPTED" || status["pending"] != nil {
+		t.Fatal("interrupted read-only run blocked future mutations", status)
+	}
 	mu.Lock()
+	targetVersion = 2
+	mu.Unlock()
+	verify = dataOf(t, b.call("POST", base+"/verify", map[string]any{}, 202))["jobId"].(string)
+	status = execute(verify)
+	if status["lastCheck"].(map[string]any)["errorCode"] != "PROJECT_EXECUTOR_UPGRADE_REQUIRED" || observations != 0 {
+		t.Fatal("old executor received a probe which could change a release", status)
+	}
+	mu.Lock()
+	targetVersion = deploy.ProjectDeployVersion
 	behavior = "failure"
 	mu.Unlock()
 	failed := submit(plan(11))
@@ -202,15 +250,26 @@ func TestProjectDeploymentReleaseAndReconcile(t *testing.T) {
 		t.Fatal("unconfirmed change promoted", status)
 	}
 	v := dataOf(t, b.call("POST", base+"/verify", map[string]any{}, 202))
-	if v["jobId"] != second {
-		t.Fatal("verify replaced instead of reconciling the existing job", v)
+	if v["jobId"] == second {
+		t.Fatal("verify requeued the mutating job", v)
+	}
+	status = execute(v["jobId"].(string))
+	if status["current"].(map[string]any)["releaseId"] != first ||
+		status["pending"].(map[string]any)["jobId"] != second ||
+		status["lastCheck"].(map[string]any)["status"] != "FAILED" || recoveries != 0 || observations != 1 {
+		t.Fatal("read-only check changed running state or lost pending repair", status)
+	}
+	b.call("POST", base+"/recover", map[string]string{"expectedJobId": uuid.NewString()}, 409)
+	r := dataOf(t, b.call("POST", base+"/recover", map[string]string{"expectedJobId": second}, 202))
+	if r["jobId"] != second {
+		t.Fatal("explicit recovery did not retry original work", r)
 	}
 	status = execute(second)
-	if status["current"].(map[string]any)["releaseId"] != second || status["previous"].(map[string]any)["releaseId"] != first {
+	if status["current"].(map[string]any)["releaseId"] != second || status["previous"].(map[string]any)["releaseId"] != first || recoveries != 1 {
 		t.Fatal("recovery not recorded", status)
 	}
 	b.call("POST", base+"/rollback", map[string]string{"previousReleaseId": uuid.NewString()}, 409)
-	r := dataOf(t, b.call("POST", base+"/rollback", map[string]string{"previousReleaseId": first}, 202))
+	r = dataOf(t, b.call("POST", base+"/rollback", map[string]string{"previousReleaseId": first}, 202))
 	status = execute(r["jobId"].(string))
 	if status["current"].(map[string]any)["releaseId"] != first || status["previous"].(map[string]any)["releaseId"] != second {
 		t.Fatal("rollback did not restore the confirmed version", status)
@@ -220,6 +279,24 @@ func TestProjectDeploymentReleaseAndReconcile(t *testing.T) {
 	}
 	if logs := b.call("GET", base+"/logs", nil, 200).Body.String(); !strings.Contains(logs, "bounded runtime service log") {
 		t.Fatal("runtime logs not available")
+	}
+	b.call("POST", base+"/decommission", map[string]string{"expectedReleaseId": second}, 409)
+	job := dataOf(t, b.call("POST", base+"/decommission", map[string]string{"expectedReleaseId": first}, 202))["jobId"].(string)
+	status = execute(job)
+	if status["current"].(map[string]any)["releaseId"] != first || status["pending"].(map[string]any)["status"] != "UNKNOWN" {
+		t.Fatal("uncertain decommission removed running binding", status)
+	}
+	r = dataOf(t, b.call("POST", base+"/recover", map[string]string{"expectedJobId": job}, 202))
+	if r["jobId"] != job {
+		t.Fatal("decommission recovery must retry the original operation")
+	}
+	status = execute(job)
+	if status["current"] != nil || status["previous"] != nil || status["pending"] != nil ||
+		status["health"] != "NOT_DEPLOYED" || decommissions != 2 || recoveries != 1 {
+		t.Fatal("confirmed decommission did not clear ownership", status)
+	}
+	if logs := b.call("GET", "/jobs/"+job+"/logs", nil, 200).Body.String(); !strings.Contains(logs, "DECOMMISSIONED") {
+		t.Fatal("confirmed decommission lost history", logs)
 	}
 	history := dataOf(t, b.call("GET", "/jobs?kind=PROJECT_DEPLOY", nil, 200))
 	if len(history["items"].([]any)) != 4 || applies != 4 {

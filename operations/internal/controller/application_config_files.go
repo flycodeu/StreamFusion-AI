@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/streamfusion-ai/operations/internal/deploy"
+	"github.com/streamfusion-ai/operations/internal/projectconfig"
 )
 
 func (h *HTTP) applicationModuleConfigFilesRoute(w http.ResponseWriter, r *http.Request, actor *session, projectID, moduleID string, rest []string) bool {
@@ -213,7 +214,7 @@ func (h *HTTP) pullApplicationModuleConfigTemplates(w http.ResponseWriter, r *ht
 			return
 		}
 		h.success(w, r, map[string]any{
-			"templates": []applicationConfigTemplate{},
+			"templates": []projectconfig.ConfigTemplate{},
 		})
 		return
 	}

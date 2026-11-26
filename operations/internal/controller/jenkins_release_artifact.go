@@ -15,24 +15,34 @@ import (
 )
 
 const (
-	jenkinsReleaseManifest = "sfops-release.txt"
-	jenkinsReleaseLimit    = 512 << 20
+	jenkinsReleaseManifest     = "sfops-release.txt"
+	jenkinsReleaseLimit        = 512 << 20
+	streamFusionWebAPIContract = "same-origin-api-v1"
 )
 
 var (
-	jenkinsReleaseCommit          = regexp.MustCompile(`\A(?:[a-f0-9]{40}|[a-f0-9]{64})\z`)
-	errJenkinsReleaseNotReady     = errors.New("JENKINS_RELEASE_NOT_READY")
-	errJenkinsReleaseArtifact     = errors.New("JENKINS_RELEASE_ARTIFACT_INVALID")
-	errJenkinsReleaseTooLarge     = errors.New("JENKINS_RELEASE_ARTIFACT_TOO_LARGE")
-	errJenkinsReleaseMismatch     = errors.New("JENKINS_RELEASE_ARTIFACT_MISMATCH")
-	errJenkinsReleaseNotSupported = errors.New("JENKINS_RELEASE_ARTIFACT_UNSUPPORTED")
+	jenkinsReleaseCommit                      = regexp.MustCompile(`\A(?:[a-f0-9]{40}|[a-f0-9]{64})\z`)
+	errJenkinsReleaseNotReady                 = errors.New("JENKINS_RELEASE_NOT_READY")
+	errJenkinsReleaseArtifact                 = errors.New("JENKINS_RELEASE_ARTIFACT_INVALID")
+	errJenkinsReleaseTooLarge                 = errors.New("JENKINS_RELEASE_ARTIFACT_TOO_LARGE")
+	errJenkinsReleaseMismatch                 = errors.New("JENKINS_RELEASE_ARTIFACT_MISMATCH")
+	errJenkinsReleaseNotSupported             = errors.New("JENKINS_RELEASE_ARTIFACT_UNSUPPORTED")
+	errStreamFusionWebArtifactRebuildRequired = errors.New("PROJECT_STREAMFUSION_WEB_ARTIFACT_REBUILD_REQUIRED")
 )
 
 type projectBuildArtifact struct {
-	Commit   string
-	Filename string
-	SHA256   string
-	Size     int64
+	Commit      string
+	Filename    string
+	SHA256      string
+	Size        int64
+	APIContract string `json:"apiContract,omitempty"`
+}
+
+func validateStreamFusionWebArtifact(artifact projectBuildArtifact) error {
+	if artifact.Filename != "web-dist.tar.gz" || artifact.APIContract != streamFusionWebAPIContract {
+		return errStreamFusionWebArtifactRebuildRequired
+	}
+	return nil
 }
 
 func jenkinsReleaseOutput(kind string) (string, int64, bool) {
@@ -139,21 +149,11 @@ func (c jenkinsBuildClient) releaseArtifact(ctx context.Context, number int, fil
 	if err != nil || len(data) > maxManifest {
 		return projectBuildArtifact{}, errJenkinsReleaseArtifact
 	}
-	fields := strings.Split(string(data), "\n")
-	if len(fields) != 5 || fields[4] != "" || !jenkinsReleaseCommit.MatchString(fields[0]) || fields[1] != filename || !deploy.Hex.MatchString(fields[2]) {
-		return projectBuildArtifact{}, errJenkinsReleaseArtifact
+	result, err := parseJenkinsReleaseManifest(data, filename, limit)
+	if err != nil || dst == nil {
+		return result, err
 	}
-	size, err := strconv.ParseInt(fields[3], 10, 64)
-	if err != nil || size < 1 || strconv.FormatInt(size, 10) != fields[3] {
-		return projectBuildArtifact{}, errJenkinsReleaseArtifact
-	}
-	if size > limit {
-		return projectBuildArtifact{}, errJenkinsReleaseTooLarge
-	}
-	result := projectBuildArtifact{Commit: fields[0], Filename: filename, SHA256: fields[2], Size: size}
-	if dst == nil {
-		return result, nil
-	}
+	size := result.Size
 	res, err := c.getWithVersionPolicy(ctx, c.jobPath(prefix+"artifact/"+filename, nil), true, true)
 	if err != nil {
 		return projectBuildArtifact{}, err
@@ -174,6 +174,29 @@ func (c jenkinsBuildClient) releaseArtifact(ctx context.Context, number int, fil
 	}
 	if n != size || extra != 0 || hex.EncodeToString(hash.Sum(nil)) != result.SHA256 {
 		return projectBuildArtifact{}, errJenkinsReleaseMismatch
+	}
+	return result, nil
+}
+
+func parseJenkinsReleaseManifest(data []byte, filename string, limit int64) (projectBuildArtifact, error) {
+	fields := strings.Split(string(data), "\n")
+	if (len(fields) != 5 && len(fields) != 6) || fields[len(fields)-1] != "" ||
+		!jenkinsReleaseCommit.MatchString(fields[0]) || fields[1] != filename || !deploy.Hex.MatchString(fields[2]) {
+		return projectBuildArtifact{}, errJenkinsReleaseArtifact
+	}
+	size, err := strconv.ParseInt(fields[3], 10, 64)
+	if err != nil || size < 1 || strconv.FormatInt(size, 10) != fields[3] {
+		return projectBuildArtifact{}, errJenkinsReleaseArtifact
+	}
+	if size > limit {
+		return projectBuildArtifact{}, errJenkinsReleaseTooLarge
+	}
+	result := projectBuildArtifact{Commit: fields[0], Filename: filename, SHA256: fields[2], Size: size}
+	if len(fields) == 6 {
+		if filename != "web-dist.tar.gz" || fields[4] != streamFusionWebAPIContract {
+			return projectBuildArtifact{}, errJenkinsReleaseArtifact
+		}
+		result.APIContract = fields[4]
 	}
 	return result, nil
 }

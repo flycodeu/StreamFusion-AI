@@ -17,6 +17,11 @@ import (
 )
 
 func TestProjectStaticPreflightOnlyReusesTheRunningArtifact(t *testing.T) {
+	t.Run("generic", func(t *testing.T) { testProjectStaticPreflight(t, false) })
+	t.Run("streamfusion", func(t *testing.T) { testProjectStaticPreflight(t, true) })
+}
+
+func testProjectStaticPreflight(t *testing.T, streamFusion bool) {
 	s, b := setup(t)
 	b.login()
 
@@ -63,6 +68,7 @@ func TestProjectStaticPreflightOnlyReusesTheRunningArtifact(t *testing.T) {
 	type workflow struct{ path, config string }
 	var expected atomic.Pointer[workflow]
 	var replaced atomic.Bool
+	var contractReady atomic.Bool
 	var manifests atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Jenkins", "2.580.2")
@@ -89,6 +95,9 @@ func TestProjectStaticPreflightOnlyReusesTheRunningArtifact(t *testing.T) {
 		case "31/artifact/sfops-release.txt":
 			manifests.Add(1)
 			fmt.Fprintf(w, "%s\n%s\n%x\n%d\n", commit, filename, sha256.Sum256([]byte(body)), len(body))
+			if contractReady.Load() {
+				fmt.Fprintln(w, streamFusionWebAPIContract)
+			}
 		case "31/artifact/" + filename:
 			fmt.Fprint(w, body)
 		default:
@@ -106,9 +115,24 @@ func TestProjectStaticPreflightOnlyReusesTheRunningArtifact(t *testing.T) {
 	d := &draft.Environments[0].Deployments[0]
 	d.HostID, d.DeployMode = target, "STATIC"
 	d.Nginx = &applicationNginxDeploy{SiteName: "reuse", ServerName: "reuse.example.test", ListenPort: 18080, SPA: true}
+	siteID := d.ID
+	var api *applicationDeployment
+	if streamFusion {
+		draft.Modules[0].Directory = "platform-web"
+		backend := draft.Modules[0]
+		backend.ID, backend.Name, backend.Directory = uuid.NewString(), "Platform API", "platform-api"
+		backend.Catalog = &applicationModuleCatalog{Kind: "BACKEND", HealthPath: "/actuator/health"}
+		draft.Modules = append(draft.Modules, backend)
+		api = &applicationDeployment{ID: uuid.NewString(), ModuleID: backend.ID, HostID: target, DeployMode: "NATIVE", ServicePort: 18081}
+		d.Nginx.ProxyRules = []applicationNginxProxyRule{{Location: "/api/", TargetModuleID: backend.ID, StripPrefix: true}}
+		draft.Environments[0].Deployments = append(draft.Environments[0].Deployments, *api)
+	}
 	project := applicationResponse(t, b.call("POST", "/application-projects", draft, 200))
+	if api != nil {
+		seedProjectRunningRelease(t, s, project, *api, 18081)
+	}
 	projectPath := "/application-projects/" + project.ID
-	base := projectPath + "/deployments/" + d.ID
+	base := projectPath + "/deployments/" + siteID
 	conn := projectPath + "/jenkins-connection"
 	callSoftwareLogin(t, b, "POST", conn, softwareLoginTestPeer, b.encrypt(conn, map[string]string{
 		"expectedVersion": "0", "softwareId": jenkins, "username": "qa-operator", "token": jenkinsFixtureToken,
@@ -116,6 +140,10 @@ func TestProjectStaticPreflightOnlyReusesTheRunningArtifact(t *testing.T) {
 	monitor, _, jobURL, err := s.jenkinsBuildBinding(t.Context(), jenkinsScope{project: project.ID, module: project.Modules[0].ID})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if script := monitor.automation.script; strings.Contains(script, `grep -Fq '<meta name="streamfusion-api-contract"`) != streamFusion ||
+		strings.Contains(script, `"$size" 'same-origin-api-v1' > sfops-release.txt`) != streamFusion {
+		t.Fatal("StreamFusion build contract was not isolated to the paired Platform Web build")
 	}
 	config, err := xml.Marshal(expectedJenkinsWorkflow(monitor.automation))
 	if err != nil {
@@ -130,6 +158,12 @@ func TestProjectStaticPreflightOnlyReusesTheRunningArtifact(t *testing.T) {
 			body["currentReleaseId"] = releaseID
 		}
 		return b.call("POST", base+"/preflight", body, status)
+	}
+	if streamFusion {
+		if reply := preflight("", 409); !strings.Contains(reply.Body.String(), errStreamFusionWebArtifactRebuildRequired.Error()) || targetCalls.Load() != 0 {
+			t.Fatal("unmarked frontend artifact reached the target or returned the wrong result", reply.Body.String())
+		}
+		contractReady.Store(true)
 	}
 	token := dataOf(t, preflight("", 200))["token"].(string)
 	releaseID := dataOf(t, b.call("POST", base+"/submit", map[string]string{"token": token}, 202))["jobId"].(string)
@@ -146,7 +180,7 @@ func TestProjectStaticPreflightOnlyReusesTheRunningArtifact(t *testing.T) {
 	planCount := func() int {
 		t.Helper()
 		var count int
-		if err := s.DB.QueryRow("SELECT count(*) FROM project_deployment_plans WHERE deployment_id=?", d.ID).Scan(&count); err != nil {
+		if err := s.DB.QueryRow("SELECT count(*) FROM project_deployment_plans WHERE deployment_id=?", siteID).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
 		return count
@@ -158,6 +192,27 @@ func TestProjectStaticPreflightOnlyReusesTheRunningArtifact(t *testing.T) {
 	}
 	before = planCount()
 	targetBefore, manifestsBefore := targetCalls.Load(), manifests.Load()
+	if streamFusion {
+		if _, err := s.DB.Exec(`UPDATE project_deployment_jobs
+		    SET snapshot_json=json_remove(snapshot_json,'$.artifact.apiContract') WHERE id=?`, releaseID); err != nil {
+			t.Fatal(err)
+		}
+		if reply := preflight(releaseID, 409); !strings.Contains(reply.Body.String(), errStreamFusionWebArtifactRebuildRequired.Error()) ||
+			targetCalls.Load() != targetBefore || manifests.Load() != manifestsBefore || planCount() != before {
+			t.Fatal("reuse of a legacy running artifact reached Jenkins or target", reply.Body.String())
+		}
+		if _, err := s.DB.Exec(`UPDATE project_deployment_jobs
+		    SET snapshot_json=json_set(snapshot_json,'$.artifact.apiContract',?) WHERE id=?`, streamFusionWebAPIContract, releaseID); err != nil {
+			t.Fatal(err)
+		}
+		contractReady.Store(false)
+		if reply := preflight(releaseID, 409); !strings.Contains(reply.Body.String(), errStreamFusionWebArtifactRebuildRequired.Error()) ||
+			targetCalls.Load() != targetBefore || planCount() != before {
+			t.Fatal("unmarked reuse artifact reached the target or returned the wrong result", reply.Body.String())
+		}
+		contractReady.Store(true)
+		manifestsBefore++
+	}
 	if reply := preflight(uuid.NewString(), 409); !strings.Contains(reply.Body.String(), "PROJECT_PLAN_CHANGED") {
 		t.Fatal("stale release was not rejected", reply.Body.String())
 	}

@@ -38,8 +38,9 @@ import {
 import { softwareState, type SoftwareInstance } from "./software";
 import ProjectJenkinsBuild from "./ProjectJenkinsBuild.vue";
 import ProjectDeploymentPanel from "./ProjectDeploymentPanel.vue";
+import { createDeploymentStatusReader } from "./features/project-delivery/deploymentStatusReader";
 import {
-  deploymentHealthText, deploymentTime, jobPending, jobStatusText, projectDeploymentPath, type DeploymentStatus,
+  deploymentHealthAt, deploymentHealthText, deploymentTime, jobPending, jobStatusText, projectDeploymentPath, type DeploymentStatus,
 } from "./projectDeployments";
 
 interface ModuleRow {
@@ -65,7 +66,7 @@ const projectId = ref(""),
   environmentFilter = ref("");
 const queryDraft = ref(""),
   environmentDraft = ref("");
-const focusedModuleId = ref("");
+const focusedRowKey = ref("");
 const listElement = ref<HTMLElement>();
 const loading = ref(false),
   pageError = ref("");
@@ -159,8 +160,18 @@ const runtimeRefresh = ref(0),
   runtimeLoading = ref(false),
   runtimeError = ref("");
 const panel = ref<{ context: JenkinsInstanceContext; monitor: JenkinsMonitor }>();
-const deploymentPanel = ref<ModuleRow>();
-const deploymentStatuses = ref(new Map<string, DeploymentStatus>());
+const deploymentSelection = ref<{ projectId: string; registrationId: string; binding: string }>();
+const deploymentPanel = computed(() => {
+  const selection = deploymentSelection.value;
+  if (!selection || project.value?.id !== selection.projectId) return;
+  return rows.value.find(({ registration }) => registration?.id === selection.registrationId &&
+    deploymentBinding(registration.hostId) === selection.binding);
+});
+watch(deploymentPanel, (row) => { if (!row) closeDeployment(); });
+const delivery = createDeploymentStatusReader(
+  (path, signal) => request<DeploymentStatus>(path, "GET", undefined, signal),
+  (problem) => { if (problem instanceof ApiError && problem.code === "AUTH_REQUIRED") emit("error", problem); },
+);
 const records = ref(new Map<string, JenkinsBuild>());
 const opening = ref("");
 const setupNotice = ref<{ message: string; row: ModuleRow }>();
@@ -175,8 +186,8 @@ function clearFilters() {
   searchModules();
 }
 
-function describe(error: unknown, fallback: string) {
-  if (error instanceof ApiError && error.code === "AUTH_REQUIRED")
+function describe(error: unknown, fallback: string, notify = true) {
+  if (notify && error instanceof ApiError && error.code === "AUTH_REQUIRED")
     emit("error", error);
   return error instanceof ApiError
     ? [error.message, error.code, error.traceId, error.timestamp]
@@ -188,39 +199,45 @@ function describe(error: unknown, fallback: string) {
 function selectProject(id: string) {
   projectId.value = id;
   clearFilters();
-  focusedModuleId.value = "";
+  focusedRowKey.value = "";
   panel.value = undefined;
-  deploymentPanel.value = undefined;
+  closeDeployment();
   selectionRequest?.abort();
   opening.value = "";
   setupNotice.value = undefined;
 }
-function useSource() {
+function rowKey(row: ModuleRow) {
+  return row.registration ? `registration:${row.registration.id}` : `module:${row.module.id}`;
+}
+
+async function useSource() {
   const source = props.source;
   if (!source || (!props.fixedProject && !projects.value.length)) return;
   if (props.fixedProject?.id === source.projectId || projects.value.some((item) => item.id === source.projectId)) {
     if (!props.fixedProject) selectProject(source.projectId);
-    focusedModuleId.value = source.moduleId;
-    const environment = project.value?.environments?.find((item) =>
-      item.deployments.some(({ id }) => id === source.serviceInstanceId),
-    );
-    if (environment) {
-      environmentDraft.value = environmentFilter.value = environment.id;
-      rowPage.value = 1;
+    else clearFilters();
+    const target = rows.value.find((row) => row.module.id === source.moduleId &&
+      (!source.serviceInstanceId || row.registration?.id === source.serviceInstanceId));
+    focusedRowKey.value = target ? rowKey(target) : "";
+    if (target?.environment && source.serviceInstanceId)
+      environmentDraft.value = environmentFilter.value = target.environment.id;
+    await nextTick(); // Let the filter watcher reset pagination.
+    if (lifetime.signal.aborted || props.source !== source || project.value?.id !== source.projectId) return;
+    const index = visibleRows.value.findIndex((row) => rowKey(row) === focusedRowKey.value);
+    if (index !== -1) {
+      rowPage.value = Math.floor(index / rowPageSize.value) + 1;
+      await nextTick();
+      if (!lifetime.signal.aborted && props.source === source)
+        listElement.value?.querySelector("[data-focused=true]")?.scrollIntoView({ block: "nearest" });
     }
-    void nextTick(() =>
-      listElement.value
-        ?.querySelector("[data-focused=true]")
-        ?.scrollIntoView({ block: "nearest" }),
-    );
   }
-  emit("source-used");
+  if (props.source === source) emit("source-used");
 }
-async function refresh() {
+async function refreshProject(refreshStatus = true) {
   if (loading.value) return;
   if (props.fixedProject) {
-    useSource();
-    runtimeRefresh.value++;
+    await useSource();
+    if (refreshStatus) runtimeRefresh.value++;
     return;
   }
   loading.value = true;
@@ -234,8 +251,8 @@ async function refresh() {
     projects.value = data;
     if (!project.value)
       selectProject((data.find((item) => !item.archived) || data[0])?.id || "");
-    useSource();
-    runtimeRefresh.value++;
+    await useSource();
+    if (refreshStatus) runtimeRefresh.value++;
   } catch (error) {
     if (!lifetime.signal.aborted)
       pageError.value = describe(error, "无法读取项目发布清单");
@@ -249,6 +266,15 @@ function maintain(row: ModuleRow) {
     projectId: project.value.id,
     moduleId: row.module.id,
     ...(row.registration && { serviceInstanceId: row.registration.id }),
+  });
+}
+function addAlgorithmHost(row: ModuleRow) {
+  if (!project.value || project.value.archived || row.module.catalog?.kind !== "ALGORITHM" ||
+      !row.environment || !row.registration?.hostId) return;
+  emit("maintain", {
+    projectId: project.value.id,
+    moduleId: row.module.id,
+    algorithmHostEnvironmentId: row.environment.id,
   });
 }
 function openServiceLog(runtime: SoftwareInstance) {
@@ -321,9 +347,13 @@ function openRelease(
 ) {
   if (!project.value) return;
   if (row.registration && row.environment && (
-    supportsProjectDeployment(row) || deploymentStatuses.value.get(row.registration.id)?.current
+    supportsProjectDeployment(row) || hasManagedDeploymentRecord(row)
   )) {
-    deploymentPanel.value = row;
+    deploymentSelection.value = {
+      projectId: project.value.id,
+      registrationId: row.registration.id,
+      binding: deploymentBinding(row.registration.hostId),
+    };
     return;
   }
   if (project.value.archived) return;
@@ -345,61 +375,113 @@ function openRelease(
   else emit("release", source);
 }
 
+function closeDeployment() {
+  deploymentSelection.value = undefined;
+}
+
 function supportsProjectDeployment(row: ModuleRow) {
   if (row.registration?.managedInstanceId) return false;
   return (row.registration?.deployMode === "NATIVE" && row.module.catalog?.kind === "BACKEND") ||
     (row.registration?.deployMode === "STATIC" && row.module.catalog?.kind === "FRONTEND");
 }
 
-function canOpenDelivery(row: ModuleRow) {
-  return supportsProjectDeployment(row) || !!row.registration?.managedInstanceId ||
-    !!deploymentStatuses.value.get(row.registration?.id || "")?.current;
+function hasManagedDeploymentRecord(row: ModuleRow) {
+  const status = deliveryObservation(row)?.status;
+  return !!(status?.current || status?.pending || status?.latest);
 }
 
+function canOpenDelivery(row: ModuleRow) {
+  return hasManagedDeploymentRecord(row) || supportsProjectDeployment(row) ||
+    (!project.value?.archived && !!row.registration?.managedInstanceId);
+}
+
+const healthClock = ref(Date.now());
+let healthTimer: ReturnType<typeof setInterval> | undefined;
+
 function deliveryLabel(row: ModuleRow) {
-  const status = deploymentStatuses.value.get(row.registration?.id || "");
-  if (status?.latest && (jobPending(status.latest) || status.latest.status === "UNKNOWN" || status.latest.status === "FAILED")) {
-    return jobStatusText(status.latest.status);
-  }
-  if (status?.health) return deploymentHealthText(status.health);
-  if (status?.current) return "已发布 · 待检查";
+  const status = deliveryObservation(row)?.status;
+  if (status?.pending) return jobStatusText(status.pending.status);
+  if (jobPending(status?.activeCheck)) return "检查中";
+  if (status?.current) return deploymentHealthText(deploymentHealthAt(status.health, status.healthObservedAt, healthClock.value));
+  if (status?.latest?.action === "DECOMMISSION" && status.latest.status === "SUCCEEDED") return "已下线";
+  if (status?.latest?.status === "FAILED") return "最近作业失败";
   if (supportsProjectDeployment(row)) return "待检查";
   if (row.registration?.managedInstanceId) return "旧版目标";
+  if (row.module.catalog?.kind === "ALGORITHM") {
+    return row.registration
+      ? (row.registration.runtimeSoftwareId ? "已关联运行软件" : "已登记 · 待关联运行软件")
+      : "待登记算法服务器";
+  }
   return row.registration ? "暂不支持发布" : "待配置";
 }
 
-function observeDelivery(id: string, status: DeploymentStatus) {
-  deploymentStatuses.value.set(id, status);
+function deliveryPolling(status?: DeploymentStatus) {
+  return jobPending(status?.pending) || jobPending(status?.activeCheck) || jobPending(status?.latest);
 }
 
-watch([pagedRows, runtimeRefresh], ([pageRows], _, cleanup) => {
-  const current = project.value;
-  if (!current) return;
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  cleanup(() => { controller.abort(); if (timer) clearTimeout(timer); });
-  const activeRows = pageRows.filter((row) => row.registration?.hostId && supportsProjectDeployment(row));
-  if (!activeRows.length) return;
-  const update = async (pendingOnly = false) => {
-    if (document.hidden && pendingOnly) {
-      timer = setTimeout(() => void update(true), 5000);
-      return;
-    }
-    for (let start = 0; start < activeRows.length && !controller.signal.aborted; start += 4) {
-      const batch = activeRows.slice(start, start + 4);
-      await Promise.allSettled(batch.map(async ({ registration }) => {
-        if (!registration || (pendingOnly && !jobPending(deploymentStatuses.value.get(registration.id)?.latest))) return;
-        const status = await request<DeploymentStatus>(
-          projectDeploymentPath(current.id, registration.id), "GET", undefined, controller.signal,
-        );
-        if (!controller.signal.aborted) observeDelivery(registration.id, status);
-      }));
-    }
-    if (!controller.signal.aborted && activeRows.some((row) => jobPending(deploymentStatuses.value.get(row.registration!.id)?.latest)))
-      timer = setTimeout(() => void update(true), 5000);
-  };
-  void update();
+function deliveryPath(row?: ModuleRow) {
+  return project.value && row?.registration ? projectDeploymentPath(project.value.id, row.registration.id) : "";
+}
+
+function deploymentBinding(hostId: string) {
+  return `${project.value?.version ?? ""}:${hostId}`;
+}
+
+function deliveryObservation(row: ModuleRow) {
+  return delivery.observation(deliveryPath(row));
+}
+
+function deliveryError(row: ModuleRow) {
+  const problem = deliveryObservation(row)?.error;
+  return problem === undefined ? "" : describe(problem, "读取发布记录失败，请刷新页面", false);
+}
+
+const dialogPath = computed(() => deliveryPath(deploymentPanel.value));
+const observedTargets = computed(() => {
+  const targets = new Map<string, string>();
+  for (const row of pagedRows.value) {
+    if (row.registration?.hostId) targets.set(deliveryPath(row), deploymentBinding(row.registration.hostId));
+  }
+  if (dialogPath.value && !targets.has(dialogPath.value))
+    targets.set(dialogPath.value, deploymentBinding(deploymentPanel.value?.registration?.hostId ?? ""));
+  return targets;
+});
+
+async function refreshDeliveries(paths: string[], maxAge: (path: string) => number, stopped: () => boolean) {
+  for (let start = 0; start < paths.length && !stopped() && !lifetime.signal.aborted; start += 4) {
+    await Promise.all(paths.slice(start, start + 4).map((path) => delivery.refresh(path, maxAge(path))));
+  }
+}
+
+watch([observedTargets, runtimeRefresh], ([targets, revision], previous, cleanup) => {
+  let stopped = false;
+  cleanup(() => { stopped = true; });
+  delivery.retain(targets);
+  const paths = [...targets.keys()].filter((path) => revision !== previous?.[1] || delivery.observation(path)?.loading);
+  void refreshDeliveries(paths, () => 0, () => stopped);
 }, { immediate: true });
+
+const pendingDeliveryPaths = computed<string[]>((previous) => {
+  const paths = [...observedTargets.value.keys()].filter((path) => deliveryPolling(delivery.observation(path)?.status));
+  return previous?.length === paths.length && previous.every((path, index) => path === paths[index]) ? previous : paths;
+});
+const pollDelay = computed(() => pendingDeliveryPaths.value.includes(dialogPath.value) &&
+  !delivery.observation(dialogPath.value)?.error ? 2500 : 5000);
+
+watch([pendingDeliveryPaths, pollDelay], ([paths, delay], _, cleanup) => {
+  if (!paths.length) return;
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout>;
+  const schedule = () => {
+    timer = setTimeout(async () => {
+      if (!document.hidden)
+        await refreshDeliveries(paths, (path) => path === dialogPath.value ? delay : 5000, () => stopped);
+      if (!stopped) schedule();
+    }, delay);
+  };
+  schedule();
+  cleanup(() => { stopped = true; clearTimeout(timer); });
+});
 watch([runtimeIds, runtimeRefresh], async ([ids], _, cleanup) => {
   const controller = new AbortController();
   cleanup(() => controller.abort());
@@ -426,12 +508,17 @@ watch([runtimeIds, runtimeRefresh], async ([ids], _, cleanup) => {
   } finally {
     if (!controller.signal.aborted) runtimeLoading.value = false;
   }
-});
+}, { immediate: true });
 watch(() => props.source, useSource);
-onMounted(refresh);
+onMounted(() => {
+  healthTimer = setInterval(() => { healthClock.value = Date.now(); }, 15_000);
+  return refreshProject(false);
+});
 onUnmounted(() => {
   lifetime.abort();
+  delivery.retain(new Map());
   selectionRequest?.abort();
+  if (healthTimer) clearInterval(healthTimer);
 });
 function buildStatusClass(status?: string) {
   if (status === "SUCCESS") return "status-ok";
@@ -512,7 +599,7 @@ function buildStatusClass(status?: string) {
               <span class="muted">· {{ project.modules.length }} 个模块</span>
               <span v-if="project.archived" class="muted">（已归档）</span>
             </span>
-            <ElButton :loading="loading" @click="refresh">刷新</ElButton>
+            <ElButton :loading="loading" @click="refreshProject()">刷新</ElButton>
           </div>
         </div>
 
@@ -549,6 +636,7 @@ function buildStatusClass(status?: string) {
 
         <ElTable
           :data="pagedRows"
+          :row-key="rowKey"
           border
           stripe
           style="width: 100%; margin-top: 14px"
@@ -556,7 +644,7 @@ function buildStatusClass(status?: string) {
           <ElTableColumn type="index" label="#" width="48" align="center" />
           <ElTableColumn label="模块名称" min-width="140" show-overflow-tooltip>
             <template #default="{ row }">
-              <span>{{ row.module.name }}</span>
+              <span :data-focused="rowKey(row as ModuleRow) === focusedRowKey ? 'true' : undefined">{{ row.module.name }}</span>
             </template>
           </ElTableColumn>
           <ElTableColumn label="模块描述" min-width="135" show-overflow-tooltip>
@@ -676,11 +764,14 @@ function buildStatusClass(status?: string) {
             <template #default="{ row }">
               <div class="runtime-cell">
                 <span>{{ deliveryLabel(row as ModuleRow) }}</span>
-                <small v-if="row.registration && deploymentStatuses.get(row.registration.id)?.current">
-                  构建 #{{ deploymentStatuses.get(row.registration.id)?.current?.buildNumber }}
+                <small v-if="deliveryObservation(row as ModuleRow)?.status?.current">
+                  构建 #{{ deliveryObservation(row as ModuleRow)?.status?.current?.buildNumber }}
                 </small>
-                <small v-if="row.registration && deploymentStatuses.get(row.registration.id)?.latest?.observedAt">
-                  {{ deploymentTime(deploymentStatuses.get(row.registration.id)?.latest?.observedAt) }}
+                <small v-if="deliveryObservation(row as ModuleRow)?.status?.healthObservedAt">
+                  检查于 {{ deploymentTime(deliveryObservation(row as ModuleRow)?.status?.healthObservedAt) }}
+                </small>
+                <small v-if="deliveryError(row as ModuleRow)" :title="deliveryError(row as ModuleRow)">
+                  发布记录读取失败
                 </small>
               </div>
             </template>
@@ -708,13 +799,13 @@ function buildStatusClass(status?: string) {
                   QA 日志
                 </ElButton>
                 <ElButton
-                  v-if="canOpenDelivery(row as ModuleRow) && (!project?.archived || supportsProjectDeployment(row as ModuleRow))"
+                  v-if="canOpenDelivery(row as ModuleRow)"
                   link
                   type="primary"
                   size="small"
                   @click="openRelease(row as ModuleRow)"
                 >
-                  {{ supportsProjectDeployment(row as ModuleRow) ? "发布与运行" : "旧版发布" }}
+                  {{ supportsProjectDeployment(row as ModuleRow) || hasManagedDeploymentRecord(row as ModuleRow) ? "发布与运行" : "旧版发布" }}
                 </ElButton>
                 <ElButton
                   v-if="!project?.archived && row.registration?.managedInstanceId && !supportsProjectDeployment(row as ModuleRow)"
@@ -740,7 +831,15 @@ function buildStatusClass(status?: string) {
                   size="small"
                   @click="maintain(row as ModuleRow)"
                 >
-                  {{ row.registration ? "草稿" : "配置" }}
+                  {{ row.module.catalog?.kind === "ALGORITHM" ? (row.registration ? "登记配置" : "登记算法服务器") : (row.registration ? "草稿" : "配置") }}
+                </ElButton>
+                <ElButton
+                  v-if="!project?.archived && row.module.catalog?.kind === 'ALGORITHM' && row.environment && row.registration?.hostId"
+                  link
+                  size="small"
+                  @click="addAlgorithmHost(row as ModuleRow)"
+                >
+                  添加服务器
                 </ElButton>
               </div>
             </template>
@@ -812,7 +911,7 @@ function buildStatusClass(status?: string) {
     </ElDrawer>
     <ProjectDeploymentPanel
       v-if="project && deploymentPanel?.registration && deploymentPanel.environment"
-      :key="deploymentPanel.registration.id"
+      :key="dialogPath"
       :project-id="project.id"
       :module-id="deploymentPanel.module.id"
       :module-name="deploymentPanel.module.name"
@@ -820,8 +919,8 @@ function buildStatusClass(status?: string) {
       :environment="deploymentPanel.environment.name"
       :host-name="hostsById.get(deploymentPanel.registration.hostId) || ''"
       :archived="project.archived"
-      @close="deploymentPanel = undefined; runtimeRefresh++"
-      @observed="observeDelivery(deploymentPanel.registration.id, $event)"
+      :delivery="delivery"
+      @close="closeDeployment"
       @build-observed="recordBuild(deploymentPanel.module.id, $event)"
       @edit-site="maintain(deploymentPanel)"
       @execution-logs="emit('logs', $event)"

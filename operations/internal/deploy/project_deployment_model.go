@@ -13,11 +13,13 @@ import (
 )
 
 const (
-	ProjectDeployVersion = 2
+	ProjectDeployVersion = 3
 	ProjectProbe         = "PROJECT_DEPLOY_PROBE"
 	ProjectApply         = "PROJECT_DEPLOY_APPLY"
 	ProjectRollback      = "PROJECT_DEPLOY_ROLLBACK"
 	ProjectObserve       = "PROJECT_DEPLOY_OBSERVE"
+	ProjectRecover       = "PROJECT_DEPLOY_RECOVER"
+	ProjectDecommission  = "PROJECT_DEPLOY_DECOMMISSION"
 	ProjectLogs          = "PROJECT_DEPLOY_LOGS"
 )
 
@@ -55,6 +57,7 @@ type ProjectSite struct {
 	ServerName string         `json:"serverName"`
 	SPA        bool           `json:"spa"`
 	Proxies    []ProjectProxy `json:"proxies,omitempty"`
+	HealthPath string         `json:"healthPath,omitempty"`
 }
 type ProjectProxy struct {
 	Location    string `json:"location"`
@@ -68,13 +71,14 @@ type ProjectDependency struct {
 	Port int    `json:"port"`
 }
 type ProjectDeployResult struct {
-	Status     string `json:"status"`
-	Phase      string `json:"phase"`
-	ErrorCode  string `json:"errorCode,omitempty"`
-	ObservedAt string `json:"observedAt"`
-	ReleaseID  string `json:"releaseId,omitempty"`
-	Health     string `json:"health,omitempty"`
-	Output     string `json:"output,omitempty"`
+	Status      string `json:"status"`
+	Phase       string `json:"phase"`
+	ErrorCode   string `json:"errorCode,omitempty"`
+	ObservedAt  string `json:"observedAt"`
+	ReleaseID   string `json:"releaseId,omitempty"`
+	Health      string `json:"health,omitempty"`
+	Output      string `json:"output,omitempty"`
+	WarningCode string `json:"warningCode,omitempty"`
 }
 
 var (
@@ -107,6 +111,10 @@ func ValidateProjectConfigFile(file ProjectConfigFile) error {
 
 // Render a restricted server fragment; repository content cannot become directives.
 func (p ProjectDeployment) NginxConfig(docroot, logroot string) (string, error) {
+	return p.nginxConfig(docroot, logroot, true)
+}
+
+func (p ProjectDeployment) nginxConfig(docroot, logroot string, browserHeaders bool) (string, error) {
 	if p.Site == nil || !(p.Site.ServerName == "_" || projectHost.MatchString(p.Site.ServerName)) || p.Port < 1 || p.Port > 65535 || len(p.Site.Proxies) > 30 {
 		return "", errors.New("PROJECT_NGINX_CONFIG_INVALID")
 	}
@@ -117,11 +125,18 @@ func (p ProjectDeployment) NginxConfig(docroot, logroot string) (string, error) 
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# StreamFusion Ops deployment %s\nserver {\n    listen %d;\n    server_name %s;\n    root %s;\n    index index.html;\n    access_log %s/access.log;\n    error_log %s/error.log;\n", p.ID, p.Port, p.Site.ServerName, docroot, logroot, logroot)
-	fmt.Fprintf(&b, "    location = /__sfops_health { access_log off; add_header X-StreamFusion-Release \"%s\"; alias %s/index.html; }\n", p.ReleaseID, docroot)
+	headers := ""
+	if browserHeaders && p.Site.HealthPath == StreamFusionSiteHealthPath {
+		headers = ` add_header Content-Security-Policy "frame-ancestors 'self'" always;` +
+			` add_header X-Frame-Options "SAMEORIGIN" always;` +
+			` add_header X-Content-Type-Options "nosniff" always;` +
+			` add_header Referrer-Policy "strict-origin-when-cross-origin" always;`
+	}
+	fmt.Fprintf(&b, "    location = /__sfops_health { access_log off; add_header X-StreamFusion-Release \"%s\";%s alias %s/index.html; }\n", p.ReleaseID, headers, docroot)
 	if p.Site.SPA {
-		b.WriteString("    location / { try_files $uri $uri/ /index.html; }\n")
+		fmt.Fprintf(&b, "    location / {%s try_files $uri $uri/ /index.html; }\n", headers)
 	} else {
-		b.WriteString("    location / { try_files $uri $uri/ =404; }\n")
+		fmt.Fprintf(&b, "    location / {%s try_files $uri $uri/ =404; }\n", headers)
 	}
 	seen := map[string]bool{"/": true, "/__sfops_health": true}
 	for _, r := range p.Site.Proxies {
@@ -139,17 +154,28 @@ func (p ProjectDeployment) NginxConfig(docroot, logroot string) (string, error) 
 		} else {
 			u.Path = ""
 		}
+		platformAPI := p.Site.HealthPath == StreamFusionSiteHealthPath && prefix == "/api"
 		if !strings.HasSuffix(r.Location, "/") {
-			projectNginxProxy(&b, "= "+prefix, u.String(), r)
+			projectNginxProxy(&b, "= "+prefix, u.String(), r, platformAPI)
 		}
-		projectNginxProxy(&b, "^~ "+prefix+"/", u.String(), r)
+		projectNginxProxy(&b, "^~ "+prefix+"/", u.String(), r, platformAPI)
 	}
 	b.WriteString("}\n")
 	return b.String(), nil
 }
 
-func projectNginxProxy(b *strings.Builder, location, upstream string, r ProjectProxy) {
-	fmt.Fprintf(b, "    location %s {\n        proxy_pass %s;\n        proxy_http_version 1.1;\n        proxy_set_header Host $host;\n        proxy_set_header X-Forwarded-Proto $scheme;\n        proxy_set_header X-Forwarded-For $remote_addr;\n", location, upstream)
+func projectNginxProxy(b *strings.Builder, location, upstream string, r ProjectProxy, platformAPI bool) {
+	forwardedFor := "$remote_addr"
+	if platformAPI {
+		// Platform walks the chain from the socket address and only through
+		// explicitly trusted hops. Preserve an upstream TLS gateway's hop.
+		forwardedFor = "$proxy_add_x_forwarded_for"
+	}
+	fmt.Fprintf(b, "    location %s {\n        proxy_pass %s;\n        proxy_http_version 1.1;\n        proxy_set_header Host $host;\n        proxy_set_header X-Forwarded-Proto $scheme;\n        proxy_set_header X-Forwarded-For %s;\n", location, upstream, forwardedFor)
+	if platformAPI {
+		// Match the Platform API's multipart request limit, including metadata.
+		b.WriteString("        client_max_body_size 21m;\n")
+	}
 	if r.WebSocket {
 		b.WriteString("        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection \"upgrade\";\n")
 	}
@@ -181,6 +207,12 @@ func validProjectDeployment(p *ProjectDeployment, action string) error {
 	if action == ProjectRollback && (p.ReleaseID == "" || p.ExpectedRelease == "" || p.ReleaseID == p.ExpectedRelease) {
 		return errors.New("PROJECT_ROLLBACK_RELEASE_INVALID")
 	}
+	if action == ProjectRecover && (p.ReleaseID == "" || p.ReleaseID == p.ExpectedRelease) {
+		return errors.New("PROJECT_RECOVERY_RELEASE_INVALID")
+	}
+	if action == ProjectDecommission && (p.ExpectedRelease == "" || p.ReleaseID != "" && p.ReleaseID != p.ExpectedRelease) {
+		return errors.New("PROJECT_DECOMMISSION_RELEASE_INVALID")
+	}
 	for _, d := range p.DependencyChecks {
 		if len(p.DependencyChecks) > 20 || d.Port < 1 || d.Port > 65535 || (!projectHost.MatchString(d.Host) && net.ParseIP(d.Host) == nil) {
 			return errors.New("PROJECT_DEPENDENCY_INVALID")
@@ -189,6 +221,9 @@ func validProjectDeployment(p *ProjectDeployment, action string) error {
 	if p.Kind == "STATIC" {
 		if len(p.Files) != 0 || len(p.Variables) != 0 {
 			return errors.New("PROJECT_STATIC_CONFIG_UNSUPPORTED")
+		}
+		if p.Site != nil && p.Site.HealthPath != "" && streamFusionAPIUpstream(p.Site) == "" {
+			return errors.New("PROJECT_STREAMFUSION_API_ROUTE_REQUIRED")
 		}
 		_, err := p.NginxConfig("/var/www/sfops/site", "/var/log/nginx/sfops/site")
 		return err

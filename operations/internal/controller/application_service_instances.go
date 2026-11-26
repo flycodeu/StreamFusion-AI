@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/streamfusion-ai/operations/internal/deploy"
+	"github.com/streamfusion-ai/operations/internal/projectconfig"
 )
 
 type applicationServiceInstanceInput struct {
@@ -39,13 +40,14 @@ type applicationServiceInstanceInput struct {
 }
 
 var (
-	errApplicationServiceInstanceInUse     = errors.New("service instance has a runtime software reference")
-	errApplicationServiceInstanceDuplicate = errors.New("environment already has this module")
+	errApplicationServiceInstanceInUse           = errors.New("service instance has a runtime software reference")
+	errApplicationServiceInstanceDuplicate       = errors.New("environment already has this module")
+	errApplicationAlgorithmHostBindingDuplicated = errors.New("algorithm module already has a binding for this host")
 )
 
 func normalizeApplicationRecordedVersion(version *string) error {
 	*version = strings.TrimSpace(*version)
-	if utf8.RuneCountInString(*version) > 100 || strings.ContainsAny(*version, "\r\n\t\x00") || applicationSecretValue(*version) {
+	if utf8.RuneCountInString(*version) > 100 || strings.ContainsAny(*version, "\r\n\t\x00") || projectconfig.ContainsSecret(*version) {
 		return applicationInvalid("登记版本须为单行文本，最多100个字符，请勿填写凭据")
 	}
 	return nil
@@ -151,6 +153,8 @@ func (h *HTTP) changeApplicationServiceInstance(w http.ResponseWriter, r *http.R
 		h.fail(w, r, 409, "APPLICATION_INSTANCE_IN_USE", "登记关联了运行软件，解除关联后才能删除或更换主机")
 	case errors.Is(err, errApplicationServiceInstanceDuplicate):
 		h.fail(w, r, 409, "APPLICATION_INSTANCE_DUPLICATED", "同一模块在这个环境已有登记，请编辑现有实例")
+	case errors.Is(err, errApplicationAlgorithmHostBindingDuplicated):
+		h.fail(w, r, 409, "APPLICATION_INSTANCE_DUPLICATED", "算法模块在同一环境只能在每台服务器登记一次，请核对或补齐已有登记的服务器")
 	case errors.Is(err, sql.ErrNoRows):
 		h.opsError(w, r, err)
 	default:
@@ -322,11 +326,30 @@ func projectModuleIDSet(project applicationProject) map[string]bool {
 	return set
 }
 
-func insertApplicationServiceInstance(tx *sql.Tx, project applicationProject, in applicationServiceInstanceInput) error {
-	var moduleExists bool
-	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM application_modules WHERE project_id=? AND id=?)", project.ID, in.ModuleID).Scan(&moduleExists); err != nil {
-		return err
+func applicationModuleByID(project applicationProject, id string) (applicationModule, bool) {
+	for _, module := range project.Modules {
+		if module.ID == id {
+			return module, true
+		}
 	}
+	return applicationModule{}, false
+}
+
+func checkApplicationServiceBinding(project applicationProject, environmentName string, candidate applicationDeployment, multiHost bool) error {
+	for _, environment := range project.Environments {
+		if strings.EqualFold(environment.Name, environmentName) &&
+			applicationDeploymentBindingConflict(environment.Deployments, candidate, multiHost) {
+			if multiHost {
+				return errApplicationAlgorithmHostBindingDuplicated
+			}
+			return errApplicationServiceInstanceDuplicate
+		}
+	}
+	return nil
+}
+
+func insertApplicationServiceInstance(tx *sql.Tx, project applicationProject, in applicationServiceInstanceInput) error {
+	module, moduleExists := applicationModuleByID(project, in.ModuleID)
 	if !moduleExists {
 		return applicationInvalid("所选模块必须属于当前项目")
 	}
@@ -345,11 +368,6 @@ func insertApplicationServiceInstance(tx *sql.Tx, project applicationProject, in
 		if strings.ToLower(environment.Name) != strings.ToLower(in.Environment) {
 			continue
 		}
-		for _, deployment := range environment.Deployments {
-			if deployment.ModuleID == in.ModuleID {
-				return errApplicationServiceInstanceDuplicate
-			}
-		}
 		if len(environment.Deployments) >= 40 {
 			return applicationInvalid("每环境最多40个模块配置")
 		}
@@ -360,6 +378,9 @@ func insertApplicationServiceInstance(tx *sql.Tx, project applicationProject, in
 		ID: in.ID, ModuleID: in.ModuleID, HostID: in.HostID, RecordedVersion: in.RecordedVersion, RuntimeSoftwareID: softwareID,
 		Ports: []applicationPort{}, Variables: []applicationVariable{}, Mounts: []applicationMount{},
 	}
+	if err := checkApplicationServiceBinding(project, in.Environment, newDeployment, module.allowsMultipleHostBindings()); err != nil {
+		return err
+	}
 	if in.ManagedInstanceID != nil {
 		newDeployment.ManagedInstanceID = *in.ManagedInstanceID
 		if err := checkManagedInstance(tx, newDeployment.ManagedInstanceID, in.HostID, in.Environment); err != nil {
@@ -368,6 +389,9 @@ func insertApplicationServiceInstance(tx *sql.Tx, project applicationProject, in
 	}
 	applyDeploymentInputFields(in, &newDeployment)
 	if err := normalizeApplicationDeployment(&newDeployment, projectModuleIDSet(project), in.Environment, nil); err != nil {
+		return err
+	}
+	if err := module.validateDeploymentMode(newDeployment.DeployMode, ""); err != nil {
 		return err
 	}
 	if err := validateApplicationDeploymentRefs(tx, newDeployment); err != nil {
@@ -415,6 +439,7 @@ func updateApplicationServiceInstance(tx *sql.Tx, project applicationProject, in
 	if err = json.Unmarshal([]byte(existingRaw), &merged); err != nil {
 		return err
 	}
+	merged.ID, merged.ModuleID, merged.HostID = in.ID, moduleID, hostID
 	if in.HostID != "" && in.HostID != hostID {
 		if bound {
 			return errApplicationServiceInstanceInUse
@@ -424,6 +449,10 @@ func updateApplicationServiceInstance(tx *sql.Tx, project applicationProject, in
 		}
 		hostID = in.HostID
 		merged.HostID = hostID
+	}
+	module, _ := applicationModuleByID(project, moduleID)
+	if err = checkApplicationServiceBinding(project, environmentName, merged, module.allowsMultipleHostBindings()); err != nil {
+		return err
 	}
 	if in.ManagedInstanceID != nil {
 		merged.ManagedInstanceID = *in.ManagedInstanceID
@@ -438,8 +467,12 @@ func updateApplicationServiceInstance(tx *sql.Tx, project applicationProject, in
 		merged.RuntimeSoftwareID = *in.RuntimeSoftwareID
 	}
 	merged.RecordedVersion = in.RecordedVersion
+	previousMode := merged.DeployMode
 	applyDeploymentInputFields(in, &merged)
 	if err = normalizeApplicationDeployment(&merged, projectModuleIDSet(project), environmentName, nil); err != nil {
+		return err
+	}
+	if err = module.validateDeploymentMode(merged.DeployMode, previousMode); err != nil {
 		return err
 	}
 	if err = validateApplicationDeploymentRefs(tx, merged); err != nil {

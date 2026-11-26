@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,13 +37,21 @@ type projectDeploymentJob struct {
 }
 
 type projectDeploymentVersion struct {
-	ReleaseID   string `json:"releaseId"`
-	BuildNumber int    `json:"buildNumber"`
-	Commit      string `json:"commit"`
-	ObservedAt  string `json:"observedAt"`
+	ReleaseID      string `json:"releaseId"`
+	BuildNumber    int    `json:"buildNumber"`
+	Commit         string `json:"commit"`
+	ObservedAt     string `json:"observedAt"`
+	Kind           string `json:"kind"`
+	TargetID       string `json:"targetId"`
+	HostName       string `json:"hostName"`
+	Address        string `json:"address,omitempty"`
+	Port           int    `json:"port"`
+	ServerName     string `json:"serverName,omitempty"`
+	SiteHealthPath string `json:"siteHealthPath,omitempty"`
 }
 
 const projectJobSummaryFields = `id,action,status,phase,error_code,health,updated_at,trace_id,build_number,commit_id,release_id`
+const projectObservationValidity = 5 * time.Minute
 
 func scanProjectJob(row *sql.Row) (job projectDeploymentJob, err error) {
 	err = row.Scan(&job.JobID, &job.Action, &job.Status, &job.Phase, &job.ErrorCode, &job.Health,
@@ -57,8 +64,12 @@ func readProjectVersion(q applicationReader, id string) (*projectDeploymentVersi
 		return nil, nil
 	}
 	var v projectDeploymentVersion
-	err := q.QueryRow(`SELECT id,build_number,commit_id,updated_at FROM project_deployment_jobs
-		WHERE id=? AND action='DEPLOY' AND status='SUCCEEDED'`, id).Scan(&v.ReleaseID, &v.BuildNumber, &v.Commit, &v.ObservedAt)
+	err := q.QueryRow(`SELECT id,build_number,commit_id,updated_at,coalesce(target_id,''),host_name,
+		coalesce(json_extract(snapshot_json,'$.spec.kind'),''),coalesce(json_extract(snapshot_json,'$.spec.address'),''),
+		coalesce(json_extract(snapshot_json,'$.spec.port'),0),coalesce(json_extract(snapshot_json,'$.spec.site.serverName'),''),
+		coalesce(json_extract(snapshot_json,'$.spec.site.healthPath'),'')
+		FROM project_deployment_jobs WHERE id=? AND action='DEPLOY' AND status='SUCCEEDED'`, id).
+		Scan(&v.ReleaseID, &v.BuildNumber, &v.Commit, &v.ObservedAt, &v.TargetID, &v.HostName, &v.Kind, &v.Address, &v.Port, &v.ServerName, &v.SiteHealthPath)
 	return &v, err
 }
 
@@ -71,40 +82,53 @@ func readProjectVersions(q applicationReader, id string) (current, previous stri
 }
 
 var projectDeploymentErrors = map[string]string{
-	"PROJECT_MODE_UNSUPPORTED":              "当前模式不支持 Jenkins 部署，请使用 Java 原生服务或前端静态站点",
-	"PROJECT_HOST_UNAVAILABLE":              "请为此环境配置已接入且未处于维护模式的目标主机",
-	"PROJECT_HOST_BUSY":                     "此主机已有部署或维护作业，请核对作业记录",
-	"PROJECT_DEPLOYMENT_BUSY":               "此部署有未结束的作业，请先核对运行状态",
-	"PROJECT_QUEUE_FULL":                    "部署队列已满，请等待现有作业结束",
-	"PROJECT_PLAN_EXPIRED":                  "部署确认已过期，请重新预检",
-	"PROJECT_PLAN_CHANGED":                  "项目、主机或当前发布版本已变化，请重新预检",
-	"PROJECT_CURRENT_ARTIFACT_CHANGED":      "当前构建的归档与在运行的制品不同，请核对 Jenkins 后重新选择构建",
-	"PROJECT_NO_ROLLBACK":                   "没有可回滚的上一个版本",
-	"PROJECT_ROLLBACK_PREVIOUS_CHANGED":     "可回滚版本已变化，请刷新后重新确认",
-	"PROJECT_CREDENTIAL_UNAVAILABLE":        "配置引用的凭据不可用，请检查草稿和凭据中心",
-	"PROJECT_NGINX_CONFIG_INVALID":          "请填写有效的站点域名和监听端口",
-	"PROJECT_NGINX_NATIVE_REQUIRED":         "选择同一主机的系统 Nginx，要求 nginx.service 和 conf.d 配置",
-	"PROJECT_NGINX_SITE_CONFLICT":           "同一主机已有使用相同监听端口和域名的站点",
-	"PROJECT_NGINX_CONF_D_REQUIRED":         "目标主机 Nginx 主配置未加载 /etc/nginx/conf.d/*.conf",
-	"PROJECT_NGINX_EXISTING_CONFIG_INVALID": "目标主机当前 Nginx 配置检查未通过",
-	"PROJECT_NGINX_SERVICE_REQUIRED":        "目标主机 nginx.service 未运行",
-	"PROJECT_PROXY_TARGET_UNAVAILABLE":      "反向代理选择的同环境后端缺少可访问的地址或端口",
-	"PROJECT_PROXY_INVALID":                 "请检查反向代理路径和 HTTP/HTTPS 上游地址",
-	"PROJECT_PROXY_TRAILING_SLASH_REQUIRED": "反代需要去掉前缀时，匹配路径应以 / 结尾",
-	"PROJECT_JAVA_CONFIG_INVALID":           "请检查 Java 服务的 IPv4 监听地址、端口、内存、Profile 和健康检查路径",
-	"PROJECT_JAVA_VARIABLE_INVALID":         "请检查 Java 环境变量的名称、长度及凭据引用",
-	"PROJECT_JAVA_21_REQUIRED":              "目标主机 /usr/bin/java 须指向 Java 21",
-	"PROJECT_SYSTEMD_REQUIRED":              "目标主机需要 systemd",
-	"PROJECT_DEPENDENCY_ENDPOINT_MISSING":   "关联软件缺少唯一可探测端口，请在软件状态中核对",
-	"PROJECT_DEPENDENCY_UNREACHABLE":        "目标主机不能连通登记的依赖，请检查地址、端口和防火墙",
-	"PROJECT_EXECUTOR_UPGRADE_REQUIRED":     "请在主机管理中更新受管执行器",
-	"PROJECT_EXECUTOR_NOT_TRUSTED":          "主机未信任当前控制器，请先完成执行器接入",
-	"PROJECT_TARGET_UNAVAILABLE":            "无法读取目标主机的执行结果，请检查 SSH 与受管执行器",
-	"PROJECT_RECOVERY_REQUIRED":             "目标尚有未确认的发布变更，请重新核对运行状态",
-	"PROJECT_NOT_DEPLOYED":                  "此部署还没有运行版本",
-	"PROJECT_LOGS_UNAVAILABLE":              "目标主机无法读取服务日志",
-	"PROJECT_RELEASE_CHANGED":               "目标主机的实际版本与 Ops 记录不同，请先核对状态",
-	"PROJECT_ARTIFACT_INVALID":              "构建制品超出此部署支持的大小或格式",
+	"PROJECT_MODE_UNSUPPORTED":                           "当前模式不支持 Jenkins 部署，请使用 Java 原生服务或前端静态站点",
+	"PROJECT_HOST_UNAVAILABLE":                           "请为此环境配置已接入且未处于维护模式的目标主机",
+	"PROJECT_HOST_BUSY":                                  "此主机已有部署或维护作业，请核对作业记录",
+	"PROJECT_DEPLOYMENT_BUSY":                            "此部署有未结束的作业，请先核对运行状态",
+	"PROJECT_QUEUE_FULL":                                 "部署队列已满，请等待现有作业结束",
+	"PROJECT_PLAN_EXPIRED":                               "部署确认已过期，请重新预检",
+	"PROJECT_PLAN_CHANGED":                               "项目、主机或当前发布版本已变化，请重新预检",
+	"PROJECT_CURRENT_ARTIFACT_CHANGED":                   "当前构建的归档与在运行的制品不同，请核对 Jenkins 后重新选择构建",
+	"PROJECT_NO_ROLLBACK":                                "没有可回滚的上一个版本",
+	"PROJECT_ROLLBACK_PREVIOUS_CHANGED":                  "可回滚版本已变化，请刷新后重新确认",
+	"PROJECT_CREDENTIAL_UNAVAILABLE":                     "配置引用的凭据不可用，请检查草稿和凭据中心",
+	"PROJECT_NGINX_CONFIG_INVALID":                       "请填写有效的站点域名和监听端口",
+	"PROJECT_NGINX_NATIVE_REQUIRED":                      "选择同一主机的系统 Nginx，要求 nginx.service 和 conf.d 配置",
+	"PROJECT_NGINX_SITE_CONFLICT":                        "同一主机已有使用相同监听端口和域名的站点",
+	"PROJECT_NGINX_CONF_D_REQUIRED":                      "目标主机 Nginx 主配置未加载 /etc/nginx/conf.d/*.conf",
+	"PROJECT_NGINX_EXISTING_CONFIG_INVALID":              "目标主机当前 Nginx 配置检查未通过",
+	"PROJECT_NGINX_SERVICE_REQUIRED":                     "目标主机 nginx.service 未运行",
+	"PROJECT_PROXY_TARGET_UNAVAILABLE":                   "同环境后端未发布或地址不可达，请核对后端运行版本及监听地址",
+	"PROJECT_PROXY_TARGET_AMBIGUOUS":                     "同环境有多个已发布的后端实例，请使用明确的上游地址",
+	"PROJECT_STREAMFUSION_API_UNHEALTHY":                 "站点反代未返回后端健康状态，请检查 /api/ 路由、后端地址和运行状态",
+	"PROJECT_STREAMFUSION_API_ROUTE_REQUIRED":            "StreamFusion 站点需要 /api/ 去前缀反代，并关联同环境的 platform-api",
+	"PROJECT_STREAMFUSION_SITE_NAME_REQUIRED":            "请在站点草稿中填写实际访问使用的域名或 IP 地址",
+	"PROJECT_STREAMFUSION_ROLLBACK_CONTRACT_CHANGED":     "上一版本缺少当前的 /api 健康检查。请修正站点配置并重新发布要恢复的构建",
+	"PROJECT_STREAMFUSION_ROLLBACK_UPSTREAM_CHANGED":     "上一版本的 /api 地址与当前运行后端不同。请用当前后端配置重新发布要恢复的构建",
+	"PROJECT_STREAMFUSION_WEB_ARTIFACT_REBUILD_REQUIRED": "此制品未确认支持 /api 反代。请用新版 Jenkins 任务重新构建 Platform Web 并归档后再发布",
+	"PROJECT_ACTIVE_SITE_USES_BACKEND":                   "同环境站点仍使用此后端，请先将站点切换到新的后端或下线站点",
+	"PROJECT_ACTIVE_SITE_USES_OLD_ENDPOINT":              "同环境站点仍使用后端当前地址，请先切换站点，再更改端口或监听地址",
+	"PROJECT_PROXY_INVALID":                              "请检查反向代理路径和 HTTP/HTTPS 上游地址",
+	"PROJECT_PROXY_TRAILING_SLASH_REQUIRED":              "反代需要去掉前缀时，匹配路径应以 / 结尾",
+	"PROJECT_JAVA_CONFIG_INVALID":                        "请检查 Java 服务的 IPv4 监听地址、端口、内存、Profile 和健康检查路径",
+	"PROJECT_JAVA_VARIABLE_INVALID":                      "请检查 Java 环境变量的名称、长度及凭据引用",
+	"PROJECT_JAVA_21_REQUIRED":                           "目标主机 /usr/bin/java 须指向 Java 21",
+	"PROJECT_SYSTEMD_REQUIRED":                           "目标主机需要 systemd",
+	"PROJECT_DEPENDENCY_ENDPOINT_MISSING":                "关联软件缺少唯一可探测端口，请在软件状态中核对",
+	"PROJECT_DEPENDENCY_UNREACHABLE":                     "目标主机不能连通登记的依赖，请检查地址、端口和防火墙",
+	"PROJECT_EXECUTOR_UPGRADE_REQUIRED":                  "请在主机管理中更新受管执行器至项目发布能力 v3；旧版不能保证检查只读",
+	"PROJECT_JOB_INTERRUPTED":                            "控制端未确认作业终态，请先检查现场；如有待恢复作业，再单独确认恢复",
+	"PROJECT_CHECK_INTERRUPTED":                          "上次检查未完成，请重新检查",
+	"PROJECT_EXECUTOR_NOT_TRUSTED":                       "主机未信任当前控制器，请先完成执行器接入",
+	"PROJECT_TARGET_UNAVAILABLE":                         "无法读取目标主机的执行结果，请检查 SSH 与受管执行器",
+	"PROJECT_RECOVERY_REQUIRED":                          "目标尚有未确认的部署变更，请核对现场后确认恢复",
+	"PROJECT_RECOVERY_JOB_CHANGED":                       "待恢复作业已变化，请刷新后重新确认",
+	"PROJECT_DECOMMISSION_RELEASE_CHANGED":               "当前版本已变化，请刷新后重新确认下线",
+	"PROJECT_NOT_DEPLOYED":                               "此部署还没有运行版本",
+	"PROJECT_LOGS_UNAVAILABLE":                           "目标主机无法读取服务日志",
+	"PROJECT_RELEASE_CHANGED":                            "目标主机的实际版本与 Ops 记录不同，请先核对状态",
+	"PROJECT_ARTIFACT_INVALID":                           "构建制品超出此部署支持的大小或格式",
 }
 
 func (h *HTTP) projectDeployError(w http.ResponseWriter, r *http.Request, err error) {
@@ -133,15 +157,40 @@ func (h *HTTP) projectDeploymentRoute(w http.ResponseWriter, r *http.Request, ac
 			return true
 		}
 		h.queueProjectDeployment(w, r, actor, projectID, id, "DEPLOY", input.Token)
-	case len(rest) == 1 && (rest[0] == "verify" || rest[0] == "rollback") && r.Method == http.MethodPost:
+	case len(rest) == 1 && rest[0] == "verify" && r.Method == http.MethodPost:
+		var input struct{}
+		if decode(w, r, &input) != nil {
+			h.fail(w, r, 400, "INVALID_INPUT", "请提交检查请求")
+			return true
+		}
+		h.queueProjectDeployment(w, r, actor, projectID, id, "VERIFY", "")
+	case len(rest) == 1 && rest[0] == "rollback" && r.Method == http.MethodPost:
 		var input struct {
 			PreviousReleaseID string `json:"previousReleaseId"`
 		}
-		if decode(w, r, &input) != nil || rest[0] == "rollback" && !deploy.ID.MatchString(input.PreviousReleaseID) {
+		if decode(w, r, &input) != nil || !deploy.ID.MatchString(input.PreviousReleaseID) {
 			h.fail(w, r, 400, "INVALID_INPUT", "请刷新部署记录，确认要恢复的版本")
 			return true
 		}
-		h.queueProjectDeployment(w, r, actor, projectID, id, strings.ToUpper(rest[0]), input.PreviousReleaseID)
+		h.queueProjectDeployment(w, r, actor, projectID, id, "ROLLBACK", input.PreviousReleaseID)
+	case len(rest) == 1 && rest[0] == "recover" && r.Method == http.MethodPost:
+		var input struct {
+			ExpectedJobID string `json:"expectedJobId"`
+		}
+		if decode(w, r, &input) != nil || !deploy.ID.MatchString(input.ExpectedJobID) {
+			h.fail(w, r, 400, "INVALID_INPUT", "请确认要恢复的待核对作业")
+			return true
+		}
+		h.queueProjectDeployment(w, r, actor, projectID, id, "RECOVER", input.ExpectedJobID)
+	case len(rest) == 1 && rest[0] == "decommission" && r.Method == http.MethodPost:
+		var input struct {
+			ExpectedReleaseID string `json:"expectedReleaseId"`
+		}
+		if decode(w, r, &input) != nil || !deploy.ID.MatchString(input.ExpectedReleaseID) {
+			h.fail(w, r, 400, "INVALID_INPUT", "请确认要下线的当前版本")
+			return true
+		}
+		h.queueProjectDeployment(w, r, actor, projectID, id, "DECOMMISSION", input.ExpectedReleaseID)
 	default:
 		return false
 	}
@@ -155,13 +204,13 @@ func (h *HTTP) projectDeploymentStatus(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 	defer tx.Rollback()
-	p, err := readProjectDeployment(tx, projectID, id)
+	kind, err := readProjectDeploymentKind(tx, projectID, id)
 	if err != nil {
 		h.opsError(w, r, err)
 		return
 	}
 	data := map[string]any{"health": "NOT_DEPLOYED"}
-	if kind := p.kind(); kind != "" {
+	if kind != "" {
 		data["kind"] = kind
 	}
 	current, previous, err := readProjectVersions(tx, id)
@@ -173,24 +222,94 @@ func (h *HTTP) projectDeploymentStatus(w http.ResponseWriter, r *http.Request, p
 		data["previous"], err = readProjectVersion(tx, previous)
 	}
 	if err == nil {
-		job, e := scanProjectJob(tx.QueryRow("SELECT "+projectJobSummaryFields+` FROM project_deployment_jobs
-			WHERE deployment_id=? ORDER BY created_at DESC,id DESC LIMIT 1`, id))
-		if e == nil {
-			data["latest"] = job
-			if job.Health != "" {
-				data["health"] = job.Health
-			} else if job.Status == "UNKNOWN" || job.Status == "RUNNING" {
-				data["health"] = "UNKNOWN"
-			}
-		} else if !errors.Is(e, sql.ErrNoRows) {
-			err = e
-		}
+		err = readProjectDeploymentActivity(tx, id, current, data)
 	}
 	if err != nil {
 		h.internal(w, r, err)
 		return
 	}
 	h.success(w, r, data)
+}
+
+// Status polling needs the kind and the release records for one registration,
+// not the full project configuration used when planning changes.
+func readProjectDeploymentKind(q applicationReader, projectID, id string) (string, error) {
+	var moduleKind, deployMode, managedInstanceID string
+	err := q.QueryRow(`SELECT coalesce(json_extract(m.config_json,'$.catalog.kind'),''),
+		coalesce(json_extract(d.config_json,'$.deployMode'),''),
+		coalesce(json_extract(d.config_json,'$.managedInstanceId'),'')
+		FROM application_deployments d
+		JOIN application_modules m ON m.project_id=d.project_id AND m.id=d.module_id
+		WHERE d.project_id=? AND d.id=?`, projectID, id).Scan(&moduleKind, &deployMode, &managedInstanceID)
+	if err != nil {
+		return "", err
+	}
+	return projectDeploymentKind(moduleKind, deployMode, managedInstanceID), nil
+}
+
+func readProjectDeploymentActivity(q applicationReader, id, current string, data map[string]any) error {
+	read := func(field, conditions string, args ...any) (projectDeploymentJob, error) {
+		job, err := scanProjectJob(q.QueryRow("SELECT "+projectJobSummaryFields+` FROM project_deployment_jobs
+			WHERE deployment_id=? `+conditions, append([]any{id}, args...)...))
+		if err == nil {
+			data[field] = job
+		} else if errors.Is(err, sql.ErrNoRows) {
+			err = nil
+		}
+		return job, err
+	}
+	if _, err := read("latest", "ORDER BY created_at DESC,id DESC LIMIT 1"); err != nil {
+		return err
+	}
+	pending, err := read("pending", "AND action<>'VERIFY' AND status IN ('QUEUED','RUNNING','UNKNOWN')")
+	if err != nil {
+		return err
+	}
+	check, err := read("lastCheck", `AND action='VERIFY' AND baseline_id=? AND status IN ('SUCCEEDED','FAILED')
+		ORDER BY updated_at DESC,id DESC LIMIT 1`, current)
+	if err != nil {
+		return err
+	}
+	if _, err = read("activeCheck", "AND action='VERIFY' AND status IN ('QUEUED','RUNNING')"); err != nil {
+		return err
+	}
+	if pending.JobID != "" {
+		data["health"] = "UNKNOWN"
+	}
+	if current == "" {
+		delete(data, "lastCheck")
+		if pending.JobID != "" && check.JobID != "" && check.ReleaseID == pending.ReleaseID {
+			data["lastCheck"] = check
+			data["healthObservedAt"] = check.ObservedAt
+		}
+		return nil
+	}
+	var health, observed string
+	err = q.QueryRow(`SELECT health,updated_at FROM project_deployment_jobs WHERE deployment_id=?
+		AND release_id=? AND action IN ('DEPLOY','ROLLBACK') AND status='SUCCEEDED'
+		ORDER BY updated_at DESC,id DESC LIMIT 1`, id, current).Scan(&health, &observed)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if check.JobID != "" && check.ObservedAt >= observed {
+		health, observed = check.Health, check.ObservedAt
+		if check.Status == "FAILED" {
+			health = "UNKNOWN"
+		}
+	} else {
+		delete(data, "lastCheck")
+	}
+	if observed != "" {
+		data["healthObservedAt"] = observed
+	}
+	if pending.JobID == "" && (health == "READY" || health == "UNHEALTHY") {
+		t, parseErr := time.Parse(time.RFC3339Nano, observed)
+		if parseErr != nil || time.Since(t) > projectObservationValidity {
+			health = "STALE"
+		}
+		data["health"] = health
+	}
+	return nil
 }
 
 func (h *HTTP) projectTargetCapabilities(ctx context.Context, host target) error {
@@ -235,15 +354,26 @@ func (h *HTTP) projectDeploymentPreflight(w http.ResponseWriter, r *http.Request
 		h.projectDeployError(w, r, err)
 		return
 	}
+	streamFusionWeb := spec.Site != nil && spec.Site.HealthPath == deploy.StreamFusionSiteHealthPath
 	var runningArtifact projectBuildArtifact
 	if input.CurrentReleaseID != "" {
 		runningArtifact, err = currentStaticProjectArtifact(h.store.DB, spec, input.CurrentReleaseID, input.BuildNumber)
+		if err == nil && streamFusionWeb {
+			err = validateStreamFusionWebArtifact(runningArtifact)
+		}
 		if err != nil {
 			h.projectDeployError(w, r, err)
 			return
 		}
 	}
 	artifact, err := h.fetchProjectReleaseArtifact(ctx, p.project, p.module, input.BuildNumber, nil)
+	if streamFusionWeb {
+		if err == nil {
+			err = validateStreamFusionWebArtifact(artifact)
+		} else if errors.Is(err, errJenkinsMissing) {
+			err = errStreamFusionWebArtifactRebuildRequired
+		}
+	}
 	if err != nil {
 		h.projectDeployError(w, r, err)
 		return
@@ -392,7 +522,7 @@ func validateProjectDeploySnapshot(q applicationReader, snap projectDeploymentSn
 func checkProjectDeploymentLocks(q applicationReader, id, hostID string, mutate bool) error {
 	var locked bool
 	err := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM project_deployment_jobs
-		WHERE deployment_id=? AND status IN ('QUEUED','RUNNING','UNKNOWN'))`, id).Scan(&locked)
+		WHERE deployment_id=? AND (status IN ('QUEUED','RUNNING') OR (? AND action<>'VERIFY' AND status='UNKNOWN')))`, id, mutate).Scan(&locked)
 	if err != nil {
 		return err
 	}

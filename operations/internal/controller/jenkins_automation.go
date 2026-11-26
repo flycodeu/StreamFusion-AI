@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/streamfusion-ai/operations/internal/deploy"
+	"github.com/streamfusion-ai/operations/internal/projectconfig"
 )
 
 //go:embed scripts/jenkins-module-qa.groovy.tmpl
@@ -50,10 +51,10 @@ func effectiveJenkinsMonitor(q applicationReader, scope jenkinsScope) (string, j
 		}
 		return "", jenkinsMonitor{}, "请先在项目维护中选择 Jenkins。", nil
 	}
-	var kind, toolchain, directory, repository, branch, credential, host, environment, module string
+	var kind, toolchain, directory, repositoryID, repository, branch, credential, host, environment, module string
 	var skipTests bool
 	const moduleQuery = `SELECT coalesce(json_extract(m.config_json,'$.catalog.kind'),''),coalesce(json_extract(m.config_json,'$.catalog.environment'),''),
-	    m.directory,coalesce(r.url,''),coalesce(r.branch,''),coalesce(r.jenkins_credential_id,''),coalesce(json_extract(m.config_json,'$.catalog.skipTests'),0)
+	    m.directory,coalesce(r.id,''),coalesce(r.url,''),coalesce(r.branch,''),coalesce(r.jenkins_credential_id,''),coalesce(json_extract(m.config_json,'$.catalog.skipTests'),0)
 	    FROM application_modules m LEFT JOIN application_repositories r ON r.id=m.repository_id AND r.project_id=m.project_id WHERE m.project_id=? AND m.id=?`
 	module = scope.module
 	if scope.instance != "" {
@@ -62,7 +63,7 @@ func effectiveJenkinsMonitor(q applicationReader, scope jenkinsScope) (string, j
 			return "", jenkinsMonitor{}, "", err
 		}
 	}
-	err = q.QueryRow(moduleQuery, scope.project, module).Scan(&kind, &toolchain, &directory, &repository, &branch, &credential, &skipTests)
+	err = q.QueryRow(moduleQuery, scope.project, module).Scan(&kind, &toolchain, &directory, &repositoryID, &repository, &branch, &credential, &skipTests)
 	if err != nil {
 		return "", jenkinsMonitor{}, "", err
 	}
@@ -81,7 +82,7 @@ func effectiveJenkinsMonitor(q applicationReader, scope jenkinsScope) (string, j
 	if directory == "" {
 		directory = "."
 	}
-	if _, err = applicationRepositoryEndpoint(repository); err != nil || !applicationRelative(directory) ||
+	if _, err = applicationRepositoryEndpoint(repository); err != nil || !projectconfig.ValidRelativePath(directory) ||
 		(credential != "" && !applicationJenkinsCredentialID.MatchString(credential)) ||
 		strings.ContainsFunc(repository+branch+directory, unicode.IsControl) ||
 		strings.ContainsAny(branch, `*?[:^~\`) || strings.Contains(branch, "..") || strings.Contains(branch, "@{") {
@@ -91,6 +92,16 @@ func effectiveJenkinsMonitor(q applicationReader, scope jenkinsScope) (string, j
 	if !ok {
 		return "", jenkinsMonitor{}, "请在项目维护中修正 Jenkins 构建节点标签。", nil
 	}
+	webAPIContract := ""
+	if kind == "FRONTEND" {
+		backend, err := readStreamFusionPlatformAPIModule(q, scope.project, applicationModule{Directory: directory, RepositoryID: repositoryID})
+		if err != nil {
+			return "", jenkinsMonitor{}, "", err
+		}
+		if backend != "" {
+			webAPIContract = streamFusionWebAPIContract
+		}
+	}
 	var script bytes.Buffer
 	credentialArg := ""
 	if credential != "" {
@@ -98,8 +109,9 @@ func effectiveJenkinsMonitor(q applicationReader, scope jenkinsScope) (string, j
 	}
 	err = qaPipelineTemplate.Execute(&script, struct {
 		Kind, Repository, Branch, Directory, Credential, AgentLabel string
+		WebAPIContract                                              string
 		SkipTests                                                   bool
-	}{kind, groovyLiteral(repository), groovyLiteral(branch), groovyLiteral(directory), credentialArg, groovyLiteral(label), skipTests})
+	}{kind, groovyLiteral(repository), groovyLiteral(branch), groovyLiteral(directory), credentialArg, groovyLiteral(label), webAPIContract, skipTests})
 	if err != nil {
 		return "", jenkinsMonitor{}, "", err
 	}

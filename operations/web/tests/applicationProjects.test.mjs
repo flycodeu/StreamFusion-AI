@@ -14,6 +14,7 @@ function load(source, imports = {}, globals = {}) {
 const read = async name => readFile(new URL(`../src/${name}`, import.meta.url), "utf8");
 const model = load(await read("applicationProjects.ts"));
 const component = (await read("ApplicationProjects.vue")).split('<script setup lang="ts">')[1].split("</script>")[0];
+const projectInspection = await read("features/project-delivery/useProjectInspection.ts");
 class ApiError extends Error {
   code = "APPLICATION_CONFIG_INVALID";
   traceId = "request-id";
@@ -43,7 +44,8 @@ const detected = [
 ];
 
 function harness(override = () => undefined) {
-  const calls = [], cleanup = [];
+  const calls = [], cleanup = [], events = [];
+  const props = vue.reactive({ active: true, source: undefined });
   const request = async (path, method = "GET", body, signal) => {
     calls.push({ path, method, body: body && JSON.parse(JSON.stringify(body)), signal });
     const result = override(path, method, body, signal);
@@ -57,21 +59,25 @@ function harness(override = () => undefined) {
     throw Error("Unexpected request " + path);
   };
   const scope = vue.effectScope();
+  const hooks = { ...vue, onMounted: () => {}, onUnmounted: fn => cleanup.push(fn) };
+  const api = { request, ApiError };
+  const inspection = load(projectInspection, { vue: hooks, "../../api": api, "../../applicationProjects": model });
   const flow = scope.run(() => load(component + `
     export const flow = {
       project, projectEditorOpen, projectDraft, moduleEditorOpen, moduleDraft, formError, inspectionOpen,
       inspectionMode, inspectionRepoUrl, inspectionBranch, inspectionGitAccountId,
-      inspectionResults, sourceId, inspectionRepository, selectedDirectories, editProject, saveProject, openProject,
-      editModule, saveModule, openInspection, inspect, closeInspection, selectNewDirectories, reviewSuggestion,
+      inspectionResults, sourcesLoading, sourceId, localRegistrationRepository, selectedDirectories, editProject, saveProject, openProject,
+      editModule, saveModule, openInspection, inspect, selectNewDirectories, reviewSuggestion,
       addSuggestions, setArchived, confirmProjectDeletion, deleteProject, projectDeleteOpen, projectDeleteTarget,
-      selectedModuleId, moduleDeleteOpen, confirmModuleDeletion, deleteModule,
+      selectedModuleId, moduleDeleteOpen, confirmModuleDeletion, deleteModule, environmentBinding,
     };`, {
-    vue: { ...vue, onMounted: () => {}, onUnmounted: fn => cleanup.push(fn) },
+    vue: hooks,
     "element-plus": {},
-    "./api": { request, ApiError },
+    "./api": api,
     "./applicationProjects": model,
-  }, { defineProps: () => ({}), defineEmits: () => () => {} }).flow);
-  return { flow, calls, close() { cleanup.forEach(fn => fn()); scope.stop(); } };
+    "./features/project-delivery/useProjectInspection": inspection,
+  }, { defineProps: () => props, defineEmits: () => (...event) => events.push(event) }).flow);
+  return { flow, calls, props, events, close() { cleanup.forEach(fn => fn()); scope.stop(); } };
 }
 
 test("project list parameters and Jenkins links are safe for browser navigation", () => {
@@ -138,9 +144,26 @@ test("discovery can bind a separately registered repository without matching pri
   await h.flow.openProject(sampleProject());
   await h.flow.openInspection();
   await h.flow.inspect();
-  h.flow.inspectionRepository.value = "separate";
+  h.flow.localRegistrationRepository.value = "separate";
   h.flow.selectNewDirectories();
   assert.deepEqual(h.flow.selectedDirectories.value, ["platform-api", "platform-web"]);
+});
+
+test("changing the registration repository for a local scan does not change the Git scan selection", async t => {
+  const h = harness();
+  t.after(h.close);
+  await h.flow.openProject(sampleProject());
+  await h.flow.openInspection();
+  await h.flow.inspect();
+  h.flow.localRegistrationRepository.value = "separate";
+  h.flow.selectNewDirectories();
+  assert.deepEqual(h.flow.selectedDirectories.value, ["platform-api", "platform-web"]);
+  h.flow.inspectionMode.value = "repo";
+  await h.flow.inspect();
+  assert.deepEqual(h.calls.at(-1).body, {
+    projectId: "project", repositoryId: "primary", repositoryUrl: "https://git.example/main.git",
+    branch: "main", gitAccountId: "profile-id",
+  });
 });
 
 test("adding a primary repository after manual registration does not duplicate an unbound module", async t => {
@@ -203,11 +226,134 @@ test("closing an inspection rejects late results from a previous source selectio
   await h.flow.openInspection();
   const scan = h.flow.inspect();
   const scanCall = h.calls.at(-1);
-  h.flow.closeInspection();
+  h.flow.inspectionOpen.value = false;
   assert.equal(scanCall.signal.aborted, true);
   finish({ modules: detected });
   await scan;
   assert.deepEqual(h.flow.inspectionResults.value, []);
+});
+
+test("starting a Git scan while local sources load keeps the scan and settles both requests", async t => {
+  const sources = Promise.withResolvers();
+  const h = harness(path => path.endsWith("/inspection-sources") ? sources.promise : undefined);
+  t.after(h.close);
+  await h.flow.openProject(sampleProject());
+  const discovery = h.flow.openInspection();
+  assert.equal(h.flow.sourcesLoading.value, true);
+  await h.flow.inspect();
+  sources.resolve({ items: [{ id: "registered-source", name: "StreamFusion AI" }] });
+  await discovery;
+  assert.equal(h.flow.sourcesLoading.value, false);
+  assert.equal(h.flow.inspectionMode.value, "repo");
+  assert.deepEqual(h.flow.selectedDirectories.value, ["platform-web"]);
+  h.flow.inspectionMode.value = "local";
+  assert.equal(h.flow.sourceId.value, "registered-source");
+  assert.deepEqual(h.flow.inspectionResults.value, []);
+});
+
+test("editing any Git scan input discards its previous registration and fill suggestions", async t => {
+  const h = harness(path => path.endsWith("/inspection-sources") ? { items: [] } : undefined);
+  t.after(h.close);
+  await h.flow.openProject(sampleProject());
+  await h.flow.openInspection();
+  for (const [field, next] of [
+    ["inspectionBranch", "release"],
+    ["inspectionGitAccountId", "other-account"],
+    ["inspectionRepoUrl", "https://git.example/other.git"],
+  ]) {
+    await h.flow.inspect();
+    const [existing] = h.flow.inspectionResults.value;
+    assert.deepEqual(h.flow.selectedDirectories.value, ["platform-web"]);
+    const calls = h.calls.length;
+    h.flow[field].value = next;
+    assert.deepEqual(h.flow.inspectionResults.value, []);
+    assert.deepEqual(h.flow.selectedDirectories.value, []);
+    h.flow.reviewSuggestion(existing);
+    assert.equal(h.flow.moduleEditorOpen.value, false);
+    await h.flow.addSuggestions();
+    assert.equal(h.calls.length, calls);
+  }
+});
+
+test("a temporary Git address can be scanned but cannot change modules in the registered repository", async t => {
+  const h = harness(path => path.endsWith("/inspection-sources") ? { items: [] } : undefined);
+  t.after(h.close);
+  const record = sampleProject();
+  await h.flow.openProject(record);
+  await h.flow.openInspection();
+
+  h.flow.inspectionRepoUrl.value = "https://git.example/other.git";
+  await h.flow.inspect();
+  assert.equal(h.calls.at(-1).body.repositoryUrl, "https://git.example/other.git");
+  assert.equal(h.flow.inspectionResults.value.length, 2);
+  h.flow.reviewSuggestion(h.flow.inspectionResults.value[0]);
+  assert.equal(h.flow.moduleEditorOpen.value, false);
+  const calls = h.calls.length;
+  h.flow.selectedDirectories.value = ["platform-web"];
+  await h.flow.addSuggestions();
+  assert.equal(h.calls.length, calls);
+
+  h.flow.inspectionRepoUrl.value = record.repositories[0].url;
+  assert.deepEqual(h.flow.inspectionResults.value, []);
+  await h.flow.inspect();
+  h.flow.reviewSuggestion(h.flow.inspectionResults.value[0]);
+  assert.equal(h.flow.moduleEditorOpen.value, true);
+  h.flow.moduleEditorOpen.value = false;
+
+  await h.flow.openInspection();
+  await h.flow.inspect();
+  await h.flow.addSuggestions();
+  assert.equal(h.calls.at(-1).method, "PATCH");
+  assert.equal(h.calls.at(-1).body.modules[0].repositoryId, "primary");
+});
+
+test("only the current maintenance link can open a registered environment editor", async t => {
+  const record = sampleProject();
+  const deployments = record.environments[0].deployments;
+  deployments.push({ ...deployments[0], id: "second", hostId: "other-host" });
+  const reads = [];
+  const h = harness(path => {
+    if (path === "/application-projects/project")
+      return reads.length ? reads.shift().promise : record;
+  });
+  t.after(h.close);
+  await h.flow.openProject(record);
+
+  const first = Promise.withResolvers(), second = Promise.withResolvers();
+  reads.push(first, second);
+  const source = { projectId: "project", moduleId: "backend" };
+  h.props.source = { ...source, serviceInstanceId: "deployment" };
+  await vue.nextTick();
+  h.props.source = { ...source, serviceInstanceId: "second" };
+  await vue.nextTick();
+  first.resolve(record);
+  await new Promise(setImmediate);
+  assert.equal(h.flow.environmentBinding.value, undefined);
+
+  second.resolve(record);
+  await new Promise(setImmediate);
+  assert.equal(h.flow.environmentBinding.value?.registration?.id, "second");
+  assert.deepEqual(h.events, [["source-used"]]);
+
+  h.props.source = { ...source, serviceInstanceId: "deleted" };
+  await new Promise(setImmediate);
+  assert.equal(h.flow.environmentBinding.value, undefined);
+  assert.match(h.events.at(-2)[1].message, /运行配置已变更/);
+});
+
+test("leaving the project page during maintenance lookup does not open a deferred editor", async t => {
+  const detail = Promise.withResolvers();
+  const h = harness(path => path === "/application-projects/project" ? detail.promise : undefined);
+  t.after(h.close);
+  h.props.source = { projectId: "project", moduleId: "backend", serviceInstanceId: "deployment" };
+  await vue.nextTick();
+  h.props.source = undefined;
+  h.props.active = false;
+  await vue.nextTick();
+  detail.resolve(sampleProject());
+  await new Promise(setImmediate);
+  assert.equal(h.flow.environmentBinding.value, undefined);
+  assert.deepEqual(h.events, []);
 });
 
 test("archive restoration sends a versioned state change without serializing the old configuration", async t => {

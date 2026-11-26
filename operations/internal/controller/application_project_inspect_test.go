@@ -10,6 +10,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/streamfusion-ai/operations/internal/projectconfig"
+	"github.com/streamfusion-ai/operations/internal/projectinspect"
 )
 
 func writeProjectInspectionFile(t *testing.T, root, name, content string) {
@@ -64,7 +67,7 @@ func TestApplicationProjectRecognitionFromModuleManifests(t *testing.T) {
 	if err != nil || len(got) != 4 {
 		t.Fatalf("want four recognized modules, got %+v (%v)", got, err)
 	}
-	modules := map[string]applicationProjectRecognition{}
+	modules := map[string]projectinspect.Module{}
 	for _, module := range got {
 		modules[module.Directory] = module
 	}
@@ -133,7 +136,7 @@ func TestApplicationProjectDeepRecognitionSpringBootAndVite(t *testing.T) {
 	if err != nil || len(got) != 2 {
 		t.Fatalf("want 2 deeply recognized modules, got %+v (%v)", got, err)
 	}
-	byDir := map[string]applicationProjectRecognition{}
+	byDir := map[string]projectinspect.Module{}
 	for _, m := range got {
 		byDir[m.Directory] = m
 	}
@@ -144,7 +147,7 @@ func TestApplicationProjectDeepRecognitionSpringBootAndVite(t *testing.T) {
 	if !slices.Equal(api.Profiles, []string{"prod", "test"}) || !slices.Contains(api.Dependencies, "MySQL") || !slices.Contains(api.Dependencies, "Redis") {
 		t.Fatalf("unexpected profiles/dependencies: %+v", api)
 	}
-	hints := map[string]applicationEnvHint{}
+	hints := map[string]projectconfig.EnvHint{}
 	for _, h := range api.EnvHints {
 		hints[h.Name] = h
 	}

@@ -142,6 +142,7 @@ export interface ProjectInstanceSource {
   projectId: string;
   moduleId: string;
   serviceInstanceId?: string;
+  algorithmHostEnvironmentId?: string;
 }
 
 export interface ProjectReleaseSource extends ProjectInstanceSource {

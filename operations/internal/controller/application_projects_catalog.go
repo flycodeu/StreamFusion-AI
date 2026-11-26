@@ -13,29 +13,30 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/streamfusion-ai/operations/internal/deploy"
+	"github.com/streamfusion-ai/operations/internal/projectconfig"
 )
 
 type applicationModuleCatalog struct {
-	Kind              string                      `json:"kind"`
-	Description       string                      `json:"description,omitempty"`
-	Environment       string                      `json:"environment"`
-	Dependencies      []string                    `json:"dependencies,omitempty"`
-	StartCommand      string                      `json:"startCommand"`
-	RuntimeMode       string                      `json:"runtimeMode"`
-	AccessURL         string                      `json:"accessUrl,omitempty"`
-	CheckCommand      string                      `json:"checkCommand,omitempty"`
-	TestCommand       string                      `json:"testCommand,omitempty"`
-	SkipTests         bool                        `json:"skipTests,omitempty"`
-	BuildCommand      string                      `json:"buildCommand,omitempty"`
-	ArtifactPath      string                      `json:"artifactPath,omitempty"`
-	DefaultPort       int                         `json:"defaultPort,omitempty"`
-	HealthPath        string                      `json:"healthPath,omitempty"`
-	Profiles          []string                    `json:"profiles,omitempty"`
-	DefaultProfile    string                      `json:"defaultProfile,omitempty"`
-	EnvHints          []applicationEnvHint        `json:"envHints,omitempty"`
-	ProxyHints        []applicationProxyHint      `json:"proxyHints,omitempty"`
-	ConfigTemplates   []applicationConfigTemplate `json:"configTemplates,omitempty"`
-	SupportsContainer bool                        `json:"supportsContainer,omitempty"`
+	Kind              string                         `json:"kind"`
+	Description       string                         `json:"description,omitempty"`
+	Environment       string                         `json:"environment"`
+	Dependencies      []string                       `json:"dependencies,omitempty"`
+	StartCommand      string                         `json:"startCommand"`
+	RuntimeMode       string                         `json:"runtimeMode"`
+	AccessURL         string                         `json:"accessUrl,omitempty"`
+	CheckCommand      string                         `json:"checkCommand,omitempty"`
+	TestCommand       string                         `json:"testCommand,omitempty"`
+	SkipTests         bool                           `json:"skipTests,omitempty"`
+	BuildCommand      string                         `json:"buildCommand,omitempty"`
+	ArtifactPath      string                         `json:"artifactPath,omitempty"`
+	DefaultPort       int                            `json:"defaultPort,omitempty"`
+	HealthPath        string                         `json:"healthPath,omitempty"`
+	Profiles          []string                       `json:"profiles,omitempty"`
+	DefaultProfile    string                         `json:"defaultProfile,omitempty"`
+	EnvHints          []projectconfig.EnvHint        `json:"envHints,omitempty"`
+	ProxyHints        []projectconfig.ProxyHint      `json:"proxyHints,omitempty"`
+	ConfigTemplates   []projectconfig.ConfigTemplate `json:"configTemplates,omitempty"`
+	SupportsContainer bool                           `json:"supportsContainer,omitempty"`
 }
 
 type applicationCatalogRepository struct {
@@ -104,7 +105,7 @@ func (c *applicationModuleCatalog) normalize() error {
 		return applicationInvalid("运行环境最多2000字节，启动命令最多8192字节")
 	}
 	for _, cmd := range []string{c.CheckCommand, c.TestCommand, c.BuildCommand} {
-		if !applicationText(cmd, 4096) || applicationSecretValue(cmd) {
+		if !applicationText(cmd, 4096) || projectconfig.ContainsSecret(cmd) {
 			return applicationInvalid("检查、测试或构建命令最多4096字节，请勿包含明文凭据")
 		}
 	}
@@ -117,10 +118,10 @@ func (c *applicationModuleCatalog) normalize() error {
 	if c.HealthPath != "" && (!strings.HasPrefix(c.HealthPath, "/") || len(c.HealthPath) > 240 || strings.ContainsAny(c.HealthPath, "\r\n\x00")) {
 		return applicationInvalid("健康检查路径须以 / 开头且不超过240字节")
 	}
-	if c.DefaultProfile != "" && !profilePatternSafe(c.DefaultProfile) {
+	if c.DefaultProfile != "" && !projectconfig.ValidProfile(c.DefaultProfile) {
 		return applicationInvalid("默认 Profile 格式不正确")
 	}
-	if applicationSecretValue(c.Description) || applicationSecretValue(c.Environment) || applicationSecretValue(c.StartCommand) {
+	if projectconfig.ContainsSecret(c.Description) || projectconfig.ContainsSecret(c.Environment) || projectconfig.ContainsSecret(c.StartCommand) {
 		return applicationInvalid("请通过环境变量引用凭据，避免在模块说明或命令中填写明文凭据")
 	}
 	if len(c.Dependencies) > 0 {
@@ -131,7 +132,7 @@ func (c *applicationModuleCatalog) normalize() error {
 			if dep == "" {
 				continue
 			}
-			if !applicationText(dep, 64) || strings.ContainsAny(dep, "\r\n") || applicationSecretValue(dep) {
+			if !applicationText(dep, 64) || strings.ContainsAny(dep, "\r\n") || projectconfig.ContainsSecret(dep) {
 				return applicationInvalid("每个依赖软件最多64字节，且不能包含换行或明文凭据")
 			}
 			key := strings.ToLower(dep)
@@ -154,7 +155,7 @@ func (c *applicationModuleCatalog) normalize() error {
 			if profile == "" {
 				continue
 			}
-			if !profilePatternSafe(profile) {
+			if !projectconfig.ValidProfile(profile) {
 				return applicationInvalid("环境 Profile 名称格式不正确")
 			}
 			key := strings.ToLower(profile)
@@ -171,24 +172,24 @@ func (c *applicationModuleCatalog) normalize() error {
 	}
 	if len(c.EnvHints) > 0 {
 		seen := make(map[string]bool, len(c.EnvHints))
-		cleaned := make([]applicationEnvHint, 0, len(c.EnvHints))
+		cleaned := make([]projectconfig.EnvHint, 0, len(c.EnvHints))
 		for _, hint := range c.EnvHints {
 			hint.Name = strings.TrimSpace(hint.Name)
 			hint.Profile = strings.TrimSpace(hint.Profile)
 			if hint.Name == "" {
 				continue
 			}
-			if !applicationVariableName.MatchString(hint.Name) || (hint.Profile != "" && !profilePatternSafe(hint.Profile)) {
+			if !applicationVariableName.MatchString(hint.Name) || (hint.Profile != "" && !projectconfig.ValidProfile(hint.Profile)) {
 				return applicationInvalid("环境变量提示名称或 Profile 格式不正确")
 			}
 			if seen[hint.Name] {
 				continue
 			}
 			seen[hint.Name] = true
-			hint.Sensitive = hint.Sensitive || applicationSensitiveName.MatchString(hint.Name)
+			hint.Sensitive = hint.Sensitive || projectconfig.IsSensitiveName(hint.Name)
 			if hint.Sensitive {
 				hint.DefaultValue = ""
-			} else if !applicationText(hint.DefaultValue, 512) || strings.ContainsAny(hint.DefaultValue, "\r\n") || applicationSecretValue(hint.DefaultValue) {
+			} else if !applicationText(hint.DefaultValue, 512) || strings.ContainsAny(hint.DefaultValue, "\r\n") || projectconfig.ContainsSecret(hint.DefaultValue) {
 				return applicationInvalid("环境变量提示默认值过长或包含疑似凭据")
 			}
 			cleaned = append(cleaned, hint)
@@ -199,7 +200,7 @@ func (c *applicationModuleCatalog) normalize() error {
 		c.EnvHints = cleaned
 	}
 	if len(c.ProxyHints) > 0 {
-		cleaned := make([]applicationProxyHint, 0, len(c.ProxyHints))
+		cleaned := make([]projectconfig.ProxyHint, 0, len(c.ProxyHints))
 		for _, hint := range c.ProxyHints {
 			hint.Location = strings.TrimSpace(hint.Location)
 			if hint.Location == "" {
@@ -217,7 +218,7 @@ func (c *applicationModuleCatalog) normalize() error {
 	}
 	if len(c.ConfigTemplates) > 0 {
 		seen := make(map[string]bool, len(c.ConfigTemplates))
-		cleaned := make([]applicationConfigTemplate, 0, len(c.ConfigTemplates))
+		cleaned := make([]projectconfig.ConfigTemplate, 0, len(c.ConfigTemplates))
 		for _, tpl := range c.ConfigTemplates {
 			tpl.Filename = strings.TrimSpace(tpl.Filename)
 			tpl.Profile = strings.TrimSpace(tpl.Profile)
@@ -226,7 +227,7 @@ func (c *applicationModuleCatalog) normalize() error {
 				continue
 			}
 			if !deploy.ValidAppConfigFilename(tpl.Filename) || seen[tpl.Filename] ||
-				(tpl.Profile != "" && !profilePatternSafe(tpl.Profile)) ||
+				(tpl.Profile != "" && !projectconfig.ValidProfile(tpl.Profile)) ||
 				len(tpl.Content) > 32<<10 || strings.ContainsRune(tpl.Content, '\x00') {
 				return applicationInvalid("模块配置模板文件名或内容超出限制")
 			}
@@ -423,6 +424,7 @@ func (h *HTTP) saveApplicationCatalog(w http.ResponseWriter, r *http.Request, s 
 			}
 		}
 	}
+	previous := project
 	if err == nil {
 		err = saveApplicationCatalogChildren(tx, project, in)
 	}
@@ -431,6 +433,9 @@ func (h *HTTP) saveApplicationCatalog(w http.ResponseWriter, r *http.Request, s 
 	}
 	if err == nil {
 		err = validateApplicationCatalogChildren(project)
+	}
+	if err == nil {
+		err = validateApplicationDeploymentModes(project, previous)
 	}
 	if err == nil {
 		err = auditTx(tx, s.Username, action, project.ID, "SUCCESS", r.Context().Value(traceKey{}).(string))
@@ -582,7 +587,7 @@ func saveApplicationCatalogChildren(tx *sql.Tx, project applicationProject, in a
 		if item.Directory == "" {
 			item.Directory = "."
 		}
-		if !validName(item.Name) || !applicationRelative(item.Directory) {
+		if !validName(item.Name) || !projectconfig.ValidRelativePath(item.Directory) {
 			return applicationInvalid("请填写模块名称和仓库内相对目录，仓库根目录填写 .")
 		}
 		if _, exists := repositories[item.RepositoryID]; item.RepositoryID != "" && !exists {
@@ -646,5 +651,5 @@ func validateApplicationCatalogChildren(project applicationProject) error {
 		}
 		ids[module.ID], modules[name] = true, true
 	}
-	return nil
+	return validateApplicationDeploymentBindings(project)
 }

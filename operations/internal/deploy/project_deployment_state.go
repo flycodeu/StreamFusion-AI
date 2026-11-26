@@ -13,6 +13,7 @@ import (
 )
 
 var projectRecoveryRequired = errors.New("PROJECT_RECOVERY_REQUIRED")
+var projectControlDrift = errors.New("PROJECT_SITE_OR_UNIT_OWNERSHIP_MISMATCH")
 var projectInvocationID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 type projectActive struct {
@@ -30,12 +31,17 @@ type projectStore struct {
 	reload                                  func(context.Context, ProjectDeployment, bool) error
 	healthy                                 func(context.Context, ProjectDeployment, string) bool
 	removeUnit                              func(context.Context, string) error
+	verifyOwnedUnit                         func(context.Context, projectActive, string, string) error
+	verifyStoppedUnit                       func(context.Context, string) error
+	stillServing                            func(context.Context, ProjectDeployment) bool
 }
 
 func newProjectStore(p ProjectDeployment, base string) projectStore {
 	s := projectStore{
 		id: p.ID, kind: p.Kind, base: base, releases: filepath.Join("/var/lib/sfops-projects/releases", p.ID),
 		control: projectControlFile(p), reload: projectReload, healthy: projectHealth,
+		verifyOwnedUnit:   projectVerifyOwnedUnit,
+		verifyStoppedUnit: projectVerifyStoppedUnit,
 		removeUnit: func(ctx context.Context, id string) error {
 			_, err := projectCommand(ctx, "/usr/bin/systemctl", "disable", "--now", projectUnit(id))
 			return err
@@ -44,6 +50,7 @@ func newProjectStore(p ProjectDeployment, base string) projectStore {
 	if p.Kind == "STATIC" {
 		s.releases = filepath.Join("/var/www/sfops", p.ID)
 		s.logs = filepath.Join("/var/log/nginx/sfops", p.ID)
+		s.stillServing = projectStaticReleaseServed
 	}
 	return s
 }
@@ -86,6 +93,23 @@ func (s projectStore) readPending() (projectPending, error) {
 		return projectPending{}, projectRecoveryRequired
 	}
 	return p, nil
+}
+
+func (s projectStore) resolveActive(ctx context.Context, active projectActive, action string, spec ProjectDeployment) (projectActive, error) {
+	if action != ProjectDecommission && s.decommissionPending(active) {
+		return active, projectRecoveryRequired
+	}
+	pending, err := s.readPending()
+	if os.IsNotExist(err) {
+		if action == ProjectRecover && active.ReleaseID != spec.ReleaseID && active.ReleaseID != spec.ExpectedRelease {
+			return active, errors.New("PROJECT_RELEASE_CHANGED")
+		}
+		return active, nil
+	}
+	if action == ProjectRecover && err == nil && pending.Candidate == spec.ReleaseID && pending.Baseline == spec.ExpectedRelease {
+		return s.reconcile(ctx, active)
+	}
+	return active, projectRecoveryRequired
 }
 
 func (s projectStore) staged(id string) (projectActive, error) {
@@ -149,13 +173,38 @@ func (s projectStore) matchesControl(found, wanted []byte, release projectActive
 	if bytes.Equal(found, wanted) {
 		return true
 	}
-	// Accept units written before release tags and JVM shutdown status were added.
-	return s.kind == "JAVA" && release.ReleaseID != "" &&
-		string(found) == projectJavaUnit(release.Spec, s.dir(release.ReleaseID), true)
+	if release.ReleaseID == "" {
+		return false
+	}
+	// Match only known templates from earlier executors.
+	dir := s.dir(release.ReleaseID)
+	if s.kind == "JAVA" {
+		return string(found) == projectJavaUnit(release.Spec, dir, true)
+	}
+	if release.Spec.Site != nil && release.Spec.Site.HealthPath == StreamFusionSiteHealthPath {
+		legacy, err := release.Spec.nginxConfig(filepath.Join(dir, "www"), s.logs, false)
+		return err == nil && string(found) == legacy
+	}
+	return false
 }
 
 func (s projectStore) health(ctx context.Context, release projectActive) bool {
 	return release.ReleaseID != "" && s.healthy(ctx, release.Spec, s.dir(release.ReleaseID))
+}
+
+func (s projectStore) observe(ctx context.Context, active projectActive) (string, error) {
+	found, err := s.currentControl()
+	expected, bodyErr := s.body(active)
+	if err != nil || bodyErr != nil || !s.matchesControl(found, expected, active) {
+		return "UNKNOWN", projectControlDrift
+	}
+	if active.ReleaseID == "" {
+		return "NOT_DEPLOYED", nil
+	}
+	if s.health(ctx, active) {
+		return "READY", nil
+	}
+	return "UNHEALTHY", nil
 }
 
 func (s projectStore) javaLogs(ctx context.Context, active projectActive) (string, error) {
@@ -408,7 +457,7 @@ func (s projectStore) activate(ctx context.Context, candidate, baseline projectA
 		observed, err := s.readActive()
 		if err != nil || observed.ReleaseID == candidate.ReleaseID {
 			// Rename may have committed active.json before its directory fsync
-			// failed. Leave the journal for the next signed observation.
+			// failed. Leave the journal for the next explicit recovery.
 			return projectRecoveryRequired
 		}
 		if _, err = s.reconcile(recoveryCtx, observed); err != nil {

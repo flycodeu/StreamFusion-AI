@@ -46,13 +46,16 @@ func (h *HTTP) enqueueProjectDeployment(actor *session, projectID, id, action, t
 	if err != nil {
 		return "", err
 	}
-	if action != "VERIFY" && p.project.Archived {
+	if (action == "DEPLOY" || action == "ROLLBACK") && p.project.Archived {
 		return "", errJenkinsArchived
 	}
-	if p.host.ID == "" || p.host.Maintenance {
+	if p.host.ID == "" || p.host.Maintenance && action != "VERIFY" {
 		return "", errors.New("PROJECT_HOST_UNAVAILABLE")
 	}
 	now := Now()
+	if action == "RECOVER" {
+		return h.enqueueProjectRecovery(tx, actor, id, token, trace, now)
+	}
 	job := uuid.NewString()
 	var snap projectDeploymentSnapshot
 	var planHash string
@@ -93,49 +96,50 @@ func (h *HTTP) enqueueProjectDeployment(actor *session, projectID, id, action, t
 		if err != nil {
 			return "", err
 		}
-		if snap.Spec.Kind == "STATIC" {
-			if err = checkProjectSiteConflict(tx, p, snap.Spec); err != nil {
-				return "", err
-			}
+		if err = checkProjectRollback(tx, p, current, snap.Spec); err != nil {
+			return "", err
 		}
 		snap.Spec.ExpectedRelease = current
 		snap.ProjectVersion, snap.HostVersion = p.project.Version, p.host.Version
 	case "VERIFY":
-		var pending string
-		err = tx.QueryRow(`SELECT id FROM project_deployment_jobs WHERE deployment_id=? AND status='UNKNOWN'`, id).Scan(&pending)
-		if err == nil {
-			_, err = tx.Exec(`UPDATE project_deployment_jobs SET status='QUEUED',phase='RECONCILING',updated_at=?,
-				execution_log=substr(execution_log||?,-8192) WHERE id=?`, now, projectExecutionLine(now, "RECONCILING", ""), pending)
-			if err == nil {
-				err = auditTx(tx, actor.Username, "PROJECT_DEPLOY_RECONCILE", pending, "SUCCESS", trace)
+		reference := current
+		if current == "" {
+			err = tx.QueryRow(`SELECT id FROM project_deployment_jobs
+				WHERE deployment_id=? AND action<>'VERIFY' AND status='UNKNOWN'`, id).Scan(&reference)
+			if errors.Is(err, sql.ErrNoRows) {
+				return "", errors.New("PROJECT_NOT_DEPLOYED")
 			}
 			if err != nil {
 				return "", err
 			}
-			return pending, tx.Commit()
 		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return "", err
-		}
-		if current == "" {
-			return "", errors.New("PROJECT_NOT_DEPLOYED")
-		}
-		snap, err = readProjectJobSnapshot(tx, current)
+		snap, err = readProjectJobSnapshot(tx, reference)
 		if err != nil {
 			return "", err
 		}
 		snap.Spec.ExpectedRelease = current
 		snap.ProjectVersion, snap.HostVersion = p.project.Version, p.host.Version
+	case "DECOMMISSION":
+		if current == "" || token != current {
+			return "", errors.New("PROJECT_DECOMMISSION_RELEASE_CHANGED")
+		}
+		snap, err = readProjectJobSnapshot(tx, current)
+		if err != nil {
+			return "", err
+		}
+		if err = checkProjectDecommissionDependencies(tx, p, snap); err != nil {
+			return "", err
+		}
+		snap.Spec.ExpectedRelease = current
+		snap.ProjectVersion, snap.HostVersion = p.project.Version, p.host.Version
+	default:
+		return "", errors.New("PROJECT_ACTION_INVALID")
 	}
 	if err = checkProjectDeploymentLocks(tx, id, p.host.ID, action != "VERIFY"); err != nil {
 		return "", err
 	}
-	var queueSize int
-	if err := tx.QueryRow(`SELECT count(*) FROM project_deployment_jobs WHERE status IN ('QUEUED','RUNNING')`).Scan(&queueSize); err != nil {
+	if err = checkProjectQueueSize(tx); err != nil {
 		return "", err
-	}
-	if queueSize >= 20 {
-		return "", errors.New("PROJECT_QUEUE_FULL")
 	}
 	// Rollback uses the frozen version already on the host; no saved credentials
 	// or Jenkins connection are needed to verify or restore it.
@@ -159,6 +163,41 @@ func (h *HTTP) enqueueProjectDeployment(actor *session, projectID, id, action, t
 	return job, tx.Commit()
 }
 
+func checkProjectQueueSize(q applicationReader) error {
+	var size int
+	if err := q.QueryRow(`SELECT count(*) FROM project_deployment_jobs WHERE status IN ('QUEUED','RUNNING')`).Scan(&size); err != nil {
+		return err
+	}
+	if size >= 20 {
+		return errors.New("PROJECT_QUEUE_FULL")
+	}
+	return nil
+}
+
+func (h *HTTP) enqueueProjectRecovery(tx *sql.Tx, actor *session, id, expectedJob, trace, now string) (string, error) {
+	if err := checkProjectDeploymentLocks(tx, id, "", false); err != nil {
+		return "", err
+	}
+	if err := checkProjectQueueSize(tx); err != nil {
+		return "", err
+	}
+	result, err := tx.Exec(`UPDATE project_deployment_jobs SET status='QUEUED',phase='RECONCILING',updated_at=?,
+		execution_log=substr(execution_log||?,-8192) WHERE id=? AND deployment_id=? AND action<>'VERIFY' AND status='UNKNOWN'`,
+		now, projectExecutionLine(now, "RECONCILING", ""), expectedJob, id)
+	if err != nil {
+		return "", err
+	}
+	if n, err := result.RowsAffected(); err != nil {
+		return "", err
+	} else if n != 1 {
+		return "", errors.New("PROJECT_RECOVERY_JOB_CHANGED")
+	}
+	if err = auditTx(tx, actor.Username, "PROJECT_DEPLOY_RECOVER", expectedJob, "SUCCESS", trace); err != nil {
+		return "", err
+	}
+	return expectedJob, tx.Commit()
+}
+
 func projectExecutionLine(now, phase, code string) string {
 	if code != "" {
 		return now + "  " + phase + "  " + code + "\n"
@@ -167,23 +206,49 @@ func projectExecutionLine(now, phase, code string) string {
 }
 
 func (h *HTTP) runProjectDeployments(ctx context.Context) {
-	_, _ = h.store.DB.Exec(`UPDATE project_deployment_jobs SET status='UNKNOWN',error_code='CONTROLLER_RESTARTED',
-		updated_at=?,execution_log=substr(execution_log||?,-8192) WHERE status='RUNNING'`,
-		Now(), projectExecutionLine(Now(), "UNKNOWN", "CONTROLLER_RESTARTED"))
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	retrySweepAt := time.Time{}
+	sweepNeeded := true
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// This is the only project worker and it executes jobs synchronously.
+			// Between jobs, RUNNING rows can only be leftovers from an interrupted
+			// worker or a failed terminal write. Retry even without a restart.
+			if sweepNeeded && time.Now().After(retrySweepAt) {
+				if err := h.recoverInterruptedProjectJobs(ctx); err != nil {
+					h.logger.Print("error=PROJECT_INTERRUPTED_JOB_SWEEP_FAILED")
+					retrySweepAt = time.Now().Add(5 * time.Second)
+				} else {
+					sweepNeeded = false
+					retrySweepAt = time.Time{}
+				}
+			}
+			if sweepNeeded {
+				continue
+			}
 			job, err := scanProjectJob(h.store.DB.QueryRow(`SELECT ` + projectJobSummaryFields + ` FROM project_deployment_jobs
-				WHERE status='QUEUED' ORDER BY updated_at,id LIMIT 1`))
+				WHERE status='QUEUED' AND (action='VERIFY' OR EXISTS (SELECT 1 FROM targets t
+					WHERE t.id=project_deployment_jobs.target_id AND t.maintenance=0))
+				ORDER BY updated_at,id LIMIT 1`))
 			if err == nil {
 				h.processProjectDeployment(ctx, job)
+				sweepNeeded = true
 			}
 		}
 	}
+}
+
+func (h *HTTP) recoverInterruptedProjectJobs(ctx context.Context) error {
+	now := Now()
+	_, err := h.store.DB.ExecContext(ctx, `UPDATE project_deployment_jobs
+		SET status=CASE WHEN action='VERIFY' OR phase='ARTIFACT_DOWNLOAD' THEN 'FAILED' ELSE 'UNKNOWN' END,
+			error_code='PROJECT_JOB_INTERRUPTED', health='', updated_at=?,execution_log=substr(execution_log||?,-8192)
+		WHERE status='RUNNING'`, now, projectExecutionLine(now, "INTERRUPTED", "PROJECT_JOB_INTERRUPTED"))
+	return err
 }
 
 func (h *HTTP) updateProjectJobPhase(id, phase string) error {
@@ -209,16 +274,7 @@ func (h *HTTP) processProjectDeployment(ctx context.Context, job projectDeployme
 		h.finishProjectDeployment(job, snap, "FAILED", "PREFLIGHT", "PROJECT_JOB_DAMAGED", "", false)
 		return
 	}
-	action := deploy.ProjectObserve
-	phase := "OBSERVING"
-	reconcile := job.Phase == "RECONCILING"
-	if reconcile {
-		phase = "RECONCILING"
-	} else if job.Action == "DEPLOY" {
-		action, phase = deploy.ProjectApply, "ARTIFACT_DOWNLOAD"
-	} else if job.Action == "ROLLBACK" {
-		action, phase = deploy.ProjectRollback, "TARGET_EXECUTION"
-	}
+	action, phase, reconcile := projectJobExecution(job.Action, job.Phase)
 	if err = h.updateProjectJobPhase(job.JobID, phase); err != nil {
 		return
 	}
@@ -230,11 +286,11 @@ func (h *HTTP) processProjectDeployment(ctx context.Context, job projectDeployme
 		h.finishProjectDeployment(job, snap, status, phase, code, "", false)
 	}
 	host, err := h.store.readTarget(snap.HostID)
-	if err != nil || host.Maintenance {
+	if err != nil || host.Maintenance && job.Action != "VERIFY" {
 		fail("PROJECT_HOST_UNAVAILABLE")
 		return
 	}
-	if !reconcile && host.Version != snap.HostVersion {
+	if !reconcile && job.Action != "VERIFY" && host.Version != snap.HostVersion {
 		fail("PROJECT_PLAN_CHANGED")
 		return
 	}
@@ -255,6 +311,9 @@ func (h *HTTP) processProjectDeployment(ctx context.Context, job projectDeployme
 		var artifact projectBuildArtifact
 		if err == nil {
 			artifact, err = h.fetchProjectReleaseArtifact(ctx, project, module, snap.BuildNumber, temp)
+		}
+		if err == nil && snap.Spec.Site != nil && snap.Spec.Site.HealthPath == deploy.StreamFusionSiteHealthPath {
+			err = validateStreamFusionWebArtifact(artifact)
 		}
 		closeErr := temp.Close()
 		if err != nil || closeErr != nil || artifact != snap.Artifact {
@@ -279,6 +338,12 @@ func (h *HTTP) processProjectDeployment(ctx context.Context, job projectDeployme
 		// Fence draft/host changes until the signed remote request has finished.
 		// The queued job locks the host; the transaction rechecks draft and dependency identity.
 		if host, err = h.checkQueuedProjectDeployment(ctx, snap); err != nil {
+			fail(projectWorkerCode(err, "PROJECT_PLAN_CHANGED"))
+			return
+		}
+	}
+	if action == deploy.ProjectRollback {
+		if err := h.checkQueuedProjectRollback(ctx, snap); err != nil {
 			fail(projectWorkerCode(err, "PROJECT_PLAN_CHANGED"))
 			return
 		}
@@ -313,6 +378,42 @@ func (h *HTTP) checkQueuedProjectDeployment(ctx context.Context, snap projectDep
 	return
 }
 
+func checkProjectRollback(q applicationReader, p projectDeploymentContext, current string, spec deploy.ProjectDeployment) error {
+	if spec.Kind != "STATIC" {
+		return checkProjectBackendEndpointChange(q, p, current, spec)
+	}
+	if err := checkStreamFusionSiteRollback(q, p, spec.Site); err != nil {
+		return err
+	}
+	if spec.Site == nil {
+		return errors.New("PROJECT_NGINX_CONFIG_INVALID")
+	}
+	if err := checkProjectSiteUpstreams(q, p, spec.Site); err != nil {
+		return err
+	}
+	return checkProjectSiteConflict(q, p, spec)
+}
+
+func (h *HTTP) checkQueuedProjectRollback(ctx context.Context, snap projectDeploymentSnapshot) error {
+	tx, err := h.store.DB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	p, err := readProjectDeployment(tx, snap.ProjectID, snap.Spec.ID)
+	if err != nil {
+		return err
+	}
+	current, previous, err := readProjectVersions(tx, snap.Spec.ID)
+	if err != nil {
+		return err
+	}
+	if current != snap.Spec.ExpectedRelease || previous != snap.Spec.ReleaseID || p.host.ID != snap.HostID {
+		return errors.New("PROJECT_PLAN_CHANGED")
+	}
+	return checkProjectRollback(tx, p, current, snap.Spec)
+}
+
 func projectWorkerCode(err error, fallback string) string {
 	if err != nil && projectResultCode.MatchString(err.Error()) {
 		return err.Error()
@@ -321,39 +422,17 @@ func projectWorkerCode(err error, fallback string) string {
 }
 
 func (h *HTTP) recordProjectTargetResult(job projectDeploymentJob, snap projectDeploymentSnapshot, result deploy.ProjectDeployResult, reconcile bool) {
+	outcome := resolveProjectTargetOutcome(job.Action, snap.Spec, result, reconcile)
 	log := ""
-	if !reconcile && (job.Action == "DEPLOY" || job.Action == "ROLLBACK") && snap.Spec.Kind == "JAVA" && result.Phase == "TARGET_EXECUTION" {
-		log = projectStartupLog(result.Output)
-	}
-	if result.Status == "UNKNOWN" {
-		h.finishProjectDeploymentWithLog(job, snap, "UNKNOWN", "RECONCILING", "PROJECT_RECOVERY_REQUIRED", "", false, log)
-		return
-	}
-	if result.Status != "SUCCEEDED" {
-		code := projectWorkerCode(errors.New(result.ErrorCode), "PROJECT_TARGET_FAILED")
-		status := "FAILED"
-		if reconcile || code == "PROJECT_RELEASE_CHANGED" {
-			status = "UNKNOWN"
+	if outcome.keepTargetLog {
+		if !reconcile && (job.Action == "DEPLOY" || job.Action == "ROLLBACK") && snap.Spec.Kind == "JAVA" && result.Phase == "TARGET_EXECUTION" {
+			log = projectStartupLog(result.Output)
 		}
-		h.finishProjectDeploymentWithLog(job, snap, status, "TARGET_EXECUTION", code, "", false, log)
-		return
-	}
-	wanted := snap.Spec.ReleaseID
-	if job.Action == "VERIFY" {
-		wanted = snap.Spec.ExpectedRelease
-	}
-	if result.ReleaseID == wanted {
-		// A candidate is promoted only after observing the expected healthy version.
-		if job.Action != "VERIFY" && result.Health != "READY" {
-			h.finishProjectDeployment(job, snap, "UNKNOWN", "RECONCILING", "PROJECT_HEALTH_UNCONFIRMED", result.Health, false)
-			return
+		if result.WarningCode == "PROJECT_RELEASE_RETENTION_PENDING" {
+			log += projectExecutionLine(Now(), "RELEASE_RETENTION", result.WarningCode)
 		}
-		h.finishProjectDeployment(job, snap, "SUCCEEDED", "VERIFIED", "", result.Health, job.Action != "VERIFY")
-	} else if reconcile && result.ReleaseID == snap.Spec.ExpectedRelease {
-		h.finishProjectDeployment(job, snap, "FAILED", "BASELINE_RETAINED", "PROJECT_CHANGE_NOT_ACTIVE", result.Health, false)
-	} else {
-		h.finishProjectDeployment(job, snap, "UNKNOWN", "RECONCILING", "PROJECT_RELEASE_CHANGED", "", false)
 	}
+	h.finishProjectDeploymentWithLog(job, snap, outcome.status, outcome.phase, outcome.code, outcome.health, outcome.promote, log)
 }
 
 func (h *HTTP) finishProjectDeployment(job projectDeploymentJob, snap projectDeploymentSnapshot, status, phase, code, health string, promote bool) {
@@ -376,7 +455,13 @@ func (h *HTTP) finishProjectDeploymentWithLog(job projectDeploymentJob, snap pro
 	err := h.commitProjectDeployment(job, snap, status, phase, code, health, promote, log)
 	if err != nil {
 		h.logger.Printf("traceId=%s jobId=%s error=PROJECT_STATE_COMMIT_FAILED", job.TraceID, job.JobID)
-		_ = h.commitProjectDeployment(job, snap, "UNKNOWN", "RECONCILING", "PROJECT_STATE_COMMIT_FAILED", "", false, log)
+		fallbackStatus, fallbackPhase := "UNKNOWN", "RECONCILING"
+		if job.Action == "VERIFY" {
+			fallbackStatus, fallbackPhase = "FAILED", "OBSERVING"
+		}
+		if fallbackErr := h.commitProjectDeployment(job, snap, fallbackStatus, fallbackPhase, "PROJECT_STATE_COMMIT_FAILED", "", false, log); fallbackErr != nil {
+			h.logger.Printf("traceId=%s jobId=%s error=PROJECT_STATE_FALLBACK_FAILED", job.TraceID, job.JobID)
+		}
 	}
 }
 
@@ -396,19 +481,28 @@ func (h *HTTP) commitProjectDeployment(job projectDeploymentJob, snap projectDep
 		if active != snap.Spec.ExpectedRelease {
 			return errors.New("PROJECT_RELEASE_CHANGED")
 		}
-		_, err = tx.Exec(`INSERT INTO project_deployment_running(deployment_id,current_id,previous_id)
-			VALUES(?,?,nullif(?,'')) ON CONFLICT(deployment_id) DO UPDATE SET current_id=excluded.current_id,previous_id=excluded.previous_id`,
-			snap.Spec.ID, snap.Spec.ReleaseID, active)
+		if job.Action == "DECOMMISSION" {
+			_, err = tx.Exec("DELETE FROM project_deployment_running WHERE deployment_id=? AND current_id=?", snap.Spec.ID, active)
+		} else {
+			_, err = tx.Exec(`INSERT INTO project_deployment_running(deployment_id,current_id,previous_id)
+				VALUES(?,?,nullif(?,'')) ON CONFLICT(deployment_id) DO UPDATE SET current_id=excluded.current_id,previous_id=excluded.previous_id`,
+				snap.Spec.ID, snap.Spec.ReleaseID, active)
+		}
 		if err != nil {
 			return err
 		}
 	}
 	now := Now()
-	_, err = tx.Exec(`UPDATE project_deployment_jobs SET status=?,phase=?,error_code=?,health=?,updated_at=?,
+	result, err := tx.Exec(`UPDATE project_deployment_jobs SET status=?,phase=?,error_code=?,health=?,updated_at=?,
 		execution_log=substr(execution_log||?,-8192) WHERE id=? AND status IN ('RUNNING','QUEUED')`,
 		status, phase, code, health, now, projectExecutionLine(now, phase, code)+log, job.JobID)
 	if err != nil {
 		return err
+	}
+	if n, err := result.RowsAffected(); err != nil {
+		return err
+	} else if n != 1 {
+		return errors.New("PROJECT_JOB_CHANGED")
 	}
 	return tx.Commit()
 }

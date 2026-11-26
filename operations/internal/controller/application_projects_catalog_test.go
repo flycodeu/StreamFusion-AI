@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/streamfusion-ai/operations/internal/projectconfig"
 )
 
 func TestApplicationProjectCatalogRegistersWithNameAndKeepsHistory(t *testing.T) {
@@ -196,7 +197,7 @@ func TestApplicationProjectCatalogExtendedBuildFieldsRoundTrip(t *testing.T) {
 				Profiles:          []string{"test", "prod"},
 				DefaultProfile:    "test",
 				SupportsContainer: true,
-				EnvHints: []applicationEnvHint{
+				EnvHints: []projectconfig.EnvHint{
 					{Name: "DB_URL", DefaultValue: "jdbc:mysql://127.0.0.1:3306/app", Profile: "test"},
 					{Name: "DB_PASSWORD", DefaultValue: "strip-secret-default", Sensitive: true, Profile: "test"},
 				},
@@ -217,7 +218,7 @@ func TestApplicationProjectCatalogExtendedBuildFieldsRoundTrip(t *testing.T) {
 			ID: created.Modules[0].ID, Name: "platform-api", Directory: "platform-api",
 			Catalog: &applicationModuleCatalog{
 				Kind: "BACKEND", Environment: "JDK 21", RuntimeMode: "NATIVE",
-				EnvHints: []applicationEnvHint{{Name: "SERVICE_DSN", DefaultValue: "https://user:pass@db.example/app"}},
+				EnvHints: []projectconfig.EnvHint{{Name: "SERVICE_DSN", DefaultValue: "https://user:pass@db.example/app"}},
 			},
 		}},
 	}, 400)

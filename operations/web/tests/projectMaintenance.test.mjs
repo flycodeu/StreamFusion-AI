@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import * as vue from "vue";
 import ts from "typescript";
+import { buildEnvironmentPatch } from "../src/features/project-delivery/environmentPatch.ts";
 
 async function componentScript(name) {
   const file = await readFile(new URL(`../src/${name}.vue`, import.meta.url), "utf8");
@@ -29,6 +30,7 @@ function mount(source, exposes, props, request, lists = {}) {
     "./api": { request, ApiError: class extends Error {} }, "element-plus": { ElMessage: { success() {} } },
     "./listPages": { requestAllPages: async path => lists[path] || [] },
     "./applicationProjects": { isProjectBuildService: () => false },
+    "./features/project-delivery/environmentPatch": { buildEnvironmentPatch },
   }[name]), exports, () => props, () => (...args) => events.push(args)));
   return { flow: exports.flow, startup, events, close() { unmount(); scope.stop(); } };
 }
@@ -112,6 +114,84 @@ test("running configuration deletes an environment only after explicit confirmat
   h.flow.removing.value = true;
   await h.flow.removeEnvironment();
   assert.deepEqual(calls, [["/application-projects/app/service-instances/test-api","DELETE"]]);
+});
+
+test("adding an algorithm server stays in the environment and does not overwrite the existing host", async t => {
+  const calls = [];
+  const environment = { id: "test", name: "test", deployments: [
+    { id: "runtime-east", moduleId: "runtime", hostId: "east", servicePort: 8101 },
+    { id: "api-west", moduleId: "api", hostId: "west", servicePort: 8080 },
+  ] };
+  const algorithmProject = { ...project, environments: [environment], modules: [
+    ...project.modules,
+    { id: "runtime", name: "runtime", catalog: { kind: "ALGORITHM", runtimeMode: "STATIC", defaultPort: 8101 } },
+  ] };
+  const h = mount(environments, "availableHosts, hostId, formError, save, previewAccessUrl, runtimeId, runtimeOptions, deployMode, canUseStaticMode", {
+    project: algorithmProject, moduleId: "runtime", environment, addingAlgorithmHost: true,
+  }, async (path, method, data) => {
+    if (path === "/hosts") return [{ id: "east", name: "East" }, { id: "west", name: "West", address: "192.0.2.10" }];
+    if (path === "/credentials") return [];
+    calls.push([path, method, data]);
+    return algorithmProject;
+  }, { "/software-instances": [
+    { id: "east-runtime", hostId: "east", runtimeKind: "SYSTEMD", observation: { identityHash: "verified" } },
+    { id: "west-runtime", hostId: "west", runtimeKind: "SYSTEMD", observation: { identityHash: "verified" } },
+    { id: "unknown-runtime", hostId: "west", runtimeKind: "SYSTEMD" },
+  ],
+  });
+  t.after(h.close);
+  await h.startup();
+  assert.deepEqual(h.flow.availableHosts.value.map(item => item.id), ["west"]);
+  assert.equal(h.flow.deployMode.value, "NATIVE", "a historical module setting cannot default a new algorithm registration to STATIC");
+  assert.equal(h.flow.canUseStaticMode.value, false);
+  h.flow.hostId.value = "east";
+  await h.flow.save();
+  assert.equal(calls.length, 0);
+  assert.match(h.flow.formError.value, /尚未登记/);
+  h.flow.hostId.value = "west";
+  await vue.nextTick();
+  assert.equal(h.flow.previewAccessUrl.value, "");
+  assert.deepEqual(h.flow.runtimeOptions.value.map(item => item.id), ["west-runtime"]);
+  h.flow.runtimeId.value = "west-runtime";
+  await h.flow.save();
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].slice(0, 2), ["/application-projects/app/service-instances", "POST"]);
+  assert.equal(calls[0][2].id, undefined);
+  assert.equal(calls[0][2].moduleId, "runtime");
+  assert.equal(calls[0][2].environment, "test");
+  assert.equal(calls[0][2].hostId, "west");
+  assert.equal(calls[0][2].deployMode, "NATIVE");
+  assert.equal(calls[0][2].servicePort, 8101);
+  assert.equal(calls[0][2].runtimeSoftwareId, "west-runtime");
+});
+
+test("a historical static algorithm registration retains its mode until the operator converts it", async t => {
+  const calls = [];
+  const row = { id: "legacy", moduleId: "runtime", hostId: "east", deployMode: "STATIC",
+    nginx: { siteName: "legacy", serverName: "legacy.example", listenPort: 8090, spa: true, proxyRules: [] } };
+  const environment = { id: "test", name: "test", deployments: [row] };
+  const algorithmProject = { ...project, environments: [environment], modules: [
+    { id: "runtime", name: "runtime", catalog: { kind: "ALGORITHM" } },
+  ] };
+  const h = mount(environments, "deployMode, canUseStaticMode, save", {
+    project: algorithmProject, moduleId: "runtime", environment, registration: row,
+  }, async (path, method, data) => {
+    if (path === "/hosts") return [{ id: "east", name: "East" }];
+    if (path === "/credentials") return [];
+    calls.push([path, method, data]);
+    return algorithmProject;
+  });
+  t.after(h.close);
+  await h.startup();
+  assert.equal(h.flow.canUseStaticMode.value, true);
+  assert.equal(h.flow.deployMode.value, "STATIC");
+  await h.flow.save();
+  assert.equal(calls[0][2].deployMode, undefined);
+  h.flow.deployMode.value = "DOCKER";
+  await vue.nextTick();
+  await h.flow.save();
+  assert.equal(calls[1][2].deployMode, "DOCKER");
+  assert.deepEqual(calls[1][2].nginx, {});
 });
 
 test("one-stop NATIVE backend configuration saves variables, credentials, start command and port", async t => {

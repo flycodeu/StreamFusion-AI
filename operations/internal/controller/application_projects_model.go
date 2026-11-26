@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/streamfusion-ai/operations/internal/deploy"
+	"github.com/streamfusion-ai/operations/internal/projectconfig"
 	"github.com/streamfusion-ai/operations/internal/runtimepolicy"
 )
 
@@ -159,31 +160,11 @@ type applicationLogs struct {
 }
 
 var applicationVariableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,99}$`)
-var applicationSensitiveName = regexp.MustCompile(`(?i)(password|passwd|secret|token|api_?key|private_?key|credential)`)
-var applicationConnectionSecret = regexp.MustCompile(`(?i)(^|[;?&\s])(password|passwd|pwd|token|access_token|secret|api[_-]?key|authorization)\s*=\s*[^;\s&]+`)
 var applicationSCP = regexp.MustCompile(`^([A-Za-z0-9_.-]+)@([A-Za-z0-9][A-Za-z0-9.-]*):([^\s]+)$`)
 var applicationJenkinsCredentialID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,119}$`)
 
-func applicationSecretValue(value string) bool {
-	if applicationConnectionSecret.MatchString(value) || strings.Contains(value, "PRIVATE KEY-----") {
-		return true
-	}
-	u, err := url.Parse(value)
-	if err == nil && u.User != nil {
-		password, present := u.User.Password()
-		return present && password != ""
-	}
-	return false
-}
-
 func applicationText(value string, limit int) bool {
 	return len(value) <= limit && !strings.ContainsRune(value, '\x00')
-}
-func applicationRelative(value string) bool {
-	if value == "" {
-		return true
-	}
-	return len(value) <= 240 && path.Clean(value) == value && !path.IsAbs(value) && value != ".." && !strings.HasPrefix(value, "../") && !strings.ContainsAny(value, "\\\r\n\x00:")
 }
 func applicationAbsolute(value string) bool {
 	return len(value) <= 240 && strings.HasPrefix(value, "/") && value != "/" && path.Clean(value) == value && !strings.ContainsAny(value, "\\\r\n\x00")
@@ -354,10 +335,10 @@ func normalizeApplicationProject(p *applicationProject) error {
 		if m.Build.Kind != "DOCKERFILE" && m.Build.Kind != "COMMAND" && m.Build.Kind != "STATIC" || m.Runtime.Kind != "DOCKER" && m.Runtime.Kind != "NATIVE" && m.Runtime.Kind != "STATIC" {
 			return errors.New("请选择有效的构建和运行方式")
 		}
-		if !applicationRelative(m.Directory) || !applicationRelative(m.Build.Context) || !applicationRelative(m.Build.Dockerfile) {
+		if !projectconfig.ValidRelativePath(m.Directory) || !projectconfig.ValidRelativePath(m.Build.Context) || !projectconfig.ValidRelativePath(m.Build.Dockerfile) {
 			return errors.New("模块、构建上下文和Dockerfile须使用仓库内的相对路径")
 		}
-		if !applicationRelative(m.Build.OutputPath) || strings.ContainsAny(m.Build.OutputPath, "*?[") {
+		if !projectconfig.ValidRelativePath(m.Build.OutputPath) || strings.ContainsAny(m.Build.OutputPath, "*?[") {
 			return errors.New("产物路径须为模块目录下的固定相对路径")
 		}
 		if m.Build.Account != "" && (!gitProfileUser.MatchString(m.Build.Account) || m.Build.Account == "root") {
@@ -378,7 +359,7 @@ func normalizeApplicationProject(p *applicationProject) error {
 			if s.TimeoutSeconds == 0 {
 				s.TimeoutSeconds = 600
 			}
-			if !validName(s.Name) || strings.TrimSpace(s.Command) == "" || !applicationText(s.Command, 8192) || !applicationRelative(s.Workdir) || s.TimeoutSeconds < 1 || s.TimeoutSeconds > 7200 || s.Privilege != "ACCOUNT" && s.Privilege != "ROOT" {
+			if !validName(s.Name) || strings.TrimSpace(s.Command) == "" || !applicationText(s.Command, 8192) || !projectconfig.ValidRelativePath(s.Workdir) || s.TimeoutSeconds < 1 || s.TimeoutSeconds > 7200 || s.Privilege != "ACCOUNT" && s.Privilege != "ROOT" {
 				return errors.New("请核对步骤名称、命令、相对目录、权限和超时（最多7200秒）")
 			}
 		}
@@ -408,7 +389,7 @@ func normalizeApplicationProject(p *applicationProject) error {
 			return errors.New("环境名称不能为空或重复，每环境最多40个模块配置")
 		}
 		names[strings.ToLower(e.Name)] = true
-		seenModules, ports := map[string]bool{}, map[string]bool{}
+		ports := map[string]bool{}
 		for j := range e.Deployments {
 			d := &e.Deployments[j]
 			if d.Ports == nil {
@@ -423,10 +404,9 @@ func normalizeApplicationProject(p *applicationProject) error {
 			if err := assign(&d.ID); err != nil {
 				return err
 			}
-			if !modules[d.ModuleID] || seenModules[d.ModuleID] {
-				return errors.New("每环境的模块配置必须属于本项目且不能重复")
+			if !modules[d.ModuleID] {
+				return errors.New("每环境的模块配置必须属于本项目")
 			}
-			seenModules[d.ModuleID] = true
 			if d.RuntimePolicy != nil {
 				kind := "SYSTEMD"
 				for _, module := range p.Modules {
@@ -456,6 +436,77 @@ func normalizeApplicationProject(p *applicationProject) error {
 			l := &d.Logs
 			if l.Kind != "" && l.Kind != "FILE" && l.Kind != "DOCKER" && l.Kind != "JOURNAL" || l.Directory != "" && !applicationAbsolute(l.Directory) || !applicationText(l.Pattern, 120) || strings.ContainsAny(l.Pattern, "/\\\r\n") || l.RetentionDays < 0 || l.RetentionDays > 3650 || l.MaxMiB < 0 || l.MaxMiB > 1048576 {
 				return errors.New("日志来源、目录、文件规则或保留范围不正确")
+			}
+		}
+	}
+	return nil
+}
+
+func (m applicationModule) allowsMultipleHostBindings() bool {
+	return m.Catalog != nil && m.Catalog.Kind == "ALGORITHM"
+}
+
+func (m applicationModule) validateDeploymentMode(mode, previousMode string) error {
+	if m.allowsMultipleHostBindings() && strings.TrimSpace(mode) == "STATIC" && strings.TrimSpace(previousMode) != "STATIC" {
+		return applicationInvalid("算法模块只能登记原生进程或 Docker 容器")
+	}
+	return nil
+}
+
+// Project and catalog edits must preserve an existing algorithm static binding
+// without allowing a newly registered or reclassified binding to use that mode.
+func validateApplicationDeploymentModes(project, previous applicationProject) error {
+	previousAlgorithms := map[string]bool{}
+	for _, module := range previous.Modules {
+		previousAlgorithms[module.ID] = module.allowsMultipleHostBindings()
+	}
+	type bindingKey struct{ environment, module, deployment string }
+	previousModes := map[bindingKey]string{}
+	for _, environment := range previous.Environments {
+		for _, deployment := range environment.Deployments {
+			if previousAlgorithms[deployment.ModuleID] && strings.TrimSpace(deployment.DeployMode) == "STATIC" {
+				previousModes[bindingKey{environment.ID, deployment.ModuleID, deployment.ID}] = deployment.DeployMode
+			}
+		}
+	}
+	modules := make(map[string]applicationModule, len(project.Modules))
+	for _, module := range project.Modules {
+		modules[module.ID] = module
+	}
+	for _, environment := range project.Environments {
+		for _, deployment := range environment.Deployments {
+			key := bindingKey{environment.ID, deployment.ModuleID, deployment.ID}
+			if err := modules[deployment.ModuleID].validateDeploymentMode(deployment.DeployMode, previousModes[key]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// A legacy unbound draft is allowed as the only binding. Its host must be set
+// before another host can be registered for the module in that environment.
+func applicationDeploymentBindingConflict(existing []applicationDeployment, candidate applicationDeployment, multiHost bool) bool {
+	for _, row := range existing {
+		if row.ID == candidate.ID || row.ModuleID != candidate.ModuleID {
+			continue
+		}
+		if !multiHost || row.HostID == "" || candidate.HostID == "" || row.HostID == candidate.HostID {
+			return true
+		}
+	}
+	return false
+}
+
+func validateApplicationDeploymentBindings(project applicationProject) error {
+	multiHost := make(map[string]bool, len(project.Modules))
+	for _, module := range project.Modules {
+		multiHost[module.ID] = module.allowsMultipleHostBindings()
+	}
+	for _, environment := range project.Environments {
+		for i, d := range environment.Deployments {
+			if applicationDeploymentBindingConflict(environment.Deployments[:i], d, multiHost[d.ModuleID]) {
+				return applicationInvalid("同一环境的普通模块只能登记一次；算法模块须登记在不同服务器")
 			}
 		}
 	}
@@ -532,10 +583,10 @@ func normalizeApplicationDeployment(d *applicationDeployment, modules map[string
 	if d.DeployMode != "" && d.DeployMode != "NATIVE" && d.DeployMode != "DOCKER" && d.DeployMode != "STATIC" {
 		return applicationInvalid("部署形态仅支持 NATIVE、DOCKER 或 STATIC")
 	}
-	if d.Profile != "" && !profilePatternSafe(d.Profile) {
+	if d.Profile != "" && !projectconfig.ValidProfile(d.Profile) {
 		return applicationInvalid("运行 Profile 格式不正确")
 	}
-	if !applicationText(d.StartCommand, 8192) || applicationSecretValue(d.StartCommand) {
+	if !applicationText(d.StartCommand, 8192) || projectconfig.ContainsSecret(d.StartCommand) {
 		return applicationInvalid("启动命令最多8192字节，且不能包含明文凭据，请使用环境变量")
 	}
 	if d.HealthPath != "" && (!strings.HasPrefix(d.HealthPath, "/") || len(d.HealthPath) > 240 || strings.ContainsAny(d.HealthPath, "\r\n\x00")) {
@@ -570,7 +621,7 @@ func normalizeApplicationDeployment(d *applicationDeployment, modules map[string
 		if (v.CredentialID == "") != (v.CredentialRevision == "") || v.CredentialID != "" && (!deploy.ID.MatchString(v.CredentialID) || v.Value != "") {
 			return applicationInvalid("变量请填写普通值或选择凭据，不能同时填写")
 		}
-		if v.CredentialID == "" && v.Value != "" && (applicationSensitiveName.MatchString(v.Name) || applicationSecretValue(v.Value)) {
+		if v.CredentialID == "" && v.Value != "" && (projectconfig.IsSensitiveName(v.Name) || projectconfig.ContainsSecret(v.Value)) {
 			return applicationInvalid("密码、Token等敏感变量请使用凭据引用")
 		}
 	}

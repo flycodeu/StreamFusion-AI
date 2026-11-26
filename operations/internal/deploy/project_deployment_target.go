@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,6 +57,9 @@ func projectCheckTools(ctx context.Context, p ProjectDeployment) error {
 		}
 		if _, err = projectCommand(ctx, "/usr/sbin/nginx", "-t"); err != nil {
 			return errors.New("PROJECT_NGINX_EXISTING_CONFIG_INVALID")
+		}
+		if p.Site != nil && p.Site.HealthPath != "" && !projectSiteUpstreamHealth(ctx, p.Site) {
+			return errors.New("PROJECT_STREAMFUSION_API_UNHEALTHY")
 		}
 	}
 	for _, d := range p.DependencyChecks {
@@ -148,37 +150,21 @@ func projectJavaStartupState(ctx context.Context, id string) string {
 }
 
 func projectHealth(ctx context.Context, p ProjectDeployment, dir string) bool {
-	address, path, method := p.Address, p.HealthPath, http.MethodGet
 	if p.Kind == "STATIC" {
-		address, path, method = "127.0.0.1", "/__sfops_health", http.MethodHead
-	} else if address == "0.0.0.0" {
+		if !projectStaticReleaseServed(ctx, p) {
+			return false
+		}
+		return p.Site.HealthPath == "" || projectJSONHealth(ctx, projectHealthClient(), projectLocalSite(p)+p.Site.HealthPath, p.Site.ServerName)
+	}
+	address := p.Address
+	if address == "0.0.0.0" {
 		address = "127.0.0.1"
 	}
-	if p.Kind == "JAVA" && !projectJavaUnitRuns(ctx, p.ID, dir) {
+	if !projectJavaUnitRuns(ctx, p.ID, dir) {
 		return false
 	}
-	request, err := http.NewRequestWithContext(ctx, method, "http://"+net.JoinHostPort(address, strconv.Itoa(p.Port))+path, nil)
-	if err != nil {
-		return false
-	}
-	if p.Site != nil {
-		request.Host = p.Site.ServerName
-	}
-	c := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DisableKeepAlives: true},
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	resp, err := c.Do(request)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return false
-	}
-	if p.Kind == "STATIC" {
-		return resp.Header.Get("X-StreamFusion-Release") == p.ReleaseID && resp.ContentLength != 0
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4097))
-	return err == nil && len(data) <= 4096
+	base := "http://" + net.JoinHostPort(address, strconv.Itoa(p.Port))
+	return projectJavaEndpointHealth(ctx, base, p.HealthPath)
 }
 
 func projectJavaUnitRuns(ctx context.Context, id, dir string) bool {

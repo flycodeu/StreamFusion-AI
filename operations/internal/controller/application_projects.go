@@ -437,6 +437,7 @@ func (h *HTTP) saveApplicationProject(w http.ResponseWriter, r *http.Request, s 
 	defer tx.Rollback()
 	now := Now()
 	action := "APPLICATION_PROJECT_SAVED"
+	var old applicationProject
 	if id == "" {
 		id = uuid.NewString()
 		in.ID = id
@@ -444,7 +445,6 @@ func (h *HTTP) saveApplicationProject(w http.ResponseWriter, r *http.Request, s 
 		in.CreatedAt = now
 		_, err = tx.Exec("INSERT INTO application_projects(id,code,name,description,jenkins_url,archived,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", id, in.Code, in.Name, in.Description, in.JenkinsURL, in.Archived, now, now)
 	} else {
-		var old applicationProject
 		old, err = readApplicationProject(tx, id)
 		if errors.Is(err, sql.ErrNoRows) {
 			h.fail(w, r, 404, "NOT_FOUND", "项目不存在")
@@ -471,6 +471,12 @@ func (h *HTTP) saveApplicationProject(w http.ResponseWriter, r *http.Request, s 
 		revision, _ = strconv.Atoi(old.Version)
 		in.Version = strconv.Itoa(revision + 1)
 		_, err = tx.Exec("UPDATE application_projects SET code=?,name=?,description=?,jenkins_url=?,archived=?,version=version+1,updated_at=? WHERE id=?", in.Code, in.Name, in.Description, in.JenkinsURL, in.Archived, now, id)
+	}
+	if err == nil && !archive {
+		err = validateApplicationDeploymentBindings(in)
+	}
+	if err == nil && !archive {
+		err = validateApplicationDeploymentModes(in, old)
 	}
 	if err == nil && !archive {
 		err = validateApplicationReferences(tx, in)

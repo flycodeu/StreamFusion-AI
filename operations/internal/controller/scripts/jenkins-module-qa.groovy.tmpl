@@ -68,7 +68,11 @@ pipeline {
                         cp -- "$selected" app.jar
                     '''
                     {{else if eq .Kind "FRONTEND"}}sh 'if test -f pnpm-lock.yaml; then pnpm run build; else npm run build; fi'
-                    sh 'test -f dist/index.html && rm -f web-dist.tar.gz sfops-release.txt && tar -czf web-dist.tar.gz -C dist .'
+                    {{if .WebAPIContract}}sh '''
+                        grep -Fq '<meta name="streamfusion-api-contract" content="{{.WebAPIContract}}" />' dist/index.html ||
+                            { echo "构建产物缺少 StreamFusion 同源 /api 标记，请核对 Platform Web 源码分支。" >&2; exit 1; }
+                    '''
+                    {{end}}sh 'test -f dist/index.html && rm -f web-dist.tar.gz sfops-release.txt && tar -czf web-dist.tar.gz -C dist .'
                     {{else}}sh 'git archive --format=tar.gz --output=module-source.tar.gz HEAD -- . && sha256sum module-source.tar.gz'
                     archiveArtifacts artifacts: 'module-source.tar.gz,qa-tests.xml', fingerprint: true
                     {{end}}
@@ -79,7 +83,7 @@ pipeline {
                         file={{if eq .Kind "BACKEND"}}app.jar{{else}}web-dist.tar.gz{{end}}
                         sha=$(sha256sum -- "$file")
                         size=$(wc -c < "$file" | tr -d '[:space:]')
-                        printf '%s\\n' "$SFOPS_CHECKOUT_COMMIT" "$file" "${sha%% *}" "$size" > sfops-release.txt
+                        printf '%s\\n' "$SFOPS_CHECKOUT_COMMIT" "$file" "${sha%% *}" "$size"{{if .WebAPIContract}} '{{.WebAPIContract}}'{{end}} > sfops-release.txt
                     '''
                     archiveArtifacts artifacts: '{{if eq .Kind "BACKEND"}}app.jar{{else}}web-dist.tar.gz{{end}},sfops-release.txt', allowEmptyArchive: false, fingerprint: true, followSymlinks: false
                     {{end}}

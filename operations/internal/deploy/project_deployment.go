@@ -51,11 +51,7 @@ func (x *executor) executeProjectDeployment(req Request, output io.Writer) error
 	if err != nil {
 		return send(err)
 	}
-	if req.Action == ProjectObserve {
-		active, err = s.reconcile(ctx, active)
-	} else if _, pendingErr := s.readPending(); !os.IsNotExist(pendingErr) {
-		err = projectRecoveryRequired
-	}
+	active, err = s.resolveActive(ctx, active, req.Action, *p)
 	if err != nil {
 		r.ReleaseID, r.Health = s.observePending(ctx, active)
 		return send(err)
@@ -68,16 +64,16 @@ func (x *executor) executeProjectDeployment(req Request, output io.Writer) error
 			return send(errors.New("PROJECT_RELEASE_CHANGED"))
 		}
 		return send(projectCheckTools(ctx, *p))
-	case ProjectObserve:
-		if active.ReleaseID == "" {
-			r.Health = "NOT_DEPLOYED"
-			return send(nil)
+	case ProjectObserve, ProjectRecover:
+		r.Health, err = s.observe(ctx, active)
+		return send(err)
+	case ProjectDecommission:
+		r.Phase = "TARGET_EXECUTION"
+		if err = s.decommission(ctx, active, p.ExpectedRelease); err != nil {
+			return send(err)
 		}
-		if s.health(ctx, active) {
-			r.Health = "READY"
-		} else {
-			r.Health = "UNHEALTHY"
-		}
+		r.ReleaseID = ""
+		r.Health = "NOT_DEPLOYED"
 		return send(nil)
 	case ProjectLogs:
 		if active.ReleaseID == "" {
@@ -132,6 +128,7 @@ func (x *executor) executeProjectDeployment(req Request, output io.Writer) error
 		}
 		r.ReleaseID = p.ReleaseID
 		r.Health = "READY"
+		r.WarningCode = s.retainReleases(ctx, candidate, active.ReleaseID)
 		return send(nil)
 	default:
 		return send(errors.New("PROJECT_ACTION_INVALID"))

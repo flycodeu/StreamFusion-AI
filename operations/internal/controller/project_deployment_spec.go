@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/streamfusion-ai/operations/internal/deploy"
+	"github.com/streamfusion-ai/operations/internal/projectconfig"
 )
 
 type projectDeploymentContext struct {
@@ -45,13 +46,20 @@ func readProjectDeployment(q applicationReader, projectID, deploymentID string) 
 }
 
 func (p projectDeploymentContext) kind() string {
-	if p.module.Catalog == nil || p.draft.ManagedInstanceID != "" {
+	if p.module.Catalog == nil {
+		return ""
+	}
+	return projectDeploymentKind(p.module.Catalog.Kind, p.draft.DeployMode, p.draft.ManagedInstanceID)
+}
+
+func projectDeploymentKind(moduleKind, deployMode, managedInstanceID string) string {
+	if managedInstanceID != "" {
 		return ""
 	}
 	switch {
-	case p.draft.DeployMode == "NATIVE" && p.module.Catalog.Kind == "BACKEND":
+	case deployMode == "NATIVE" && moduleKind == "BACKEND":
 		return "JAVA"
-	case p.draft.DeployMode == "STATIC" && p.module.Catalog.Kind == "FRONTEND":
+	case deployMode == "STATIC" && moduleKind == "FRONTEND":
 		return "STATIC"
 	}
 	return ""
@@ -65,7 +73,7 @@ func normalizeProjectConfigDrafts(drafts []deploy.ProjectConfigFile) error {
 		if len(drafts) > 12 || total > 40<<10 {
 			return applicationInvalid("Java 配置草稿最多 12 个文件，合计不超过 40 KiB")
 		}
-		if seen[file.Filename] || deploy.ValidateProjectConfigFile(file) != nil || applicationSecretValue(file.Content) {
+		if seen[file.Filename] || deploy.ValidateProjectConfigFile(file) != nil || projectconfig.ContainsSecret(file.Content) {
 			return applicationInvalid("草稿仅支持不重名的 YAML 或 properties，请使用变量或凭据引用，并检查文件格式")
 		}
 		seen[file.Filename] = true
@@ -137,11 +145,19 @@ func projectDeploySpec(q applicationReader, p projectDeploymentContext, baseline
 			name = "_"
 		}
 		spec.Site = &deploy.ProjectSite{ServerName: name, SPA: d.Nginx.SPA}
+		if err := configureStreamFusionProjectSite(p, spec.Site); err != nil {
+			return spec, err
+		}
+		streamFusionAPI := streamFusionPlatformAPIModule(p.module, p.project.Modules)
 		for _, rule := range d.Nginx.ProxyRules {
 			upstream := rule.UpstreamURL
 			if rule.TargetModuleID != "" {
 				var err error
-				upstream, err = projectModuleUpstream(q, p, rule.TargetModuleID)
+				if rule.TargetModuleID == streamFusionAPI && strings.TrimSuffix(rule.Location, "/") == "/api" {
+					upstream, err = projectModuleUpstream(q, p, rule.TargetModuleID)
+				} else {
+					upstream, err = projectConfiguredModuleUpstream(q, p, rule.TargetModuleID)
+				}
 				if err != nil {
 					return spec, err
 				}
@@ -149,6 +165,9 @@ func projectDeploySpec(q applicationReader, p projectDeploymentContext, baseline
 			spec.Site.Proxies = append(spec.Site.Proxies, deploy.ProjectProxy{
 				Location: rule.Location, URL: upstream, StripPrefix: rule.StripPrefix, WebSocket: rule.WebSocket, SSE: rule.SSE,
 			})
+		}
+		if err := checkProjectSiteUpstreams(q, p, spec.Site); err != nil {
+			return spec, err
 		}
 		if err := checkProjectSiteConflict(q, p, spec); err != nil {
 			return spec, err
@@ -158,6 +177,9 @@ func projectDeploySpec(q applicationReader, p projectDeploymentContext, baseline
 		spec.Address, spec.HealthPath, spec.Profile, spec.MemoryMiB = d.BindAddress, d.HealthPath, d.Profile, d.MemoryMiB
 		if spec.Address == "" {
 			spec.Address = "127.0.0.1"
+		}
+		if err := checkProjectBackendEndpointChange(q, p, baseline, spec); err != nil {
+			return spec, err
 		}
 		if spec.HealthPath == "" {
 			spec.HealthPath = p.module.Runtime.Health.Path
@@ -235,24 +257,128 @@ func projectListenPort(d applicationDeployment) int {
 }
 
 func projectModuleUpstream(q applicationReader, p projectDeploymentContext, moduleID string) (string, error) {
+	var upstream string
 	for _, d := range p.env.Deployments {
-		if d.ModuleID != moduleID || d.ID == p.draft.ID || d.HostID == "" || projectListenPort(d) == 0 || d.DeployMode == "STATIC" {
+		if d.ModuleID != moduleID || d.ID == p.draft.ID {
 			continue
 		}
-		host := d.BindAddress
-		if d.HostID == p.host.ID && (host == "" || host == "0.0.0.0" || host == "::") {
-			host = "127.0.0.1"
-		} else if d.HostID != p.host.ID && (host == "" || host == "0.0.0.0" || host == "::") {
-			if err := q.QueryRow("SELECT address FROM targets WHERE id=?", d.HostID).Scan(&host); err != nil {
-				return "", err
-			}
+		var release string
+		err := q.QueryRow(`SELECT current_id FROM project_deployment_running WHERE deployment_id=?`, d.ID).Scan(&release)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
 		}
-		if ip := net.ParseIP(host); host == "" || d.HostID != p.host.ID && ip != nil && ip.IsLoopback() {
-			break
+		if err != nil {
+			return "", err
 		}
-		return "http://" + net.JoinHostPort(host, strconv.Itoa(projectListenPort(d))), nil
+		snap, err := readProjectJobSnapshot(q, release)
+		if err != nil {
+			return "", err
+		}
+		if snap.Spec.Kind != "JAVA" || snap.HostID == "" || snap.Spec.Port == 0 {
+			continue
+		}
+		if safe, err := projectBackendEndpointStable(q, snap); err != nil {
+			return "", err
+		} else if !safe {
+			continue
+		}
+		candidate, err := projectBackendURL(q, p.host.ID, snap)
+		if err != nil {
+			return "", err
+		}
+		if candidate == "" {
+			continue
+		}
+		if upstream != "" {
+			return "", errors.New("PROJECT_PROXY_TARGET_AMBIGUOUS")
+		}
+		upstream = candidate
+	}
+	if upstream == "" {
+		return "", errors.New("PROJECT_PROXY_TARGET_UNAVAILABLE")
+	}
+	return upstream, nil
+}
+
+// Other project templates can reference a separately managed application.
+// StreamFusion's /api instead resolves only from the active release.
+func projectConfiguredModuleUpstream(q applicationReader, p projectDeploymentContext, moduleID string) (string, error) {
+	for _, d := range p.env.Deployments {
+		port := projectListenPort(d)
+		if d.ModuleID != moduleID || d.ID == p.draft.ID || d.HostID == "" || port == 0 || d.DeployMode == "STATIC" {
+			continue
+		}
+		candidate := projectDeploymentSnapshot{HostID: d.HostID, Spec: deploy.ProjectDeployment{Address: d.BindAddress, Port: port}}
+		endpoint, err := projectBackendURL(q, p.host.ID, candidate)
+		if err != nil {
+			return "", err
+		}
+		if endpoint != "" {
+			return endpoint, nil
+		}
 	}
 	return "", errors.New("PROJECT_PROXY_TARGET_UNAVAILABLE")
+}
+
+func projectBackendEndpointStable(q applicationReader, active projectDeploymentSnapshot) (bool, error) {
+	var action, raw string
+	err := q.QueryRow(`SELECT action,snapshot_json FROM project_deployment_jobs WHERE deployment_id=?
+		AND action<>'VERIFY' AND status IN ('QUEUED','RUNNING','UNKNOWN')`, active.Spec.ID).Scan(&action, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return projectBackendJobKeepsEndpoint(active, action, raw)
+}
+
+func projectBackendJobKeepsEndpoint(active projectDeploymentSnapshot, action, raw string) (bool, error) {
+	if action == "DECOMMISSION" {
+		return false, nil
+	}
+	var pending projectDeploymentSnapshot
+	if err := deploy.StrictJSON([]byte(raw), &pending); err != nil {
+		return false, err
+	}
+	return sameProjectBackendEndpoint(active, pending.HostID, pending.Spec), nil
+}
+
+func sameProjectBackendEndpoint(active projectDeploymentSnapshot, hostID string, candidate deploy.ProjectDeployment) bool {
+	return active.HostID == hostID && active.Spec.Port == candidate.Port && active.Spec.Address == candidate.Address
+}
+
+func projectBackendURL(q applicationReader, siteHostID string, snap projectDeploymentSnapshot) (string, error) {
+	address := snap.Spec.Address
+	if ip := net.ParseIP(address); address == "" || ip != nil && ip.IsUnspecified() {
+		if snap.HostID == siteHostID {
+			address = "127.0.0.1"
+		} else if err := q.QueryRow("SELECT address FROM targets WHERE id=?", snap.HostID).Scan(&address); err != nil {
+			return "", err
+		}
+	}
+	if ip := net.ParseIP(address); address == "" || snap.HostID != siteHostID && (strings.EqualFold(address, "localhost") || ip != nil && ip.IsLoopback()) {
+		return "", nil
+	}
+	return "http://" + net.JoinHostPort(address, strconv.Itoa(snap.Spec.Port)), nil
+}
+
+func checkProjectBackendEndpointChange(q applicationReader, p projectDeploymentContext, current string, candidate deploy.ProjectDeployment) error {
+	if candidate.Kind != "JAVA" || current == "" {
+		return nil
+	}
+	snap, err := readProjectJobSnapshot(q, current)
+	if err != nil {
+		return err
+	}
+	if sameProjectBackendEndpoint(snap, p.host.ID, candidate) {
+		return nil
+	}
+	err = checkProjectDecommissionDependencies(q, p, snap)
+	if err != nil && err.Error() == "PROJECT_ACTIVE_SITE_USES_BACKEND" {
+		return errors.New("PROJECT_ACTIVE_SITE_USES_OLD_ENDPOINT")
+	}
+	return err
 }
 
 func checkProjectSiteConflict(q applicationReader, p projectDeploymentContext, spec deploy.ProjectDeployment) error {
@@ -275,8 +401,18 @@ func projectSpecSummary(spec deploy.ProjectDeployment) []string {
 			fmt.Sprintf("健康检查 %s · %d 个配置草稿 · %d 个依赖探测", spec.HealthPath, len(spec.Files), len(spec.DependencyChecks)),
 		}
 	}
-	return []string{
+	lines := []string{
 		fmt.Sprintf("Nginx · %s:%d · %d 条反向代理", spec.Site.ServerName, spec.Port, len(spec.Site.Proxies)),
 		fmt.Sprintf("/etc/nginx/conf.d/sfops-project-%s.conf", spec.ID),
 	}
+	if spec.Site.HealthPath != "" {
+		for _, proxy := range spec.Site.Proxies {
+			if strings.TrimSuffix(proxy.Location, "/") == "/api" {
+				lines = append(lines, fmt.Sprintf("实际 API 上游 · %s", proxy.URL))
+				break
+			}
+		}
+		lines = append(lines, fmt.Sprintf("目标机反代检查 · %s（JSON status=UP）", spec.Site.HealthPath))
+	}
+	return lines
 }

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import * as vue from "vue";
 import ts from "typescript";
+import { buildEnvironmentPatch } from "../src/features/project-delivery/environmentPatch.ts";
 
 function loadTS(source, imports = {}) {
   const exports = {};
@@ -101,6 +102,7 @@ test("saving a pulled YAML draft records only the project draft and credential r
           "element-plus": { ElMessage: { success() {}, info() {} } },
           "./listPages": { requestAllPages: async () => [] },
           "./applicationProjects": { isProjectBuildService: () => false },
+          "./features/project-delivery/environmentPatch": { buildEnvironmentPatch },
         }[name]),
       exports,
       () => ({ project: fullProject, moduleId: "api" }),

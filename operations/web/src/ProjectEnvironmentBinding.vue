@@ -27,7 +27,6 @@ import type {
   ModuleConfigDraft,
   ModuleConfigTemplate,
   ModuleVariable,
-  NginxProxyRule,
   ProjectEnvironment,
   ProjectServiceRegistration,
 } from "./applicationProjects";
@@ -38,24 +37,11 @@ import {
 import type { Host, SSHCredential } from "./hosts";
 import { requestAllPages } from "./listPages";
 import type { SoftwareInstance } from "./software";
-
-interface EditableVariable {
-  name: string;
-  mode: "PLAIN" | "CREDENTIAL";
-  value: string;
-  credentialRef: string;
-  profile?: string;
-}
-
-interface EditableProxyRule {
-  location: string;
-  targetType: "MODULE" | "URL";
-  targetModuleId: string;
-  upstreamUrl: string;
-  stripPrefix: boolean;
-  webSocket: boolean;
-  sse: boolean;
-}
+import {
+  buildEnvironmentPatch,
+  type EnvironmentFormVariable as EditableVariable,
+  type EnvironmentFormProxyRule as EditableProxyRule,
+} from "./features/project-delivery/environmentPatch";
 
 interface EditableConfigFile {
   filename: string;
@@ -71,6 +57,7 @@ const props = defineProps<{
   moduleId: string;
   environment?: ProjectEnvironment;
   registration?: ProjectServiceRegistration;
+  addingAlgorithmHost?: boolean;
   softwareList?: SoftwareInstance[];
   visible?: boolean;
 }>();
@@ -86,6 +73,7 @@ const projectVersion = props.project.version;
 const module = computed(() =>
   props.project.modules.find((item) => item.id === props.moduleId),
 );
+const algorithm = computed(() => module.value?.catalog?.kind === "ALGORITHM");
 const existingEnvironments =
   props.project.environments?.filter((item) =>
     item.deployments.some((row) => row.moduleId === props.moduleId),
@@ -106,12 +94,13 @@ const runtimeId = ref(originalRuntime);
 const inferredNewDeployMode = (() => {
   if (props.registration?.deployMode) return props.registration.deployMode;
   if (props.registration) return "";
-  const cat = props.project.modules.find((m) => m.id === props.moduleId)?.catalog;
-  if (cat?.runtimeMode === "STATIC" || cat?.kind === "FRONTEND") return "STATIC";
+  const cat = module.value?.catalog;
+  if (cat?.kind !== "ALGORITHM" && (cat?.runtimeMode === "STATIC" || cat?.kind === "FRONTEND")) return "STATIC";
   if (cat?.runtimeMode === "DOCKER") return "DOCKER";
   return "NATIVE";
 })();
 const deployMode = ref(inferredNewDeployMode);
+const canUseStaticMode = computed(() => !algorithm.value || props.registration?.deployMode === "STATIC");
 const nativeJava = computed(() => deployMode.value === "NATIVE" && module.value?.catalog?.kind === "BACKEND");
 const profile = ref(
   props.registration?.profile ||
@@ -125,7 +114,7 @@ const bindAddress = ref(
 const servicePort = ref(
   props.registration?.servicePort ||
     (!props.registration && inferredNewDeployMode !== "STATIC"
-      ? module.value?.catalog?.defaultPort || 8080
+      ? module.value?.catalog?.defaultPort || (algorithm.value ? 0 : 8080)
       : 0),
 );
 const containerPort = ref(
@@ -234,6 +223,19 @@ function sanitizeSiteName(raw: string) {
     .replace(/^-+|-+$/g, "")
     .slice(0, 60);
 }
+const streamFusionBackend = computed(() => {
+  const web = module.value;
+  const path = web?.directory?.replace(/\/+$/, "") || "";
+  if (!web || !/(?:^|\/)platform-web$/.test(path)) return undefined;
+  const apiPath = path.replace(/platform-web$/, "platform-api");
+  return props.project.modules.find(
+    (candidate) => candidate.repositoryId === web.repositoryId && candidate.directory === apiPath,
+  );
+});
+function platformApiRule(moduleId: string): EditableProxyRule {
+  return { location: "/api", targetType: "MODULE", targetModuleId: moduleId, upstreamUrl: "",
+    stripPrefix: true, webSocket: false, sse: false };
+}
 const initialProxyRules = (): EditableProxyRule[] => {
   const existing = props.registration?.nginx?.proxyRules;
   if (existing?.length) {
@@ -247,6 +249,7 @@ const initialProxyRules = (): EditableProxyRule[] => {
       sse: !!r.sse,
     }));
   }
+  if (!props.registration && streamFusionBackend.value) return [platformApiRule(streamFusionBackend.value.id)];
   if (!props.registration && module.value?.catalog?.proxyHints?.length) {
     const firstBackend = props.project.modules.find(
       (m) => m.id !== props.moduleId && m.catalog?.kind === "BACKEND",
@@ -275,13 +278,26 @@ const nginxSiteName = ref(
       : ""),
 );
 const nginxServerName = ref(
-  props.registration?.nginx?.serverName || (!props.registration ? "_" : ""),
+  props.registration?.nginx?.serverName || (!props.registration && !streamFusionBackend.value ? "_" : ""),
 );
 const nginxListenPort = ref(
   props.registration?.nginx?.listenPort || (!props.registration ? 80 : 80),
 );
 const nginxSpa = ref(props.registration?.nginx?.spa ?? true);
 const nginxProxyRules = ref<EditableProxyRule[]>(initialProxyRules());
+function setStreamFusionRoutes() {
+  if (!streamFusionBackend.value) return;
+  const conflicts = new Set([
+    "api", "assets", "index.html", "api-docs.html", "api-docs.css", "api-docs.js", "streamfusion.svg",
+    "login", "home", "profile", "change-password", "forbidden", "unavailable",
+    "system", "monitor", "camera", "preview", "storage",
+  ]);
+  nginxSpa.value = true;
+  nginxProxyRules.value = [
+    platformApiRule(streamFusionBackend.value.id),
+    ...nginxProxyRules.value.filter((rule) => !conflicts.has(rule.location.trim().split("/")[1] ?? "")),
+  ];
+}
 
 interface ManagedTarget {
   id: string;
@@ -301,6 +317,16 @@ const targetOptions = computed(() =>
   ),
 );
 const hosts = ref<Host[]>([]);
+const availableHosts = computed(() => {
+  if (!algorithm.value) return hosts.value;
+  const environment = props.project.environments?.find((item) =>
+    item.name.toLowerCase() === environmentName.value.trim().toLowerCase(),
+  );
+  const occupied = new Set(environment?.deployments.filter((row) =>
+    row.id !== props.registration?.id && row.moduleId === props.moduleId,
+  ).map((row) => row.hostId));
+  return hosts.value.filter((host) => !occupied.has(host.id));
+});
 const software = ref<SoftwareInstance[]>(props.softwareList || []);
 const credentials = ref<SSHCredential[]>([]);
 const credentialsLoaded = ref(false);
@@ -401,8 +427,7 @@ function resolveBackendModuleEndpoint(targetModuleId: string) {
       e.name.toLowerCase() === environmentName.value.trim().toLowerCase(),
   );
   const dep =
-    sameEnv?.deployments.find((d) => d.moduleId === targetModuleId) ||
-    envs.flatMap((e) => e.deployments).find((d) => d.moduleId === targetModuleId);
+    sameEnv?.deployments.find((d) => d.moduleId === targetModuleId);
   if (!dep) return "";
   const host = hostMap.value.get(dep.hostId);
   const addr = host?.address || "";
@@ -411,6 +436,7 @@ function resolveBackendModuleEndpoint(targetModuleId: string) {
   return `http://${addr}:${port}`;
 }
 const previewAccessUrl = computed(() => {
+  if (algorithm.value) return "";
   const addr = hostMap.value.get(hostId.value)?.address || "";
   if (!addr && (!nginxServerName.value || nginxServerName.value === "_")) return "";
   const wrap = (h: string) => (h.includes(":") && !h.startsWith("[") ? `[${h}]` : h);
@@ -924,7 +950,8 @@ onMounted(async () => {
     request<Host[]>("/hosts", "GET", undefined, lifetime.signal)
       .then((items) => {
         hosts.value = items;
-        if (!props.registration && items.length === 1) hostId.value = items[0].id;
+        if (!props.registration && availableHosts.value.length === 1)
+          hostId.value = availableHosts.value[0].id;
       })
       .catch((error) => {
         if (!lifetime.signal.aborted)
@@ -957,21 +984,21 @@ onMounted(async () => {
 });
 onUnmounted(() => lifetime.abort());
 
-const origMode = props.registration?.deployMode || "";
-const origProfile = props.registration?.profile || "";
-const origBind = props.registration?.bindAddress || "";
-const origPort = props.registration?.servicePort || 0;
-const origMem = props.registration?.memoryMiB || 0;
-const origCmd = props.registration?.startCommand || "";
-const origHealth = props.registration?.healthPath || "";
-const origVarsStr = JSON.stringify(props.registration?.variables || []);
-const origDepsStr = JSON.stringify(props.registration?.dependencyIds || []);
-const origNginxStr = JSON.stringify(props.registration?.nginx || null);
-const origConfigDrafts = JSON.stringify(props.registration?.configDrafts || []);
-
 async function save() {
   if (!module.value || props.project.archived || saving.value || !environmentName.value.trim())
     return;
+  if (algorithm.value && !props.registration && !availableHosts.value.some((host) => host.id === hostId.value)) {
+    formError.value = "请选择尚未登记此算法模块的服务器";
+    return;
+  }
+  if (deployMode.value === "STATIC" && !canUseStaticMode.value) {
+    formError.value = "算法模块只能登记原生进程或 Docker 容器";
+    return;
+  }
+  if (deployMode.value === "STATIC" && streamFusionBackend.value && ["", "_"].includes(nginxServerName.value.trim())) {
+    formError.value = "请填写用户访问时使用的站点域名或 IP 地址";
+    return;
+  }
   if (hasUnsatisfiedPlainSensitiveVar.value) {
     formError.value = "请为敏感变量选择「凭据引用」与对应凭据，避免明文密码或遗漏凭据";
     return;
@@ -993,84 +1020,33 @@ async function save() {
   }
   saving.value = true;
   formError.value = "";
-  const registrationId = props.registration?.id;
-
-  const builtVariables: ModuleVariable[] = variables.value
-    .filter((v) => v.name.trim())
-    .map((v) => {
-      if (v.mode === "CREDENTIAL" && v.credentialRef) {
-        const [credentialId, credentialRevision] = v.credentialRef.split(":");
-        return { name: v.name.trim(), credentialId, credentialRevision };
-      }
-      return { name: v.name.trim(), value: v.value };
-    });
-
-  const builtNginx =
-    deployMode.value === "STATIC"
-      ? {
-          nginxSoftwareId: nginxSoftwareId.value,
-          siteName: nginxSiteName.value.trim(),
-          serverName: nginxServerName.value.trim() || "_",
-          listenPort: Number(nginxListenPort.value) || 80,
-          spa: !!nginxSpa.value,
-          proxyRules: nginxProxyRules.value
-            .filter((r) => r.location.trim())
-            .map((r): NginxProxyRule => ({
-              location: r.location.trim(),
-              ...(r.targetType === "MODULE" && r.targetModuleId
-                ? { targetModuleId: r.targetModuleId }
-                : { upstreamUrl: r.upstreamUrl.trim() }),
-              ...(r.stripPrefix ? { stripPrefix: true } : {}),
-              ...(r.webSocket ? { webSocket: true } : {}),
-              ...(r.sse ? { sse: true } : {}),
-            })),
-        }
-      : undefined;
-
-  const nextDeployMode = deployMode.value;
-  const nextProfile = profile.value.trim();
-  const nextBind = bindAddress.value.trim();
-  const nextServicePort = nextDeployMode === "STATIC" ? 0 : Number(servicePort.value) || 0;
-  const nextMemoryMiB = nextDeployMode === "STATIC" ? 0 : Number(memoryMiB.value) || 0;
-  const nextStartCommand = nextDeployMode === "STATIC" ? "" : startCommand.value.trim();
-  const nextHealthPath = nextDeployMode === "STATIC" ? "" : healthPath.value.trim();
-  const nextDeps = dependencyIds.value.filter(Boolean);
-
-  const payload: Record<string, unknown> = {
-    ...(registrationId ? { id: registrationId } : {}),
+  const payload = buildEnvironmentPatch({
     version: projectVersion,
     moduleId: props.moduleId,
-    environment: environmentName.value.trim(),
+    environment: environmentName.value,
     hostId: hostId.value,
-    recordedVersion: props.registration?.recordedVersion || "",
-    ...(managedId.value === originalTarget ? {} : { managedInstanceId: managedId.value }),
-    ...(runtimeId.value === originalRuntime ? {} : { runtimeSoftwareId: runtimeId.value }),
-  };
-
-  if (nextDeployMode !== origMode) payload.deployMode = nextDeployMode;
-  if (nextProfile !== origProfile) payload.profile = nextProfile;
-  if (nextBind !== origBind) payload.bindAddress = nextBind;
-  if (nextServicePort !== origPort) payload.servicePort = nextServicePort;
-  if (nextMemoryMiB !== origMem) payload.memoryMiB = nextMemoryMiB;
-  if (nextDeployMode === "DOCKER" && nextServicePort > 0) {
-    payload.ports = [
-      {
-        hostPort: nextServicePort,
-        containerPort: Number(containerPort.value) || nextServicePort,
-        protocol: "TCP",
-      },
-    ];
-  }
-  if (nextStartCommand !== origCmd) payload.startCommand = nextStartCommand;
-  if (nextHealthPath !== origHealth) payload.healthPath = nextHealthPath;
-  if (JSON.stringify(builtVariables) !== origVarsStr) payload.variables = builtVariables;
-  if (JSON.stringify(nextDeps) !== origDepsStr) payload.dependencyIds = nextDeps;
-  if (builtNginx) {
-    if (JSON.stringify(builtNginx) !== origNginxStr) payload.nginx = builtNginx;
-  } else if (origNginxStr !== "null" && nextDeployMode !== "STATIC") {
-    payload.nginx = {};
-  }
-  if (nativeJava.value && !managedId.value && JSON.stringify(nextDrafts) !== origConfigDrafts) payload.configDrafts = nextDrafts;
+    managedInstanceId: managedId.value,
+    runtimeSoftwareId: runtimeId.value,
+    deployMode: deployMode.value,
+    profile: profile.value,
+    bindAddress: bindAddress.value,
+    servicePort: servicePort.value,
+    containerPort: containerPort.value,
+    memoryMiB: memoryMiB.value,
+    startCommand: startCommand.value,
+    healthPath: healthPath.value,
+    dependencyIds: dependencyIds.value,
+    variables: variables.value,
+    configDrafts: nativeJava.value && !managedId.value ? nextDrafts : undefined,
+    nginx: {
+      nginxSoftwareId: nginxSoftwareId.value,
+      siteName: nginxSiteName.value,
+      serverName: nginxServerName.value,
+      listenPort: nginxListenPort.value,
+      spa: !!nginxSpa.value,
+      proxyRules: nginxProxyRules.value,
+    },
+  }, props.registration);
 
   try {
     const saved = await request<ApplicationProject>(
@@ -1080,7 +1056,7 @@ async function save() {
       lifetime.signal,
     );
     if (lifetime.signal.aborted) return;
-    ElMessage.success("部署草稿已保存");
+    ElMessage.success(algorithm.value ? "算法服务器登记已保存" : "部署草稿已保存");
     emit("saved", saved);
     emit("close");
   } catch (error) {
@@ -1112,7 +1088,7 @@ async function removeEnvironment() {
     if (lifetime.signal.aborted) return;
     emit("saved", saved);
     emit("close");
-    ElMessage.success("运行环境已移除");
+    ElMessage.success("实例登记已移除");
   } catch (error) {
     if (!lifetime.signal.aborted)
       formError.value = describe(error, "运行环境移除失败");
@@ -1125,7 +1101,7 @@ async function removeEnvironment() {
 <template>
   <ElDialog
     :model-value="visible !== false"
-    title="编辑部署草稿"
+    :title="algorithm ? (registration ? '编辑算法服务器登记' : '登记算法服务器') : '编辑部署草稿'"
     width="min(920px, 96vw)"
     append-to-body
     :close-on-click-modal="false"
@@ -1141,6 +1117,14 @@ async function removeEnvironment() {
         </span>
       </div>
     </div>
+
+    <ElAlert
+      v-if="algorithm"
+      title="按服务器登记算法模块。关联本机已登记的运行软件后，可在项目交付页查看状态和日志；Jenkins 在此提供 QA。"
+      type="info"
+      show-icon
+      :closable="false"
+    />
 
     <ElAlert
       v-if="originalBuildService && runtimeId === originalRuntime"
@@ -1161,7 +1145,7 @@ async function removeEnvironment() {
       <div class="binding-grid-3">
         <ElFormItem label="部署环境" required>
           <ElSelect
-            v-if="registration"
+            v-if="registration || addingAlgorithmHost"
             :model-value="environmentName"
             disabled
             style="width: 100%"
@@ -1207,7 +1191,7 @@ async function removeEnvironment() {
               :value="hostId"
             />
             <ElOption
-              v-for="host in hosts"
+              v-for="host in availableHosts"
               :key="host.id"
               :label="host.address ? `${host.name} (${host.address})` : host.name"
               :value="host.id"
@@ -1219,10 +1203,38 @@ async function removeEnvironment() {
           <ElSelect v-model="deployMode" :disabled="saving" style="width: 100%">
             <ElOption :label="module?.catalog?.kind === 'BACKEND' ? 'Java JAR（systemd）' : '原生进程（登记）'" value="NATIVE" />
             <ElOption label="Docker 容器（登记）" value="DOCKER" />
-            <ElOption label="Nginx 静态站点" value="STATIC" />
+            <ElOption v-if="canUseStaticMode" :label="algorithm ? 'Nginx 静态站点（历史登记）' : 'Nginx 静态站点'" value="STATIC" />
           </ElSelect>
         </ElFormItem>
       </div>
+
+      <ElFormItem
+        v-if="algorithm || managedId || (!nativeJava && deployMode !== 'STATIC') || originalBuildService"
+        :label="algorithm ? '关联已有运行服务' : '已有服务的日志来源'"
+      >
+        <ElSelect
+          v-model="runtimeId"
+          :aria-label="algorithm ? '关联已有运行服务' : '服务日志来源'"
+          :disabled="saving || !hostId || loadingSoftware || !!softwareError"
+          style="width: 100%"
+        >
+          <ElOption label="暂未设置" value="" />
+          <ElOption
+            v-if="originalRuntime && !runtimeOptions.some((item) => item.id === originalRuntime)"
+            :label="originalBuildService ? 'Jenkins（原关联的构建服务）' : '原关联对象'"
+            :value="originalRuntime"
+          />
+          <ElOption
+            v-for="item in runtimeOptions"
+            :key="item.id"
+            :label="`${item.name} · ${item.locator}`"
+            :value="item.id"
+          />
+        </ElSelect>
+        <p v-if="algorithm && hostId && !loadingSoftware && !softwareError && !runtimeOptions.length" class="field-hint">
+          这台服务器暂无已核对的运行服务。可先保存登记，服务注册到「软件管理」后再关联。
+        </p>
+      </ElFormItem>
 
       <div v-if="hostId && dependencyChecks.length" class="readiness-strip">
         <span class="readiness-label">依赖登记：</span>
@@ -1493,6 +1505,11 @@ async function removeEnvironment() {
             </ElButton>
           </div>
           <p v-if="!managedId" class="field-hint">发布时生成站点配置、检查语法，然后重载 Nginx。</p>
+          <template v-if="streamFusionBackend && !managedId">
+            <p class="field-hint">StreamFusion 页面使用 SPA 回退，<code>/api</code> 转到同环境已上线的 {{ streamFusionBackend.name }}。可先保存草稿，再发布后端和前端。</p>
+            <ElButton size="small" @click="setStreamFusionRoutes">应用 StreamFusion 路由</ElButton>
+            <p class="field-hint">应用后替换与 <code>/api</code>、<code>/preview</code>、<code>/storage</code> 重叠的草稿规则。</p>
+          </template>
           <div class="binding-fields" style="margin-top: 8px">
             <ElFormItem label="服务器 Nginx 实例">
               <ElSelect
@@ -1515,9 +1532,11 @@ async function removeEnvironment() {
           </div>
           <div class="binding-grid-3">
             <ElFormItem label="域名（server_name）">
-              <ElInput v-model="nginxServerName" placeholder="_ 表示任意域名或服务器 IP" />
+              <ElInput v-model="nginxServerName" placeholder="填写实际站点域名，例如 platform.example.com" />
+              <small v-if="streamFusionBackend" class="field-hint">填写用户访问的域名或 IP 地址。外层网关须保留该 Host。</small>
+              <small v-else class="field-hint">填写 <code>_</code> 不会把此站点设为同端口的默认站点。</small>
             </ElFormItem>
-            <ElFormItem label="对外访问端口">
+            <ElFormItem label="Nginx 监听端口">
               <ElInputNumber
                 v-model="nginxListenPort"
                 :min="1"
@@ -1556,7 +1575,7 @@ async function removeEnvironment() {
                 <ElOption
                   v-for="bm in backendModuleChoices"
                   :key="bm.id"
-                  :label="`${bm.name}${resolveBackendModuleEndpoint(bm.id) ? ' (' + resolveBackendModuleEndpoint(bm.id) + ')' : ' (待配端口)'}`"
+                  :label="`${bm.name}${resolveBackendModuleEndpoint(bm.id) ? '（草稿 ' + resolveBackendModuleEndpoint(bm.id) + '）' : '（同环境尚未填端口）'}`"
                   :value="bm.id"
                 />
                 <ElOption label="自定义上游地址…" value="__URL__" />
@@ -1587,7 +1606,7 @@ async function removeEnvironment() {
       </template>
 
       <ElCollapse style="margin-top: 8px">
-        <ElCollapseItem title="高级运行参数（补充环境变量 / 服务日志绑定 / 历史目标兼容）" name="advanced">
+        <ElCollapseItem title="高级运行参数（补充环境变量 / 历史目标兼容）" name="advanced">
           <div v-if="deployMode !== 'STATIC'" class="section-box" style="margin-bottom: 12px">
             <div class="section-box-head">
               <span>补充环境变量（可选，常规配置建议直接使用上方 YAML 文件）</span>
@@ -1662,30 +1681,6 @@ async function removeEnvironment() {
               提示：名称含 PASSWORD / TOKEN / SECRET / KEY 的变量必须使用「凭据引用」，不可填写明文。
             </p>
           </div>
-          <ElFormItem
-            v-if="managedId || (!nativeJava && deployMode !== 'STATIC') || originalBuildService"
-            label="已有服务的日志来源"
-          >
-            <ElSelect
-              v-model="runtimeId"
-              aria-label="服务日志来源"
-              :disabled="saving || !hostId || loadingSoftware || !!softwareError"
-              style="width: 100%"
-            >
-              <ElOption label="暂未设置" value="" />
-              <ElOption
-                v-if="originalRuntime && !runtimeOptions.some((item) => item.id === originalRuntime)"
-                :label="originalBuildService ? 'Jenkins（原关联的构建服务）' : '原关联对象'"
-                :value="originalRuntime"
-              />
-              <ElOption
-                v-for="item in runtimeOptions"
-                :key="item.id"
-                :label="`${item.name} · ${item.locator}`"
-                :value="item.id"
-              />
-            </ElSelect>
-          </ElFormItem>
           <ElFormItem v-if="originalTarget" label="旧版上线目标">
             <ElSelect
               v-model="managedId"
@@ -1749,7 +1744,7 @@ async function removeEnvironment() {
           :disabled="saving"
           @click="removing = true"
         >
-          移除环境
+          移除登记
         </ElButton>
         <div class="footer-right">
           <ElButton :disabled="saving" @click="emit('close')">取消</ElButton>
@@ -1759,7 +1754,7 @@ async function removeEnvironment() {
             :disabled="saving || loadingHosts || !module || (!registration && (!hostId || !!hostError))"
             @click="save"
           >
-            {{ saving ? "保存中…" : "保存草稿" }}
+            {{ saving ? "保存中…" : algorithm ? "保存登记" : "保存草稿" }}
           </ElButton>
         </div>
       </div>

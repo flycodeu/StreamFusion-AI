@@ -140,3 +140,30 @@ func TestFetchReleaseArtifactUsesOnlyTheVerifiedModuleBuild(t *testing.T) {
 		}
 	}
 }
+
+func TestJenkinsReleaseManifestKeepsGenericArtifactsAndChecksWebContract(t *testing.T) {
+	base := func(filename string) string {
+		return fmt.Sprintf("%s\n%s\n%s\n123\n", strings.Repeat("a", 40), filename, strings.Repeat("b", 64))
+	}
+	for _, tc := range []struct {
+		name, filename, extra string
+		parseOK, streamOK     bool
+	}{
+		{"generic jar", "app.jar", "", true, false},
+		{"generic web archive", "web-dist.tar.gz", "", true, false},
+		{"StreamFusion web archive", "web-dist.tar.gz", streamFusionWebAPIContract + "\n", true, true},
+		{"marker cannot describe jar", "app.jar", streamFusionWebAPIContract + "\n", false, false},
+		{"unknown contract", "web-dist.tar.gz", "same-origin-api-v2\n", false, false},
+		{"incomplete marker", "web-dist.tar.gz", streamFusionWebAPIContract, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			artifact, err := parseJenkinsReleaseManifest([]byte(base(tc.filename)+tc.extra), tc.filename, 1024)
+			if (err == nil) != tc.parseOK {
+				t.Fatalf("parse manifest = %v, want success=%t", err, tc.parseOK)
+			}
+			if tc.parseOK && (validateStreamFusionWebArtifact(artifact) == nil) != tc.streamOK {
+				t.Fatalf("StreamFusion validation accepted the wrong contract: %+v", artifact)
+			}
+		})
+	}
+}

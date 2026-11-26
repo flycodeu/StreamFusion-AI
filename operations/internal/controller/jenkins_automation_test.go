@@ -80,14 +80,23 @@ func TestProjectConnectionCreatesAndRunsTypedPipelines(t *testing.T) {
 	software := installedJenkinsFixture(t, store, b, upstream.URL)
 	draft := projectDraft28("typed-qa")
 	draft.Modules[0].Catalog = &applicationModuleCatalog{Kind: "BACKEND"}
+	draft.Modules[0].Directory = "stack/platform-api"
 	for _, kind := range []string{"FRONTEND", "ALGORITHM", "OTHER"} {
 		m := draft.Modules[0]
 		m.ID = uuid.NewString()
 		m.Name = kind
 		m.Directory = "module-" + strings.ToLower(kind)
 		m.Catalog = &applicationModuleCatalog{Kind: kind}
+		if kind == "FRONTEND" {
+			m.Directory = "stack/platform-web"
+		}
 		draft.Modules = append(draft.Modules, m)
 	}
+	otherRepo := applicationRepository{ID: uuid.NewString(), Name: "独立仓库", URL: "https://github.com/example/standalone.git", Branch: "main"}
+	draft.Repositories = append(draft.Repositories, otherRepo)
+	standaloneWeb := draft.Modules[1]
+	standaloneWeb.ID, standaloneWeb.Name, standaloneWeb.RepositoryID = uuid.NewString(), "独立前端", otherRepo.ID
+	draft.Modules = append(draft.Modules, standaloneWeb)
 	pythonModule := draft.Modules[0]
 	pythonModule.ID, pythonModule.Name, pythonModule.Directory = uuid.NewString(), "camera-inspector", "camera-inspector"
 	pythonModule.Catalog = &applicationModuleCatalog{Kind: "OTHER", Environment: "Python >=3.12,<3.13、uv"}
@@ -134,19 +143,27 @@ func TestProjectConnectionCreatesAndRunsTypedPipelines(t *testing.T) {
 			t.Fatalf("decode %s workflow: %v", m.Catalog.Kind, err)
 		}
 		script := workflow.Definition.Script
-		if !strings.Contains(script, want) || !strings.Contains(script, m.Directory) || !strings.Contains(script, draft.Repositories[0].URL) {
+		repository := draft.Repositories[0].URL
+		if m.ID == standaloneWeb.ID {
+			repository = otherRepo.URL
+		}
+		if !strings.Contains(script, want) || !strings.Contains(script, m.Directory) || !strings.Contains(script, repository) {
 			t.Fatalf("incorrect %s pipeline", m.Catalog.Kind)
+		}
+		wantContract := m.Catalog.Kind == "FRONTEND" && m.ID != standaloneWeb.ID
+		if strings.Contains(script, streamFusionWebAPIContract) != wantContract {
+			t.Fatalf("incorrect StreamFusion site contract for %s in %s", m.Directory, repository)
 		}
 		if !strings.Contains(script, "agent { label 'sfops-build' }") || strings.Contains(script, "agent any") {
 			t.Fatalf("%s pipeline did not target the default build label", m.Catalog.Kind)
 		}
 	}
-	if created != 4 || queued != 4 {
+	if created != 5 || queued != 5 {
 		t.Fatalf("created=%d queued=%d", created, queued)
 	}
 	firstReq["requestId"] = uuid.NewString()
 	b.call("POST", firstScope+"/jenkins-build", firstReq, 200)
-	if created != 4 || queued != 5 {
+	if created != 5 || queued != 6 {
 		t.Fatal("existing managed workflow was not reused")
 	}
 	envScope := root + "/service-instances/" + p.Environments[0].Deployments[0].ID
@@ -160,7 +177,7 @@ func TestProjectConnectionCreatesAndRunsTypedPipelines(t *testing.T) {
 	configs[firstName] = "<flow-definition><description>different job</description></flow-definition>"
 	firstReq["requestId"] = uuid.NewString()
 	b.call("POST", firstScope+"/jenkins-build", firstReq, 409)
-	if created != 4 || queued != 5 {
+	if created != 5 || queued != 6 {
 		t.Fatal("unowned workflow ran")
 	}
 	settings["expectedVersion"] = "1"
@@ -264,7 +281,7 @@ func rewindSchema34Fixture(t *testing.T, db *sql.DB) {
         DROP TABLE IF EXISTS project_deployment_jobs;
         ALTER TABLE application_repositories DROP COLUMN jenkins_credential_id;
         ALTER TABLE application_jenkins_connections DROP COLUMN build_agent_label;
-        DELETE FROM schema_migrations WHERE version=34;
+        DELETE FROM schema_migrations WHERE version>=34;
         PRAGMA user_version=33;`); err != nil {
 		t.Fatal(err)
 	}

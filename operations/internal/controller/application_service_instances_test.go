@@ -118,6 +118,125 @@ func TestApplicationServiceInstanceRegistrationAndRemoval(t *testing.T) {
 	}
 }
 
+func TestAlgorithmModuleRegistersDistinctHostsInOneEnvironment(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	hostA := dataOf(t, b.call("POST", "/hosts", map[string]string{"name": "算法服务器 A", "kind": "LOCAL"}, 201))["id"].(string)
+	hostB := uuid.NewString()
+	if _, err := s.DB.Exec("INSERT INTO targets(id,name,install_root,kind,address,created_at) VALUES(?,?,?,'SSH',?,?)",
+		hostB, "算法服务器 B", "/opt/algorithm", "192.0.2.10", Now()); err != nil {
+		t.Fatal(err)
+	}
+	draft := projectDraft28("算法两台服务器")
+	draft.Modules[0].Catalog = &applicationModuleCatalog{Kind: "ALGORITHM"}
+	draft.Environments[0].Deployments[0].HostID = hostA
+	draft.Environments[0].Deployments[0].ServicePort = 8101
+	draft.Modules = append(draft.Modules, applicationModule{ID: uuid.NewString(), Name: "platform-api",
+		Catalog: &applicationModuleCatalog{Kind: "BACKEND"}})
+	project := applicationResponse(t, b.call("POST", "/application-projects", draft, 200))
+	base := "/application-projects/" + project.ID
+	path := base + "/service-instances"
+	port := 8101
+	input := applicationServiceInstanceInput{Version: project.Version, ModuleID: project.Modules[0].ID,
+		Environment: "qa", HostID: hostB, ServicePort: &port}
+	project = applicationResponse(t, b.call("POST", path, input, 200))
+	env := project.Environments[0]
+	if len(project.Environments) != 1 || len(env.Deployments) != 2 ||
+		env.Deployments[0].HostID != hostA || env.Deployments[1].HostID != hostB ||
+		env.Deployments[0].ID == env.Deployments[1].ID {
+		t.Fatal("algorithm registrations were not distinct within one environment", env)
+	}
+	input.Version = project.Version
+	if res := b.call("POST", path, input, 409); !strings.Contains(res.Body.String(), "APPLICATION_INSTANCE_DUPLICATED") {
+		t.Fatal(res.Body.String())
+	}
+	input.ID, input.HostID = env.Deployments[1].ID, hostA
+	b.call("POST", path, input, 409)
+	if res := b.call("PATCH", base+"/catalog", applicationCatalogInput{Version: project.Version,
+		Modules: []applicationCatalogModule{{ID: project.Modules[0].ID, Name: project.Modules[0].Name,
+			RepositoryID: project.Modules[0].RepositoryID, Directory: project.Modules[0].Directory,
+			Catalog: &applicationModuleCatalog{Kind: "BACKEND"}}}}, 400); !strings.Contains(res.Body.String(), "不同服务器") {
+		t.Fatal(res.Body.String())
+	}
+	// The comprehensive draft endpoint follows the same rules and preserves both identities.
+	project = applicationResponse(t, b.call("PATCH", base, project, 200))
+	if !reflect.DeepEqual(project.Environments[0].Deployments, env.Deployments) {
+		t.Fatal("full project edit changed registered hosts")
+	}
+	input = applicationServiceInstanceInput{Version: project.Version, ModuleID: project.Modules[1].ID,
+		Environment: env.Name, HostID: hostA}
+	project = applicationResponse(t, b.call("POST", path, input, 200))
+	input.Version, input.HostID = project.Version, hostB
+	b.call("POST", path, input, 409)
+	project = applicationResponse(t, b.call("DELETE", path+"/"+env.Deployments[1].ID,
+		map[string]string{"version": project.Version}, 200))
+	if len(project.Environments[0].Deployments) != 2 || project.Environments[0].Deployments[0].ID != env.Deployments[0].ID {
+		t.Fatal("removing one host changed the other registration")
+	}
+}
+
+func TestAlgorithmRegistrationDoesNotIntroduceStaticMode(t *testing.T) {
+	s, b := setup(t)
+	b.login()
+	host := dataOf(t, b.call("POST", "/hosts", map[string]string{"name": "算法主机", "kind": "LOCAL"}, 201))["id"].(string)
+	draft := projectDraft28("算法部署形态")
+	draft.Modules[0].Catalog = &applicationModuleCatalog{Kind: "ALGORITHM"}
+	draft.Environments[0].Deployments[0].HostID = host
+	draft.Environments[0].Deployments[0].DeployMode = "STATIC"
+	checkInvalid := func(method, path string, input any) {
+		t.Helper()
+		if response := b.call(method, path, input, 400); !strings.Contains(response.Body.String(), "只能登记原生进程或 Docker 容器") {
+			t.Fatal(response.Body.String())
+		}
+	}
+	checkInvalid("POST", "/application-projects", draft)
+	draft.Environments[0].Deployments[0].DeployMode = "NATIVE"
+	project := applicationResponse(t, b.call("POST", "/application-projects", draft, 200))
+	base := "/application-projects/" + project.ID
+	registrations := base + "/service-instances"
+
+	static, docker := " STATIC ", "DOCKER"
+	input := applicationServiceInstanceInput{Version: project.Version, ModuleID: project.Modules[0].ID,
+		Environment: "staging", HostID: host, DeployMode: &static}
+	checkInvalid("POST", registrations, input)
+	input.ID, input.Environment = project.Environments[0].Deployments[0].ID, "QA"
+	checkInvalid("POST", registrations, input)
+	project.Environments[0].Deployments[0].DeployMode = "STATIC"
+	checkInvalid("PATCH", base, project)
+
+	// Simulate a static registration saved before the new mode restriction.
+	if _, err := s.DB.Exec(`UPDATE application_deployments SET config_json=json_set(config_json,'$.deployMode','STATIC') WHERE id=?`, input.ID); err != nil {
+		t.Fatal(err)
+	}
+	input.RecordedVersion = "historical-static"
+	project = applicationResponse(t, b.call("POST", registrations, input, 200))
+	if row := project.Environments[0].Deployments[0]; row.DeployMode != "STATIC" || row.RecordedVersion != input.RecordedVersion {
+		t.Fatalf("legacy static registration was not preserved: %+v", row)
+	}
+	project = applicationResponse(t, b.call("PATCH", base, project, 200))
+	renamed := "算法部署形态更新"
+	project = applicationResponse(t, b.call("PATCH", base+"/catalog",
+		applicationCatalogInput{Version: project.Version, Name: &renamed}, 200))
+
+	input.Version, input.DeployMode = project.Version, &docker
+	project = applicationResponse(t, b.call("POST", registrations, input, 200))
+	if mode := project.Environments[0].Deployments[0].DeployMode; mode != "DOCKER" {
+		t.Fatal("legacy registration could not convert to a container:", mode)
+	}
+	input.Version, input.DeployMode = project.Version, &static
+	checkInvalid("POST", registrations, input)
+
+	frontend := projectDraft28("前端静态形态")
+	frontend.Modules[0].Catalog = &applicationModuleCatalog{Kind: "FRONTEND"}
+	frontend.Environments[0].Deployments[0].DeployMode = "STATIC"
+	project = applicationResponse(t, b.call("POST", "/application-projects", frontend, 200))
+	module := project.Modules[0]
+	checkInvalid("PATCH", "/application-projects/"+project.ID+"/catalog", applicationCatalogInput{
+		Version: project.Version, Modules: []applicationCatalogModule{{ID: module.ID, Name: module.Name, RepositoryID: module.RepositoryID,
+			Directory: module.Directory, Catalog: &applicationModuleCatalog{Kind: "ALGORITHM"}}},
+	})
+}
+
 func TestApplicationServiceInstanceEditKeepsRuntimeAndLegacyConfig(t *testing.T) {
 	s, b := setup(t)
 	b.login()
