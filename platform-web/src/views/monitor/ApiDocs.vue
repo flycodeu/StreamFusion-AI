@@ -101,20 +101,20 @@ onMounted(load)
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 12px 16px;
-  margin-bottom: 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  padding: 12px var(--sf-card-padding-x);
+  margin-bottom: 14px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  background: var(--sf-surface);
+  box-shadow: var(--sf-shadow-xs);
 }
 .api-docs-frame {
   flex: 1;
   width: 100%;
   min-height: 640px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: white;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  background: var(--sf-surface);
+  box-shadow: var(--sf-shadow-xs);
 }
 </style>

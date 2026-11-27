@@ -6,7 +6,6 @@ import {
   ElDatePicker,
   ElDialog,
   ElEmpty,
-  ElForm,
   ElFormItem,
   ElInput,
   ElOption,
@@ -27,6 +26,9 @@ import { normalizedTraceId } from '../../features/audit/presentation'
 import RequestError from '../../components/feedback/RequestError.vue'
 import CaptureDialog from '../../features/diagnostics/CaptureDialog.vue'
 import TablePanel from '../../components/table/TablePanel.vue'
+import TableActions from '../../components/table/TableActions.vue'
+import CursorPagination from '../../components/table/CursorPagination.vue'
+import FilterBar from '../../components/ui/FilterBar.vue'
 import { sessionState } from '../../session/state'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
@@ -187,7 +189,7 @@ watch(
       v-if="captureOpen && sessionState.me?.isSuperAdmin"
       @close="captureOpen = false"
     />
-    <ElForm class="search-form" inline @submit.prevent="load">
+    <FilterBar :loading="loading" @search="load" @reset="reset">
       <ElFormItem label="时间范围" class="time-filter"
         ><ElDatePicker
           v-model="range"
@@ -198,31 +200,31 @@ watch(
           :clearable="false"
       /></ElFormItem>
       <ElFormItem label="请求标识"
-        ><ElInput v-model="filters.traceId" placeholder="粘贴请求标识" clearable
+        ><ElInput
+          v-model="filters.traceId"
+          class="search-field"
+          placeholder="粘贴请求标识"
+          clearable
       /></ElFormItem>
       <ElFormItem label="巡检任务编号"
-        ><ElInput v-model="filters.planId" placeholder="任务编号" clearable
+        ><ElInput v-model="filters.planId" class="status-field" placeholder="任务编号" clearable
       /></ElFormItem>
       <ElFormItem label="检查编号"
-        ><ElInput v-model="filters.checkId" placeholder="检查编号" clearable
+        ><ElInput v-model="filters.checkId" class="status-field" placeholder="检查编号" clearable
       /></ElFormItem>
       <ElFormItem label="日志类型"
-        ><ElSelect v-model="filters.kind" clearable placeholder="全部类型"
+        ><ElSelect v-model="filters.kind" class="status-field" clearable placeholder="全部类型"
           ><ElOption label="接口请求" value="REQUEST" /><ElOption
             label="相机检查"
             value="CAMERA_CHECK" /></ElSelect
       ></ElFormItem>
       <ElFormItem label="日志级别"
-        ><ElSelect v-model="filters.level" clearable placeholder="全部级别"
+        ><ElSelect v-model="filters.level" class="status-field" clearable placeholder="全部级别"
           ><ElOption label="正常" value="INFO" /><ElOption label="警告" value="WARN" /><ElOption
             label="错误"
             value="ERROR" /></ElSelect
       ></ElFormItem>
-      <div class="filter-actions">
-        <ElButton type="primary" native-type="submit" :loading="loading">查询日志</ElButton
-        ><ElButton @click="reset">重置</ElButton>
-      </div>
-    </ElForm>
+    </FilterBar>
     <p v-if="validation" role="alert" class="query-warning">{{ validation }}</p>
     <RequestError :error="error" :diagnostic-link="false" />
     <TablePanel>
@@ -250,7 +252,7 @@ watch(
       <ElTable
         v-loading="loading"
         :data="rows"
-        :max-height="context ? 420 : 620"
+        :max-height="context ? 420 : undefined"
         border
         @row-dblclick="show"
       >
@@ -290,36 +292,44 @@ watch(
             row.durationMs == null ? '—' : `${row.durationMs} ms`
           }}</template></ElTableColumn
         >
-        <ElTableColumn label="操作" width="80" fixed="right"
+        <ElTableColumn
+          label="操作"
+          width="80"
+          fixed="right"
+          class-name="table-actions-column"
+          :resizable="false"
           ><template #default="{ row }"
-            ><ElButton link type="primary" @click="show(asEvent(row))">详情</ElButton></template
+            ><TableActions compact
+              ><ElButton link type="primary" @click="show(asEvent(row))"
+                >详情</ElButton
+              ></TableActions
+            ></template
           ></ElTableColumn
         >
         <template #empty
-          ><ElEmpty description="没有找到日志，请检查时间范围和筛选条件" :image-size="72"
+          ><ElEmpty description="没有找到日志，请检查时间范围和筛选条件" :image-size="64"
         /></template>
       </ElTable>
       <template #footer>
-        <div class="log-pagination">
-          <span v-if="total !== null" class="log-total">{{
-            totalExact ? `共 ${total} 条` : `已匹配至少 ${total} 条`
-          }}</span>
-          <span v-else class="log-total">总数量暂不可用</span>
-          <span>第 {{ page }} 页 · 本页 {{ rows.length }} 条</span>
-          <ElSelect v-model="pageSize" aria-label="每页条数" class="page-size" @change="load"
-            ><ElOption
-              v-for="size in [20, 50, 100, 200]"
-              :key="size"
-              :label="`${size} 条/页`"
-              :value="size"
-          /></ElSelect>
-          <ElButton :disabled="loading || page === 1 || cursorExpired" @click="previousPage"
-            >上一页</ElButton
-          >
-          <ElButton :disabled="loading || !nextCursor || cursorExpired" @click="nextPage"
-            >下一页</ElButton
-          >
-        </div>
+        <CursorPagination
+          v-model:page-size="pageSize"
+          :page="page"
+          :page-sizes="[20, 50, 100, 200]"
+          :has-prev="page > 1 && !cursorExpired"
+          :has-next="Boolean(nextCursor) && !cursorExpired"
+          :disabled="loading"
+          :summary="
+            total !== null
+              ? totalExact
+                ? `共 ${total} 条`
+                : `已匹配至少 ${total} 条`
+              : '总数量暂不可用'
+          "
+          :page-summary="`第 ${page} 页 · 本页 ${rows.length} 条`"
+          @prev="previousPage"
+          @next="nextPage"
+          @size-change="load"
+        />
       </template>
     </TablePanel>
     <ElDialog
@@ -420,47 +430,26 @@ watch(
 .diagnostics-page {
   min-width: 0;
 }
-.filter-actions {
-  display: inline-flex;
-  margin-bottom: 18px;
-}
-.log-pagination {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-.log-total {
-  margin-right: auto;
-}
-.page-size {
-  width: 120px;
-}
 .last-read {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-.search-form :deep(.el-input),
-.search-form :deep(.el-select) {
-  width: 190px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
+  font-variant-numeric: tabular-nums;
 }
 .event-title {
-  font-size: 13px;
+  font-size: var(--sf-fs-sub);
+  color: var(--sf-text-primary);
   overflow-wrap: anywhere;
 }
 .event-meta {
-  font:
-    11px/1.7 Consolas,
-    monospace;
-  color: var(--el-text-color-secondary);
+  font-family: var(--sf-font-mono);
+  font-size: var(--sf-fs-caption);
+  line-height: 1.6;
+  color: var(--sf-text-secondary);
 }
 .query-warning {
-  color: var(--el-color-warning-dark-2);
-  font-size: 13px;
-  margin: 12px 0;
+  color: var(--sf-warning);
+  font-size: var(--sf-fs-sub);
+  margin: 10px 0;
 }
 .detail-heading,
 .detail-actions {

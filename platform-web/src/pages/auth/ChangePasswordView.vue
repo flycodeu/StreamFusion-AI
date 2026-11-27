@@ -25,21 +25,22 @@ onMounted(() => {
 .required-password-card {
   max-width: 760px;
   margin: 24px auto;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  box-shadow: var(--sf-shadow-xs);
 }
 .required-password-card h2 {
   margin: 0;
-  font-size: 18px;
+  color: var(--sf-text-primary);
+  font-size: var(--sf-fs-section);
   font-weight: 600;
 }
 .required-password-card :deep(.el-card__body) {
-  padding: 32px;
+  padding: 28px 32px;
 }
 @media (max-width: 680px) {
   .required-password-card :deep(.el-card__body) {
-    padding: 24px 16px;
+    padding: 20px 16px;
   }
 }
 </style>

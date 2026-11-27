@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
-import { ElButton, ElOption, ElPagination, ElSelect } from 'element-plus'
+import { ElButton, ElOption, ElSelect } from 'element-plus'
 import { getCamera, getDeviceChannels } from '../../api/camera/api'
 import { getCameraStatus } from '../../api/camera-status/api'
 import type { Camera, CameraProfile } from '../../api/camera/types'
@@ -8,6 +8,7 @@ import type { PlanTarget, TargetSelection } from '../../api/camera-status/planTa
 import { sessionState } from '../../session/state'
 import { usePageScope } from '../../composables/usePageScope'
 import RequestError from '../../components/feedback/RequestError.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
 import { streamLabel } from '../camera/streamLabels'
 import { reasonLabel } from './model'
 
@@ -197,14 +198,14 @@ onScopeDispose(cancel)
         >
       </div>
     </div>
-    <ElPagination
+    <StandardPagination
       v-if="targets.length > 10"
+      v-model:page="page"
       class="target-pagination"
-      :current-page="page"
-      :page-size="10"
+      :size="10"
       :total="targets.length"
+      small
       layout="total, prev, pager, next"
-      @update:current-page="page = $event"
     />
     <div v-if="editing" class="target-editor" :aria-label="`设置 ${editing.name} 检测码流`">
       <header>
@@ -271,8 +272,8 @@ onScopeDispose(cancel)
   margin-top: 16px;
 }
 .target-table {
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
   overflow: hidden;
 }
 .target-row {
@@ -281,8 +282,8 @@ onScopeDispose(cancel)
   align-items: center;
   gap: 16px;
   padding: 10px 16px;
-  border-bottom: 1px solid #f1f5f9;
-  font-size: 13px;
+  border-bottom: 1px solid var(--sf-border-light);
+  font-size: var(--sf-fs-sub);
 }
 .target-row:last-child {
   border-bottom: 0;
@@ -294,16 +295,16 @@ onScopeDispose(cancel)
   white-space: nowrap;
 }
 .target-row strong {
-  color: #334155;
+  color: var(--sf-text-regular);
   font-weight: 500;
 }
 .target-description {
-  color: #64748b;
+  color: var(--sf-text-secondary);
 }
 .target-header {
-  background: #f8fafc;
-  color: #64748b;
-  font-size: 12px;
+  background: var(--sf-surface-subtle);
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
 }
 .target-pagination {
   justify-content: flex-end;
@@ -312,17 +313,17 @@ onScopeDispose(cancel)
 .target-editor {
   margin-top: 12px;
   padding: 14px 16px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
 }
 .target-editor header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 10px;
-  color: #334155;
-  font-size: 13px;
+  color: var(--sf-text-regular);
+  font-size: var(--sf-fs-sub);
 }
 .target-controls {
   display: flex;

@@ -49,7 +49,7 @@ vi.mock('vue-router', async () => {
 vi.mock('element-plus', async () => {
   const { defineComponent, h } = await import('vue')
   return Object.fromEntries(
-    ['ElButton', 'ElDialog', 'ElTag'].map((name) => [
+    ['ElButton', 'ElDialog', 'ElIcon', 'ElTag', 'ElTooltip'].map((name) => [
       name,
       defineComponent({
         inheritAttrs: false,

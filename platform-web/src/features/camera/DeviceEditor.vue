@@ -201,11 +201,11 @@ onMounted(load)
   flex-wrap: wrap;
   gap: 8px 24px;
   padding: 10px 14px;
-  background: #f7f8fa;
-  border: 1px solid #e5e8ef;
-  border-radius: 6px;
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
+  background: var(--sf-surface-subtle);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-sm);
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
   line-height: 1.6;
 }
 </style>

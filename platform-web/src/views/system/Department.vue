@@ -22,6 +22,7 @@ import { useColumns } from '../../composables/table/useColumns'
 import { flattenTree, treeIds } from '../../utils/tree'
 import TablePanel from '../../components/table/TablePanel.vue'
 import TableActions from '../../components/table/TableActions.vue'
+import FilterBar from '../../components/ui/FilterBar.vue'
 import { useTableSelection } from '../../composables/table/useTableSelection'
 import { usePageScope } from '../../composables/usePageScope'
 
@@ -143,15 +144,11 @@ onMounted(load)
 
 <template>
   <div class="content-page">
-    <ElForm class="search-form" inline @submit.prevent="load">
+    <FilterBar :loading="loading" @search="load" @reset="resetSearch">
       <ElFormItem label="部门名称">
         <ElInput v-model="name" class="search-field" placeholder="请输入部门名称" clearable />
       </ElFormItem>
-      <ElFormItem>
-        <ElButton type="primary" native-type="submit" :loading="loading">查询</ElButton>
-        <ElButton @click="resetSearch">重置</ElButton>
-      </ElFormItem>
-    </ElForm>
+    </FilterBar>
     <RequestError :error="error" />
     <TablePanel :initial-loading="loading && !rows.length">
       <template #actions>
@@ -239,7 +236,7 @@ onMounted(load)
       :show-close="!saving"
     >
       <RequestError :error="error" />
-      <ElForm label-width="90px" :disabled="saving" @submit.prevent="save">
+      <ElForm label-position="top" :disabled="saving" @submit.prevent="save">
         <ElFormItem
           label="部门名称"
           required

@@ -29,6 +29,8 @@ import {
   type PreviewMaintenance,
 } from '../../api/preview-node/api'
 import RequestError from '../../components/feedback/RequestError.vue'
+import PageHeader from '../../components/ui/PageHeader.vue'
+import HelpTip from '../../components/ui/HelpTip.vue'
 import { ApiRequestError } from '../../lib/http/error'
 import { usePageScope } from '../../composables/usePageScope'
 import { sessionState } from '../../session/state'
@@ -445,12 +447,12 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
 
 <template>
   <section class="preview-node-panel" :aria-label="management ? '预览节点管理' : '预览节点总览'">
-    <header class="node-title">
-      <div class="node-title-label">
-        <h2>预览节点</h2>
-        <span class="node-count">{{ snapshot?.nodes.length ?? '—' }} 台已登记</span>
-      </div>
-      <div class="node-actions">
+    <PageHeader
+      title="预览节点"
+      :count="`${snapshot?.nodes.length ?? '—'} 台已登记`"
+      heading-tag="h2"
+    >
+      <template #actions>
         <ElButton v-if="!snapshot" :loading="busy" @click="run()">重新加载</ElButton>
         <ElButton v-else :loading="busy" @click="run(() => previewNodeAction('check'))"
           >检查节点</ElButton
@@ -461,25 +463,26 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
           @click="run(() => previewNodeAction('reconcile'))"
           >重新核对资源</ElButton
         >
-        <button
-          v-if="snapshot && canManage"
-          type="button"
-          class="guide-trigger primary-trigger"
-          popovertarget="preview-package-panel"
-        >
-          + 接入节点包
-        </button>
+        <ElButton v-if="snapshot && canManage" type="primary" popovertarget="preview-package-panel">
+          接入节点包
+        </ElButton>
         <RouterLink
           v-if="snapshot && !management && administrator"
+          class="node-nav-link"
           to="/monitor/PreviewServiceNodes"
           >节点配置与接入</RouterLink
         >
-        <RouterLink v-if="snapshot && management" to="/monitor/Server">主机与媒体状态</RouterLink>
-        <RouterLink v-if="snapshot && !management && previewPath" :to="previewPath"
+        <RouterLink v-if="snapshot && management" class="node-nav-link" to="/monitor/Server"
+          >主机与媒体状态</RouterLink
+        >
+        <RouterLink
+          v-if="snapshot && !management && previewPath"
+          class="node-nav-link"
+          :to="previewPath"
           >前往预览</RouterLink
         >
-      </div>
-    </header>
+      </template>
+    </PageHeader>
     <RequestError
       :error="error"
       advice="核对节点原因和预算；连接异常时检查证书、凭据与节点日志，资源未确认关闭前保留占用。"
@@ -565,21 +568,22 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
       </div>
       <section v-if="canManage" class="node-guide direct-guide" aria-label="直连 ZLM">
         <div class="connection-heading">
-          <div>
+          <div class="connection-title-group">
             <h3>直连 ZLM</h3>
-            <p class="connection-hint">手工接入与 Ops 引入互不依赖；接入后需手动参与调度</p>
+            <HelpTip
+              content="手工接入与 Ops 引入互不依赖；接入后需手动参与调度。"
+              label="直连 ZLM 说明"
+            />
           </div>
           <div class="node-actions">
-            <button type="button" class="guide-trigger" popovertarget="preview-ops-zlm-panel">
-              从 Ops 引入 ZLM
-            </button>
+            <ElButton popovertarget="preview-ops-zlm-panel">从 Ops 引入 ZLM</ElButton>
             <ElButton
               :disabled="busy || directBusy || !directInstances?.registrationAvailable"
               type="primary"
               @click="openDirectForm()"
               >+ 接入 ZLM</ElButton
             >
-            <ElButton text :loading="directBusy" @click="loadDirectInstances()">刷新</ElButton>
+            <ElButton :loading="directBusy" @click="loadDirectInstances()">刷新</ElButton>
           </div>
         </div>
         <RequestError :error="directError" :advice="directAdvice" />
@@ -708,6 +712,8 @@ function maintain(action?: 'PREPARE' | 'RELEASE') {
                 >密钥</ElButton
               >
               <ElButton
+                type="danger"
+                plain
                 :disabled="busy || item.mode === 'REMOTE' || !directIdle(item)"
                 @click="directRemoving = item"
                 >移除</ElButton

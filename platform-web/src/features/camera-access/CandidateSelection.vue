@@ -1,19 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import {
-  ElButton,
-  ElCheckbox,
-  ElFormItem,
-  ElOption,
-  ElPagination,
-  ElSelect,
-  ElTag,
-} from 'element-plus'
+import { ElButton, ElCheckbox, ElFormItem, ElOption, ElSelect, ElTag } from 'element-plus'
 import type {
   AccessCandidate,
   CandidateSelection,
   CandidateProfile,
 } from '../../api/camera-access/types'
+import StandardPagination from '../../components/table/StandardPagination.vue'
 import { initialSelections } from './form'
 import { usageLabel, effectiveUsage } from '../camera/form'
 import { streamLabel } from '../camera/streamLabels'
@@ -102,8 +95,10 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
           :disabled="disabled || candidate.mappingRequired"
           @update:model-value="toggleCandidate(candidate, !!$event)"
           >{{ candidate.name }}</ElCheckbox
-        ><ElTag v-if="candidate.mappingRequired" type="warning">通道映射待确认，暂不能导入</ElTag
-        ><ElTag v-else-if="!candidate.profiles.length" type="info">暂无码流资料</ElTag
+        ><ElTag v-if="candidate.mappingRequired" type="warning" effect="plain"
+          >通道映射待确认，暂不能导入</ElTag
+        ><ElTag v-else-if="!candidate.profiles.length" type="info" effect="plain"
+          >暂无码流资料</ElTag
         ><span v-else-if="!compact">{{ candidate.profiles.length }} 路码流</span>
       </header>
       <template v-if="!compact && selected(candidate.candidateId)">
@@ -147,11 +142,12 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
         ></ElFormItem>
       </template>
     </section>
-    <ElPagination
+    <StandardPagination
       v-if="!compact && candidates.length > 12"
-      v-model:current-page="page"
-      :page-size="12"
+      v-model:page="page"
+      :size="12"
       :total="candidates.length"
+      small
       layout="total, prev, pager, next"
     />
   </div>
@@ -163,13 +159,13 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
   flex-wrap: wrap;
 }
 .candidate-row {
   padding: 14px 16px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 5px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-sm);
   margin-bottom: 12px;
 }
 .candidate-row header {
@@ -186,14 +182,14 @@ function toggleProfile(candidate: AccessCandidate, profile: CandidateProfile, ch
   padding: 6px 10px;
   margin-bottom: 0;
   border: 0;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--sf-border-light);
   border-radius: 0;
 }
 .candidate-row header > span,
 .profile-parameters,
 .empty-state {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
 }
 .profile-row {
   display: flex;

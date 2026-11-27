@@ -114,14 +114,19 @@ onBeforeUnmount(() => {
   >
     <RequestError :error="error" />
     <div v-if="status" class="capture-status">
-      <ElTag :type="status.enabled ? 'success' : 'info'">{{
+      <ElTag :type="status.enabled ? 'success' : 'info'" effect="plain">{{
         status.enabled ? '采集中' : '未开启'
-      }}</ElTag
-      ><span>已匹配 {{ status.matched }} / {{ status.limit }} · 已记录 {{ status.recorded }}</span
-      ><span v-if="status.enabled">截止 {{ formatDateTime(status.expiresAt) }}</span>
+      }}</ElTag>
+      <span>已匹配 {{ status.matched }} / {{ status.limit }} · 已记录 {{ status.recorded }}</span>
+      <span v-if="status.enabled">截止 {{ formatDateTime(status.expiresAt) }}</span>
     </div>
-    <ElForm label-width="105px" :disabled="busy || status?.enabled" @submit.prevent="change(false)">
-      <ElFormItem label="采集接口"
+    <ElForm
+      class="sf-form-grid"
+      label-position="top"
+      :disabled="busy || status?.enabled"
+      @submit.prevent="change(false)"
+    >
+      <ElFormItem class="sf-form-full" label="采集接口"
         ><ElSelect
           v-model="form.routes"
           multiple
@@ -134,13 +139,13 @@ onBeforeUnmount(() => {
             :value="route.key"
             :label="`${route.label} · ${route.key}`" /></ElSelect
       ></ElFormItem>
-      <ElFormItem label="账号范围"
+      <ElFormItem class="sf-form-full" label="账号范围"
         ><ElInput v-model="form.actorId" placeholder="账号编号，留空匹配全部账号" clearable
       /></ElFormItem>
       <ElFormItem label="执行时间"
-        ><ElInputNumber v-model="form.minutes" :min="1" :max="60" /><span class="unit"
-          >分钟</span
-        ></ElFormItem
+        ><div class="duration-field">
+          <ElInputNumber v-model="form.minutes" :min="1" :max="60" /><span class="unit">分钟</span>
+        </div></ElFormItem
       >
       <ElFormItem label="仅记录失败"><ElSwitch v-model="form.errorsOnly" /></ElFormItem>
     </ElForm>
@@ -164,19 +169,27 @@ onBeforeUnmount(() => {
   gap: 10px;
   flex-wrap: wrap;
   align-items: center;
-  margin-bottom: 18px;
+  margin-bottom: 16px;
   padding: 10px 14px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  font-size: 13px;
-  color: #334155;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
+  font-size: var(--sf-fs-sub);
+  color: var(--sf-text-regular);
+}
+.duration-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.duration-field :deep(.el-input-number) {
+  width: 150px;
 }
 .unit {
-  margin-left: 10px;
+  color: var(--sf-text-secondary);
 }
 .capture-validation {
-  color: var(--el-color-danger);
-  font-size: 13px;
+  color: var(--sf-danger);
+  font-size: var(--sf-fs-sub);
 }
 </style>

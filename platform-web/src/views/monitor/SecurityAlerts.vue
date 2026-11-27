@@ -7,7 +7,6 @@ import {
   ElDescriptionsItem,
   ElDrawer,
   ElEmpty,
-  ElPagination,
   ElTable,
   ElTableColumn,
   ElTag,
@@ -17,6 +16,9 @@ import { getSecurityAlerts, securityDegraded } from '../../api/security/alerts'
 import type { SecurityAlert, SecurityFeed } from '../../api/security/alerts'
 import RequestError from '../../components/feedback/RequestError.vue'
 import TablePanel from '../../components/table/TablePanel.vue'
+import TableActions from '../../components/table/TableActions.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
+import HelpTip from '../../components/ui/HelpTip.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import DiagnosticLink from '../../features/diagnostics/DiagnosticLink.vue'
 import { securityCategories, securityRules } from '../../features/security/presentation'
@@ -25,7 +27,7 @@ import { formatDateTime } from '../../utils/dateTime'
 
 defineOptions({ name: 'MonitorSecurityAlerts' })
 
-const pageSize = 20
+const pageSize = ref(20)
 const allowed = computed(
   () => !!sessionState.me?.isSuperAdmin && sessionState.me.modules?.includes('audit'),
 )
@@ -44,7 +46,7 @@ const emptyText = computed(() =>
 const captureScope = usePageScope()
 let sequence = 0
 let pending: InstanceType<typeof globalThis.AbortController> | null = null
-async function load(targetPage = page.value) {
+async function load(targetPage = page.value, targetSize = pageSize.value) {
   if (!allowed.value) return
   const inScope = captureScope()
   const current = ++sequence
@@ -55,15 +57,16 @@ async function load(targetPage = page.value) {
   error.value = null
   const currentRequest = () => inScope() && allowed.value && sequence === current
   try {
-    let result = await getSecurityAlerts({ page: targetPage, size: pageSize }, controller.signal)
+    let result = await getSecurityAlerts({ page: targetPage, size: targetSize }, controller.signal)
     if (!currentRequest()) return
-    const lastPage = Math.max(1, Math.ceil(result.total / pageSize))
+    const lastPage = Math.max(1, Math.ceil(result.total / targetSize))
     if (targetPage > lastPage) {
-      result = await getSecurityAlerts({ page: lastPage, size: pageSize }, controller.signal)
+      result = await getSecurityAlerts({ page: lastPage, size: targetSize }, controller.signal)
       if (!currentRequest()) return
     }
     rows.value = result.items
     page.value = result.page
+    pageSize.value = targetSize
     total.value = result.total
     monitor.value = result.monitor
   } catch (cause) {
@@ -77,6 +80,12 @@ async function load(targetPage = page.value) {
       loading.value = false
     }
   }
+}
+function changePage(nextPage: number) {
+  void load(nextPage, pageSize.value)
+}
+function changeSize(nextSize: number) {
+  void load(1, nextSize)
 }
 function details(row: SecurityAlert) {
   selected.value = row
@@ -118,7 +127,10 @@ onBeforeUnmount(clear)
       <template #actions>
         <div class="security-heading">
           <h1>安全告警</h1>
-          <span>本机最近 7 天，最多 1000 条</span>
+          <HelpTip
+            content="展示本机最近 7 天留存的安全告警，上限 1000 条。"
+            label="安全告警统计范围"
+          />
         </div>
       </template>
       <template #tools>
@@ -144,7 +156,7 @@ onBeforeUnmount(clear)
         >
           <ElTableColumn label="异常类型" min-width="170"
             ><template #default="{ row }"
-              ><ElTag :type="row.rule === 'MIXED_PROBING' ? 'danger' : 'warning'">{{
+              ><ElTag :type="row.rule === 'MIXED_PROBING' ? 'danger' : 'warning'" effect="plain">{{
                 securityRules[(row as SecurityAlert).rule]
               }}</ElTag></template
             ></ElTableColumn
@@ -156,25 +168,30 @@ onBeforeUnmount(clear)
               formatDateTime(row.lastSeen)
             }}</template></ElTableColumn
           >
-          <ElTableColumn label="操作" width="90" fixed="right"
+          <ElTableColumn
+            label="操作"
+            width="90"
+            fixed="right"
+            class-name="table-actions-column"
+            :resizable="false"
             ><template #default="{ row }"
-              ><ElButton link type="primary" @click="details(row as SecurityAlert)"
-                >详情</ElButton
+              ><TableActions compact
+                ><ElButton link type="primary" @click="details(row as SecurityAlert)"
+                  >详情</ElButton
+                ></TableActions
               ></template
             ></ElTableColumn
           >
         </ElTable>
       </div>
-      <template v-if="total > 0" #footer>
-        <ElPagination
-          class="security-pagination"
-          :current-page="page"
-          :page-size="pageSize"
+      <template v-if="monitor" #footer>
+        <StandardPagination
+          :page="page"
+          :size="pageSize"
           :total="total"
           :disabled="loading"
-          :pager-count="5"
-          layout="total, prev, pager, next"
-          @update:current-page="load"
+          @update:page="changePage"
+          @update:size="changeSize"
         />
       </template>
     </TablePanel>
@@ -182,7 +199,7 @@ onBeforeUnmount(clear)
     <ElDrawer
       v-if="allowed"
       v-model="detailOpen"
-      class="camera-detail-drawer"
+      class="management-drawer"
       title="安全告警详情"
       size="min(680px, 100vw)"
       append-to-body
@@ -235,23 +252,15 @@ onBeforeUnmount(clear)
 }
 .security-heading {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 6px 12px;
+  gap: 8px;
 }
 .security-heading h1 {
   margin: 0;
-  color: var(--el-text-color-primary);
-  font-size: 18px;
-}
-.security-heading span {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-.security-pagination {
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  row-gap: 10px;
+  color: var(--sf-text-primary);
+  font-size: var(--sf-fs-section);
+  font-weight: 600;
 }
 .security-trace {
   display: flex;
@@ -261,22 +270,23 @@ onBeforeUnmount(clear)
   gap: 12px;
   margin: 10px 0;
   padding: 8px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
 }
 code,
 pre {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-  font-size: 12px;
+  font-family: var(--sf-font-mono);
+  font-size: var(--sf-fs-caption);
 }
 pre {
   max-height: 360px;
   overflow: auto;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
   padding: 14px;
 }
 summary {

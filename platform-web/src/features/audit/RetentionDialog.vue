@@ -128,7 +128,7 @@ onBeforeUnmount(() => {
     @close="$emit('close')"
   >
     <RequestError :error="error" />
-    <ElForm label-width="100px" :disabled="loading || !policy" @submit.prevent>
+    <ElForm label-position="top" :disabled="loading || !policy" @submit.prevent>
       <ElFormItem label="自动清理"
         ><ElSwitch v-model="form.enabled" :disabled="!policy"
       /></ElFormItem>
@@ -158,7 +158,9 @@ onBeforeUnmount(() => {
         {{ preview.protectedCount }} 条初始化记录</span
       >
       <span v-if="preview.cutoff">截止边界 {{ formatDateTime(preview.cutoff) }}</span>
-      <ElTag v-if="preview.exportInProgress" type="warning">有导出任务，清理将等待</ElTag>
+      <ElTag v-if="preview.exportInProgress" type="warning" effect="plain"
+        >有导出任务，清理将等待</ElTag
+      >
     </div>
     <ElDescriptions v-if="policy" :column="1" border>
       <ElDescriptionsItem label="下次执行">{{
@@ -215,10 +217,10 @@ onBeforeUnmount(() => {
   gap: 8px;
   padding: 12px 14px;
   margin: 10px 0 18px;
-  border: 1px solid #bfdbfe;
-  background: #eff6ff;
-  color: #1e3a8a;
-  font-size: 13px;
-  border-radius: 8px;
+  border: 1px solid var(--sf-primary-border);
+  background: var(--sf-primary-soft);
+  color: var(--sf-primary-active);
+  font-size: var(--sf-fs-sub);
+  border-radius: var(--sf-radius-md);
 }
 </style>

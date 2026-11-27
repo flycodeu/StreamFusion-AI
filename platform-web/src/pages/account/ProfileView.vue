@@ -94,7 +94,7 @@ async function save(): Promise<void> {
         <div>
           <dt>账号状态</dt>
           <dd>
-            <ElTag :type="form.status === 1 ? 'success' : 'info'" size="small">{{
+            <ElTag :type="form.status === 1 ? 'success' : 'info'" effect="plain" size="small">{{
               userStatusLabel(form.status)
             }}</ElTag>
           </dd>
@@ -102,9 +102,13 @@ async function save(): Promise<void> {
         <div>
           <dt>所属角色</dt>
           <dd class="role-tags">
-            <ElTag v-for="role in sessionState.me?.roles" :key="role.id" size="small" type="info">{{
-              role.name
-            }}</ElTag
+            <ElTag
+              v-for="role in sessionState.me?.roles"
+              :key="role.id"
+              size="small"
+              type="info"
+              effect="plain"
+              >{{ role.name }}</ElTag
             ><span v-if="!sessionState.me?.roles.length">未分配</span>
           </dd>
         </div>
@@ -114,7 +118,7 @@ async function save(): Promise<void> {
       <ElTabs v-model="activeTab">
         <ElTabPane label="基本资料" name="profile">
           <RequestError :error="error" />
-          <ElForm label-width="80px" :disabled="busy" @submit.prevent="save">
+          <ElForm label-position="top" :disabled="busy" @submit.prevent="save">
             <ElFormItem label="头像" class="profile-avatar"
               ><AvatarPicker v-model="form.avatarKey" :name="displayName"
             /></ElFormItem>
@@ -172,55 +176,56 @@ async function save(): Promise<void> {
 .identity-card {
   position: sticky;
   top: 20px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  box-shadow: var(--sf-shadow-xs);
 }
 .profile-card {
   min-height: 470px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  box-shadow: var(--sf-shadow-xs);
 }
 .profile-card :deep(.el-tabs__header) {
-  margin-bottom: 28px;
+  margin-bottom: 24px;
 }
 .profile-card :deep(.el-tabs__item) {
-  font-size: 15px;
+  font-size: var(--sf-fs-body);
 }
 .profile-avatar {
-  margin-bottom: 30px;
+  margin-bottom: 24px;
 }
 .identity-heading {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 10px 0 24px;
+  gap: 8px;
+  padding: 10px 0 20px;
 }
 .identity-heading h2 {
   margin: 6px 0 0;
-  font-size: 19px;
+  color: var(--sf-text-primary);
+  font-size: var(--sf-fs-section);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 .account-name {
-  color: var(--el-text-color-secondary);
-  font-size: 14px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
 }
 .identity-facts {
   margin: 0 0 22px;
-  font-size: 14px;
+  font-size: var(--sf-fs-body);
 }
 .identity-facts > div {
   display: grid;
   grid-template-columns: 72px 1fr;
   gap: 12px;
   padding: 14px 0;
-  border-top: 1px solid var(--el-border-color-lighter);
+  border-top: 1px solid var(--sf-border-light);
 }
 .identity-facts dt {
-  color: var(--el-text-color-secondary);
+  color: var(--sf-text-secondary);
 }
 .identity-facts dd {
   margin: 0;
@@ -231,15 +236,18 @@ async function save(): Promise<void> {
   gap: 6px;
 }
 .profile-card :deep(.el-card__body) {
-  padding: 28px 24px;
+  padding: 24px;
 }
 .profile-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 24px;
+  gap: 0 20px;
 }
 .profile-fields :deep(.el-form-item) {
-  margin-bottom: 24px;
+  margin-bottom: 18px;
+}
+.profile-fields :deep(.el-select) {
+  width: 100%;
 }
 .profile-actions {
   margin-top: 14px;

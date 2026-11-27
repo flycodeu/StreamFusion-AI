@@ -104,7 +104,7 @@ onBeforeUnmount(() => {
       </template>
       <template v-else>
         <ElAlert v-if="frozen" type="warning" :closable="false" title="保存结果未确认，请重试。" />
-        <ElForm label-width="110px" :disabled="saving || frozen" @submit.prevent="save">
+        <ElForm label-position="top" :disabled="saving || frozen" @submit.prevent="save">
           <ElFormItem label="相机名称" required
             ><ElInput v-model="form.name" maxlength="128" placeholder="例如：高炉东侧"
           /></ElFormItem>

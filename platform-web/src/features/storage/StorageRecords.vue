@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
-import { ElButton, ElTable, ElTableColumn, ElTag, ElDialog, ElPagination } from 'element-plus'
-import { Refresh } from '@element-plus/icons-vue'
+import { ElButton, ElTable, ElTableColumn, ElTag, ElDialog } from 'element-plus'
 import * as api from '../../api/storage/api'
 import type { StorageTask } from '../../api/storage/types'
 import RequestError from '../../components/feedback/RequestError.vue'
 import JsonInspector from '../../components/feedback/JsonInspector.vue'
+import TableActions from '../../components/table/TableActions.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
 import StorageHistoryPolicy from './StorageHistoryPolicy.vue'
 import { label, time } from './display'
 
@@ -15,6 +16,7 @@ const loading = ref(false)
 const retentionOpen = ref(false)
 const rows = ref<StorageTask[]>([]),
   page = ref(1),
+  pageSize = ref(20),
   total = ref(0),
   error = ref<unknown>(null),
   selected = ref<StorageTask | null>(null)
@@ -23,15 +25,22 @@ let timer: ReturnType<typeof globalThis.setTimeout> | undefined,
 const live = new Set(['QUEUED', 'RUNNING', 'RECONCILING'])
 const observedLive = new Set([...live, 'IN_PROGRESS'])
 let polls = 0
+function statusTone(status: string): 'success' | 'danger' | 'warning' | 'primary' | 'info' {
+  if (status === 'SUCCEEDED') return 'success'
+  if (status === 'FAILED') return 'danger'
+  if (status === 'PARTIAL' || status === 'PAUSED_LIMIT') return 'warning'
+  if (observedLive.has(status)) return 'primary'
+  return 'info'
+}
 async function load() {
   globalThis.clearTimeout(timer)
   if (!props.active) return
   const current = ++sequence
   loading.value = true
   try {
-    const result = await api.listTasks(props.instanceId, page.value, 10)
+    const result = await api.listTasks(props.instanceId, page.value, pageSize.value)
     if (sequence !== current || !props.active) return
-    const lastPage = Math.max(1, Math.ceil(result.total / 10))
+    const lastPage = Math.max(1, Math.ceil(result.total / pageSize.value))
     if (page.value > lastPage) {
       page.value = lastPage
       await load()
@@ -89,45 +98,59 @@ const asRow = (row: unknown): StorageTask => row as StorageTask
       <h3>操作记录</h3>
       <div class="record-actions">
         <ElButton @click="retentionOpen = true">清理策略</ElButton>
-        <ElButton :icon="Refresh" :loading="loading" @click="refresh">刷新记录</ElButton>
+        <ElButton :loading="loading" @click="refresh">刷新</ElButton>
       </div>
     </header>
     <RequestError v-if="error" :error="error" />
-    <ElTable :data="rows" row-key="taskId" max-height="320">
+    <ElTable :data="rows" row-key="taskId" border max-height="320">
       <ElTableColumn label="任务" min-width="130"
         ><template #default="{ row }">{{ label(row.type) }}</template></ElTableColumn
       >
       <ElTableColumn label="状态" width="130"
         ><template #default="{ row }"
-          ><ElTag>{{ label(row.status) }}</ElTag></template
+          ><ElTag :type="statusTone(row.status)" effect="plain">{{
+            label(row.status)
+          }}</ElTag></template
         ></ElTableColumn
       >
       <ElTableColumn label="创建时间" min-width="180"
         ><template #default="{ row }">{{ time(row.acceptedAt) }}</template></ElTableColumn
       >
-      <ElTableColumn label="操作" min-width="190"
+      <ElTableColumn
+        label="操作"
+        min-width="190"
+        fixed="right"
+        class-name="table-actions-column"
+        :resizable="false"
         ><template #default="{ row }"
-          ><ElButton text @click="selected = asRow(row)">查看 JSON</ElButton
-          ><ElButton
-            v-if="live.has(row.status)"
-            text
-            :disabled="row.cancelRequested"
-            @click="action(asRow(row))"
-            >{{ row.cancelRequested ? '取消已请求' : '取消' }}</ElButton
-          ><ElButton v-if="row.status === 'PAUSED_LIMIT'" text @click="action(asRow(row), true)"
-            >继续统计</ElButton
+          ><TableActions compact
+            ><ElButton link type="primary" @click="selected = asRow(row)">查看 JSON</ElButton
+            ><ElButton
+              v-if="live.has(row.status)"
+              link
+              type="danger"
+              :disabled="row.cancelRequested"
+              @click="action(asRow(row))"
+              >{{ row.cancelRequested ? '取消已请求' : '取消' }}</ElButton
+            ><ElButton
+              v-if="row.status === 'PAUSED_LIMIT'"
+              link
+              type="primary"
+              @click="action(asRow(row), true)"
+              >继续统计</ElButton
+            ></TableActions
           ></template
         ></ElTableColumn
       >
     </ElTable>
-    <ElPagination
-      v-model:current-page="page"
-      :page-size="10"
-      :total="total"
-      :pager-count="5"
-      layout="total, prev, pager, next"
-      @current-change="load"
-    />
+    <div class="record-footer">
+      <StandardPagination
+        v-model:page="page"
+        v-model:size="pageSize"
+        :total="total"
+        @change="load"
+      />
+    </div>
     <ElDialog
       :model-value="!!selected"
       class="management-dialog"
@@ -147,7 +170,7 @@ const asRow = (row: unknown): StorageTask => row as StorageTask
 .storage-records {
   margin-top: 24px;
   padding-top: 20px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--sf-border);
   min-width: 0;
 }
 .record-tools {
@@ -160,15 +183,14 @@ const asRow = (row: unknown): StorageTask => row as StorageTask
 }
 .record-tools h3 {
   margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  color: #0f172a;
+  font-size: var(--sf-fs-section);
+  font-weight: 600;
+  color: var(--sf-text-primary);
 }
-.el-pagination {
+.record-footer {
+  display: flex;
   justify-content: flex-end;
-  flex-wrap: wrap;
-  row-gap: 10px;
-  margin-top: 12px;
+  margin-top: 14px;
 }
 .record-actions {
   display: flex;
@@ -178,17 +200,5 @@ const asRow = (row: unknown): StorageTask => row as StorageTask
 }
 .record-actions :deep(.el-button + .el-button) {
   margin-left: 0;
-}
-.storage-records :deep(.el-table__cell) {
-  padding: 11px 0;
-  font-variant-numeric: tabular-nums;
-}
-.storage-records :deep(.el-tag) {
-  background: #e0f2fe;
-  color: #0284c7;
-  border: 0;
-  border-radius: 6px;
-  padding: 2px 8px;
-  font-weight: 500;
 }
 </style>

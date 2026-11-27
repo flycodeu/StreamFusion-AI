@@ -53,7 +53,7 @@ const observations = computed(() =>
     </div>
     <RequestError v-if="error" :error="error" />
     <ElTag v-if="task" class="job-state">{{ label(task.status) }} · {{ task.taskId }}</ElTag>
-    <ElTable :data="observations" empty-text="尚无检测结果"
+    <ElTable :data="observations" border empty-text="尚无检测结果"
       ><ElTableColumn prop="storage" label="存储" min-width="170" /><ElTableColumn
         prop="stage"
         label="检测项"
@@ -103,13 +103,13 @@ const observations = computed(() =>
 }
 h2 {
   margin: 0 0 4px;
-  font-size: 17px;
-  font-weight: 700;
-  color: #0f172a;
+  font-size: var(--sf-fs-section);
+  font-weight: 600;
+  color: var(--sf-text-primary);
 }
 .section-heading span {
-  color: #64748b;
-  font-size: 12.5px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
 }
 .job-state {
   margin-bottom: 14px;
@@ -123,19 +123,11 @@ h2 {
 .check-actions :deep(.el-button + .el-button) {
   margin-left: 0;
 }
-.checks-page :deep(.el-table__header .el-table__cell) {
-  background: #f8fafc;
-  color: #475569;
-  font-weight: 600;
-}
-.checks-page :deep(.el-table__cell) {
-  padding: 12px 0;
-}
 .check-state {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: #64748b;
+  color: var(--sf-text-secondary);
   font-weight: 500;
 }
 .check-state > span {

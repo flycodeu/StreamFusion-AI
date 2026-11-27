@@ -203,7 +203,7 @@ onMounted(load)
             {{ deviceName || camera.sourceDisplayName }}
           </p>
         </div>
-        <ElTag :type="camera.lifecycle === 'ENABLED' ? 'success' : 'info'">
+        <ElTag :type="camera.lifecycle === 'ENABLED' ? 'success' : 'info'" effect="plain">
           {{ lifecycleLabel(camera.lifecycle) }}
         </ElTag>
       </header>
@@ -481,15 +481,16 @@ onMounted(load)
   min-width: 0;
 }
 .camera-summary h2 {
-  margin: 0 0 8px;
-  font-size: 18px;
-  color: var(--text-primary);
+  margin: 0 0 6px;
+  font-size: var(--sf-fs-section);
+  color: var(--sf-text-primary);
   overflow-wrap: anywhere;
 }
 .camera-summary p {
   margin: 0;
   line-height: 1.6;
-  color: var(--text-secondary);
+  font-size: var(--sf-fs-sub);
+  color: var(--sf-text-secondary);
   overflow-wrap: anywhere;
 }
 .camera-summary .el-tag {
@@ -521,9 +522,9 @@ onMounted(load)
   padding: 12px 0;
 }
 .detail-facts dt {
-  margin-bottom: 8px;
-  font-size: 13px;
-  color: var(--text-secondary);
+  margin-bottom: 6px;
+  font-size: var(--sf-fs-sub);
+  color: var(--sf-text-secondary);
 }
 .detail-facts dd {
   margin: 0;
@@ -532,12 +533,13 @@ onMounted(load)
 }
 .camera-record-meta {
   margin-top: 12px;
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--sf-border);
   padding-top: 16px;
 }
 .camera-record-meta summary {
   cursor: pointer;
-  color: var(--text-secondary);
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
 }
 .detail-section-heading,
 .detail-action-buttons,
@@ -553,17 +555,15 @@ onMounted(load)
 }
 .connection-actions {
   margin-top: 12px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-subtle);
-}
-.draft-note {
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-secondary);
+  padding-top: 12px;
+  border-top: 1px solid var(--sf-border);
 }
 .draft-note {
   margin: 0 0 12px;
   text-align: left;
+  font-size: var(--sf-fs-sub);
+  line-height: 1.6;
+  color: var(--sf-text-secondary);
 }
 .detail-action-buttons :deep(.el-button + .el-button),
 .detail-footer-actions :deep(.el-button + .el-button) {
@@ -576,9 +576,6 @@ onMounted(load)
   .camera-summary {
     align-items: flex-start;
     padding-bottom: 12px;
-  }
-  .camera-summary h2 {
-    font-size: 18px;
   }
   .detail-facts {
     grid-template-columns: minmax(0, 1fr);

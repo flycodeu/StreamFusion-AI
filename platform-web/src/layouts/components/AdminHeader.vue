@@ -94,36 +94,42 @@ async function command(value: string): Promise<void> {
 .topbar {
   height: var(--header-height);
   padding: 0 20px;
-  background: #fff;
-  border-bottom: 1px solid var(--border-subtle);
+  background: var(--sf-surface);
+  border-bottom: 1px solid var(--sf-border);
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
 }
 .icon-button {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   flex-shrink: 0;
   padding: 4px;
   border: 0;
+  border-radius: var(--sf-radius-sm);
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--sf-text-secondary);
   cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
 }
 .icon-button:hover {
-  background: var(--surface-muted);
+  background: var(--sf-surface-muted);
+  color: var(--sf-text-primary);
 }
 .icon-button svg {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
 }
 .breadcrumbs {
   display: flex;
   overflow: hidden;
   flex: 1;
   min-width: 0;
+  font-size: var(--sf-fs-sub);
   line-height: 1.5;
 }
 .breadcrumbs :deep(.el-breadcrumb__item) {
@@ -135,9 +141,16 @@ async function command(value: string): Promise<void> {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--sf-text-secondary);
+  font-weight: 500;
+}
+.breadcrumbs :deep(.el-breadcrumb__item:last-child .el-breadcrumb__inner) {
+  color: var(--sf-text-primary);
+  font-weight: 600;
 }
 .breadcrumbs :deep(.el-breadcrumb__separator) {
   flex-shrink: 0;
+  color: var(--sf-text-muted);
 }
 .account {
   margin-left: auto;
@@ -147,14 +160,19 @@ async function command(value: string): Promise<void> {
 .account-trigger {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   border: 0;
-  padding: 0;
+  border-radius: var(--sf-radius-sm);
+  padding: 4px 8px;
   background: transparent;
   cursor: pointer;
-  color: var(--text-secondary);
-  font-size: 14px;
+  color: var(--sf-text-regular);
+  font-size: var(--sf-fs-body);
   min-width: 0;
+  transition: background-color 0.15s ease;
+}
+.account-trigger:hover {
+  background: var(--sf-surface-subtle);
 }
 .account-name {
   overflow: hidden;

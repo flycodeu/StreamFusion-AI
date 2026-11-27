@@ -309,7 +309,8 @@ onBeforeUnmount(() => {
         title="搜索请求结果未知，请重试原请求。"
       />
       <ElForm
-        label-width="100px"
+        class="sf-form-grid"
+        label-position="top"
         :disabled="busy || running || frozen || saving || !!savedIds.length"
       >
         <ElFormItem label="接入网络"
@@ -337,7 +338,9 @@ onBeforeUnmount(() => {
           ><ElInput v-model="ports" placeholder="例如 80,443，最多 4 个"
         /></ElFormItem>
       </ElForm>
-      <p v-if="job">已检查 {{ job.scannedTargets }} / {{ job.totalTargets }} 个目标</p>
+      <p v-if="job" class="scan-note">
+        已检查 {{ job.scannedTargets }} / {{ job.totalTargets }} 个目标
+      </p>
       <ElAlert
         v-if="job?.diagnostic"
         type="error"
@@ -352,8 +355,10 @@ onBeforeUnmount(() => {
         :closable="false"
         :title="accessWarningLabel(warning)"
       />
-      <p v-if="paused">自动查询已暂停。</p>
-      <p v-if="job && !running && !rows.length">未发现开放端口，请检查地址范围和端口。</p>
+      <p v-if="paused" class="scan-note">自动查询已暂停。</p>
+      <p v-if="job && !running && !rows.length" class="scan-note">
+        未发现开放端口，请检查地址范围和端口。
+      </p>
       <template v-if="rows.length">
         <ElTable :data="rows" row-key="candidateId" border :max-height="320">
           <ElTableColumn label="选择" width="66"
@@ -400,7 +405,7 @@ onBeforeUnmount(() => {
             ></ElTableColumn
           >
         </ElTable>
-        <ElForm label-width="110px" :disabled="saving">
+        <ElForm class="scan-save-form" label-position="top" :disabled="saving">
           <DeviceConnectionFields v-model="form" hide-host :adapters="options?.adapters" />
           <ElFormItem label="视频分组"><GroupSelect v-model="groupId" clearable /></ElFormItem>
         </ElForm>
@@ -435,3 +440,13 @@ onBeforeUnmount(() => {
     </template>
   </ElDialog>
 </template>
+<style scoped>
+.scan-note {
+  margin: 8px 0 12px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
+}
+.scan-save-form {
+  margin-top: 16px;
+}
+</style>

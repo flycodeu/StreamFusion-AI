@@ -1,17 +1,10 @@
 <script setup lang="ts">
 import { ref, watch, onScopeDispose } from 'vue'
-import {
-  ElButton,
-  ElSelect,
-  ElOption,
-  ElPagination,
-  ElTable,
-  ElTableColumn,
-  ElTag,
-} from 'element-plus'
+import { ElButton, ElSelect, ElOption, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import { getStatusHistory } from '../../api/camera-status/api'
 import type { StatusLayer } from '../../api/camera-status/types'
 import RequestError from '../../components/feedback/RequestError.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
 import { reasonLabel, executionLabels } from './model'
@@ -61,11 +54,6 @@ async function load() {
     if (active() && current === sequence) loading.value = false
   }
 }
-function changeSize(nextSize: number) {
-  size.value = nextSize
-  page.value = 1
-  void load()
-}
 watch(
   () => [props.cameraId, props.profileId, props.layer, props.active, days.value],
   () => {
@@ -98,9 +86,9 @@ onScopeDispose(() => {
     <template v-if="history">
       <div class="history-summary-bar">
         <div class="sample-counts">
-          <ElTag type="success" size="small">通过 {{ history.accessible }}</ElTag>
-          <ElTag type="danger" size="small">异常 {{ history.failed }}</ElTag>
-          <ElTag type="info" size="small">无确定结果 {{ history.unknown }}</ElTag>
+          <ElTag type="success" effect="plain" size="small">通过 {{ history.accessible }}</ElTag>
+          <ElTag type="danger" effect="plain" size="small">异常 {{ history.failed }}</ElTag>
+          <ElTag type="info" effect="plain" size="small">无确定结果 {{ history.unknown }}</ElTag>
         </div>
         <span v-if="history.truncated" class="truncated-note" role="status"
           >仅统计最近 1000 次留存检查</span
@@ -144,16 +132,15 @@ onScopeDispose(() => {
         >
       </ElTable>
       <div class="history-pagination">
-        <ElPagination
-          v-model:current-page="page"
-          v-model:page-size="size"
+        <StandardPagination
+          v-model:page="page"
+          v-model:size="size"
           :page-sizes="[5, 10, 20, 50]"
           :total="history.total"
-          size="small"
+          small
           layout="total, sizes, prev, pager, next"
           :disabled="loading"
-          @current-change="load"
-          @size-change="changeSize"
+          @change="load"
         />
       </div>
     </template>
@@ -164,9 +151,9 @@ onScopeDispose(() => {
 .status-history {
   margin-top: 12px;
   padding: 14px 16px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #f8fafc;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  background: var(--sf-surface-subtle);
 }
 header {
   display: flex;
@@ -176,8 +163,8 @@ header {
 }
 h4 {
   margin: 0 auto 0 0;
-  color: #0f172a;
-  font-size: 14px;
+  color: var(--sf-text-primary);
+  font-size: var(--sf-fs-body);
   font-weight: 600;
 }
 .el-select {
@@ -197,14 +184,14 @@ h4 {
   flex-wrap: wrap;
 }
 .truncated-note {
-  color: #64748b;
-  font-size: 12px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
 }
 .history-table {
   width: 100%;
-  border-radius: 6px;
+  border-radius: var(--sf-radius-sm);
   overflow: hidden;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--sf-border);
 }
 .diag-details {
   overflow-wrap: anywhere;
@@ -212,25 +199,25 @@ h4 {
 }
 .diag-details summary {
   cursor: pointer;
-  color: #2563eb;
+  color: var(--sf-primary);
   user-select: none;
 }
 .diag-body {
   margin-top: 4px;
-  color: #475569;
-  font-size: 12px;
+  color: var(--sf-text-regular);
+  font-size: var(--sf-fs-caption);
   line-height: 1.45;
 }
 .diag-trace {
-  color: #64748b;
-  font-family: Consolas, monospace;
+  color: var(--sf-text-secondary);
+  font-family: var(--sf-font-mono);
 }
 .history-pagination {
   display: flex;
   justify-content: flex-end;
   margin-top: 12px;
   padding-top: 10px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--sf-border);
 }
 .history-pagination :deep(.el-pagination) {
   flex-wrap: wrap;

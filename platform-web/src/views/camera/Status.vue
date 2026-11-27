@@ -4,12 +4,10 @@ import { useRoute } from 'vue-router'
 import {
   ElButton,
   ElDialog,
-  ElForm,
   ElFormItem,
   ElInput,
   ElIcon,
   ElOption,
-  ElPagination,
   ElSelect,
   ElRadioGroup,
   ElRadioButton,
@@ -36,6 +34,8 @@ import type {
 import RequestError from '../../components/feedback/RequestError.vue'
 import { ApiRequestError } from '../../lib/http/error'
 import TablePanel from '../../components/table/TablePanel.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
+import FilterBar from '../../components/ui/FilterBar.vue'
 import { streamLabel } from '../../features/camera/streamLabels'
 import type { ConnectionState } from '../../features/camera-status/health'
 import {
@@ -238,7 +238,7 @@ function profileOptionLabel(profile: CameraProfile): string {
 
 <template>
   <div class="content-page camera-status-page">
-    <ElForm class="search-form status-search" inline @submit.prevent="search">
+    <FilterBar class="status-search" :loading="loading && !result" @search="search" @reset="reset">
       <ElFormItem label="检查类型">
         <ElRadioGroup :model-value="layer" aria-label="检查类型" @update:model-value="changeLayer">
           <ElRadioButton value="CONTROL">相机连接</ElRadioButton>
@@ -246,10 +246,21 @@ function profileOptionLabel(profile: CameraProfile): string {
         </ElRadioGroup>
       </ElFormItem>
       <ElFormItem label="相机">
-        <ElInput v-model="name" placeholder="搜索相机名称 / IP" clearable maxlength="128" />
+        <ElInput
+          v-model="name"
+          class="search-field"
+          placeholder="搜索相机名称 / IP"
+          clearable
+          maxlength="128"
+        />
       </ElFormItem>
       <ElFormItem label="最近检查结果">
-        <ElSelect v-model="observation" clearable placeholder="全部结果（含历史）">
+        <ElSelect
+          v-model="observation"
+          class="observation-field"
+          clearable
+          placeholder="全部结果（含历史）"
+        >
           <ElOption
             v-for="(label, value) in observationLabels"
             :key="value"
@@ -258,11 +269,7 @@ function profileOptionLabel(profile: CameraProfile): string {
           />
         </ElSelect>
       </ElFormItem>
-      <ElFormItem
-        ><ElButton type="primary" native-type="submit" :loading="loading && !result">查询</ElButton
-        ><ElButton @click="reset">重置</ElButton></ElFormItem
-      >
-    </ElForm>
+    </FilterBar>
     <RequestError :error="error" />
     <p v-if="capacityHint" class="capacity-hint" role="alert">{{ capacityHint }}</p>
     <section class="status-overview" aria-label="当前页相机检查总览">
@@ -305,9 +312,9 @@ function profileOptionLabel(profile: CameraProfile): string {
       <template #actions
         ><ElButton type="primary" @click="plansOpen = true">巡检任务</ElButton></template
       >
-      <template #tools
-        ><ElButton :loading="loading && !result" @click="refresh">刷新结果</ElButton></template
-      >
+      <template #tools>
+        <ElButton :loading="loading && !result" @click="refresh">刷新</ElButton>
+      </template>
       <div v-loading="loading && !result" class="camera-card-grid" :aria-busy="loading">
         <StatusCard
           v-for="channel in rows"
@@ -320,18 +327,17 @@ function profileOptionLabel(profile: CameraProfile): string {
           {{ error ? '状态未读取，请重试刷新' : result ? '暂无符合条件的相机' : '状态未读取' }}
         </p>
       </div>
-      <p v-if="paused" class="read-paused" role="status">已暂停读取检查进度，请点击“刷新结果”。</p>
-      <template #footer
-        ><ElPagination
-          :current-page="query.page"
-          :page-size="query.size"
+      <p v-if="paused" class="read-paused" role="status">已暂停读取检查进度，请点击“刷新”。</p>
+      <template #footer>
+        <StandardPagination
+          :page="query.page"
+          :size="query.size"
           :total="total"
           :disabled="!result"
-          :page-sizes="[20, 50, 100]"
-          layout="total, sizes, prev, pager, next, jumper"
-          @update:current-page="changePage($event)"
-          @update:page-size="changePage(1, $event)"
-      /></template>
+          @update:page="changePage($event)"
+          @update:size="changePage(1, $event)"
+        />
+      </template>
     </TablePanel>
     <PlanDialog v-if="plansOpen" @close="plansOpen = false" @changed="refresh" />
     <ElDialog
@@ -470,10 +476,11 @@ function profileOptionLabel(profile: CameraProfile): string {
 }
 .status-overview {
   margin-bottom: 14px;
-  padding: 12px 16px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: var(--el-bg-color);
+  padding: 14px var(--sf-card-padding-x);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  background: var(--sf-surface);
+  box-shadow: var(--sf-shadow-xs);
 }
 .overview-top {
   display: flex;
@@ -495,20 +502,20 @@ function profileOptionLabel(profile: CameraProfile): string {
 }
 .overview-heading h3 {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--sf-fs-section);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--sf-text-primary);
 }
 .overview-heading > div:first-child > span {
   display: inline-flex;
   align-items: center;
   padding: 2px 10px;
-  border-radius: 999px;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  color: #475569;
-  font-size: 12px;
-  font-weight: 500;
+  border-radius: var(--sf-radius-pill);
+  background: var(--sf-surface-subtle);
+  border: 1px solid var(--sf-border);
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
+  font-weight: 600;
 }
 .status-metrics {
   display: grid;
@@ -517,17 +524,17 @@ function profileOptionLabel(profile: CameraProfile): string {
   flex: 1 1 700px;
 }
 .status-metric {
-  --state-soft-bg: #f8fafc;
-  --state-soft-border: #e2e8f0;
+  --state-soft-bg: var(--sf-surface-subtle);
+  --state-soft-border: var(--sf-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
   padding: 7px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
   transition:
     background-color 0.15s ease,
     border-color 0.15s ease;
@@ -541,78 +548,64 @@ function profileOptionLabel(profile: CameraProfile): string {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  color: #475569;
-  font-size: 12px;
+  color: var(--sf-text-regular);
+  font-size: var(--sf-fs-caption);
   white-space: nowrap;
 }
 .metric-icon {
   flex-shrink: 0;
   color: var(--state-color);
-  font-size: 15px;
+  font-size: 14px;
 }
 .status-metric strong {
-  font-size: 15px;
+  font-size: var(--sf-fs-section);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1;
-  color: #0f172a;
+  color: var(--sf-text-primary);
 }
 .status-metric.is-active strong {
   color: var(--state-color);
 }
 .state-accessible {
-  --state-color: #059669;
-  --state-soft-bg: #ecfdf5;
-  --state-soft-border: #a7f3d0;
+  --state-color: var(--sf-success);
+  --state-soft-bg: var(--sf-success-soft);
+  --state-soft-border: var(--sf-success-border);
 }
 .state-failed {
-  --state-color: #dc2626;
-  --state-soft-bg: #fef2f2;
-  --state-soft-border: #fecaca;
+  --state-color: var(--sf-danger);
+  --state-soft-bg: var(--sf-danger-soft);
+  --state-soft-border: var(--sf-danger-border);
 }
 .state-checking {
-  --state-color: #2563eb;
-  --state-soft-bg: #eff6ff;
-  --state-soft-border: #bfdbfe;
+  --state-color: var(--sf-primary);
+  --state-soft-bg: var(--sf-primary-soft);
+  --state-soft-border: var(--sf-primary-border);
 }
 .state-stale {
-  --state-color: #d97706;
-  --state-soft-bg: #fffbeb;
-  --state-soft-border: #fde68a;
+  --state-color: var(--sf-warning);
+  --state-soft-bg: var(--sf-warning-soft);
+  --state-soft-border: var(--sf-warning-border);
 }
 .state-unknown,
 .state-disabled {
-  --state-color: #64748b;
-  --state-soft-bg: #f1f5f9;
-  --state-soft-border: #cbd5e1;
+  --state-color: var(--sf-info);
+  --state-soft-bg: var(--sf-info-soft);
+  --state-soft-border: var(--sf-info-border);
 }
 .status-distribution {
   display: flex;
   height: 5px;
   margin-top: 10px;
-  border-radius: 999px;
+  border-radius: var(--sf-radius-pill);
   overflow: hidden;
-  background: #f1f5f9;
+  background: var(--sf-surface-muted);
 }
 .status-distribution > span {
   background: var(--state-color);
 }
-.status-search {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 14px 20px;
-  padding: 14px 18px;
-}
-.status-search :deep(.el-form-item) {
-  min-width: 0;
-  margin: 0;
-}
-.status-search :deep(.el-input) {
-  width: 220px;
-}
-.status-search :deep(.el-select) {
-  width: 180px;
+.status-search .observation-field {
+  width: 185px;
 }
 .capacity-hint {
   margin: 8px 0 16px;

@@ -78,8 +78,10 @@ async function save() {
 <template>
   <section class="placement-content">
     <RequestError :error="error" />
-    <p v-if="camera">{{ camera.name }} · 当前分组：{{ camera.groupPath || '待归档' }}</p>
-    <ElForm v-if="action === 'move'" :disabled="saving || !!impact" label-width="100px"
+    <p v-if="camera" class="placement-target">
+      {{ camera.name }} · 当前分组：{{ camera.groupPath || '待归档' }}
+    </p>
+    <ElForm v-if="action === 'move'" :disabled="saving || !!impact" label-position="top"
       ><ElFormItem label="目标分组" required><GroupSelect v-model="targetGroupId" /></ElFormItem
     ></ElForm>
     <ImpactSummary v-if="impact" :impact="impact" />
@@ -94,11 +96,20 @@ async function save() {
 </template>
 
 <style scoped>
+.placement-target {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
+  color: var(--sf-text-regular);
+  font-size: var(--sf-fs-sub);
+}
 .placement-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 24px;
+  margin-top: 20px;
 }
 .placement-actions :deep(.el-button + .el-button) {
   margin-left: 0;

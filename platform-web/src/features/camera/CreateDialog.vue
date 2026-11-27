@@ -15,6 +15,7 @@ import {
 } from 'element-plus'
 import CameraDialogFrame from './CameraDialogFrame.vue'
 import RequestError from '../../components/feedback/RequestError.vue'
+import HelpTip from '../../components/ui/HelpTip.vue'
 import GroupSelect from '../camera-groups/GroupSelect.vue'
 import ConnectionForm from '../camera-access/ConnectionForm.vue'
 import CandidateSelection from '../camera-access/CandidateSelection.vue'
@@ -177,7 +178,7 @@ function retryBulk(value: AccessJob) {
           </template>
           <template v-else-if="result">
             <div class="import-result">
-              <ElTag type="success">导入已完成</ElTag>
+              <ElTag type="success" effect="plain">导入已完成</ElTag>
               <h3>新增 {{ result.createdCount }} 个相机，匹配已有 {{ result.existingCount }} 个</h3>
             </div>
             <ElTable :data="result.cameras" border row-key="cameraId"
@@ -223,6 +224,7 @@ function retryBulk(value: AccessJob) {
                 :type="
                   job.status === 'FAILED' ? 'danger' : job.status === 'PARTIAL' ? 'warning' : 'info'
                 "
+                effect="plain"
                 >{{ accessJobLabel(job) }}</ElTag
               ><span>有效至 {{ formatDateTime(job.expiresAt) }}</span>
             </div>
@@ -287,12 +289,15 @@ function retryBulk(value: AccessJob) {
                 :address-only="mode === 'rtsp'"
                 :compact="mode === 'platform'" /><ElForm
                 v-if="!targetCamera"
-                label-width="110px"
+                label-position="top"
                 class="destination-form"
-                ><ElFormItem label="保存到分组"
-                  ><GroupSelect v-model="groupId" clearable :disabled="busy" /></ElFormItem></ElForm
+              >
+                <ElFormItem label="保存到分组">
+                  <div class="destination-control">
+                    <GroupSelect v-model="groupId" clearable :disabled="busy" />
+                    <HelpTip v-if="mode === 'rtsp'" content="保存后可预览视频。" label="预览说明" />
+                  </div> </ElFormItem></ElForm
             ></template>
-            <p v-if="selectable && mode === 'rtsp'" class="field-note">保存后可预览视频。</p>
           </template>
           <div
             v-if="mode === 'platform' && job?.page && !running && !impact"
@@ -436,24 +441,25 @@ function retryBulk(value: AccessJob) {
   display: flex;
   gap: 16px;
   flex-wrap: wrap;
-  padding: 0 0 16px;
-  margin: 0 0 20px;
+  padding: 0 0 14px;
+  margin: 0 0 18px;
   list-style: none;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--sf-border-light);
+  font-size: var(--sf-fs-sub);
 }
 .wizard-steps li {
-  color: var(--el-text-color-placeholder);
+  color: var(--sf-text-muted);
 }
 .wizard-steps .current {
-  color: var(--el-color-primary);
+  color: var(--sf-primary);
   font-weight: 600;
 }
 .wizard-steps .complete {
-  color: var(--el-text-color-regular);
+  color: var(--sf-text-regular);
 }
 .operations-note {
   margin-top: 16px;
-  color: var(--el-text-color-secondary);
+  color: var(--sf-text-secondary);
 }
 .job-heading {
   display: flex;
@@ -464,12 +470,22 @@ function retryBulk(value: AccessJob) {
 }
 .job-heading > span:last-child,
 .field-note {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
 }
 .device-summary,
 .destination-form {
-  margin: 20px 0;
+  margin: 18px 0;
+}
+.destination-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.destination-control > :first-child {
+  flex: 1;
+  min-width: 0;
 }
 .import-review,
 .import-result {
@@ -479,8 +495,10 @@ function retryBulk(value: AccessJob) {
   display: grid;
   grid-template-columns: 100px 1fr;
   gap: 10px;
-  padding: 18px;
-  background: var(--el-fill-color-light);
+  padding: 16px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
 }
 .import-review dd {
   margin: 0;

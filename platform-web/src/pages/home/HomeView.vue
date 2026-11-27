@@ -7,6 +7,7 @@ import { getPreviewCapacity, getPreviewCatalog } from '../../api/preview/api'
 import type { PreviewCapacity } from '../../api/preview/types'
 import { getStatusPage } from '../../api/camera-status/api'
 import RequestError from '../../components/feedback/RequestError.vue'
+import PageHeader from '../../components/ui/PageHeader.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import { findMenuPagePath } from '../../router/menuPath'
 import { formatDateTime } from '../../utils/dateTime'
@@ -98,19 +99,17 @@ watch([cameras, preview, cameraStatus, () => sessionState.epoch], () => void ref
 
 <template>
   <main class="content-page home-dashboard">
-    <header class="home-heading">
-      <div>
-        <h1>视频工作台</h1>
-        <p>查看相机、预览会话和平台连接状态。</p>
-      </div>
-      <ElButton :loading="loading" @click="refresh">刷新</ElButton>
-    </header>
+    <PageHeader title="视频工作台" :card="false" heading-tag="h1">
+      <template #actions>
+        <ElButton :loading="loading" @click="refresh">刷新</ElButton>
+      </template>
+    </PageHeader>
     <RequestError :error="healthError" advice="请检查平台服务连接，或将请求标识提供给运维。" />
     <section class="home-metrics" aria-label="视频运行概况">
       <ElCard v-if="cameras || preview" shadow="never" class="home-metric">
         <h2>可见视频通道</h2>
         <p class="home-value">{{ channels ?? (loading ? '…' : '未读取') }}</p>
-        <RouterLink v-if="cameras" :to="cameras">管理相机</RouterLink>
+        <RouterLink v-if="cameras" :to="cameras">管理相机 →</RouterLink>
       </ElCard>
       <ElCard v-if="preview" shadow="never" class="home-metric">
         <h2>预览会话占用</h2>
@@ -123,18 +122,23 @@ watch([cameras, preview, cameraStatus, () => sessionState.epoch], () => void ref
                 : '未读取'
           }}
         </p>
-        <RouterLink :to="preview">打开预览中心</RouterLink>
+        <RouterLink :to="preview">打开预览中心 →</RouterLink>
       </ElCard>
       <ElCard v-if="cameraStatus" shadow="never" class="home-metric">
         <h2>连接检查异常设备</h2>
-        <p class="home-value">{{ failures ?? (loading ? '…' : '未读取') }}</p>
+        <p class="home-value" :class="{ 'is-danger': (failures ?? 0) > 0 }">
+          {{ failures ?? (loading ? '…' : '未读取') }}
+        </p>
         <RouterLink :to="{ path: cameraStatus, query: { observation: 'FAILED' } }">
-          查看异常设备
+          查看异常设备 →
         </RouterLink>
       </ElCard>
       <ElCard shadow="never" class="home-metric">
         <h2>平台服务连接</h2>
-        <p class="home-value">
+        <p
+          class="home-value"
+          :class="{ 'is-success': platformUp === true, 'is-danger': platformUp === false }"
+        >
           {{ platformUp === null ? '检查中' : platformUp ? '正常' : '异常' }}
         </p>
         <p v-if="checkedAt" class="check-time">{{ checkedAt }}</p>
@@ -146,47 +150,62 @@ watch([cameras, preview, cameraStatus, () => sessionState.epoch], () => void ref
 <style scoped>
 .home-dashboard {
   display: grid;
-  gap: 20px;
+  gap: var(--sf-space-md);
   align-content: start;
-}
-.home-heading {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  justify-content: space-between;
-}
-.home-heading h1 {
-  font-size: 24px;
-  line-height: 1.35;
-  margin: 0;
-}
-.home-heading p {
-  margin: 8px 0 0;
-  color: var(--el-text-color-secondary);
 }
 .home-metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: var(--sf-space-md);
+}
+.home-metric {
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  box-shadow: var(--sf-shadow-xs);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.home-metric:hover {
+  border-color: var(--sf-border-strong);
+  box-shadow: var(--sf-shadow-sm);
+}
+.home-metric :deep(.el-card__body) {
+  padding: 18px 20px;
 }
 .home-metric h2 {
   margin: 0;
-  font-size: 14px;
-  font-weight: 600;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
+  font-weight: 500;
 }
 .home-value {
-  margin: 12px 0;
-  font-size: 24px;
-  font-weight: 600;
+  margin: 10px 0 12px;
+  color: var(--sf-text-primary);
+  font-size: var(--sf-fs-kpi);
+  font-weight: 700;
+  line-height: 1.25;
   font-variant-numeric: tabular-nums;
 }
+.home-value.is-success {
+  color: var(--sf-success);
+}
+.home-value.is-danger {
+  color: var(--sf-danger);
+}
 .home-metric a {
-  color: var(--el-color-primary);
-  font-size: 14px;
+  color: var(--sf-primary);
+  font-size: var(--sf-fs-sub);
+  font-weight: 500;
+}
+.home-metric a:hover {
+  color: var(--sf-primary-active);
+  text-decoration: underline;
 }
 .check-time {
-  color: var(--el-text-color-secondary);
+  color: var(--sf-text-secondary);
   margin: 0;
-  font-size: 13px;
+  font-size: var(--sf-fs-caption);
+  font-variant-numeric: tabular-nums;
 }
 </style>

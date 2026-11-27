@@ -1,41 +1,35 @@
 .camera-workspace {
-  --pane-border: #e5e8ef;
-  --text-main: #1d2129;
-  --text-sub: #4e5969;
-  --text-muted: #86909c;
-
   min-height: calc(100dvh - var(--header-height, 56px));
   display: grid;
   grid-template-columns: clamp(248px, 17vw, 310px) minmax(0, 1fr);
-  gap: clamp(14px, 1.2vw, 20px);
+  gap: clamp(14px, 1.2vw, 18px);
   align-items: stretch;
-  padding-top: clamp(12px, 1.4dvh, 20px);
-  padding-bottom: clamp(12px, 1.4dvh, 20px);
   box-sizing: border-box;
 }
 
 .camera-group-pane {
   min-width: 0;
-  padding: 16px 14px;
-  border: 1px solid var(--pane-border);
-  border-radius: 6px;
-  background: var(--el-bg-color);
+  padding: var(--sf-card-padding-y) 14px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  background: var(--sf-surface);
+  box-shadow: var(--sf-shadow-xs);
   display: flex;
   flex-direction: column;
 }
 
 .camera-group-pane.is-group-focused {
-  border-color: var(--el-color-primary-light-5);
-  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.08);
+  border-color: var(--sf-primary-border);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
 }
 
 .group-count-badge {
   margin-right: auto;
-  font-size: 12px;
-  color: var(--text-muted);
-  background: #f2f3f5;
-  padding: 1px 6px;
-  border-radius: 999px;
+  font-size: var(--sf-fs-caption);
+  color: var(--sf-text-secondary);
+  background: var(--sf-surface-muted);
+  padding: 2px 8px;
+  border-radius: var(--sf-radius-pill);
   font-variant-numeric: tabular-nums;
 }
 
@@ -46,14 +40,14 @@
   gap: 12px;
   padding-bottom: 12px;
   margin-bottom: 12px;
-  border-bottom: 1px solid #f0f2f5;
+  border-bottom: 1px solid var(--sf-border-light);
   flex-shrink: 0;
 }
 
 .group-pane-header h2 {
-  font-size: 15px;
+  font-size: var(--sf-fs-section);
   font-weight: 600;
-  color: var(--text-main);
+  color: var(--sf-text-primary);
   margin: 0;
 }
 
@@ -65,15 +59,16 @@
 }
 
 .workspace-filter-bar {
-  background: #ffffff;
-  border: 1px solid var(--pane-border);
-  border-radius: 6px;
-  padding: 12px 18px;
+  background: var(--sf-surface);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  box-shadow: var(--sf-shadow-xs);
+  padding: 14px var(--sf-card-padding-x);
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 14px;
+  gap: 12px 16px;
 }
 
 .scope-indicator {
@@ -84,46 +79,23 @@
 }
 
 .scope-label {
-  font-size: 12px;
-  color: var(--text-muted);
-  background: #f7f8fa;
-  border: 1px solid var(--pane-border);
+  font-size: var(--sf-fs-caption);
+  color: var(--sf-text-secondary);
+  background: var(--sf-surface-subtle);
+  border: 1px solid var(--sf-border);
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--sf-radius-sm);
   flex-shrink: 0;
 }
 
 .scope-name {
-  font-size: 14px;
+  font-size: var(--sf-fs-body);
   font-weight: 600;
-  color: var(--text-main);
+  color: var(--sf-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 260px;
-}
-
-.scope-count {
-  font-size: 12px;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  padding-left: 4px;
-  flex-shrink: 0;
-}
-
-.camera-search-form {
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 14px;
-}
-
-.camera-search-form .el-form-item {
-  margin: 0;
 }
 
 .camera-search-form .search-field {
@@ -134,9 +106,6 @@
   flex: 1;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--pane-border);
-  border-radius: 6px;
-  padding: 16px 18px;
 }
 
 .camera-table-panel .el-table {
@@ -145,7 +114,6 @@
 
 .camera-table-panel .table-panel__footer {
   margin-top: auto;
-  padding-top: 16px;
 }
 
 .camera-workspace .mobile-group-toggle {
@@ -184,7 +152,7 @@
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  color: var(--text-main);
+  color: var(--sf-text-primary);
 }
 
 .camera-workspace .device-statuses {
@@ -216,20 +184,20 @@
   }
   .camera-workspace .mobile-device {
     padding: 16px 0;
-    border-top: 1px solid var(--border-subtle);
+    border-top: 1px solid var(--sf-border);
   }
   .camera-workspace .mobile-device:first-child {
     border-top: 0;
   }
   .camera-workspace .mobile-device h3 {
-    font-size: 15px;
+    font-size: var(--sf-fs-body);
     margin: 0;
     overflow-wrap: anywhere;
   }
   .camera-workspace .mobile-device p,
   .camera-workspace .mobile-device dl {
-    font-size: 13px;
-    color: var(--text-secondary);
+    font-size: var(--sf-fs-sub);
+    color: var(--sf-text-secondary);
     margin: 8px 0 12px;
   }
   .camera-workspace .mobile-device dl > div {
@@ -246,7 +214,7 @@
   }
   .camera-workspace .mobile-empty {
     text-align: center;
-    color: var(--text-secondary);
+    color: var(--sf-text-secondary);
   }
   .workspace-filter-bar {
     flex-direction: column;

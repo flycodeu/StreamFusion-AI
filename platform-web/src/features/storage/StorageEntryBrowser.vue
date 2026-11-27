@@ -5,14 +5,13 @@ import {
   ElCheckbox,
   ElEmpty,
   ElIcon,
-  ElOption,
-  ElSelect,
   ElTable,
   ElTableColumn,
   ElTooltip,
 } from 'element-plus'
 import { Delete, Document, Download, Folder, Link, MoreFilled } from '@element-plus/icons-vue'
 import type { ObjectPage, StorageObject } from '../../api/storage/types'
+import CursorPagination from '../../components/table/CursorPagination.vue'
 import StorageThumbnail from './StorageThumbnail.vue'
 import { createThumbnailQueue, libraryFiles } from './file-browser'
 import { bytes, time } from './display'
@@ -186,7 +185,13 @@ function rowMenu(
       </button>
     </article>
   </div>
-  <ElTable v-else :data="entries" row-key="key" empty-text="文件夹为空" @row-contextmenu="rowMenu"
+  <ElTable
+    v-else
+    :data="entries"
+    row-key="key"
+    border
+    empty-text="文件夹为空"
+    @row-contextmenu="rowMenu"
     ><ElTableColumn width="48"
       ><template #default="{ row }"
         ><ElCheckbox
@@ -228,27 +233,17 @@ function rowMenu(
     description="文件夹为空"
   />
   <div class="file-footer">
-    <span
-      >本页 {{ result?.commonPrefixes.length ?? 0 }} 个文件夹 ·
-      {{ libraryFiles(result?.items ?? []).length }} 个文件</span
-    >
-    <div class="file-pagination">
-      <ElSelect
-        :model-value="pageSize"
-        aria-label="每页条数"
-        :disabled="busy || mutating"
-        @update:model-value="emit('update:pageSize', $event)"
-        @change="emit('resizePage')"
-        ><ElOption
-          v-for="size in [20, 50, 100]"
-          :key="size"
-          :value="size"
-          :label="`${size} 条/页`" /></ElSelect
-      ><span>第 {{ page + 1 }} 页</span>
-      <ElButton :disabled="!page || busy || mutating" @click="emit('previous')">上一页</ElButton
-      ><ElButton :disabled="!result?.hasMore || busy || mutating" @click="emit('next')"
-        >下一页</ElButton
-      >
-    </div>
+    <CursorPagination
+      :page="page + 1"
+      :page-size="pageSize"
+      :has-prev="page > 0"
+      :has-next="Boolean(result?.hasMore)"
+      :disabled="busy || mutating"
+      :summary="`本页 ${result?.commonPrefixes.length ?? 0} 个文件夹 · ${libraryFiles(result?.items ?? []).length} 个文件`"
+      @update:page-size="emit('update:pageSize', $event)"
+      @size-change="emit('resizePage')"
+      @prev="emit('previous')"
+      @next="emit('next')"
+    />
   </div>
 </template>

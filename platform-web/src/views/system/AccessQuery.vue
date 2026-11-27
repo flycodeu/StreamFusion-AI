@@ -3,8 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   ElButton,
   ElDrawer,
+  ElFormItem,
   ElInput,
-  ElPagination,
   ElRadioButton,
   ElRadioGroup,
   ElTable,
@@ -25,6 +25,8 @@ import type {
 import { eligibilityText, reasonText } from '../../features/access-query/presentation'
 import RequestError from '../../components/feedback/RequestError.vue'
 import TablePanel from '../../components/table/TablePanel.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
+import FilterBar from '../../components/ui/FilterBar.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import { ApiRequestError } from '../../lib/http/error'
 import { sessionState } from '../../session/state'
@@ -117,9 +119,9 @@ function search(): void {
   total.value = 0
   void load()
 }
-function resize(): void {
-  current.value = 1
-  void load()
+function resetSearch(): void {
+  keyword.value = ''
+  search()
 }
 async function exportPages(): Promise<void> {
   if (mode.value !== 'page' || !pageReady.value || exporting.value) return
@@ -277,40 +279,41 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="content-page access-query">
-    <div class="query-toolbar">
-      <ElRadioGroup v-model="mode" aria-label="权限查询视角">
-        <ElRadioButton value="role">按角色查看</ElRadioButton>
-        <ElRadioButton value="page">按页面查看</ElRadioButton>
-      </ElRadioGroup>
-      <ElInput
-        v-model="keyword"
-        class="query-search"
-        maxlength="64"
-        clearable
-        :placeholder="mode === 'role' ? '搜索角色名称或编码' : '搜索页面名称或路径'"
-        @keyup.enter="search"
-        @clear="search"
-      />
-      <ElButton type="primary" :loading="loading" @click="search">查询</ElButton>
-      <ElButton :loading="loading" @click="load">刷新</ElButton>
-      <ElButton
-        v-if="mode === 'page'"
-        :loading="exporting"
-        :disabled="!pageReady || loading"
-        title="导出当前结果范围的全部页面，不限当前页"
-        @click="exportPages"
-        >导出当前结果（Excel）</ElButton
-      >
-      <ElTag class="query-readonly" effect="plain" type="info">只读</ElTag>
-    </div>
+    <FilterBar :loading="loading" @search="search" @reset="resetSearch">
+      <ElFormItem label="查询视角">
+        <ElRadioGroup v-model="mode" aria-label="权限查询视角">
+          <ElRadioButton value="role">按角色查看</ElRadioButton>
+          <ElRadioButton value="page">按页面查看</ElRadioButton>
+        </ElRadioGroup>
+      </ElFormItem>
+      <ElFormItem :label="mode === 'role' ? '角色' : '页面'">
+        <ElInput
+          v-model="keyword"
+          class="search-field"
+          maxlength="64"
+          clearable
+          :placeholder="mode === 'role' ? '搜索角色名称或编码' : '搜索页面名称或路径'"
+          @clear="search"
+        />
+      </ElFormItem>
+    </FilterBar>
     <RequestError :error="error" />
     <RequestError :error="exportError" :advice="exportAdvice" />
-    <TablePanel>
-      <template #actions
-        ><span class="table-context">{{
-          mode === 'role' ? '角色授权概览' : '页面覆盖概览'
-        }}</span></template
-      >
+    <TablePanel :initial-loading="loading && !roles.length && !pages.length">
+      <template #actions>
+        <span class="table-context">{{ mode === 'role' ? '角色授权概览' : '页面覆盖概览' }}</span>
+      </template>
+      <template #tools>
+        <ElButton
+          v-if="mode === 'page'"
+          :loading="exporting"
+          :disabled="!pageReady || loading"
+          title="导出当前结果范围的全部页面，不限当前页"
+          @click="exportPages"
+          >导出当前结果（Excel）</ElButton
+        >
+        <ElButton :loading="loading" @click="load">刷新</ElButton>
+      </template>
       <ElTable
         v-if="mode === 'role'"
         v-loading="loading"
@@ -387,20 +390,18 @@ onBeforeUnmount(() => {
           </template></ElTableColumn
         >
       </ElTable>
-      <template #footer
-        ><ElPagination
-          v-model:current-page="current"
-          v-model:page-size="size"
-          :page-sizes="[20, 50, 100]"
+      <template #footer>
+        <StandardPagination
+          v-model:page="current"
+          v-model:size="size"
           :total="total"
-          layout="total, sizes, prev, pager, next"
-          @current-change="load"
-          @size-change="resize"
-      /></template>
+          @change="load"
+        />
+      </template>
     </TablePanel>
     <ElDrawer
       v-model="drawer"
-      class="camera-detail-drawer"
+      class="management-drawer"
       :title="
         detailRole
           ? `${detailRole.role.name} · 角色明细`
@@ -545,50 +546,33 @@ onBeforeUnmount(() => {
           }}</template></ElTableColumn
         >
       </ElTable>
-      <ElPagination
-        v-model:current-page="detailCurrent"
-        :page-size="20"
+      <StandardPagination
+        v-model:page="detailCurrent"
+        :size="20"
         :total="detailTotal"
-        layout="total, prev, next"
+        small
+        layout="total, prev, pager, next"
         class="detail-pagination"
-        @current-change="loadDetail"
+        @change="loadDetail"
       />
     </ElDrawer>
   </div>
 </template>
 
 <style scoped>
-.query-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 14px 18px;
-  margin-bottom: 14px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
-}
-.query-readonly {
-  margin-left: auto;
-}
-.query-search {
-  width: min(320px, 100%);
-}
 .table-context {
-  color: #0f172a;
-  font-size: 14px;
-  font-weight: 700;
+  color: var(--sf-text-primary);
+  font-size: var(--sf-fs-body);
+  font-weight: 600;
 }
 .primary-cell {
-  color: #0f172a;
+  color: var(--sf-text-primary);
   font-weight: 600;
 }
 small {
   display: block;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
   line-height: 1.6;
 }
 .status-tag {
@@ -602,13 +586,6 @@ small {
   margin-bottom: 14px;
 }
 .detail-pagination {
-  display: flex;
-  justify-content: flex-end;
   margin-top: 14px;
-}
-@media (max-width: 640px) {
-  .query-search {
-    width: 100%;
-  }
 }
 </style>

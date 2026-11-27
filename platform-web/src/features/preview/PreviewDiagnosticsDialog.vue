@@ -75,11 +75,11 @@ const open = ref(true)
 .failure-message {
   margin: 0 0 14px;
   padding: 10px 14px;
-  border: 1px solid #fecaca;
-  border-radius: 8px;
-  background: #fef2f2;
-  color: #991b1b;
-  font-size: 13px;
+  border: 1px solid var(--sf-danger-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-danger-soft);
+  color: var(--el-color-danger-dark-2);
+  font-size: var(--sf-fs-sub);
   font-weight: 500;
   line-height: 1.5;
 }
@@ -89,9 +89,9 @@ const open = ref(true)
   gap: 10px 16px;
   margin: 0 0 14px;
   padding: 12px 14px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
 }
 .failure-fields > div {
   display: grid;
@@ -102,32 +102,32 @@ const open = ref(true)
   grid-column: 1 / -1;
 }
 .failure-fields dt {
-  color: #64748b;
-  font-size: 11px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
   font-weight: 500;
 }
 .failure-fields dd {
   margin: 0;
-  color: #0f172a;
-  font-size: 12.5px;
+  color: var(--sf-text-primary);
+  font-size: var(--sf-fs-sub);
   font-weight: 500;
   overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums;
 }
 .failure-note {
   margin: 10px 0 0;
-  color: #64748b;
-  font-size: 12.5px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
   line-height: 1.5;
 }
 .failure-json {
   margin-top: 14px;
-  font-size: 12.5px;
+  font-size: var(--sf-fs-sub);
 }
 .failure-json summary {
   width: fit-content;
   cursor: pointer;
-  color: var(--el-color-primary);
+  color: var(--sf-primary);
   font-weight: 500;
 }
 .failure-json pre {
@@ -135,10 +135,11 @@ const open = ref(true)
   overflow: auto;
   margin: 8px 0 0;
   padding: 10px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  background: #f8fafc;
-  font-size: 12px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-sm);
+  background: var(--sf-surface-subtle);
+  font-family: var(--sf-font-mono);
+  font-size: var(--sf-fs-caption);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

@@ -172,13 +172,13 @@ function contextMenu(event: InstanceType<typeof globalThis.Event>, item: FolderN
   min-width: 0;
   overflow: auto;
   padding: 16px 12px;
-  border-right: 1px solid #e2e8f0;
-  background: #fafbfc;
+  border-right: 1px solid var(--sf-border);
+  background: var(--sf-surface-subtle);
 }
 .tree-heading {
   display: block;
-  color: #475569;
-  font-size: 12px;
+  color: var(--sf-text-regular);
+  font-size: var(--sf-fs-caption);
   font-weight: 600;
   padding: 0 8px 10px;
 }
@@ -187,14 +187,14 @@ function contextMenu(event: InstanceType<typeof globalThis.Event>, item: FolderN
   align-items: center;
   gap: 7px;
   margin: 14px 8px 0;
-  color: #64748b;
-  font-size: 12px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
 }
 .tree-unavailable i {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--el-color-warning);
+  background: var(--sf-warning);
 }
 .tree-unavailable button {
   border: 0;
@@ -202,7 +202,7 @@ function contextMenu(event: InstanceType<typeof globalThis.Event>, item: FolderN
   margin-left: auto;
   background: none;
   font: inherit;
-  color: var(--el-color-primary);
+  color: var(--sf-primary);
   cursor: pointer;
 }
 .tree-node {
@@ -210,14 +210,14 @@ function contextMenu(event: InstanceType<typeof globalThis.Event>, item: FolderN
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--sf-fs-sub);
 }
 .tree-node > span {
   white-space: nowrap;
 }
 .tree-node .el-icon {
   flex-shrink: 0;
-  color: #f59e0b;
+  color: var(--sf-warning);
 }
 .folder-tree :deep(.el-tree) {
   background: transparent;
@@ -226,18 +226,18 @@ function contextMenu(event: InstanceType<typeof globalThis.Event>, item: FolderN
   height: 36px;
   width: max-content;
   min-width: 100%;
-  border-radius: 6px;
+  border-radius: var(--sf-radius-sm);
   margin-bottom: 1px;
 }
 :deep(.is-current > .el-tree-node__content) {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: var(--sf-primary-soft);
+  color: var(--sf-primary-active);
   font-weight: 500;
 }
 @media (max-width: 700px) {
   .folder-tree {
     border-right: 0;
-    border-bottom: 1px solid #e2e8f0;
+    border-bottom: 1px solid var(--sf-border);
     padding: 12px;
     max-height: 220px;
     overflow: auto;

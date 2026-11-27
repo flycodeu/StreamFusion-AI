@@ -122,10 +122,10 @@ const display = computed(() => factPresentation(props.profile))
 .status-fact {
   min-width: 0;
   padding: 16px 18px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #fff;
-  font-size: 13px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  background: var(--sf-surface);
+  font-size: var(--sf-fs-sub);
 }
 .fact-heading {
   display: flex;
@@ -134,39 +134,39 @@ const display = computed(() => factPresentation(props.profile))
   gap: 12px;
   flex-wrap: wrap;
   padding-bottom: 12px;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--sf-border-light);
 }
 .fact-heading > span:first-child {
-  color: #0f172a;
-  font-size: 14px;
+  color: var(--sf-text-primary);
+  font-size: var(--sf-fs-body);
   font-weight: 600;
 }
 .fact-status {
   padding: 2px 10px;
-  border: 1px solid #e2e8f0;
-  border-radius: 99px;
-  background: #f1f5f9;
-  color: #64748b;
-  font-size: 12px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-pill);
+  background: var(--sf-surface-muted);
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
   font-weight: 600;
 }
 .fact-status.tone-success {
-  border-color: #a7f3d0;
-  background: #ecfdf5;
-  color: #059669;
+  border-color: var(--sf-success-border);
+  background: var(--sf-success-soft);
+  color: var(--sf-success);
 }
 .fact-status.tone-warning {
-  border-color: #fecaca;
-  background: #fef2f2;
-  color: #b91c1c;
+  border-color: var(--sf-danger-border);
+  background: var(--sf-danger-soft);
+  color: var(--el-color-danger-dark-2);
 }
 .fact-reason {
   margin: 12px 0 0;
   padding: 8px 12px;
-  border-radius: 6px;
-  background: #f8fafc;
-  border-left: 3px solid #cbd5e1;
-  color: #475569;
+  border-radius: var(--sf-radius-sm);
+  background: var(--sf-surface-subtle);
+  border-left: 3px solid var(--sf-border-strong);
+  color: var(--sf-text-regular);
   overflow-wrap: anywhere;
 }
 .fact-grid {
@@ -178,25 +178,25 @@ const display = computed(() => factPresentation(props.profile))
 .fact-grid > div {
   min-width: 0;
   padding: 10px 12px;
-  border-radius: 8px;
-  background: #f8fafc;
-  border: 1px solid #f1f5f9;
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
+  border: 1px solid var(--sf-border-light);
 }
 .fact-grid dt {
   margin-bottom: 4px;
-  color: #64748b;
-  font-size: 12px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
 }
 .fact-grid dd {
   margin: 0;
-  color: #0f172a;
+  color: var(--sf-text-primary);
   font-weight: 500;
   line-height: 1.5;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 .fact-grid .fact-muted {
-  color: #94a3b8;
+  color: var(--sf-text-muted);
   font-weight: 400;
 }
 .fact-wide {

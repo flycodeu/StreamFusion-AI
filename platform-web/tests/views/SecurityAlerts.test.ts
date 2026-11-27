@@ -36,10 +36,12 @@ vi.mock('element-plus', async () => {
         'ElDescriptionsItem',
         'ElDrawer',
         'ElEmpty',
+        'ElIcon',
         'ElPagination',
         'ElTable',
         'ElTableColumn',
         'ElTag',
+        'ElTooltip',
         'ElDialog',
       ].map((name) => [
         name,

@@ -36,6 +36,7 @@ import type {
 } from '../../api/storage/types'
 import StorageAccessState from './StorageAccessState.vue'
 import RequestError from '../../components/feedback/RequestError.vue'
+import HelpTip from '../../components/ui/HelpTip.vue'
 import StorageUpload from './StorageUpload.vue'
 import StorageFolderDelete from './StorageFolderDelete.vue'
 import StorageFileDelete from './StorageFileDelete.vue'
@@ -609,14 +610,20 @@ function removeSelection() {
       width="min(560px,94vw)"
       align-center
       @update:model-value="copiedLink = ''"
-      ><ElInput
+    >
+      <template #header>
+        <div class="link-dialog-header">
+          <span class="el-dialog__title">预览链接</span>
+          <HelpTip content="打开链接时需要登录平台并具有图床访问权限。" label="预览链接访问说明" />
+        </div>
+      </template>
+      <ElInput
         :model-value="copiedLink"
         readonly
         aria-label="预览链接"
         @focus="($event.target as HTMLInputElement).select()"
       />
-      <p class="link-dialog-note">打开链接时需要登录平台并具有图床访问权限。</p></ElDialog
-    >
+    </ElDialog>
     <StorageUpload
       v-model="uploadDialog"
       :instance="instance"

@@ -109,7 +109,7 @@ onMounted(load)
                   label="1 分钟"
                 /><ElOption :value="120" label="2 分钟" />
               </ElSelect>
-              <ElButton type="primary" :loading="loading" @click="load">刷新</ElButton>
+              <ElButton :loading="loading" @click="load">刷新</ElButton>
             </div>
           </div>
           <RequestError :error="error" />
@@ -261,11 +261,11 @@ onMounted(load)
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-  padding: 12px 18px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  padding: 12px var(--sf-card-padding-x);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  background: var(--sf-surface);
+  box-shadow: var(--sf-shadow-xs);
 }
 .refresh-controls {
   display: flex;
@@ -278,18 +278,19 @@ onMounted(load)
   width: 100px;
 }
 .refresh-countdown {
-  color: var(--text-secondary);
-  font-size: 12px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
   font-variant-numeric: tabular-nums;
 }
 .refresh-paused {
-  color: var(--el-color-warning);
-  font-size: 12px;
+  color: var(--sf-warning);
+  font-size: var(--sf-fs-caption);
 }
 .server-toolbar > span {
-  color: #334155;
-  font-size: 13px;
+  color: var(--sf-text-regular);
+  font-size: var(--sf-fs-sub);
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 .server-metrics {
   display: grid;
@@ -298,18 +299,18 @@ onMounted(load)
 }
 .server-section {
   min-width: 0;
-  padding: 16px 18px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  padding: var(--sf-card-padding-y) var(--sf-card-padding-x);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  background: var(--sf-surface);
+  box-shadow: var(--sf-shadow-xs);
 }
 .server-section h2,
 .table-section-title {
   margin: 0 0 12px;
-  color: #0f172a;
-  font-size: 15px;
-  font-weight: 700;
+  color: var(--sf-text-primary);
+  font-size: var(--sf-fs-section);
+  font-weight: 600;
 }
 .table-section-title {
   margin: 0;

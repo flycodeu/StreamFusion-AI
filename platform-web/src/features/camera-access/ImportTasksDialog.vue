@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { accessJobLabel } from './presentation'
 import { onMounted, ref } from 'vue'
-import { ElButton, ElDialog, ElPagination, ElTable, ElTableColumn, ElTag } from 'element-plus'
+import { ElButton, ElDialog, ElTable, ElTableColumn, ElTag } from 'element-plus'
 import { getImportJobs } from '../../api/camera-access/api'
 import type { AccessJob } from '../../api/camera-access/types'
 import { usePageScope } from '../../composables/usePageScope'
 import RequestError from '../../components/feedback/RequestError.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
 import BulkImportPanel from './BulkImportPanel.vue'
 import CreateDialog from '../camera/CreateDialog.vue'
 import { formatDateTime } from '../../utils/dateTime'
@@ -96,7 +97,7 @@ onMounted(load)
           label="状态"
           width="120"
           ><template #default="{ row }"
-            ><ElTag>{{ accessJobLabel(asJob(row)) }}</ElTag></template
+            ><ElTag effect="plain">{{ accessJobLabel(asJob(row)) }}</ElTag></template
           ></ElTableColumn
         >
         <ElTableColumn label="处理 / 总数" min-width="140"
@@ -121,13 +122,14 @@ onMounted(load)
           ></ElTableColumn
         >
       </ElTable>
-      <ElPagination
-        v-model:current-page="page"
+      <StandardPagination
+        v-model:page="page"
         class="import-tasks-pagination"
-        :page-size="20"
+        :size="20"
         :total="total"
+        small
         layout="total, prev, pager, next"
-        @current-change="load"
+        @change="load"
       />
     </template>
     <template v-if="!selected && !retrying" #footer

@@ -19,7 +19,6 @@ import {
   ElDropdownMenu,
   ElDropdownItem,
   ElOption,
-  ElPagination,
   ElSelect,
   ElEmpty,
   ElTable,
@@ -38,6 +37,8 @@ import ColumnPicker from '../../components/table/ColumnPicker.vue'
 import { useColumns } from '../../composables/table/useColumns'
 import TablePanel from '../../components/table/TablePanel.vue'
 import TableActions from '../../components/table/TableActions.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
+import FilterBar from '../../components/ui/FilterBar.vue'
 import { useTableSelection } from '../../composables/table/useTableSelection'
 import { ApiRequestError } from '../../lib/http/error'
 import { accountHint } from '../../utils/loginValidation'
@@ -461,7 +462,7 @@ onMounted(load)
 
 <template>
   <div class="content-page">
-    <ElForm class="search-form" inline @submit.prevent="search">
+    <FilterBar :loading="loading" @search="search" @reset="resetSearch">
       <ElFormItem label="用户">
         <ElInput v-model="keyword" class="search-field" placeholder="请输入账号或昵称" clearable />
       </ElFormItem>
@@ -475,11 +476,7 @@ onMounted(load)
           />
         </ElSelect>
       </ElFormItem>
-      <ElFormItem>
-        <ElButton type="primary" native-type="submit" :loading="loading">查询</ElButton>
-        <ElButton @click="resetSearch">重置</ElButton>
-      </ElFormItem>
-    </ElForm>
+    </FilterBar>
     <RequestError :error="error" />
     <TablePanel :initial-loading="loading && !rows.length">
       <template #actions>
@@ -647,14 +644,7 @@ onMounted(load)
         >
       </ElTable>
       <template #footer>
-        <ElPagination
-          v-model:current-page="page"
-          v-model:page-size="size"
-          :total="total"
-          :page-sizes="[20, 50, 100]"
-          layout="total, sizes, prev, pager, next, jumper"
-          @change="load"
-        />
+        <StandardPagination v-model:page="page" v-model:size="size" :total="total" @change="load" />
       </template>
     </TablePanel>
     <ElDialog
@@ -682,7 +672,7 @@ onMounted(load)
       :show-close="!saving"
     >
       <RequestError :error="error" />
-      <ElForm class="user-form-grid" label-position="top" :disabled="saving" @submit.prevent="save">
+      <ElForm class="sf-form-grid" label-position="top" :disabled="saving" @submit.prevent="save">
         <ElFormItem label="账号" :required="!editing" :error="submitted ? accountError : ''"
           ><ElInput v-model="form.username" :disabled="!!editing" maxlength="32"
         /></ElFormItem>
@@ -711,7 +701,7 @@ onMounted(load)
               :label="option.label"
               :value="option.value" /></ElSelect
         ></ElFormItem>
-        <ElFormItem class="user-form-full" label="所属部门">
+        <ElFormItem class="sf-form-full" label="所属部门">
           <ElTreeSelect
             v-model="form.departmentIds"
             :disabled="!canEditDepartments"
@@ -730,7 +720,7 @@ onMounted(load)
             placeholder="请选择部门"
           />
         </ElFormItem>
-        <ElFormItem class="user-form-full" label="角色">
+        <ElFormItem class="sf-form-full" label="角色">
           <UserRolesField
             v-model="form.roleIds"
             :options="roleOptions"
@@ -757,7 +747,7 @@ onMounted(load)
         <ElTableColumn prop="username" label="账号" min-width="140" />
         <ElTableColumn label="结果" width="90">
           <template #default="{ row }"
-            ><ElTag :type="row.success ? 'success' : 'danger'">{{
+            ><ElTag :type="row.success ? 'success' : 'danger'" effect="plain">{{
               row.success ? '成功' : '失败'
             }}</ElTag></template
           >
@@ -802,11 +792,11 @@ onMounted(load)
   user-select: all;
   overflow-wrap: anywhere;
   padding: 2px 8px;
-  border-radius: 4px;
-  background: #f1f5f9;
-  color: #0f172a;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 13px;
+  border-radius: var(--sf-radius-sm);
+  background: var(--sf-surface-muted);
+  color: var(--sf-text-primary);
+  font-family: var(--sf-font-mono);
+  font-size: var(--sf-fs-sub);
 }
 .password-cell {
   display: flex;
@@ -818,19 +808,5 @@ onMounted(load)
 }
 .danger-action {
   color: var(--el-color-danger);
-}
-.user-form-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 24px;
-}
-.user-form-full {
-  grid-column: 1 / -1;
-}
-@media (max-width: 680px) {
-  .user-form-grid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
-  }
 }
 </style>

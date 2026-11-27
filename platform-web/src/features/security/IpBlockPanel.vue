@@ -2,13 +2,11 @@
 import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import {
   ElButton,
-  ElForm,
   ElFormItem,
   ElInput,
   ElMessage,
   ElMessageBox,
   ElOption,
-  ElPagination,
   ElSelect,
   ElTable,
   ElTableColumn,
@@ -21,6 +19,8 @@ import RequestError from '../../components/feedback/RequestError.vue'
 import ColumnPicker from '../../components/table/ColumnPicker.vue'
 import TableActions from '../../components/table/TableActions.vue'
 import TablePanel from '../../components/table/TablePanel.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
+import FilterBar from '../../components/ui/FilterBar.vue'
 import { useColumns } from '../../composables/table/useColumns'
 import { usePageScope } from '../../composables/usePageScope'
 import { sessionState } from '../../session/state'
@@ -138,7 +138,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="ip-block-panel">
-    <ElForm class="search-form" inline @submit.prevent="search">
+    <FilterBar :loading="loading" @search="search" @reset="reset">
       <ElFormItem label="来源IP">
         <ElInput
           v-model="query.sourceIp"
@@ -153,11 +153,7 @@ onBeforeUnmount(() => {
           <ElOption label="封禁中" value="BLOCKED" /><ElOption label="已解除" value="RELEASED" />
         </ElSelect>
       </ElFormItem>
-      <ElFormItem>
-        <ElButton type="primary" native-type="submit" :loading="loading">查询</ElButton>
-        <ElButton @click="reset">重置</ElButton>
-      </ElFormItem>
-    </ElForm>
+    </FilterBar>
     <RequestError :error="error" />
     <TablePanel>
       <template #tools>
@@ -231,12 +227,10 @@ onBeforeUnmount(() => {
         </ElTableColumn>
       </ElTable>
       <template #footer>
-        <ElPagination
-          v-model:current-page="query.page"
-          v-model:page-size="query.size"
+        <StandardPagination
+          v-model:page="query.page"
+          v-model:size="query.size"
           :total="total"
-          :page-sizes="[20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
           @change="load"
         />
       </template>

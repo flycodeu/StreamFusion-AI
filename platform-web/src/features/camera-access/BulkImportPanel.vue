@@ -7,7 +7,6 @@ import {
   ElButton,
   ElDescriptions,
   ElDescriptionsItem,
-  ElPagination,
   ElTable,
   ElTableColumn,
   ElTag,
@@ -20,6 +19,8 @@ import type {
   ImportItem,
 } from '../../api/camera-access/types'
 import RequestError from '../../components/feedback/RequestError.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
+import HelpTip from '../../components/ui/HelpTip.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import { isRequestRejected, useCreateRequest } from '../camera/form'
 import { formatDateTime } from '../../utils/dateTime'
@@ -207,7 +208,10 @@ onBeforeUnmount(() => {
   <section class="bulk-import-panel">
     <RequestError :error="error" />
     <template v-if="!started">
-      <h3>整批导入平台目录</h3>
+      <div class="bulk-heading">
+        <h3>整批导入平台目录</h3>
+        <HelpTip content="已有相机保留原分组，导入完成后可在相机列表查看。" label="整批导入说明" />
+      </div>
       <ElDescriptions v-if="impact" :column="2" border>
         <ElDescriptionsItem label="范围"
           >全部目录，共 {{ impact.declaredTotal ?? '待统计' }} 个资源</ElDescriptionsItem
@@ -218,7 +222,6 @@ onBeforeUnmount(() => {
         >
         <ElDescriptionsItem label="本次上限">{{ impact.maxItems }} 个资源</ElDescriptionsItem>
       </ElDescriptions>
-      <p class="panel-note">已有相机保留原分组。完成后可在相机列表查看。</p>
       <ElAlert
         v-if="creation.pending.value"
         type="warning"
@@ -238,7 +241,7 @@ onBeforeUnmount(() => {
     <template v-else>
       <div class="progress-heading">
         <h3>{{ accessJobLabel(job) }}</h3>
-        <ElTag>{{ accessMethodLabel(job.method, accessAdapters) }}</ElTag>
+        <ElTag effect="plain">{{ accessMethodLabel(job.method, accessAdapters) }}</ElTag>
       </div>
       <template v-if="job.bulk">
         <p class="progress-count">
@@ -312,12 +315,13 @@ onBeforeUnmount(() => {
             label="原因"
             min-width="160"
         /></ElTable>
-        <ElPagination
-          v-model:current-page="failurePage"
-          :page-size="20"
+        <StandardPagination
+          v-model:page="failurePage"
+          :size="20"
           :total="failureTotal"
+          small
           layout="total, prev, pager, next"
-          @current-change="loadFailures"
+          @change="loadFailures"
         />
       </template>
       <div class="panel-actions">
@@ -333,9 +337,19 @@ onBeforeUnmount(() => {
   </section>
 </template>
 <style scoped>
+.bulk-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.bulk-heading h3 {
+  margin: 0;
+  font-size: var(--sf-fs-section);
+}
 .bulk-import-panel h3 {
-  margin: 0 0 18px;
-  font-size: 18px;
+  margin: 0 0 16px;
+  font-size: var(--sf-fs-section);
 }
 .progress-heading {
   display: flex;
@@ -346,16 +360,16 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 .progress-count {
-  font-size: 16px;
+  font-size: var(--sf-fs-section);
 }
 .progress-count strong {
-  font-size: 24px;
+  font-size: var(--sf-fs-kpi);
   font-variant-numeric: tabular-nums;
 }
 .bulk-import-panel progress {
   width: 100%;
   height: 8px;
-  accent-color: var(--el-color-primary);
+  accent-color: var(--sf-primary);
 }
 .import-counts {
   display: grid;
@@ -364,22 +378,24 @@ onBeforeUnmount(() => {
   margin: 20px 0;
 }
 .import-counts > div {
-  padding: 16px;
-  background: var(--el-fill-color-light);
-  border-radius: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--sf-border);
+  background: var(--sf-surface-subtle);
+  border-radius: var(--sf-radius-md);
 }
 .import-counts dt {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
 }
 .import-counts dd {
   margin: 5px 0 0;
-  font-size: 24px;
+  color: var(--sf-text-primary);
+  font-size: var(--sf-fs-kpi);
   font-variant-numeric: tabular-nums;
 }
 .panel-note {
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
+  font-size: var(--sf-fs-sub);
+  color: var(--sf-text-secondary);
   line-height: 1.6;
 }
 .panel-actions {

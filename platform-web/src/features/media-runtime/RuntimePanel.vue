@@ -12,6 +12,7 @@ import type {
   RuntimeSelection,
 } from '../../api/media-runtime/types'
 import RequestError from '../../components/feedback/RequestError.vue'
+import PageHeader from '../../components/ui/PageHeader.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
 
@@ -122,12 +123,13 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="runtime-settings" aria-label="媒体运行环境">
-    <header class="settings-heading">
-      <div>
-        <h2>媒体运行环境</h2>
-        <span>{{ snapshot?.os || '—' }} · {{ formatDateTime(snapshot?.checkedAt) }}</span>
-      </div>
-      <div class="settings-actions">
+    <PageHeader title="媒体运行环境" heading-tag="h2">
+      <template #meta>
+        <span class="runtime-checked-meta"
+          >{{ snapshot?.os || '—' }} · {{ formatDateTime(snapshot?.checkedAt) }}</span
+        >
+      </template>
+      <template #actions>
         <ElButton :loading="detecting" :disabled="saving || loading" @click="load(true)"
           >重新检测</ElButton
         ><ElButton
@@ -137,8 +139,8 @@ onBeforeUnmount(() => {
           @click="save"
           >保存选择</ElButton
         >
-      </div>
-    </header>
+      </template>
+    </PageHeader>
     <RequestError :error="error" />
     <p v-if="missingSelections.length" class="runtime-diagnostic" role="status">
       {{ missingSelections.map((tool) => tool.title).join('、') }}
@@ -258,52 +260,36 @@ onBeforeUnmount(() => {
 <style scoped>
 .runtime-settings {
   display: grid;
-  gap: 20px;
+  gap: var(--sf-space-md);
 }
-.settings-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 18px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+.runtime-checked-meta {
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
+  font-variant-numeric: tabular-nums;
 }
-.settings-actions,
 .runtime-tool > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
 }
-.settings-heading h2 {
-  margin: 0 0 4px;
-  color: #0f172a;
-  font-size: 16px;
-  font-weight: 700;
-}
-.settings-heading span {
-  color: var(--text-secondary);
-  font-size: 12px;
-}
 .runtime-tools {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--sf-space-md);
 }
 .runtime-tool {
   min-width: 0;
-  padding: clamp(18px, 2vw, 24px);
-  background: var(--el-bg-color);
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  padding: clamp(18px, 2vw, 22px);
+  background: var(--sf-surface);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  box-shadow: var(--sf-shadow-xs);
 }
 .runtime-tool h3 {
   margin: 0;
-  font-size: 19px;
+  color: var(--sf-text-primary);
+  font-size: var(--sf-fs-section);
   font-weight: 600;
 }
 .runtime-tool > label {

@@ -4,7 +4,7 @@ defineProps<{ initialLoading?: boolean; embedded?: boolean }>()
 
 <template>
   <section class="table-panel" :class="{ 'is-embedded': embedded }">
-    <div class="table-panel__toolbar">
+    <div v-if="$slots.actions || $slots.tools" class="table-panel__toolbar">
       <div class="table-panel__actions"><slot name="actions" /></div>
       <div class="table-panel__tools"><slot name="tools" /></div>
     </div>
@@ -21,12 +21,13 @@ defineProps<{ initialLoading?: boolean; embedded?: boolean }>()
 <style scoped>
 .table-panel {
   min-width: 0;
-  padding: 16px 18px;
-  background: var(--el-bg-color);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--card-radius);
-  box-shadow: var(--card-shadow);
+  padding: var(--sf-card-padding-y) var(--sf-card-padding-x);
+  background: var(--sf-surface);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  box-shadow: var(--sf-shadow-xs);
 }
+
 .table-panel.is-embedded {
   padding: 0;
   background: transparent;
@@ -34,40 +35,47 @@ defineProps<{ initialLoading?: boolean; embedded?: boolean }>()
   border-radius: 0;
   box-shadow: none;
 }
+
 .table-skeleton {
   padding: 8px 0;
 }
+
 .table-skeleton__row {
   display: grid;
   grid-template-columns: 2fr 3fr 2fr 1fr;
   gap: 24px;
   padding: 16px 12px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--sf-border-light);
 }
+
 .table-skeleton__row span {
   height: 16px;
-  border-radius: 4px;
-  background: var(--el-fill-color);
+  border-radius: var(--sf-radius-sm);
+  background: var(--sf-surface-muted);
   animation: skeleton-pulse 1.6s ease-in-out infinite alternate;
 }
+
 @keyframes skeleton-pulse {
   to {
     opacity: 0.4;
   }
 }
+
 @media (prefers-reduced-motion: reduce) {
   .table-skeleton__row span {
     animation: none;
   }
 }
+
 .table-panel__toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 10px 12px;
+  margin-bottom: 14px;
 }
+
 .table-panel__actions,
 .table-panel__tools {
   display: flex;
@@ -75,14 +83,19 @@ defineProps<{ initialLoading?: boolean; embedded?: boolean }>()
   flex-wrap: wrap;
   gap: 8px;
 }
+
 .table-panel__actions :deep(.el-button + .el-button),
 .table-panel__tools :deep(.el-button + .el-button) {
   margin-left: 0;
 }
+
 .table-panel__footer {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  margin-top: 16px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--sf-border-light);
   overflow-x: auto;
 }
 </style>

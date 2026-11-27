@@ -23,17 +23,17 @@ defineProps<{ load: PreviewNodeStatus['zlmLoad'] }>()
 .zlm-network-load {
   margin: 10px 0;
   padding: 8px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #64748b;
-  font-size: 12px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
   line-height: 1.5;
 }
 .zlm-network-load summary {
   width: fit-content;
   cursor: pointer;
-  color: #0f172a;
+  color: var(--sf-text-primary);
   font-weight: 600;
 }
 .load-values {
@@ -48,10 +48,10 @@ defineProps<{ load: PreviewNodeStatus['zlmLoad'] }>()
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #334155;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-sm);
+  background: var(--sf-surface);
+  color: var(--sf-text-regular);
   font-weight: 500;
 }
 .zlm-network-load p {
@@ -60,7 +60,7 @@ defineProps<{ load: PreviewNodeStatus['zlmLoad'] }>()
 .zlm-network-load small {
   display: block;
   margin-top: 6px;
-  font-size: 11px;
-  color: #94a3b8;
+  font-size: var(--sf-fs-caption);
+  color: var(--sf-text-muted);
 }
 </style>

@@ -61,16 +61,8 @@ function opsZlmStatus(item: OpsZlmInstances['items'][number]): 'linked' | 'occup
     <header class="popover-heading">
       <div>
         <h3>接入节点包</h3>
-        <p>从 Ops 引入或手工登记远程节点</p>
       </div>
-      <button
-        type="button"
-        class="guide-trigger"
-        popovertarget="preview-package-panel"
-        popovertargetaction="hide"
-      >
-        关闭
-      </button>
+      <ElButton popovertarget="preview-package-panel" popovertargetaction="hide">关闭</ElButton>
     </header>
     <div class="connection-heading">
       <h3>Ops 已安装</h3>
@@ -179,16 +171,8 @@ function opsZlmStatus(item: OpsZlmInstances['items'][number]): 'linked' | 'occup
     <header class="popover-heading">
       <div>
         <h3>从 Ops 引入 ZLM</h3>
-        <p>选择已发布实例接入预览调度</p>
       </div>
-      <button
-        type="button"
-        class="guide-trigger"
-        popovertarget="preview-ops-zlm-panel"
-        popovertargetaction="hide"
-      >
-        关闭
-      </button>
+      <ElButton popovertarget="preview-ops-zlm-panel" popovertargetaction="hide">关闭</ElButton>
     </header>
     <div class="connection-heading">
       <h4>已发布实例</h4>

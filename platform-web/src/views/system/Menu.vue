@@ -25,6 +25,7 @@ import RequestError from '../../components/feedback/RequestError.vue'
 import ColumnPicker from '../../components/table/ColumnPicker.vue'
 import TablePanel from '../../components/table/TablePanel.vue'
 import TableActions from '../../components/table/TableActions.vue'
+import FilterBar from '../../components/ui/FilterBar.vue'
 import { useColumns } from '../../composables/table/useColumns'
 import { useTableSelection } from '../../composables/table/useTableSelection'
 import { editMenuForm, menuParentOptions, menuWrite, newMenuForm } from '../../features/menu/form'
@@ -229,7 +230,7 @@ onMounted(load)
 
 <template>
   <div class="content-page">
-    <ElForm inline class="search-form" @submit.prevent="load">
+    <FilterBar :loading="loading" @search="load" @reset="reset">
       <ElFormItem label="菜单名称"
         ><ElInput v-model="name" class="search-field" placeholder="请输入菜单名称" clearable
       /></ElFormItem>
@@ -245,11 +246,7 @@ onMounted(load)
         ><ElSelect v-model="enabled" class="status-field" placeholder="全部" clearable
           ><ElOption label="启用" :value="true" /><ElOption label="停用" :value="false" /></ElSelect
       ></ElFormItem>
-      <ElFormItem
-        ><ElButton type="primary" native-type="submit" :loading="loading">查询</ElButton
-        ><ElButton @click="reset">重置</ElButton></ElFormItem
-      >
-    </ElForm>
+    </FilterBar>
     <RequestError :error="error" />
     <TablePanel :initial-loading="loading && !rows.length">
       <template #actions
@@ -312,9 +309,9 @@ onMounted(load)
           show-overflow-tooltip
           ><template #default="{ row }">{{ row.page?.path || '—' }}</template></ElTableColumn
         >
-        <ElTableColumn v-if="columns.includes('enabled')" label="状态" width="80"
+        <ElTableColumn v-if="columns.includes('enabled')" label="状态" width="90"
           ><template #default="{ row }"
-            ><ElTag :type="row.enabled ? 'success' : 'info'" size="small">{{
+            ><ElTag :type="row.enabled ? 'success' : 'info'" effect="plain">{{
               row.enabled ? '启用' : '停用'
             }}</ElTag></template
           ></ElTableColumn
@@ -372,7 +369,7 @@ onMounted(load)
       :show-close="!saving"
     >
       <RequestError :error="error" />
-      <ElForm class="menu-form-grid" label-position="top" :disabled="saving" @submit.prevent="save">
+      <ElForm class="sf-form-grid" label-position="top" :disabled="saving" @submit.prevent="save">
         <ElFormItem
           label="菜单名称"
           required
@@ -387,7 +384,7 @@ onMounted(load)
               :label="label"
               :value="value" /></ElSelect
         ></ElFormItem>
-        <ElFormItem class="menu-form-full" label="上级目录">
+        <ElFormItem class="sf-form-full" label="上级目录">
           <ElTreeSelect
             v-model="form.parentId"
             :data="parentOptions"
@@ -432,20 +429,3 @@ onMounted(load)
     </ElDialog>
   </div>
 </template>
-
-<style scoped>
-.menu-form-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 20px;
-}
-.menu-form-full {
-  grid-column: 1 / -1;
-}
-@media (max-width: 640px) {
-  .menu-form-grid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
-  }
-}
-</style>

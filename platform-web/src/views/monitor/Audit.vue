@@ -6,12 +6,10 @@ import {
   ElDatePicker,
   ElDrawer,
   ElEmpty,
-  ElForm,
   ElFormItem,
   ElInput,
   ElMessage,
   ElOption,
-  ElPagination,
   ElSelect,
   ElTable,
   ElTableColumn,
@@ -28,6 +26,8 @@ import { moduleNames, actionNames, resultNames } from '../../features/audit/labe
 import TablePanel from '../../components/table/TablePanel.vue'
 import TableActions from '../../components/table/TableActions.vue'
 import ColumnPicker from '../../components/table/ColumnPicker.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
+import FilterBar from '../../components/ui/FilterBar.vue'
 import { useColumns } from '../../composables/table/useColumns'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
@@ -254,7 +254,7 @@ watch(
         @close="retentionOpen = false"
       />
       <ExportDialog v-if="exportOpen" :filter="exportFilter" @close="exportOpen = false" />
-      <ElForm class="search-form" inline @submit.prevent="search">
+      <FilterBar :loading="loading" @search="search" @reset="reset">
         <ElFormItem label="操作人"
           ><ElInput
             v-model="query.user"
@@ -309,11 +309,7 @@ watch(
             maxlength="32"
             clearable
         /></ElFormItem>
-        <ElFormItem
-          ><ElButton type="primary" native-type="submit" :loading="loading">查询</ElButton
-          ><ElButton @click="reset">重置</ElButton></ElFormItem
-        >
-      </ElForm>
+      </FilterBar>
       <RequestError :error="error" />
       <TablePanel :initial-loading="loading && !rows.length">
         <template #actions>
@@ -397,19 +393,18 @@ watch(
             ></ElTableColumn
           >
         </ElTable>
-        <template #footer
-          ><ElPagination
-            v-model:current-page="query.page"
-            v-model:page-size="query.size"
+        <template #footer>
+          <StandardPagination
+            v-model:page="query.page"
+            v-model:size="query.size"
             :total="total"
-            :page-sizes="[20, 50, 100]"
-            layout="total, sizes, prev, pager, next, jumper"
             @change="load"
-        /></template>
+          />
+        </template>
       </TablePanel>
       <ElDrawer
         v-model="drawer"
-        class="camera-detail-drawer"
+        class="management-drawer"
         title="操作详情"
         size="min(760px, 100vw)"
         destroy-on-close
@@ -476,7 +471,7 @@ watch(
             <section aria-labelledby="audit-changes-title">
               <h3 id="audit-changes-title" class="detail-section-title">变更内容</h3>
               <div v-if="changes.length" class="audit-changes">
-                <ElTable :data="changes">
+                <ElTable :data="changes" border>
                   <ElTableColumn prop="name" label="字段" width="140" />
                   <ElTableColumn label="内容" min-width="180">
                     <template #default="{ row }">
@@ -499,11 +494,7 @@ watch(
 
             <details class="audit-technical">
               <summary>
-                <span
-                  >技术排查<span class="audit-technical-hint"
-                    >记录 ID · 请求定位 · 排查 JSON</span
-                  ></span
-                >
+                <span>技术排查</span>
               </summary>
               <div class="audit-technical-content">
                 <dl class="audit-technical-fields">

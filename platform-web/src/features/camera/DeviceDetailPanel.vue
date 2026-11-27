@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { useAccessAdapters } from '../camera-access/useDeviceAdapters'
 import { computed, onMounted, ref, watch } from 'vue'
-import { ElButton, ElDrawer, ElMessageBox, ElPagination, ElTag, vLoading } from 'element-plus'
+import { ElButton, ElDrawer, ElMessageBox, ElTag, vLoading } from 'element-plus'
 import * as api from '../../api/camera/api'
 import type { Camera, CameraDeviceGroup } from '../../api/camera/types'
 import RequestError from '../../components/feedback/RequestError.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import { connectionLabel, lifecycleLabel, sourceBrandLabel, streamLabel } from './form'
 import { addressLabel, addressText, streamAddress } from './address'
@@ -236,6 +237,7 @@ onMounted(load)
             v-if="selected"
             size="small"
             :type="selected.lifecycle === 'ENABLED' ? 'success' : 'info'"
+            effect="plain"
             >{{ lifecycleLabel(selected.lifecycle) }}</ElTag
           >
           <span>{{ total }} 个可访问通道</span>
@@ -253,15 +255,16 @@ onMounted(load)
           >{{ item.name }}</ElButton
         >
       </div>
-      <ElPagination
+      <StandardPagination
         v-if="total > 20"
-        v-model:current-page="page"
-        :disabled="busy"
+        v-model:page="page"
+        :size="20"
         :total="total"
-        :page-size="20"
+        :disabled="busy"
         :pager-count="5"
+        small
         layout="prev, pager, next"
-        @current-change="load"
+        @change="load"
       />
       <p v-if="!loading && !channels.length && !error" class="empty-note">暂无可访问通道</p>
       <div v-if="selected" v-loading="detailLoading" class="channel-detail">
@@ -400,9 +403,9 @@ onMounted(load)
   bottom: auto;
   height: auto;
   max-height: calc(100dvh - 2 * var(--camera-card-gap));
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 12px;
-  box-shadow: var(--el-box-shadow);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  box-shadow: var(--sf-shadow-md);
   font-size: var(--camera-card-text);
 }
 .camera-device-card > .el-drawer__header {
@@ -410,10 +413,12 @@ onMounted(load)
   gap: 16px;
   margin: 0;
   padding: var(--camera-card-section-gap) var(--camera-card-padding);
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  border-bottom: 1px solid var(--sf-border);
 }
 .camera-device-card .el-drawer__title {
-  font-size: clamp(1rem, 0.8rem + 0.25vw, 1.125rem);
+  color: var(--sf-text-primary);
+  font-size: var(--sf-fs-section);
+  font-weight: 600;
 }
 .camera-device-card > .el-drawer__body {
   padding: var(--camera-card-padding);
@@ -426,7 +431,7 @@ onMounted(load)
   justify-content: space-between;
   gap: 12px;
   padding: var(--camera-card-row-gap) var(--camera-card-padding);
-  border-top: 1px solid var(--el-border-color-lighter);
+  border-top: 1px solid var(--sf-border);
 }
 .camera-device-card .el-button {
   height: auto;
@@ -457,9 +462,9 @@ onMounted(load)
 </style>
 <style scoped>
 .device-top-card {
-  background: #f7f8fa;
-  border: 1px solid #e5e8ef;
-  border-radius: 8px;
+  background: var(--sf-surface-subtle);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
   padding: 14px 16px;
   margin-bottom: var(--camera-card-section-gap);
 }
@@ -513,7 +518,7 @@ onMounted(load)
 .device-facts {
   margin: 14px 0 0;
   padding-top: 12px;
-  border-top: 1px solid #e5e8ef;
+  border-top: 1px solid var(--sf-border);
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
@@ -618,9 +623,9 @@ onMounted(load)
   justify-content: space-between;
   gap: 16px;
   padding: 10px 14px;
-  background: #f8fafc;
-  border: 1px solid #e5e8ef;
-  border-radius: 6px;
+  background: var(--sf-surface-subtle);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-sm);
 }
 .stream-info {
   min-width: 0;

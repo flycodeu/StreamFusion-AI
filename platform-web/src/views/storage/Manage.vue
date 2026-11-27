@@ -3,8 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ElButton,
+  ElFormItem,
   ElInput,
-  ElPagination,
   ElTable,
   ElTableColumn,
   ElTag,
@@ -13,6 +13,10 @@ import {
 import * as api from '../../api/storage/api'
 import type { StorageInstance, StorageOptions } from '../../api/storage/types'
 import RequestError from '../../components/feedback/RequestError.vue'
+import TablePanel from '../../components/table/TablePanel.vue'
+import TableActions from '../../components/table/TableActions.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
+import FilterBar from '../../components/ui/FilterBar.vue'
 import InstanceEditor from '../../features/storage/InstanceEditor.vue'
 import StorageLibrary from '../../features/storage/StorageLibrary.vue'
 import StorageResources from '../../features/storage/StorageResources.vue'
@@ -109,14 +113,14 @@ function enter(id: string) {
 function back() {
   void router.push({ query: {} })
 }
-function sizeChanged() {
-  listPage.value = 1
-  void loadInstances()
-}
 function query() {
   search.value = keyword.value.trim()
   listPage.value = 1
   void loadInstances()
+}
+function resetSearch() {
+  keyword.value = ''
+  query()
 }
 async function saved() {
   if (selectedId.value) await refresh()
@@ -173,51 +177,34 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="storage-workspace">
-    <header class="workspace-heading" :class="{ 'list-heading': !selectedId }">
-      <template v-if="selectedId"
-        ><ElButton text class="back-btn" @click="back">← 图床列表</ElButton
-        ><span v-if="instance" class="instance-name">{{ instance.name }}</span></template
-      >
-      <template v-else>
-        <div class="list-title">
-          <h2>对象存储</h2>
-          <span class="list-count">共 {{ total }} 个实例</span>
-        </div>
-        <div class="list-actions">
-          <ElButton @click="policyOpen = true">全局清理策略</ElButton
-          ><ElButton type="primary" @click="edit(null)">新增图床</ElButton>
-        </div>
-      </template>
-      <nav v-if="selectedId" class="workspace-navigation" aria-label="图床管理分区">
-        <button
-          v-for="view in views"
-          :key="view.key"
-          type="button"
-          :aria-current="currentView === view.key ? 'page' : undefined"
-          :class="{ active: currentView === view.key }"
-          @click="navigate(view.key)"
-        >
-          {{ view.label }}
-        </button>
-      </nav>
-    </header>
-    <RequestError v-if="error" :error="error" class="workspace-error" />
-    <main v-loading="loading" class="workspace-content">
-      <section v-if="!selectedId" class="server-list" aria-label="图床服务器列表">
-        <form class="server-search" @submit.prevent="query">
+  <div class="content-page storage-workspace">
+    <template v-if="!selectedId">
+      <FilterBar :loading="loading" @search="query" @reset="resetSearch">
+        <ElFormItem label="存储">
           <ElInput
             v-model="keyword"
+            class="search-field"
             clearable
             placeholder="名称或 S3 地址"
             aria-label="搜索图床"
-          /><ElButton native-type="submit" type="primary">查询</ElButton
-          ><ElButton @click="loadInstances">刷新</ElButton>
-        </form>
+          />
+        </ElFormItem>
+      </FilterBar>
+      <RequestError v-if="error" :error="error" class="workspace-error" />
+      <TablePanel :initial-loading="loading && !instances.length">
+        <template #actions>
+          <ElButton type="primary" @click="edit(null)">新建图床</ElButton>
+          <ElButton @click="policyOpen = true">全局清理策略</ElButton>
+        </template>
+        <template #tools>
+          <span class="sf-count-pill">共 {{ total }} 个实例</span>
+          <ElButton :loading="loading" @click="loadInstances">刷新</ElButton>
+        </template>
         <ElTable
+          v-loading="loading"
           :data="instances"
           row-key="instanceId"
-          height="clamp(320px, calc(100vh - 340px), 640px)"
+          border
           empty-text="尚未配置图床服务器"
         >
           <ElTableColumn label="图床名称" min-width="170"
@@ -230,9 +217,11 @@ onMounted(async () => {
           <ElTableColumn prop="endpoint" label="S3 地址" min-width="230" show-overflow-tooltip />
           <ElTableColumn label="连接状态" width="130"
             ><template #default="{ row }"
-              ><ElTag :type="row.accessStatus === 'ACCESSIBLE' ? 'success' : 'info'">{{
-                label(row.accessStatus)
-              }}</ElTag></template
+              ><ElTag
+                :type="row.accessStatus === 'ACCESSIBLE' ? 'success' : 'info'"
+                effect="plain"
+                >{{ label(row.accessStatus) }}</ElTag
+              ></template
             ></ElTableColumn
           >
           <ElTableColumn label="文件 / 逻辑大小" min-width="180"
@@ -244,52 +233,80 @@ onMounted(async () => {
           <ElTableColumn label="检查时间" min-width="180"
             ><template #default="{ row }">{{ time(row.checkedAt) }}</template></ElTableColumn
           >
-          <ElTableColumn label="操作" width="170"
+          <ElTableColumn
+            label="操作"
+            width="170"
+            fixed="right"
+            class-name="table-actions-column"
+            :resizable="false"
             ><template #default="{ row }"
-              ><ElButton link type="primary" @click="enter(row.instanceId)">进入文件库</ElButton
-              ><ElButton link @click="edit(asInstance(row))">编辑</ElButton></template
+              ><TableActions compact
+                ><ElButton link type="primary" @click="enter(row.instanceId)">进入文件库</ElButton
+                ><ElButton link type="primary" @click="edit(asInstance(row))"
+                  >编辑</ElButton
+                ></TableActions
+              ></template
             ></ElTableColumn
           >
         </ElTable>
-        <ElPagination
-          v-model:current-page="listPage"
-          v-model:page-size="listSize"
-          :page-sizes="[10, 20, 50]"
-          :total="total"
-          :pager-count="5"
-          layout="total, sizes, prev, pager, next"
-          @size-change="sizeChanged"
-          @current-change="loadInstances"
+        <template #footer>
+          <StandardPagination
+            v-model:page="listPage"
+            v-model:size="listSize"
+            :total="total"
+            @change="loadInstances"
+          />
+        </template>
+      </TablePanel>
+    </template>
+    <template v-else>
+      <header class="workspace-heading">
+        <ElButton text class="back-btn" @click="back">← 图床列表</ElButton>
+        <span v-if="instance" class="instance-name">{{ instance.name }}</span>
+        <nav class="workspace-navigation" aria-label="图床管理分区">
+          <button
+            v-for="view in views"
+            :key="view.key"
+            type="button"
+            :aria-current="currentView === view.key ? 'page' : undefined"
+            :class="{ active: currentView === view.key }"
+            @click="navigate(view.key)"
+          >
+            {{ view.label }}
+          </button>
+        </nav>
+      </header>
+      <RequestError v-if="error" :error="error" class="workspace-error" />
+      <main v-loading="loading" class="workspace-content">
+        <StorageLibrary
+          v-if="instance && currentView === 'files'"
+          :key="instance.instanceId"
+          :instance="instance"
+          @updated="refresh"
+          @settings="navigate('settings')"
         />
-      </section>
-      <StorageLibrary
-        v-else-if="instance && currentView === 'files'"
-        :key="instance.instanceId"
-        :instance="instance"
-        @updated="refresh"
-        @settings="navigate('settings')"
-      />
-      <StorageResources
-        v-else-if="instance && currentView === 'resources'"
-        :key="instance.instanceId"
-        :instance="instance"
-        @updated="refresh"
-      />
-      <StorageChecks
-        v-else-if="instance && currentView === 'checks'"
-        :key="instance.instanceId"
-        :instance="instance"
-        @updated="refresh"
-      />
-      <StorageSettings
-        v-else-if="currentView === 'settings'"
-        :instances="instance ? [instance] : []"
-        :instance="instance"
-        @edit="edit"
-        @select="enter"
-        @updated="saved"
-      />
-    </main>
+        <StorageResources
+          v-else-if="instance && currentView === 'resources'"
+          :key="instance.instanceId"
+          :instance="instance"
+          @updated="refresh"
+        />
+        <StorageChecks
+          v-else-if="instance && currentView === 'checks'"
+          :key="instance.instanceId"
+          :instance="instance"
+          @updated="refresh"
+        />
+        <StorageSettings
+          v-else-if="currentView === 'settings'"
+          :instances="instance ? [instance] : []"
+          :instance="instance"
+          @edit="edit"
+          @select="enter"
+          @updated="saved"
+        />
+      </main>
+    </template>
     <StorageHistoryPolicy v-model="policyOpen" />
     <InstanceEditor v-model="editor" :instance="editing" :options="options" @saved="saved" />
   </div>
@@ -297,7 +314,6 @@ onMounted(async () => {
 
 <style scoped>
 .storage-workspace {
-  padding: 20px 24px;
   min-width: 0;
 }
 .workspace-heading {
@@ -305,106 +321,41 @@ onMounted(async () => {
   flex-wrap: wrap;
   gap: 14px;
   align-items: center;
-  margin-bottom: 16px;
-  padding: 12px 20px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
-}
-.list-heading {
-  justify-content: space-between;
-}
-.list-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.list-title h2 {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 700;
-  color: #0f172a;
-  letter-spacing: -0.01em;
-}
-.list-count {
-  padding: 2px 10px;
-  border: 1px solid #e2e8f0;
-  border-radius: 999px;
-  background: #f8fafc;
-  color: #475569;
-  font-size: 12px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  margin-bottom: 14px;
+  padding: 12px var(--sf-card-padding-x);
+  background: var(--sf-surface);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  box-shadow: var(--sf-shadow-xs);
 }
 .back-btn {
   font-weight: 500;
-  color: #475569;
+  color: var(--sf-text-regular);
 }
 .instance-name {
-  color: #0f172a;
-  font-size: 16px;
-  font-weight: 700;
-  overflow-wrap: anywhere;
-}
-.list-actions {
-  display: flex;
-  gap: 8px;
-}
-.list-actions :deep(.el-button + .el-button) {
-  margin-left: 0;
-}
-.server-list {
-  padding: 18px 22px;
-  min-width: 0;
-}
-.server-list :deep(.el-table__body .el-table__cell) {
-  padding-top: 13px;
-  padding-bottom: 13px;
-  font-variant-numeric: tabular-nums;
-}
-.server-list :deep(.el-table__header .el-table__cell) {
-  padding-top: 11px;
-  padding-bottom: 11px;
-  background: #f8fafc;
-  color: #475569;
+  color: var(--sf-text-primary);
+  font-size: var(--sf-fs-section);
   font-weight: 600;
-}
-.server-search {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 16px;
-}
-.server-search .el-input {
-  width: 320px;
-  max-width: 55%;
-}
-.server-list .el-pagination {
-  margin-top: 16px;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  row-gap: 10px;
-  overflow-x: auto;
-  padding-bottom: 4px;
+  overflow-wrap: anywhere;
 }
 .workspace-navigation {
   display: inline-flex;
   gap: 4px;
   margin-left: auto;
   padding: 3px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  background: #f8fafc;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
   flex-wrap: wrap;
 }
 .workspace-navigation button {
   border: 0;
   background: transparent;
   padding: 6px 14px;
-  border-radius: 7px;
-  color: #475569;
+  border-radius: var(--sf-radius-sm);
+  color: var(--sf-text-secondary);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--sf-fs-sub);
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -414,32 +365,29 @@ onMounted(async () => {
     box-shadow 120ms ease;
 }
 .workspace-navigation button:hover:not(.active) {
-  color: #0f172a;
+  color: var(--sf-text-primary);
 }
 .workspace-navigation button.active {
-  color: #1d4ed8;
-  background: #ffffff;
+  color: var(--sf-primary);
+  background: var(--sf-surface);
   font-weight: 600;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  box-shadow: var(--sf-shadow-xs);
 }
 .workspace-content {
   min-height: 360px;
   min-width: 0;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+  background: var(--sf-surface);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  box-shadow: var(--sf-shadow-xs);
   overflow: hidden;
 }
 .workspace-error {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
 }
 @media (max-width: 700px) {
-  .storage-workspace {
-    padding: 12px;
-  }
   .workspace-heading {
-    margin-bottom: 14px;
+    margin-bottom: 12px;
   }
   .workspace-navigation {
     margin-left: 0;

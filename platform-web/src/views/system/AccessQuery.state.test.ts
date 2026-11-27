@@ -25,6 +25,8 @@ vi.mock('element-plus', async () => {
       [
         'ElButton',
         'ElDrawer',
+        'ElForm',
+        'ElFormItem',
         'ElInput',
         'ElPagination',
         'ElRadioButton',

@@ -254,7 +254,7 @@ watch(
           {{ selectedPreset.apiFamily }} · {{ selectedPreset.status }}
         </p>
       </div>
-      <ElForm v-if="!unavailable" label-width="110px" :disabled="disabled" @submit.prevent>
+      <ElForm v-if="!unavailable" label-position="top" :disabled="disabled" @submit.prevent>
         <RequestError :error="error" />
         <ElFormItem label="连接配置"
           ><ElCheckbox v-model="model.reuse">使用已保存连接</ElCheckbox></ElFormItem
@@ -334,7 +334,7 @@ watch(
             ></ElFormItem
           >
         </template>
-        <template v-else-if="!model.reuse">
+        <div v-else-if="!model.reuse" class="sf-form-grid">
           <ElFormItem :label="isPlatform ? '平台地址' : '设备地址'" required
             ><ElInput
               v-model="model.host"
@@ -344,7 +344,7 @@ watch(
           <ElFormItem label="服务端口" required
             ><ElInputNumber v-model="model.port" :min="1" :max="65535"
           /></ElFormItem>
-        </template>
+        </div>
         <p v-if="passive" class="field-note">使用已启用的主动接入地址，登记地址无需推流令牌。</p>
         <p v-if="passive" class="field-note">
           <ElButton link :loading="ingressLoading" @click="inspectIngress"
@@ -414,46 +414,51 @@ watch(
 
 <style scoped>
 .platform-selector {
-  display: grid;
-  grid-template-columns: 98px minmax(0, 1fr);
-  gap: 10px 12px;
-  align-items: center;
-  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
 }
 .platform-selector > label {
-  text-align: right;
+  color: var(--sf-text-regular);
+  font-size: var(--sf-fs-sub);
+  font-weight: 500;
+  line-height: 1.4;
+}
+.platform-selector :deep(.el-select) {
+  width: 100%;
 }
 .platform-description {
-  grid-column: 2;
   margin: 0;
-  color: var(--text-secondary);
-  font-size: 13px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
   line-height: 1.5;
 }
 .method-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
 .method-choice {
   min-height: 40px;
   padding: 8px;
-  color: var(--el-text-color-regular);
-  background: var(--el-fill-color-blank);
-  border: 1px solid var(--el-border-color);
-  border-radius: 5px;
+  color: var(--sf-text-regular);
+  background: var(--sf-surface);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-sm);
   cursor: pointer;
   font: inherit;
+  font-size: var(--sf-fs-sub);
 }
 .method-choice.selected {
-  color: var(--el-color-primary);
-  border-color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
+  color: var(--sf-primary);
+  border-color: var(--sf-primary);
+  background: var(--sf-primary-soft);
   font-weight: 600;
 }
 .method-choice:focus-visible {
-  outline: 2px solid var(--el-color-primary);
+  outline: 2px solid var(--sf-primary);
   outline-offset: 2px;
 }
 .method-choice:disabled {
@@ -468,7 +473,7 @@ watch(
 .credential-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 16px;
+  gap: 0 20px;
 }
 @media (max-width: 640px) {
   .credential-fields {
@@ -476,26 +481,24 @@ watch(
   }
 }
 .field-note {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
   line-height: 1.6;
-  margin: 0 0 16px 110px;
+  margin: 0 0 14px;
 }
 .advanced-settings {
-  border-top: 1px solid var(--el-border-color-lighter);
+  border-top: 1px solid var(--sf-border);
   padding-top: 12px;
 }
 .advanced-settings summary {
   cursor: pointer;
-  color: var(--el-text-color-secondary);
-  margin-bottom: 16px;
+  color: var(--sf-primary);
+  font-size: var(--sf-fs-sub);
+  margin-bottom: 14px;
 }
 @media (max-width: 640px) {
   .method-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .field-note {
-    margin-left: 0;
   }
 }
 </style>

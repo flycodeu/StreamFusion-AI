@@ -399,8 +399,8 @@ onBeforeUnmount(() => {
 </template>
 <style scoped>
 .connection-note {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
 }
 .connection-fields {
   display: grid;
@@ -418,8 +418,9 @@ onBeforeUnmount(() => {
 }
 .connection-advanced summary {
   cursor: pointer;
-  color: var(--el-color-primary);
-  padding: 4px 0 16px;
+  color: var(--sf-primary);
+  font-size: var(--sf-fs-sub);
+  padding: 4px 0 14px;
 }
 @media (max-width: 600px) {
   .connection-fields {

@@ -21,7 +21,7 @@ vi.mock('../../components/table/TablePanel.vue', () => ({
     setup:
       (_, { slots }) =>
       () =>
-        h('table-panel', [slots.default?.(), slots.actions?.(), slots.footer?.()]),
+        h('table-panel', [slots.default?.(), slots.actions?.(), slots.tools?.(), slots.footer?.()]),
   }),
 }))
 vi.mock('element-plus', () => {
@@ -44,6 +44,8 @@ vi.mock('element-plus', () => {
       [
         'ElButton',
         'ElDrawer',
+        'ElForm',
+        'ElFormItem',
         'ElInput',
         'ElPagination',
         'ElRadioButton',

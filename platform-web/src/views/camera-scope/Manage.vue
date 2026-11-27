@@ -4,12 +4,10 @@ import {
   ElButton,
   ElDialog,
   ElEmpty,
-  ElForm,
   ElFormItem,
   ElInput,
   ElMessage,
   ElMessageBox,
-  ElPagination,
   ElTable,
   ElTableColumn,
   ElTag,
@@ -19,6 +17,8 @@ import * as api from '../../api/camera-scopes/api'
 import type { CameraScope, ScopeUser } from '../../api/camera-scopes/types'
 import TablePanel from '../../components/table/TablePanel.vue'
 import TableActions from '../../components/table/TableActions.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
+import FilterBar from '../../components/ui/FilterBar.vue'
 import RequestError from '../../components/feedback/RequestError.vue'
 import GroupGrantTree from '../../features/camera-scopes/GroupGrantTree.vue'
 import { usePageScope } from '../../composables/usePageScope'
@@ -28,6 +28,7 @@ defineOptions({ name: 'CameraScopeManage' })
 const captureScope = usePageScope(),
   rows = ref<ScopeUser[]>([]),
   page = ref(1),
+  size = ref(20),
   total = ref(0),
   name = ref('')
 const loading = ref(false),
@@ -63,7 +64,7 @@ async function load() {
   try {
     const result = await api.getScopeUsers({
       page: page.value,
-      size: 20,
+      size: size.value,
       name: name.value.trim() || undefined,
     })
     if (active() && current === sequence) {
@@ -173,15 +174,11 @@ onMounted(load)
 
 <template>
   <div class="content-page">
-    <ElForm class="search-form scope-search-form" inline @submit.prevent="search">
+    <FilterBar :loading="loading" @search="search" @reset="resetSearch">
       <ElFormItem label="账户">
         <ElInput v-model="name" class="search-field" clearable placeholder="账号、昵称或部门" />
       </ElFormItem>
-      <ElFormItem>
-        <ElButton type="primary" native-type="submit" :loading="loading">查询</ElButton>
-        <ElButton @click="resetSearch">重置</ElButton>
-      </ElFormItem>
-    </ElForm>
+    </FilterBar>
     <RequestError :error="error" />
     <TablePanel :initial-loading="loading && !rows.length">
       <template #tools>
@@ -245,7 +242,8 @@ onMounted(load)
         </ElTableColumn>
         <ElTableColumn
           label="操作"
-          min-width="144"
+          width="130"
+          fixed="right"
           class-name="table-actions-column"
           :resizable="false"
         >
@@ -290,13 +288,7 @@ onMounted(load)
         <p v-if="!loading && !rows.length">暂无账户</p>
       </div>
       <template #footer>
-        <ElPagination
-          v-model:current-page="page"
-          :page-size="20"
-          :total="total"
-          layout="total, prev, pager, next"
-          @current-change="load"
-        />
+        <StandardPagination v-model:page="page" v-model:size="size" :total="total" @change="load" />
       </template>
     </TablePanel>
     <ElDialog
@@ -389,14 +381,9 @@ onMounted(load)
   </div>
 </template>
 <style scoped>
-.scope-search-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-}
 .scope-user-account {
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--sf-text-primary);
 }
 .scope-departments {
   display: flex;
@@ -418,9 +405,9 @@ onMounted(load)
   flex-wrap: wrap;
   gap: 12px 20px;
   padding: 12px 16px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--surface-muted);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
 }
 .scope-account {
   display: flex;
@@ -436,16 +423,16 @@ onMounted(load)
   gap: 8px;
 }
 .scope-account__name {
-  font-size: 15px;
-  color: var(--text-primary);
+  font-size: var(--sf-fs-section);
+  color: var(--sf-text-primary);
 }
 .scope-account__username {
   padding: 1px 8px;
-  border-radius: 4px;
-  background: #fff;
-  border: 1px solid var(--border-subtle);
-  color: var(--text-secondary);
-  font-size: 12px;
+  border-radius: var(--sf-radius-sm);
+  background: var(--sf-surface);
+  border: 1px solid var(--sf-border);
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
 }
 .scope-detail {
   min-height: 180px;

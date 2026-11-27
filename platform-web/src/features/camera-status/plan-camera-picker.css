@@ -6,7 +6,7 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  background: #fff;
+  background: var(--sf-surface);
 }
 .camera-picker .picker-toolbar {
   display: flex;
@@ -14,8 +14,8 @@
   justify-content: space-between;
   gap: 16px;
   padding: 10px 16px;
-  border-bottom: 1px solid #e2e8f0;
-  background: #f8fafc;
+  border-bottom: 1px solid var(--sf-border);
+  background: var(--sf-surface-subtle);
   flex-shrink: 0;
 }
 .camera-picker .camera-search {
@@ -29,8 +29,8 @@
   gap: 12px;
   margin-left: auto;
   flex-shrink: 0;
-  color: #64748b;
-  font-size: 13px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
   white-space: nowrap;
 }
 .camera-picker .selection-pill {
@@ -38,28 +38,28 @@
   align-items: center;
   gap: 4px;
   padding: 4px 10px;
-  border: 1px solid #e2e8f0;
-  border-radius: 999px;
-  background: #fff;
-  font-size: 12px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-pill);
+  background: var(--sf-surface);
+  font-size: var(--sf-fs-caption);
   line-height: 20px;
 }
 .camera-picker .selection-summary strong {
-  color: #1e293b;
+  color: var(--sf-text-primary);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 .camera-picker .selection-summary .el-button {
-  color: #64748b;
-  font-size: 12px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
 }
 .camera-picker .tree-shell {
   display: flex;
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
   overflow: hidden;
 }
 .camera-picker .tree-grid {
@@ -71,7 +71,7 @@
   overflow-y: hidden;
   overscroll-behavior: contain;
   scrollbar-width: thin;
-  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-color: var(--sf-border-strong) transparent;
 }
 .camera-picker .tree-scroll {
   box-sizing: border-box;
@@ -88,7 +88,7 @@
   min-width: 680px;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
-  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-color: var(--sf-border-strong) transparent;
 }
 .camera-picker .tree-grid::-webkit-scrollbar,
 .camera-picker .tree-header::-webkit-scrollbar,
@@ -98,8 +98,8 @@
 }
 .camera-picker .tree-grid::-webkit-scrollbar-thumb,
 .camera-picker .tree-scroll::-webkit-scrollbar-thumb {
-  border-radius: 8px;
-  background: #cbd5e1;
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-border-strong);
 }
 .camera-picker .tree-header {
   display: flex;
@@ -108,10 +108,10 @@
   box-sizing: border-box;
   padding: 6px 16px;
   overflow: hidden;
-  border-bottom: 1px solid #f1f5f9;
-  background: #fcfcfd;
-  color: #94a3b8;
-  font-size: 12px;
+  border-bottom: 1px solid var(--sf-border-light);
+  background: var(--sf-surface-subtle);
+  color: var(--sf-text-muted);
+  font-size: var(--sf-fs-caption);
   line-height: 20px;
 }
 .camera-picker .tree-heading {
@@ -143,18 +143,18 @@
 }
 .camera-picker .picker-tree {
   --el-tree-node-content-height: 40px;
-  --el-tree-node-hover-bg-color: #f8fafc;
-  --el-tree-text-color: #334155;
+  --el-tree-node-hover-bg-color: var(--sf-surface-subtle);
+  --el-tree-text-color: var(--sf-text-regular);
   background: transparent;
 }
 .camera-picker .picker-tree .el-tree-node__content {
   box-sizing: border-box;
   padding-right: 0;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--sf-border-light);
   transition: background 150ms ease;
 }
 .camera-picker .picker-tree .el-tree-node__expand-icon {
-  color: #94a3b8;
+  color: var(--sf-text-muted);
 }
 .camera-picker .picker-tree .el-tree-node__expand-icon.is-leaf {
   color: transparent;
@@ -169,7 +169,7 @@
   height: 100%;
   padding: 8px 16px;
   gap: 16px;
-  font-size: 13px;
+  font-size: var(--sf-fs-sub);
 }
 .camera-picker .tree-main {
   display: flex;
@@ -180,7 +180,7 @@
   gap: 10px;
 }
 .camera-picker .tree-row.is-selected {
-  background: #f8fafc;
+  background: var(--sf-surface-subtle);
 }
 .camera-picker .tree-row .el-checkbox {
   height: 100%;
@@ -190,7 +190,7 @@
 .camera-picker .tree-icon {
   width: 15px;
   height: 15px;
-  color: #94a3b8;
+  color: var(--sf-text-muted);
   flex-shrink: 0;
 }
 .camera-picker .tree-label {
@@ -199,7 +199,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #1e293b;
+  color: var(--sf-text-primary);
 }
 .camera-picker .group-label {
   font-weight: 600;
@@ -208,19 +208,17 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font:
-    12px ui-monospace,
-    Consolas,
-    monospace;
-  color: #64748b;
+  font-family: var(--sf-font-mono);
+  font-size: var(--sf-fs-caption);
+  color: var(--sf-text-secondary);
 }
 .camera-picker .camera-status {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  color: #94a3b8;
-  font-size: 12px;
+  color: var(--sf-text-muted);
+  font-size: var(--sf-fs-caption);
 }
 .camera-picker .status-dot {
   flex: 0 0 6px;
@@ -236,17 +234,17 @@
   white-space: nowrap;
 }
 .camera-picker .camera-status.is-online {
-  color: #10b981;
+  color: var(--sf-success);
 }
 .camera-picker .tree-action .el-button {
-  color: #94a3b8;
-  font-size: 12px;
+  color: var(--sf-text-muted);
+  font-size: var(--sf-fs-caption);
   font-weight: 400;
 }
 .camera-picker .selection-notice {
   margin: 0 0 8px;
-  color: #b45309;
-  font-size: 12px;
+  color: var(--el-color-warning-dark-2);
+  font-size: var(--sf-fs-caption);
 }
 @media (max-width: 600px) {
   .camera-picker .picker-toolbar {

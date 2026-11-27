@@ -60,7 +60,7 @@ watch(
 .workspace {
   flex: 1;
   min-width: 0;
-  background: #f4f6f8;
+  background: var(--sf-bg-canvas);
 }
 .sidebar-backdrop {
   display: none;

@@ -198,10 +198,10 @@ onBeforeUnmount(() => controller?.abort())
   place-items: center;
   width: 36px;
   height: 36px;
-  border-radius: 8px;
-  background: #eff6ff;
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-primary-soft);
   flex-shrink: 0;
-  color: #2563eb;
+  color: var(--sf-primary);
 }
 .detail-heading h2 {
   display: -webkit-box;
@@ -209,21 +209,21 @@ onBeforeUnmount(() => controller?.abort())
   -webkit-box-orient: vertical;
   overflow: hidden;
   margin: 0 0 2px;
-  font-size: 16px;
+  font-size: var(--sf-fs-section);
   font-weight: 700;
-  color: #0f172a;
+  color: var(--sf-text-primary);
   overflow-wrap: anywhere;
   line-height: 1.4;
 }
 .detail-heading span {
-  color: #64748b;
-  font-size: 12px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
 }
 .detail-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 310px;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
   overflow: hidden;
 }
 .preview-stage {
@@ -233,7 +233,7 @@ onBeforeUnmount(() => controller?.abort())
   min-width: 0;
   height: clamp(320px, 56vh, 620px);
   padding: 20px;
-  background: #f8fafc;
+  background: var(--sf-surface-subtle);
 }
 .detail-media {
   display: block;
@@ -242,7 +242,7 @@ onBeforeUnmount(() => controller?.abort())
   min-width: 0;
   object-fit: contain;
   object-position: center;
-  border-radius: 6px;
+  border-radius: var(--sf-radius-sm);
 }
 .file-placeholder {
   display: flex;
@@ -255,17 +255,17 @@ onBeforeUnmount(() => controller?.abort())
   max-width: 100%;
 }
 .file-placeholder > .el-icon {
-  color: #94a3b8;
+  color: var(--sf-text-muted);
   margin-bottom: 4px;
 }
 .file-placeholder strong {
-  font-size: 15px;
+  font-size: var(--sf-fs-body);
   font-weight: 600;
-  color: #0f172a;
+  color: var(--sf-text-primary);
 }
 .file-placeholder span {
-  color: #64748b;
-  font-size: 13px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
 }
 .file-placeholder :deep(.el-button + .el-button) {
   margin-left: 0;
@@ -275,22 +275,22 @@ onBeforeUnmount(() => controller?.abort())
   min-width: 0;
   max-height: clamp(320px, 56vh, 620px);
   overflow-y: auto;
-  border-left: 1px solid #e2e8f0;
-  background: #ffffff;
+  border-left: 1px solid var(--sf-border);
+  background: var(--sf-surface);
 }
 .file-information h3 {
   margin: 0 0 14px;
-  font-size: 14px;
+  font-size: var(--sf-fs-body);
   font-weight: 700;
-  color: #0f172a;
+  color: var(--sf-text-primary);
 }
 dl {
   margin: 0;
 }
 dt {
-  font-size: 11.5px;
+  font-size: var(--sf-fs-caption);
   font-weight: 500;
-  color: #64748b;
+  color: var(--sf-text-secondary);
   margin: 12px 0 3px;
 }
 dt:first-child {
@@ -298,9 +298,9 @@ dt:first-child {
 }
 dd {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--sf-fs-sub);
   font-weight: 500;
-  color: #0f172a;
+  color: var(--sf-text-primary);
   line-height: 1.55;
   overflow-wrap: anywhere;
   user-select: text;
@@ -308,29 +308,28 @@ dd {
 }
 dd small {
   display: block;
-  color: #64748b;
-  font-size: 11.5px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
   font-weight: 400;
 }
 .object-path {
   padding: 4px 8px;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  background: #f8fafc;
-  font:
-    12px/1.5 ui-monospace,
-    Consolas,
-    monospace;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-sm);
+  background: var(--sf-surface-subtle);
+  font-family: var(--sf-font-mono);
+  font-size: var(--sf-fs-caption);
+  line-height: 1.5;
 }
 .technical-details {
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--sf-border);
   margin-top: 18px;
   padding-top: 14px;
 }
 .technical-details summary {
   cursor: pointer;
-  color: #475569;
-  font-size: 12px;
+  color: var(--sf-text-regular);
+  font-size: var(--sf-fs-caption);
   font-weight: 500;
 }
 .technical-details dl {
@@ -366,7 +365,7 @@ dd small {
   }
   .file-information {
     border-left: 0;
-    border-top: 1px solid #e2e8f0;
+    border-top: 1px solid var(--sf-border);
     max-height: none;
     padding: 18px;
   }

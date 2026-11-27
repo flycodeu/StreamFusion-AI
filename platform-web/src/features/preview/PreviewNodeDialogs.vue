@@ -9,6 +9,7 @@ import type {
   PreviewNodeStatus,
 } from '../../api/preview-node/api'
 import RequestError from '../../components/feedback/RequestError.vue'
+import HelpTip from '../../components/ui/HelpTip.vue'
 import { formatDateTime } from '../../utils/dateTime'
 import { labelOf } from '../../utils/display'
 import {
@@ -152,8 +153,13 @@ function submitEditing() {
     destroy-on-close
     @close="emit('closeDirectForm')"
   >
+    <template #header>
+      <div class="dialog-title-with-tip">
+        <span class="el-dialog__title">接入 ZLM</span>
+        <HelpTip content="填写内网 HTTP API；安装位置仅用于登记。" label="接入 ZLM 说明" />
+      </div>
+    </template>
     <form v-if="directDraft" class="budget-form" @submit.prevent="submitDirectForm">
-      <p class="connection-form-intro">填写内网 HTTP API；安装位置仅用于登记。</p>
       <label>实例名称<input v-model.trim="directDraft.name" maxlength="80" required /></label>
       <label
         >内网 IP<input v-model.trim="directDraft.apiHost" placeholder="10.0.0.10" required
@@ -222,6 +228,15 @@ function submitEditing() {
     destroy-on-close
     @close="emit('closeDirectEditing')"
   >
+    <template #header>
+      <div class="dialog-title-with-tip">
+        <span class="el-dialog__title">ZLM 配置与预算</span>
+        <HelpTip
+          content="直连 ZLM 首期不支持转码，转码上限固定为 0。降低预算只影响新申请。"
+          label="ZLM 预算说明"
+        />
+      </div>
+    </template>
     <form v-if="directEditingDraft" class="budget-form" @submit.prevent="submitDirectEditing">
       <label
         >安装位置（选填）<input
@@ -248,7 +263,6 @@ function submitEditing() {
           required
         />
       </label>
-      <p>直连 ZLM 首期不支持转码，转码上限固定为 0。降低预算只影响新申请。</p>
       <ElButton native-type="submit" type="primary" :loading="busy">保存</ElButton>
     </form>
   </ElDialog>
@@ -263,10 +277,17 @@ function submitEditing() {
     destroy-on-close
     @close="emit('closeDirectCredential')"
   >
+    <template #header>
+      <div class="dialog-title-with-tip">
+        <span class="el-dialog__title"
+          >更新 ZLM secret{{
+            directCredentialDraft ? ` · ${directCredentialDraft.instance.name}` : ''
+          }}</span
+        >
+        <HelpTip content="排空并确认资源归零后才能更新密钥。" label="密钥更新条件" />
+      </div>
+    </template>
     <form v-if="directCredentialDraft" class="budget-form" @submit.prevent="submitDirectCredential">
-      <p class="connection-form-intro">
-        {{ directCredentialDraft.instance.name }}：排空并确认资源归零后才能更新。
-      </p>
       <label class="field-full"
         >新 secret<input
           v-model="directCredentialDraft.secret"
@@ -311,10 +332,18 @@ function submitEditing() {
     destroy-on-close
     @close="emit('closeConnection')"
   >
+    <template #header>
+      <div class="dialog-title-with-tip">
+        <span class="el-dialog__title">{{
+          connectionDraft?.version == null ? '新增远程预览节点' : '修改节点连接'
+        }}</span>
+        <HelpTip
+          content="节点控制地址不是 ZLM HTTP API，可用内网自签名 HTTPS 控制口，无需公网证书；凭据文件须预先存放在 Platform 受保护目录，文件名为「节点 ID.token」。"
+          label="远程节点连接说明"
+        />
+      </div>
+    </template>
     <form v-if="connectionDraft" class="budget-form" @submit.prevent="submitConnection">
-      <p class="connection-form-intro">
-        节点控制地址不是 ZLM HTTP API；可用内网自签名 HTTPS 控制口，无需公网证书。
-      </p>
       <label
         >节点 ID<input
           v-model.trim="connectionDraft.nodeId"
@@ -343,7 +372,6 @@ function submitEditing() {
           maxlength="64"
           required
       /></label>
-      <p>凭据文件须预先存放在 Platform 受保护目录，文件名为“节点 ID.token”。</p>
       <ElButton native-type="submit" type="primary" :loading="busy">检查并登记</ElButton>
     </form>
   </ElDialog>
@@ -443,6 +471,15 @@ function submitEditing() {
     destroy-on-close
     @close="emit('closeEditing')"
   >
+    <template #header>
+      <div class="dialog-title-with-tip">
+        <span class="el-dialog__title">节点预算与优先级</span>
+        <HelpTip
+          content="降低预算只影响新申请。修改每路码率上界须先排空；远程预算不得超过节点已应用配置。"
+          label="预算调整说明"
+        />
+      </div>
+    </template>
     <form v-if="editingDraft" class="budget-form" @submit.prevent="submitEditing">
       <label class="field-full"
         >优先级<input
@@ -461,7 +498,6 @@ function submitEditing() {
           :max="field.max"
           required
       /></label>
-      <p>降低预算只影响新申请。修改每路码率上界须先排空；远程预算不得超过节点已应用配置。</p>
       <ElButton native-type="submit" type="primary" :loading="busy">保存</ElButton>
     </form>
   </ElDialog>

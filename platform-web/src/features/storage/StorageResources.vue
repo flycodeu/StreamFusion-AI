@@ -108,20 +108,20 @@ const { task, error, busy, run } = useStorageJob(
 }
 h2 {
   margin: 0 0 4px;
-  font-size: 17px;
-  font-weight: 700;
-  color: #0f172a;
+  font-size: var(--sf-fs-section);
+  font-weight: 600;
+  color: var(--sf-text-primary);
 }
 h3 {
   margin: 12px 0 8px;
-  font-size: 14.5px;
-  font-weight: 700;
-  color: #0f172a;
+  font-size: var(--sf-fs-body);
+  font-weight: 600;
+  color: var(--sf-text-primary);
 }
 .secondary,
 .job-state {
-  color: #64748b;
-  font-size: 12px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
 }
 .job-state {
   display: flex;
@@ -137,23 +137,23 @@ h3 {
 }
 article {
   padding: 18px 20px;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
   position: relative;
-  background: #f8fafc;
+  background: var(--sf-surface-subtle);
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 article span {
-  font-size: 12.5px;
+  font-size: var(--sf-fs-sub);
   font-weight: 500;
-  color: #64748b;
+  color: var(--sf-text-secondary);
 }
 article strong {
-  font-size: 26px;
+  font-size: var(--sf-fs-kpi);
   font-weight: 700;
-  color: #0f172a;
+  color: var(--sf-text-primary);
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
@@ -174,27 +174,27 @@ dl div {
   min-height: 44px;
   box-sizing: border-box;
   align-items: center;
-  border-bottom: 1px solid #f1f5f9;
-  font-size: 13px;
+  border-bottom: 1px solid var(--sf-border-light);
+  font-size: var(--sf-fs-sub);
 }
 dl div:last-child {
   border-bottom: 0;
 }
 dt {
-  color: #64748b;
+  color: var(--sf-text-secondary);
   font-weight: 500;
 }
 dd {
   margin: 0;
-  color: #0f172a;
+  color: var(--sf-text-primary);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
 .resource-sections > section {
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  background: #ffffff;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  background: var(--sf-surface);
   padding: 6px 20px 10px;
 }
 article .metric-icon {
@@ -205,10 +205,10 @@ article .metric-icon {
   place-items: center;
   width: 32px;
   height: 32px;
-  border-radius: 8px;
-  background: #eff6ff;
-  color: #2563eb;
-  font-size: 18px;
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-primary-soft);
+  color: var(--sf-primary);
+  font-size: 16px;
 }
 .empty-value {
   color: #94a3b8;

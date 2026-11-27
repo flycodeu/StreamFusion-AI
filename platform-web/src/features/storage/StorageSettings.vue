@@ -15,6 +15,8 @@ import {
 import * as api from '../../api/storage/api'
 import type { StorageInstance, StorageScope } from '../../api/storage/types'
 import RequestError from '../../components/feedback/RequestError.vue'
+import TableActions from '../../components/table/TableActions.vue'
+import HelpTip from '../../components/ui/HelpTip.vue'
 import StorageHistoryPolicy from './StorageHistoryPolicy.vue'
 const props = defineProps<{ instances: StorageInstance[]; instance: StorageInstance | null }>()
 const emit = defineEmits<{
@@ -98,7 +100,7 @@ const asScope = (row: unknown) => row as StorageScope
         <ElButton type="primary" @click="emit('edit', null)">新增实例</ElButton>
       </div>
       <RequestError v-if="error && !adding" :error="error" />
-      <ElTable :data="instances" row-key="instanceId" empty-text="尚未配置存储实例"
+      <ElTable :data="instances" row-key="instanceId" border empty-text="尚未配置存储实例"
         ><ElTableColumn label="名称" min-width="170"
           ><template #default="{ row }"
             ><ElButton
@@ -113,11 +115,18 @@ const asScope = (row: unknown) => row as StorageScope
           label="S3 地址"
           min-width="210"
           show-overflow-tooltip
-        /><ElTableColumn label="操作" width="180"
+        /><ElTableColumn
+          label="操作"
+          width="180"
+          fixed="right"
+          class-name="table-actions-column"
+          :resizable="false"
           ><template #default="{ row }"
-            ><ElButton link type="primary" @click="emit('edit', asInstance(row))">编辑</ElButton
-            ><ElButton link type="danger" @click="removeInstance(asInstance(row))"
-              >移除登记</ElButton
+            ><TableActions compact
+              ><ElButton link type="primary" @click="emit('edit', asInstance(row))">编辑</ElButton
+              ><ElButton link type="danger" @click="removeInstance(asInstance(row))"
+                >移除登记</ElButton
+              ></TableActions
             ></template
           ></ElTableColumn
         ></ElTable
@@ -150,7 +159,7 @@ const asScope = (row: unknown) => row as StorageScope
         <h3>存储目录</h3>
         <ElButton type="primary" @click="add">添加目录入口</ElButton>
       </div>
-      <ElTable :data="instance.scopes" row-key="scopeId" empty-text="尚未配置存储目录"
+      <ElTable :data="instance.scopes" row-key="scopeId" border empty-text="尚未配置存储目录"
         ><ElTableColumn label="名称" min-width="150"
           ><template #default="{ row }">{{
             row.displayName || row.bucket
@@ -159,19 +168,26 @@ const asScope = (row: unknown) => row as StorageScope
           label="根目录"
           min-width="160"
           ><template #default="{ row }">{{ row.prefix || '/' }}</template></ElTableColumn
-        ><ElTableColumn label="操作" width="130"
+        ><ElTableColumn
+          label="操作"
+          width="130"
+          fixed="right"
+          class-name="table-actions-column"
+          :resizable="false"
           ><template #default="{ row }"
-            ><ElButton link type="danger" @click="removeDirectory(asScope(row))"
-              >移除登记</ElButton
+            ><TableActions compact
+              ><ElButton link type="danger" @click="removeDirectory(asScope(row))"
+                >移除登记</ElButton
+              ></TableActions
             ></template
           ></ElTableColumn
         ></ElTable
       >
     </section>
     <section v-if="instance" class="settings-card policy-card">
-      <div>
+      <div class="policy-heading">
         <h3>记录清理</h3>
-        <span class="secondary">操作日志与文件操作元数据</span>
+        <HelpTip content="控制操作日志与文件操作元数据的保留天数。" label="记录清理说明" />
       </div>
       <div class="policy-actions">
         <ElButton @click="globalPolicyOpen = true">全局策略</ElButton
@@ -214,8 +230,8 @@ const asScope = (row: unknown) => row as StorageScope
   padding: 20px 24px;
   display: grid;
   gap: 16px;
-  background: #f8fafc;
-  border-radius: 12px;
+  background: var(--sf-surface-subtle);
+  border-radius: var(--sf-radius-lg);
 }
 .section-heading {
   display: flex;
@@ -227,36 +243,33 @@ const asScope = (row: unknown) => row as StorageScope
 }
 h2 {
   margin: 0;
-  font-size: 17px;
-  font-weight: 700;
-  color: #0f172a;
+  font-size: var(--sf-fs-section);
+  font-weight: 600;
+  color: var(--sf-text-primary);
 }
 h3 {
   margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  color: #0f172a;
+  font-size: var(--sf-fs-body);
+  font-weight: 600;
+  color: var(--sf-text-primary);
+}
+.policy-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .connection-heading {
-  margin-top: 28px;
+  margin-top: 24px;
 }
 .directory-heading {
   margin-top: 0;
 }
 .settings-card {
-  padding: 20px 22px;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  background: #ffffff;
+  padding: 18px 20px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
+  background: var(--sf-surface);
   min-width: 0;
-}
-.settings-card :deep(.el-table__header .el-table__cell) {
-  background: #f8fafc;
-  color: #475569;
-  font-weight: 600;
-}
-.settings-card :deep(.el-table__cell) {
-  padding: 12px 0;
 }
 .settings-card :deep(.el-descriptions__cell) {
   padding: 10px 0;
@@ -278,8 +291,8 @@ h3 {
 }
 .secondary {
   display: block;
-  color: #64748b;
-  font-size: 12.5px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
   margin-top: 4px;
 }
 a {

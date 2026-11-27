@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { onUnmounted, ref, watch } from 'vue'
-import { ElButton, ElPagination, ElTable, ElTableColumn, ElTag, vLoading } from 'element-plus'
+import { ElButton, ElTable, ElTableColumn, ElTag, vLoading } from 'element-plus'
 import { getLoginRecords } from '../../api/login-records/api'
 import type { LoginRecord } from '../../api/login-records/types'
 import TablePanel from '../../components/table/TablePanel.vue'
 import ColumnPicker from '../../components/table/ColumnPicker.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
 import RequestError from '../../components/feedback/RequestError.vue'
 import { useColumns } from '../../composables/table/useColumns'
 import { loginEndReason, sessionDuration } from './presentation'
@@ -137,15 +138,9 @@ onUnmounted(() => {
           ><template #default="{ row }">{{ formatDateTime(row.endedAt) }}</template></ElTableColumn
         >
       </ElTable>
-      <template #footer
-        ><ElPagination
-          v-model:current-page="page"
-          v-model:page-size="size"
-          :total="total"
-          :page-sizes="[20, 50, 100]"
-          layout="total, sizes, prev, pager, next"
-          @change="load"
-      /></template>
+      <template #footer>
+        <StandardPagination v-model:page="page" v-model:size="size" :total="total" @change="load" />
+      </template>
     </TablePanel>
   </div>
 </template>

@@ -282,8 +282,8 @@ const connection = computed(() => {
 .camera-status-panel {
   margin-top: var(--camera-card-section-gap, 20px);
   padding-top: var(--camera-card-section-gap, 20px);
-  border-top: 1px solid var(--el-border-color-lighter);
-  font-size: var(--camera-card-text, 14px);
+  border-top: 1px solid var(--sf-border-light);
+  font-size: var(--camera-card-text, var(--sf-fs-body));
   line-height: 1.6;
 }
 .camera-status-panel.has-summary {
@@ -304,18 +304,18 @@ const connection = computed(() => {
   align-items: center;
   gap: 4px;
   padding: 3px;
-  border-radius: 8px;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-muted);
+  border: 1px solid var(--sf-border);
 }
 .layer-tab {
   margin: 0;
   padding: 5px 14px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--sf-radius-sm);
   background: transparent;
-  color: #64748b;
-  font-size: 13px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
   font-weight: 500;
   line-height: 1.4;
   cursor: pointer;
@@ -325,17 +325,17 @@ const connection = computed(() => {
     box-shadow 0.15s ease;
 }
 .layer-tab:hover {
-  color: #0f172a;
+  color: var(--sf-text-primary);
 }
 .layer-tab.is-active {
-  background: #fff;
-  color: #2563eb;
+  background: var(--sf-surface);
+  color: var(--sf-primary);
   font-weight: 600;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--sf-shadow-xs);
 }
 .layer-tab:focus-visible,
 .check-diagnostics > summary:focus-visible {
-  outline: 2px solid #2563eb;
+  outline: 2px solid var(--sf-primary);
   outline-offset: 2px;
 }
 .status-actions {
@@ -360,28 +360,28 @@ const connection = computed(() => {
   gap: 8px;
 }
 .status-actions .status-refresh {
-  color: #64748b;
+  color: var(--sf-text-secondary);
   padding: 4px 6px;
 }
 .status-note {
   margin: 8px 0 12px;
   padding: 8px 12px;
-  border-radius: 6px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  color: var(--text-secondary);
-  font-size: var(--camera-card-meta, 13px);
+  border-radius: var(--sf-radius-sm);
+  background: var(--sf-surface-subtle);
+  border: 1px solid var(--sf-border);
+  color: var(--sf-text-secondary);
+  font-size: var(--camera-card-meta, var(--sf-fs-sub));
   overflow-wrap: anywhere;
 }
 .check-execution {
   margin-top: 12px;
 }
 .check-diagnostics {
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #475569;
-  font-size: 13px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
+  color: var(--sf-text-regular);
+  font-size: var(--sf-fs-sub);
 }
 .check-diagnostics > summary {
   display: flex;
@@ -401,8 +401,8 @@ const connection = computed(() => {
   width: 6px;
   height: 6px;
   margin-right: 3px;
-  border-right: 1px solid #94a3b8;
-  border-bottom: 1px solid #94a3b8;
+  border-right: 1px solid var(--sf-text-muted);
+  border-bottom: 1px solid var(--sf-text-muted);
   transform: rotate(45deg);
 }
 .check-diagnostics[open] > summary::after {
@@ -410,8 +410,8 @@ const connection = computed(() => {
 }
 .check-summary-state {
   margin-left: auto;
-  color: #64748b;
-  font-size: 12px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-caption);
   font-weight: 400;
 }
 .check-diagnostics dl {
@@ -430,7 +430,7 @@ const connection = computed(() => {
   grid-column: 1 / -1;
 }
 .check-diagnostics dt {
-  color: #64748b;
+  color: var(--sf-text-secondary);
 }
 .check-diagnostics dd {
   margin: 0;
@@ -439,10 +439,10 @@ const connection = computed(() => {
   user-select: text;
 }
 .check-diagnostics code {
-  color: #475569;
-  font:
-    12px/1.6 Consolas,
-    monospace;
+  color: var(--sf-text-regular);
+  font-family: var(--sf-font-mono);
+  font-size: var(--sf-fs-caption);
+  line-height: 1.6;
 }
 .status-footer {
   display: flex;
@@ -451,15 +451,15 @@ const connection = computed(() => {
 }
 .status-footer .el-button {
   height: 30px;
-  border-color: #dbe2ea;
-  border-radius: 6px;
-  background: #fff;
-  color: #334155;
+  border-color: var(--sf-border);
+  border-radius: var(--sf-radius-sm);
+  background: var(--sf-surface);
+  color: var(--sf-text-regular);
 }
 .status-footer .el-button:hover {
-  border-color: #cbd5e1;
-  background: #f8fafc;
-  color: #0f172a;
+  border-color: var(--sf-border-strong);
+  background: var(--sf-surface-subtle);
+  color: var(--sf-text-primary);
 }
 @media (max-width: 420px) {
   .check-diagnostics dl {

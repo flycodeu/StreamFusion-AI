@@ -143,7 +143,7 @@ async function submit(test = false) {
               />
             </ElFormItem>
             <ElCheckbox v-if="instance" v-model="replace">替换访问密钥</ElCheckbox>
-            <div v-if="replace" class="field-grid">
+            <div v-if="replace" class="sf-form-grid">
               <ElFormItem label="Access Key" required>
                 <ElInput
                   v-model="form.access"
@@ -231,19 +231,8 @@ async function submit(test = false) {
 :global(.el-dialog.storage-instance-editor) {
   margin: auto;
 }
-.field-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 20px;
-}
 .tab-panel {
   padding-top: 4px;
-}
-.field-hint {
-  margin: 0 0 16px;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.6;
 }
 .editor-footer {
   display: flex;
@@ -265,10 +254,7 @@ async function submit(test = false) {
   overflow-wrap: anywhere;
   max-height: 120px;
   overflow: auto;
-}
-@media (max-width: 600px) {
-  .field-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
+  font-family: var(--sf-font-mono);
+  font-size: var(--sf-fs-caption);
 }
 </style>

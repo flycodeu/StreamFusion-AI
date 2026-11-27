@@ -14,13 +14,11 @@ import {
   ElDropdownItem,
   ElEmpty,
   ElCheckbox,
-  ElForm,
   ElFormItem,
   ElInput,
   ElMessage,
   ElMessageBox,
   ElOption,
-  ElPagination,
   ElSelect,
   ElTable,
   ElTableColumn,
@@ -33,6 +31,8 @@ import RequestError from '../../components/feedback/RequestError.vue'
 import TablePanel from '../../components/table/TablePanel.vue'
 import TableActions from '../../components/table/TableActions.vue'
 import ColumnPicker from '../../components/table/ColumnPicker.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
+import FilterBar from '../../components/ui/FilterBar.vue'
 import { useColumns } from '../../composables/table/useColumns'
 import { useTableSelection } from '../../composables/table/useTableSelection'
 import { usePageScope } from '../../composables/usePageScope'
@@ -404,10 +404,16 @@ onMounted(() => {
         <div class="scope-indicator">
           <span class="scope-label">{{ focusGroups ? '分组视图' : '当前视图' }}</span>
           <span class="scope-name" :title="groupPath">{{ groupPath }}</span>
-          <span class="scope-count">共 {{ total }} 台</span>
+          <span class="sf-count-pill">共 {{ total }} 台</span>
         </div>
-        <ElForm class="search-form camera-search-form" inline @submit.prevent="search"
-          ><ElFormItem label="相机"
+        <FilterBar
+          embedded
+          class="camera-search-form"
+          :loading="loading"
+          @search="search"
+          @reset="resetSearch"
+        >
+          <ElFormItem label="相机"
             ><ElInput
               v-model="name"
               class="search-field"
@@ -431,12 +437,9 @@ onMounted(() => {
                 v-for="(label, value) in lifecycleLabels"
                 :key="value"
                 :value="value"
-                :label="label" /></ElSelect></ElFormItem
-          ><ElFormItem
-            ><ElButton type="primary" native-type="submit" :loading="loading">查询</ElButton
-            ><ElButton @click="resetSearch">重置</ElButton></ElFormItem
-          ></ElForm
-        >
+                :label="label" /></ElSelect
+          ></ElFormItem>
+        </FilterBar>
       </div>
       <RequestError :error="error" />
       <TablePanel class="camera-table-panel" :initial-loading="loading && !rows.length">
@@ -458,18 +461,20 @@ onMounted(() => {
                   <ElDropdownItem @click="creating = 'manual'">仅登记设备档案</ElDropdownItem>
                 </ElDropdownMenu></template
               > </ElDropdown
-            ><ElButton @click="importTasksOpen = true">导入任务</ElButton></template
+            ><ElButton @click="importTasksOpen = true">导入任务</ElButton
+            ><ElButton
+              type="danger"
+              plain
+              :loading="deviceDeleting"
+              :disabled="!selectedRows.length || loading || deviceDeleting"
+              @click="removeDevices(selectedRows)"
+              >{{
+                selectedRows.length ? `批量删除 (${selectedRows.length})` : '批量删除'
+              }}</ElButton
+            ></template
           ></template
         >
         <template #tools
-          ><ElButton
-            v-if="canManage"
-            type="danger"
-            plain
-            :loading="deviceDeleting"
-            :disabled="!selectedRows.length || loading || deviceDeleting"
-            @click="removeDevices(selectedRows)"
-            >{{ selectedRows.length ? `批量删除 (${selectedRows.length})` : '批量删除' }}</ElButton
           ><ElButton @click="plansOpen = true">巡检计划</ElButton
           ><ElButton :loading="loading || treeLoading" @click="refresh">刷新</ElButton
           ><span class="desktop-column-picker"
@@ -564,7 +569,7 @@ onMounted(() => {
             <template #default="{ row }">
               <div class="device-statuses">
                 <ElButton link @click="selectedDevice = asDevice(row)">
-                  <ElTag :type="deviceStatus(asDevice(row)).tone">{{
+                  <ElTag :type="deviceStatus(asDevice(row)).tone" effect="plain">{{
                     deviceStatus(asDevice(row)).label
                   }}</ElTag>
                 </ElButton>
@@ -577,9 +582,15 @@ onMounted(() => {
           <ElTableColumn v-if="columns.includes('lifecycle')" label="配置状态" min-width="180"
             ><template #default="{ row }"
               ><div class="device-statuses">
-                <ElTag v-if="row.enabledCount" type="success">{{ row.enabledCount }} 启用</ElTag>
-                <ElTag v-if="row.disabledCount" type="danger">{{ row.disabledCount }} 停用</ElTag>
-                <ElTag v-if="row.pendingCount" type="warning">{{ row.pendingCount }} 待归档</ElTag>
+                <ElTag v-if="row.enabledCount" type="success" effect="plain"
+                  >{{ row.enabledCount }} 启用</ElTag
+                >
+                <ElTag v-if="row.disabledCount" type="danger" effect="plain"
+                  >{{ row.disabledCount }} 停用</ElTag
+                >
+                <ElTag v-if="row.pendingCount" type="warning" effect="plain"
+                  >{{ row.pendingCount }} 待归档</ElTag
+                >
               </div></template
             ></ElTableColumn
           >
@@ -671,16 +682,14 @@ onMounted(() => {
           </article>
           <p v-if="!loading && !rows.length" class="mobile-empty">暂无可访问相机</p>
         </div>
-        <template #footer
-          ><ElPagination
-            v-model:current-page="page"
-            v-model:page-size="size"
-            :page-sizes="[20, 50, 100]"
+        <template #footer>
+          <StandardPagination
+            v-model:page="page"
+            v-model:size="size"
             :total="total"
-            layout="total, sizes, prev, pager, next, jumper"
-            @size-change="page = 1"
             @change="load"
-        /></template>
+          />
+        </template>
       </TablePanel>
     </section>
     <GroupEditor

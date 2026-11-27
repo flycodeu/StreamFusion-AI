@@ -1,0 +1,131 @@
+:root {
+  /* Brand palette: Modern Slate + Enterprise Blue (#2563eb) */
+  --sf-primary: #2563eb;
+  --sf-primary-hover: #3b82f6;
+  --sf-primary-active: #1d4ed8;
+  --sf-primary-soft: #eff6ff;
+  --sf-primary-border: #bfdbfe;
+
+  /* Semantic status palette */
+  --sf-success: #059669;
+  --sf-success-soft: #ecfdf5;
+  --sf-success-border: #a7f3d0;
+  --sf-warning: #d97706;
+  --sf-warning-soft: #fffbeb;
+  --sf-warning-border: #fde68a;
+  --sf-danger: #dc2626;
+  --sf-danger-soft: #fef2f2;
+  --sf-danger-border: #fecaca;
+  --sf-info: #64748b;
+  --sf-info-soft: #f1f5f9;
+  --sf-info-border: #cbd5e1;
+
+  /* Neutral Slate surfaces & borders */
+  --sf-bg-canvas: #f4f6f9;
+  --sf-surface: #ffffff;
+  --sf-surface-subtle: #f8fafc;
+  --sf-surface-muted: #f1f5f9;
+  --sf-border: #e2e8f0;
+  --sf-border-strong: #cbd5e1;
+  --sf-border-light: #f1f5f9;
+
+  /* Slate text hierarchy */
+  --sf-text-primary: #0f172a;
+  --sf-text-regular: #334155;
+  --sf-text-secondary: #64748b;
+  --sf-text-muted: #94a3b8;
+
+  /* Typography scale (6 steps) */
+  --sf-font-sans: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --sf-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sf-fs-caption: 12px;
+  --sf-fs-sub: 13px;
+  --sf-fs-body: 14px;
+  --sf-fs-section: 16px;
+  --sf-fs-page: 20px;
+  --sf-fs-kpi: 24px;
+
+  /* Radius scale (3 steps + pill) */
+  --sf-radius-sm: 6px;
+  --sf-radius-md: 8px;
+  --sf-radius-lg: 10px;
+  --sf-radius-pill: 999px;
+
+  /* Shadows */
+  --sf-shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --sf-shadow-sm: 0 4px 12px -2px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --sf-shadow-md: 0 12px 32px -4px rgba(15, 23, 42, 0.12), 0 4px 12px -2px rgba(15, 23, 42, 0.06);
+
+  /* Spacing rhythm */
+  --sf-space-xs: 8px;
+  --sf-space-sm: 12px;
+  --sf-space-md: 16px;
+  --sf-space-lg: 20px;
+  --sf-card-padding-y: 16px;
+  --sf-card-padding-x: 18px;
+
+  /* Element Plus token mapping */
+  --el-color-primary: var(--sf-primary);
+  --el-color-primary-light-3: #60a5fa;
+  --el-color-primary-light-5: #93c5fd;
+  --el-color-primary-light-7: #bfdbfe;
+  --el-color-primary-light-8: #dbeafe;
+  --el-color-primary-light-9: var(--sf-primary-soft);
+  --el-color-primary-dark-2: var(--sf-primary-active);
+
+  --el-color-success: var(--sf-success);
+  --el-color-success-light-3: #34d399;
+  --el-color-success-light-5: #6ee7b7;
+  --el-color-success-light-7: #a7f3d0;
+  --el-color-success-light-8: #d1fae5;
+  --el-color-success-light-9: var(--sf-success-soft);
+  --el-color-success-dark-2: #047857;
+
+  --el-color-warning: var(--sf-warning);
+  --el-color-warning-light-3: #fbbf24;
+  --el-color-warning-light-5: #fcd34d;
+  --el-color-warning-light-7: #fde68a;
+  --el-color-warning-light-8: #fef3c7;
+  --el-color-warning-light-9: var(--sf-warning-soft);
+  --el-color-warning-dark-2: #b45309;
+
+  --el-color-danger: var(--sf-danger);
+  --el-color-danger-light-3: #f87171;
+  --el-color-danger-light-5: #fca5a5;
+  --el-color-danger-light-7: #fecaca;
+  --el-color-danger-light-8: #fee2e2;
+  --el-color-danger-light-9: var(--sf-danger-soft);
+  --el-color-danger-dark-2: #b91c1c;
+
+  --el-color-info: var(--sf-info);
+  --el-color-info-light-3: #94a3b8;
+  --el-color-info-light-5: #cbd5e1;
+  --el-color-info-light-7: #e2e8f0;
+  --el-color-info-light-8: #f1f5f9;
+  --el-color-info-light-9: var(--sf-surface-subtle);
+  --el-color-info-dark-2: #475569;
+
+  --el-text-color-primary: var(--sf-text-primary);
+  --el-text-color-regular: var(--sf-text-regular);
+  --el-text-color-secondary: var(--sf-text-secondary);
+  --el-text-color-placeholder: var(--sf-text-muted);
+  --el-border-color: var(--sf-border);
+  --el-border-color-light: var(--sf-border);
+  --el-border-color-lighter: var(--sf-border-light);
+  --el-border-color-hover: var(--sf-border-strong);
+  --el-bg-color: var(--sf-surface);
+  --el-bg-color-page: var(--sf-bg-canvas);
+  --el-fill-color: var(--sf-surface-muted);
+  --el-fill-color-light: var(--sf-surface-subtle);
+  --el-fill-color-lighter: #fafbfc;
+  --el-border-radius-base: var(--sf-radius-sm);
+  --el-font-size-base: var(--sf-fs-body);
+
+  /* Legacy variable aliases for backward compatibility */
+  --text-primary: var(--sf-text-primary);
+  --text-secondary: var(--sf-text-secondary);
+  --surface-muted: var(--sf-surface-subtle);
+  --border-subtle: var(--sf-border);
+  --card-radius: var(--sf-radius-lg);
+  --card-shadow: var(--sf-shadow-xs);
+}

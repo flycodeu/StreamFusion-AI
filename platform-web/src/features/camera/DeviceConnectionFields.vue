@@ -17,34 +17,38 @@ const model = defineModel<ManualCameraDraft>({ required: true })
       />
     </ElSelect>
   </ElFormItem>
-  <template v-if="!hideHost">
+  <div v-if="!hideHost" class="sf-form-grid">
     <ElFormItem label="设备地址" required
       ><ElInput v-model="model.host" maxlength="253" placeholder="IP 或域名"
     /></ElFormItem>
     <ElFormItem label="管理端口" required
       ><ElInputNumber v-model="model.port" :min="1" :max="65535"
     /></ElFormItem>
-  </template>
-  <ElFormItem label="设备账号"
-    ><ElInput v-model="model.username" autocomplete="off" maxlength="128" placeholder="可选"
-  /></ElFormItem>
-  <ElFormItem label="设备密码"
-    ><ElInput
-      v-model="model.password"
-      type="password"
-      show-password
-      autocomplete="new-password"
-      maxlength="512"
-  /></ElFormItem>
+  </div>
+  <div class="sf-form-grid">
+    <ElFormItem label="设备账号"
+      ><ElInput v-model="model.username" autocomplete="off" maxlength="128" placeholder="可选"
+    /></ElFormItem>
+    <ElFormItem label="设备密码"
+      ><ElInput
+        v-model="model.password"
+        type="password"
+        show-password
+        autocomplete="new-password"
+        maxlength="512"
+    /></ElFormItem>
+  </div>
   <details class="connection-more">
     <summary>其他连接资料</summary>
-    <ElFormItem label="连接协议"
-      ><ElSelect v-model="model.scheme"
-        ><ElOption label="HTTP" value="http" /><ElOption label="HTTPS" value="https" /></ElSelect
-    ></ElFormItem>
-    <ElFormItem label="品牌"
-      ><BrandSelect v-model="model.vendorHint" :adapters="adapters"
-    /></ElFormItem>
+    <div class="sf-form-grid">
+      <ElFormItem label="连接协议"
+        ><ElSelect v-model="model.scheme"
+          ><ElOption label="HTTP" value="http" /><ElOption label="HTTPS" value="https" /></ElSelect
+      ></ElFormItem>
+      <ElFormItem label="品牌"
+        ><BrandSelect v-model="model.vendorHint" :adapters="adapters"
+      /></ElFormItem>
+    </div>
   </details>
 </template>
 <style scoped>
@@ -53,7 +57,8 @@ const model = defineModel<ManualCameraDraft>({ required: true })
 }
 .connection-more summary {
   cursor: pointer;
-  color: var(--el-text-color-secondary);
+  color: var(--sf-primary);
+  font-size: var(--sf-fs-sub);
   margin-bottom: 14px;
 }
 </style>

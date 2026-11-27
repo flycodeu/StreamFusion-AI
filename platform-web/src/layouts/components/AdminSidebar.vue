@@ -56,13 +56,13 @@ const navigation = computed(
   height: 100dvh;
   display: flex;
   flex-direction: column;
-  background: #fff;
-  border-right: 1px solid var(--border-subtle);
+  background: var(--sf-surface);
+  border-right: 1px solid var(--sf-border);
 }
 .brand {
   height: var(--header-height);
   flex-shrink: 0;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--sf-border);
   padding: 0 18px;
   display: flex;
   align-items: center;
@@ -72,29 +72,34 @@ const navigation = computed(
 }
 .brand-name {
   transition: opacity 0.15s ease;
-  color: #263445;
-  font-size: 15px;
+  color: var(--sf-text-primary);
+  font-size: var(--sf-fs-section);
   font-weight: 600;
+  letter-spacing: -0.01em;
 }
 .navigation {
-  padding: 12px 0;
+  padding: 10px 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
 .navigation :deep(.el-menu) {
   border-right: 0;
-  --el-menu-item-height: 46px;
-  --el-menu-sub-item-height: 42px;
+  --el-menu-item-height: 44px;
+  --el-menu-sub-item-height: 40px;
+  --el-menu-text-color: var(--sf-text-regular);
+  --el-menu-hover-bg-color: var(--sf-surface-subtle);
+  --el-menu-active-color: var(--sf-primary);
 }
 .navigation :deep(.app-icon) {
   margin-right: 12px;
 }
 .navigation :deep(.el-menu-item.is-active) {
-  background: var(--el-color-primary-light-9);
-  border-right: 3px solid var(--el-color-primary);
+  background: var(--sf-primary-soft);
+  border-right: 3px solid var(--sf-primary);
+  font-weight: 600;
 }
 .navigation :deep(.el-sub-menu .el-menu-item) {
-  font-size: 13px;
+  font-size: var(--sf-fs-sub);
 }
 .is-collapsed {
   width: 64px;

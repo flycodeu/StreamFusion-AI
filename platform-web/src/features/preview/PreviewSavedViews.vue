@@ -195,9 +195,9 @@ header span,
   display: inline-flex;
   align-items: center;
   padding: 1px 8px;
-  border-radius: 999px;
-  background: #f1f5f9;
-  color: #475569;
+  border-radius: var(--sf-radius-pill);
+  background: var(--sf-surface-muted);
+  color: var(--sf-text-regular);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -217,9 +217,9 @@ article {
   display: grid;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
 }
 .saved-actions {
   flex-wrap: wrap;
@@ -233,21 +233,21 @@ p {
 }
 .saved-note {
   padding: 6px 10px;
-  border-radius: 6px;
-  background: #eff6ff;
-  color: #1d4ed8;
+  border-radius: var(--sf-radius-sm);
+  background: var(--sf-primary-soft);
+  color: var(--sf-primary-active);
 }
 .saved-empty {
   padding: 16px 12px;
-  border: 1px dashed #cbd5e1;
-  border-radius: 8px;
-  background: #f8fafc;
+  border: 1px dashed var(--sf-border-strong);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
   text-align: center;
 }
 .saved-error {
   padding: 6px 10px;
-  border-radius: 6px;
-  background: #fef2f2;
-  color: var(--el-color-danger);
+  border-radius: var(--sf-radius-sm);
+  background: var(--sf-danger-soft);
+  color: var(--sf-danger);
 }
 </style>

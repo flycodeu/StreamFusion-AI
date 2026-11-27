@@ -70,13 +70,13 @@ const statusLabel = computed(() =>
 
 <style scoped>
 .camera-card {
-  --state-soft-bg: #f1f5f9;
+  --state-soft-bg: var(--sf-info-soft);
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
+  background: var(--sf-surface);
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-lg);
   overflow: hidden;
   transition:
     border-color 0.16s ease,
@@ -84,21 +84,21 @@ const statusLabel = computed(() =>
     transform 0.16s ease;
 }
 .camera-card.state-accessible {
-  --state-soft-bg: #ecfdf5;
+  --state-soft-bg: var(--sf-success-soft);
 }
 .camera-card.state-failed {
-  --state-soft-bg: #fef2f2;
-  border-color: #fecaca;
+  --state-soft-bg: var(--sf-danger-soft);
+  border-color: var(--sf-danger-border);
 }
 .camera-card.state-checking {
-  --state-soft-bg: #eff6ff;
+  --state-soft-bg: var(--sf-primary-soft);
 }
 .camera-card.state-stale {
-  --state-soft-bg: #fffbeb;
+  --state-soft-bg: var(--sf-warning-soft);
 }
 .camera-card:hover {
-  border-color: #cbd5e1;
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+  border-color: var(--sf-border-strong);
+  box-shadow: var(--sf-shadow-sm);
 }
 .camera-card-heading {
   display: flex;

@@ -109,7 +109,8 @@ async function save() {
     <div v-if="loading" class="policy-loading">加载策略…</div>
     <ElForm v-if="policy" label-position="top" :disabled="saving" @submit.prevent="save">
       <div class="policy-summary">
-        <span>操作日志 / 文件操作记录 / 清理候选</span><ElTag type="info">数据库记录</ElTag>
+        <span>操作日志 / 文件操作记录 / 清理候选</span
+        ><ElTag type="info" effect="plain">数据库记录</ElTag>
       </div>
       <ElFormItem v-if="instanceId" label="策略来源"
         ><ElSwitch v-model="form.inheritGlobal" active-text="继承全局" inactive-text="单独设置"
@@ -166,23 +167,24 @@ async function save() {
   flex-wrap: wrap;
   align-items: center;
   padding: 12px 14px;
-  background: #f8fafc;
-  border-radius: 8px;
-  color: #64748b;
-  font-size: 13px;
-  margin-bottom: 24px;
+  border: 1px solid var(--sf-border);
+  background: var(--sf-surface-subtle);
+  border-radius: var(--sf-radius-md);
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
+  margin-bottom: 20px;
 }
 .inherited-state {
   display: flex;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  padding: 20px 0;
-  color: #64748b;
+  padding: 16px 0;
+  color: var(--sf-text-secondary);
 }
 .inherited-state strong {
   font-weight: 500;
-  color: #334155;
+  color: var(--sf-text-regular);
 }
 .days-input {
   display: flex;
@@ -193,7 +195,7 @@ async function save() {
   display: flex;
   gap: 8px;
   margin-top: -8px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 .day-presets .el-button {
   margin-left: 0;
@@ -201,6 +203,6 @@ async function save() {
 .policy-loading {
   padding: 24px;
   text-align: center;
-  color: #64748b;
+  color: var(--sf-text-secondary);
 }
 </style>

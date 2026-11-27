@@ -140,9 +140,7 @@ describe('diagnostic query page', () => {
     await flush()
     expect(mock.getDiagnostics).toHaveBeenCalledTimes(2)
     expect(text(root)).not.toContain('已达到扫描预算')
-    expect(nodes(root).some((item) => item.type === 'ElButton' && text(item) === '查询日志')).toBe(
-      true,
-    )
+    expect(nodes(root).some((item) => item.type === 'ElButton' && text(item) === '查询')).toBe(true)
   })
 
   it('uses backend cursors, preserves query bounds and returns to the previous page', async () => {

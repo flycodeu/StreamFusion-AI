@@ -68,7 +68,7 @@ async function save() {
     @close="emit('close')"
   >
     <RequestError :error="error" /><ImpactSummary v-if="impact" :impact="impact" />
-    <ElForm label-width="90px" :disabled="saving || !!impact" @submit.prevent="save">
+    <ElForm label-position="top" :disabled="saving || !!impact" @submit.prevent="save">
       <ElFormItem label="分组名称" required
         ><ElInput v-model="form.name" maxlength="64"
       /></ElFormItem>

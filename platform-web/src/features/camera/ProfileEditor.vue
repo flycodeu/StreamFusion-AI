@@ -167,24 +167,26 @@ onBeforeUnmount(() => {
       :closable="false"
       title="保存结果未确认，请重试。"
     />
-    <ElForm label-width="120px" :disabled="loading || saving || frozen" @submit.prevent="save">
-      <ElFormItem label="码流标签" :required="!!profileId"
-        ><ElInput
-          v-model="form.label"
-          maxlength="64"
-          :placeholder="profileId ? '' : '留空则自动命名'"
-      /></ElFormItem>
+    <ElForm label-position="top" :disabled="loading || saving || frozen" @submit.prevent="save">
+      <div class="sf-form-grid">
+        <ElFormItem label="码流标签" :required="!!profileId"
+          ><ElInput
+            v-model="form.label"
+            maxlength="64"
+            :placeholder="profileId ? '' : '留空则自动命名'"
+        /></ElFormItem>
+        <ElFormItem label="用途"
+          ><ElSelect v-model="form.usageHint"
+            ><ElOption
+              v-for="option in usageOptions"
+              :key="option.value"
+              :value="option.value"
+              :label="option.label" /></ElSelect
+        ></ElFormItem>
+      </div>
       <p v-if="profile?.classification?.origin === 'NAME_RULE'" class="classification-note">
         已自动识别为{{ usageLabel(effectiveUsage(profile)) }}；修改用途后将以你的选择为准。
       </p>
-      <ElFormItem label="用途"
-        ><ElSelect v-model="form.usageHint"
-          ><ElOption
-            v-for="option in usageOptions"
-            :key="option.value"
-            :value="option.value"
-            :label="option.label" /></ElSelect
-      ></ElFormItem>
       <ElFormItem label="允许新使用"><ElSwitch v-model="form.enabled" /></ElFormItem>
       <ElFormItem v-if="replacingDefault" label="新的默认码流"
         ><ElSelect v-model="form.replacementDefaultProfileId" clearable placeholder="清空默认码流"
@@ -195,7 +197,7 @@ onBeforeUnmount(() => {
             :key="item.streamProfileId"
             :value="item.streamProfileId"
             :label="streamLabel(item, camera?.profiles, camera?.name)" /></ElSelect
-        ><span>当前默认码流将停用，需明确换选或清空。</span></ElFormItem
+        ><span class="profile-note">当前默认码流将停用，需明确换选或清空。</span></ElFormItem
       >
       <template v-if="manual">
         <ElFormItem v-if="profileId" label="视频地址"
@@ -218,9 +220,9 @@ onBeforeUnmount(() => {
             maxlength="8192"
             placeholder="rtsp://192.168.1.10:554/实际视频路径"
         /></ElFormItem>
-        <p>认证信息沿用连接设置。</p>
+        <p class="profile-note">认证信息沿用连接设置。</p>
       </template>
-      <p v-else>地址由设备或平台提供。</p>
+      <p v-else class="profile-note">地址由设备或平台提供。</p>
     </ElForm>
     <template #footer
       ><ElButton :disabled="saving" @click="emit('close')">关闭</ElButton
@@ -230,3 +232,12 @@ onBeforeUnmount(() => {
     >
   </CameraDialogFrame>
 </template>
+<style scoped>
+.classification-note,
+.profile-note {
+  margin: 0 0 14px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
+  line-height: 1.6;
+}
+</style>

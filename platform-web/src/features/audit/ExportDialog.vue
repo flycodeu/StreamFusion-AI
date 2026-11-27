@@ -20,6 +20,7 @@ import {
 } from '../../api/audit/maintenance'
 import { getAuditPage, type AuditQuery } from '../../api/audit/api'
 import RequestError from '../../components/feedback/RequestError.vue'
+import TableActions from '../../components/table/TableActions.vue'
 import { usePageScope } from '../../composables/usePageScope'
 import { formatDateTime } from '../../utils/dateTime'
 import { formatBytes } from '../../utils/formatBytes'
@@ -195,6 +196,7 @@ onBeforeUnmount(() => {
             :type="
               row.state === 'FAILED' ? 'danger' : row.state === 'COMPLETED' ? 'success' : 'info'
             "
+            effect="plain"
             >{{ labelOf(exportStates, row.state) }}</ElTag
           ></template
         ></ElTableColumn
@@ -217,28 +219,35 @@ onBeforeUnmount(() => {
       <ElTableColumn label="文件有效期" width="170"
         ><template #default="{ row }">{{ formatDateTime(row.expiresAt) }}</template></ElTableColumn
       >
-      <ElTableColumn label="操作" width="145" fixed="right"
+      <ElTableColumn
+        label="操作"
+        width="145"
+        fixed="right"
+        class-name="table-actions-column"
+        :resizable="false"
         ><template #default="{ row }"
-          ><ElButton
-            v-if="row.downloadable"
-            link
-            type="primary"
-            :disabled="loading"
-            @click="act('download', asJob(row))"
-            >下载</ElButton
-          ><ElButton
-            v-if="['QUEUED', 'RUNNING'].includes(row.state)"
-            link
-            :disabled="loading"
-            @click="act('cancel', asJob(row))"
-            >取消</ElButton
-          ><ElButton
-            v-else-if="row.state !== 'EXPIRED'"
-            link
-            type="danger"
-            :disabled="loading"
-            @click="act('remove', asJob(row))"
-            >删除文件</ElButton
+          ><TableActions compact
+            ><ElButton
+              v-if="row.downloadable"
+              link
+              type="primary"
+              :disabled="loading"
+              @click="act('download', asJob(row))"
+              >下载</ElButton
+            ><ElButton
+              v-if="['QUEUED', 'RUNNING'].includes(row.state)"
+              link
+              :disabled="loading"
+              @click="act('cancel', asJob(row))"
+              >取消</ElButton
+            ><ElButton
+              v-else-if="row.state !== 'EXPIRED'"
+              link
+              type="danger"
+              :disabled="loading"
+              @click="act('remove', asJob(row))"
+              >删除文件</ElButton
+            ></TableActions
           ></template
         ></ElTableColumn
       >
@@ -256,11 +265,11 @@ onBeforeUnmount(() => {
 .export-scope {
   margin-bottom: 12px;
   padding: 10px 14px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #334155;
-  font-size: 13px;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
+  color: var(--sf-text-regular);
+  font-size: var(--sf-fs-sub);
   overflow-wrap: anywhere;
 }
 .export-details {

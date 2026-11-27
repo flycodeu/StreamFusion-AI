@@ -104,6 +104,7 @@ vi.mock('element-plus', async () => {
     'ElEmpty',
     'ElForm',
     'ElFormItem',
+    'ElIcon',
     'ElInput',
     'ElInputNumber',
     'ElOption',
@@ -111,6 +112,7 @@ vi.mock('element-plus', async () => {
     'ElSelect',
     'ElSwitch',
     'ElTag',
+    'ElTooltip',
     'ElCheckbox',
     'ElDescriptions',
     'ElDescriptionsItem',
@@ -1274,7 +1276,8 @@ describe('camera management interaction boundaries', () => {
     expect(nodes(root).filter((item) => item.type === 'ElDialog')).toHaveLength(1)
     const pager = nodes(root).find((item) => item.type === 'ElPagination')!
     ;(pager.props['onUpdate:currentPage'] as (value: number) => void)(2)
-    await (pager.props.onCurrentChange as () => Promise<void>)()
+    ;(pager.props.onChange as (page: number, size: number) => void)(2, 20)
+    await settle()
     expect(api.getImportItems).toHaveBeenLastCalledWith('900', {
       page: 2,
       size: 20,
@@ -1964,7 +1967,8 @@ describe('camera management interaction boundaries', () => {
     const root = await mount(DeviceDetailPanel, { device, canManage: true })
     const pager = nodes(root).find((item) => item.type === 'ElPagination')!
     ;(pager.props['onUpdate:currentPage'] as (value: number) => void)(2)
-    await (pager.props.onCurrentChange as () => Promise<void>)()
+    ;(pager.props.onChange as (page: number, size: number) => void)(2, 20)
+    await settle()
     api.getDeviceChannels
       .mockResolvedValueOnce({ items: [], total: 20, page: 2, size: 20 })
       .mockResolvedValueOnce({
@@ -3319,7 +3323,11 @@ describe('camera management interaction boundaries', () => {
     await settle()
     expect(text(root)).toContain('2048 kbps')
     expect(text(root)).not.toContain('码率未获取')
-    expect(text(root)).toContain('保存后可预览视频。')
+    expect(
+      nodes(root).some(
+        (item) => item.type === 'ElTooltip' && item.props.content === '保存后可预览视频。',
+      ),
+    ).toBe(true)
     await setField(root, '默认码流', 'stream-b', 'ElSelect')
     const select = nodes(root).find((item) => item.type === 'ElTreeSelect')!
     ;(select.props['onUpdate:modelValue'] as (value: string) => void)('30')

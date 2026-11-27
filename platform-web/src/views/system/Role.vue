@@ -8,8 +8,8 @@ import {
   ElInput,
   ElMessageBox,
   ElOption,
-  ElPagination,
   ElSelect,
+  ElEmpty,
   ElTable,
   ElTableColumn,
   ElTree,
@@ -23,6 +23,8 @@ import ColumnPicker from '../../components/table/ColumnPicker.vue'
 import { useColumns } from '../../composables/table/useColumns'
 import TablePanel from '../../components/table/TablePanel.vue'
 import TableActions from '../../components/table/TableActions.vue'
+import StandardPagination from '../../components/table/StandardPagination.vue'
+import FilterBar from '../../components/ui/FilterBar.vue'
 import { useTableSelection } from '../../composables/table/useTableSelection'
 import { usePageScope } from '../../composables/usePageScope'
 
@@ -263,7 +265,7 @@ onMounted(load)
 
 <template>
   <div class="content-page">
-    <ElForm class="search-form" inline @submit.prevent="search">
+    <FilterBar :loading="loading" @search="search" @reset="resetSearch">
       <ElFormItem label="角色">
         <ElInput v-model="keyword" class="search-field" placeholder="请输入编码或名称" clearable />
       </ElFormItem>
@@ -273,11 +275,7 @@ onMounted(load)
           <ElOption label="停用" value="DISABLED" />
         </ElSelect>
       </ElFormItem>
-      <ElFormItem>
-        <ElButton type="primary" native-type="submit" :loading="loading">查询</ElButton>
-        <ElButton @click="resetSearch">重置</ElButton>
-      </ElFormItem>
-    </ElForm>
+    </FilterBar>
     <RequestError :error="error" />
     <TablePanel :initial-loading="loading && !rows.length">
       <template #actions>
@@ -309,6 +307,18 @@ onMounted(load)
         empty-text="暂无角色"
         @selection-change="setSelection"
       >
+        <template #empty>
+          <ElEmpty
+            :image-size="64"
+            :description="
+              error ? '角色列表读取失败' : keyword || status ? '未找到符合条件的角色' : '暂无角色'
+            "
+          >
+            <ElButton v-if="error" @click="load">重新加载</ElButton>
+            <ElButton v-else-if="keyword || status" @click="resetSearch">重置筛选</ElButton>
+            <ElButton v-else type="primary" @click="openCreate">新建角色</ElButton>
+          </ElEmpty>
+        </template>
         <ElTableColumn type="selection" width="48" align="center" />
         <ElTableColumn v-if="columns.includes('code')" prop="code" label="编码" min-width="150" />
         <ElTableColumn v-if="columns.includes('name')" prop="name" label="名称" min-width="150" />
@@ -368,14 +378,7 @@ onMounted(load)
         >
       </ElTable>
       <template #footer>
-        <ElPagination
-          v-model:current-page="page"
-          v-model:page-size="size"
-          :total="total"
-          :page-sizes="[20, 50, 100]"
-          layout="total, sizes, prev, pager, next, jumper"
-          @change="load"
-        />
+        <StandardPagination v-model:page="page" v-model:size="size" :total="total" @change="load" />
       </template>
     </TablePanel>
     <ElDialog
@@ -390,7 +393,7 @@ onMounted(load)
       :show-close="!saving"
     >
       <RequestError :error="error" />
-      <ElForm label-width="90px" :disabled="saving" @submit.prevent="save">
+      <ElForm label-position="top" :disabled="saving" @submit.prevent="save">
         <ElFormItem label="角色编码" required :error="submitted ? codeError : ''"
           ><ElInput v-model="form.code" :disabled="!!editing" maxlength="64"
         /></ElFormItem>
@@ -444,9 +447,9 @@ onMounted(load)
   max-height: 400px;
   overflow-y: auto;
   padding: 10px 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
+  border: 1px solid var(--sf-border);
+  border-radius: var(--sf-radius-md);
+  background: var(--sf-surface-subtle);
 }
 .role-menu-tree-box :deep(.el-tree) {
   background: transparent;

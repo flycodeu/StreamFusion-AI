@@ -62,7 +62,7 @@ onUnmounted(() => Object.assign(form, { current: '', password: '', confirm: '' }
     <p class="password-notice">修改密码后需要重新登录。</p>
     <RequestError :error="error" />
     <ElButton v-if="!policy" :loading="loading" @click="loadPolicy">重新获取密码规则</ElButton>
-    <ElForm v-else label-width="100px" :disabled="busy" @submit.prevent="submit">
+    <ElForm v-else label-position="top" :disabled="busy" @submit.prevent="submit">
       <ElFormItem
         label="当前密码"
         :error="touched.current && !form.current ? '请输入当前密码' : ''"
@@ -110,25 +110,25 @@ onUnmounted(() => Object.assign(form, { current: '', password: '', confirm: '' }
 
 <style scoped>
 .password-section {
-  max-width: 620px;
+  max-width: 560px;
 }
 .password-notice {
-  margin: 0 0 28px;
-  color: var(--el-text-color-regular);
-  font-size: 14px;
+  margin: 0 0 20px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
 }
 .password-section :deep(.el-form-item) {
-  margin-bottom: 28px;
+  margin-bottom: 18px;
 }
 .password-checks {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 18px;
+  gap: 8px 18px;
   padding: 0;
-  margin: -8px 0 28px 100px;
+  margin: -6px 0 20px;
   list-style: none;
-  color: var(--el-text-color-secondary);
-  font-size: 14px;
+  color: var(--sf-text-secondary);
+  font-size: var(--sf-fs-sub);
 }
 .password-checks li {
   display: flex;
@@ -136,15 +136,10 @@ onUnmounted(() => Object.assign(form, { current: '', password: '', confirm: '' }
   gap: 6px;
 }
 .password-checks .passed {
-  color: var(--el-color-success);
+  color: var(--sf-success);
 }
 .password-section .password-submit {
-  margin-top: 32px;
+  margin-top: 24px;
   margin-bottom: 0;
-}
-@media (max-width: 540px) {
-  .password-checks {
-    margin-left: 0;
-  }
 }
 </style>
